@@ -451,8 +451,57 @@ except SystemExit as e:
     negative_limit = e.code == 2
 check(negative_limit, "--limit 为负数时 argparse 明确拒绝")
 
+print("\n[提示词缓存的请求形态]")
+
+# 这一段是 2026-08-30 补的：原实现把 cache_control 当成**顶层参数**发，
+# 而 Anthropic Messages API 里它是**内容块上的字段**。那样发出去要么被网关
+# 400、要么被静默忽略——后者更糟：以为省了钱，其实每篇都在重发 2400 token。
+# 没有测试覆盖请求形态，是这个缺陷能活到现在的原因。
+
+
+class SpyClient:
+    """记录最终发给 SDK 的 kwargs。不碰网络。"""
+
+    def __init__(self):
+        self.kw = None
+        outer = self
+
+        class _Messages:
+            def create(self, **kw):
+                outer.kw = kw
+                return type("R", (), {
+                    "stop_reason": "end_turn",
+                    "content": [type("B", (), {"type": "text", "text": "Hallo"})()],
+                })()
+        self.messages = _Messages()
+
+
+class _S:
+    model, max_tokens, gap = "m", 100, 0.0
+    effort = temperature = None
+    prompt_cache = False
+
+
+spy = SpyClient()
+T.Translator(_S(), client=spy).translate("hi", "SYSTEM PROMPT")
+check(spy.kw["system"] == "SYSTEM PROMPT",
+      "不开缓存时 system 是普通字符串")
+check("cache_control" not in spy.kw, "不开缓存时不发 cache_control")
+
+cached = _S()
+cached.prompt_cache = True
+spy2 = SpyClient()
+T.Translator(cached, client=spy2).translate("hi", "SYSTEM PROMPT")
+check("cache_control" not in spy2.kw,
+      "开缓存时**不得**把 cache_control 放在顶层参数（原缺陷就在这里）")
+check(isinstance(spy2.kw["system"], list)
+      and spy2.kw["system"][0]["type"] == "text"
+      and spy2.kw["system"][0]["text"] == "SYSTEM PROMPT"
+      and spy2.kw["system"][0]["cache_control"] == {"type": "ephemeral"},
+      "开缓存时 system 变成带 cache_control 的内容块列表（API 要求的形态）")
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 if not fails:
     print("\n真实网关验收：scripts\\run_translate.bat --check")
-    print("真实译文验收（F1/F2）需等 B 组抓到文案后进行。")
+    print("真实译文验收（F1/F2）见 docs/TRANSLATION_PLAN.md。")
 sys.exit(1 if fails else 0)

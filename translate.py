@@ -434,8 +434,15 @@ class Translator:
             kw["temperature"] = float(self.s.temperature)
         if self.s.prompt_cache:
             # system prompt 每篇都一样（风格示例每账号只算一次），缓存命中率应接近 100%。
-            # 兼容网关未必支持 cache_control，所以默认关闭。
-            kw["cache_control"] = {"type": "ephemeral"}
+            # 1010 篇 × 约 2400 token 的重复输入，开缓存省的是大头。
+            #
+            # ⚠️ `cache_control` 是**内容块上的字段，不是顶层参数**。
+            # 2026-08-30 修正：原实现写的是 `kw["cache_control"] = ...`，
+            # 那样发出去要么被网关 400、要么被静默忽略（更糟：以为省了钱其实没省）。
+            # 正确形态是把 system 从字符串换成带 cache_control 的内容块列表。
+            # 兼容网关未必支持，所以默认关闭。
+            kw["system"] = [{"type": "text", "text": system,
+                             "cache_control": {"type": "ephemeral"}}]
 
         resp = self.client.messages.create(**kw)
 

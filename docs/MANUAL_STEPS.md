@@ -333,6 +333,11 @@ https://www.facebook.com/profile.php?id=100012345678901
 
 ## 第 6 步 · 配置翻译 API（F 组前置，可随时做）
 
+> 📄 **2026-08-30 起，翻译这条线交给另一个 Agent 执行**，
+> 它的完整任务书是 `docs/TRANSLATION_PLAN.md`。
+> 你这边要做的事没变，还是下面这些：**给网关信息、放密钥、看质量**。
+> 待译量：**约 1055 篇**（IG 1010 + FB 45）。
+
 ### 6.1 先向网关管理员要这四样
 
 翻译走**公司内部兼容 Anthropic Messages 的第三方端点**。你需要问到：
@@ -508,7 +513,8 @@ scripts\run_translate.bat --show-prompt
 scripts\run_translate.bat --dry-run
 ```
 
-只列清单，不调用 API、不花钱。确认待译篇数符合预期。
+只列清单，不调用 API、不花钱。**待译篇数应该在 1055 篇左右**
+（IG 1010 + FB 45）。数字对不上就先别往下跑。
 
 ### 7.2 小批量试跑 3 篇
 

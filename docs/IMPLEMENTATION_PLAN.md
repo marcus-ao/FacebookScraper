@@ -150,8 +150,9 @@ FacebookScraper/
   docs/
     IMPLEMENTATION_PLAN.md 本文件（进度真相源）
     MANUAL_STEPS.md        **人工操作指南**，需要用户亲自做的步骤全在这里
-    HANDOFF.md             会话交接
-    CODE_REVIEW.md         已实现代码二次审查、修复与验证记录
+    HANDOFF.md             会话交接（抓取侧任务书）
+    CODE_REVIEW.md         审查记录 CR-01~CR-19
+    TRANSLATION_PLAN.md    F 组任务书（交给另一个 Agent 执行）
   prompts/
     translate_de.md        英译德提示词本体。可直接编辑，改它不用动 Python。
                            `{{占位符}}` 由 config.toml 注入；改完 --show-prompt 看效果
@@ -1544,6 +1545,18 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
 
 ## F. 德语翻译（依赖 B6，可与 C/D/E 并行）
 
+> ### 📄 本组的实施细节已独立成 `docs/TRANSLATION_PLAN.md`
+> **2026-08-30 起由另一个 Agent 执行。** 那份文件是自包含的任务书：
+> 文件所有权边界、并行 git 纪律、T1–T6 分阶段清单与验收、
+> 已踩过的 9 个坑、`[translate]` 全部配置项速查。
+>
+> 下面 F1/F2/F3 三项仍是**进度真相源**（勾选状态以这里为准），
+> 但**动手前先读 `TRANSLATION_PLAN.md`**。
+>
+> ⚠️ **待译量已变**：Instagram 合作帖修复后归档从 756 涨到 1019 篇，
+> **可进翻译流水线的从 747 涨到 1010 篇**（两平台合计约 1055 篇）。
+> F1 的成本估算要按新数字重做。
+
 - [ ] **F1** 实现 `translate.py` 主流程
 
   - 读 `archive/*/manifest.jsonl`，筛出 `text` 非空且尚未翻译的帖子
@@ -1593,6 +1606,19 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
   >
   > 截断处理：`stop_reason == "max_tokens"` 抛错而不是返回半句德语——
   > 半句德语在人工审校时未必看得出来。`refusal` 同样抛错。
+
+  > 补记：2026-08-30 · **修掉一个"代码写完但从没对过真实网关"的典型缺陷**：
+  > `prompt_cache` 打开时，原实现把 `cache_control` 当成**顶层请求参数**发，
+  > 而 Anthropic Messages API 里它是**内容块上的字段**。那样发出去要么被网关
+  > 400、要么被静默忽略——**后者更糟：以为省了钱，其实每篇都在重发
+  > 约 2400 token 的 system prompt**。正确形态是把 `system` 从字符串换成
+  > 带 `cache_control` 的内容块列表。
+  >
+  > **这个缺陷能活下来是因为没有任何测试覆盖"发出去的请求长什么样"**——
+  > 已补两条断言（开/关缓存各一条）钉住请求形态。
+  > 1010 篇的量级下，这个开关是成本大头，实施时**先 `--limit 3` 验证网关认**。
+  >
+  > ⚠️ **待译量已变**：747 → **1010 篇**（IG）+ 45 篇（FB）。
 - [ ] **F2** 实现风格 few-shot
 
   - 从已抓到的 US 文案里取 `config.toml` 的 `[translate].style_examples` 篇

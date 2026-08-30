@@ -33,17 +33,53 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
    **新增任何需要用户操作的功能，都要同步更新它**，否则用户手上的
    指南会和实现漂移。
 4. **`core/parse.py` 和 `core/store.py`** —— 已实现的核心，你会频繁改动前者。
-5. **`docs/CODE_REVIEW.md`** —— 2026-08-29 对已实现主干的二次审查，含已修问题、
-   回归证据与仍需真实账号/网关验证的风险。
+5. **`docs/CODE_REVIEW.md`** —— 已实现代码的审查记录（CR-01 ~ CR-19）。
+   **第 8 节的 CR-19（Instagram 合作帖）是目前最值得读的一节**，
+   它一条推翻了三个曾被写进文档的"事实"。
+6. **`docs/TRANSLATION_PLAN.md`** —— 翻译侧的任务书。**你不执行它**，
+   但要知道它存在、以及它划走了哪些文件（见上面的并行工作说明）。
 
 不要跳过第 1 步。计划里有大量"看起来可以优化、实际是保命设计"的地方，
 不读会被你顺手改掉。
 
 ---
 
+## 🔴 先读：现在有两个 Agent 在同一个仓库里并行工作
+
+用户 2026-08-30 起把工作拆成了两条线，**你们在同一个工作目录、同一个 git 分支上**：
+
+| 线 | 谁 | 任务书 | 主战场 |
+|---|---|---|---|
+| **抓取侧** | 读本文件的你 | 本文件 + `IMPLEMENTATION_PLAN.md` | `routes/` `core/` `tools/` `scripts/` |
+| **翻译侧** | 另一个 Agent | **`docs/TRANSLATION_PLAN.md`** | `translate.py` `prompts/` `config.toml` 的 `[translate]` 段 |
+
+### 你不要碰的文件
+
+```
+translate.py                 另一个 Agent 的主战场
+prompts/translate_de.md      提示词本体
+config.toml 的 [translate] 段与 [translate.glossary]
+tests/tests_translate.py
+docs/TRANSLATION_PLAN.md
+archive/*/translated.jsonl   archive/*/review.md   archive/*/posts/*/text_de.txt
+```
+
+反过来，那个 Agent 被明确告知不得碰 `routes/` `core/` `tools/` `scripts/`
+以及 `config.toml` 的 `[delta]` / `[integrity]` / `[chrome]` / `[targets]` 段。
+
+### git 纪律（两条，别省）
+
+1. **不要 `git checkout` 切分支** —— 会把另一个 Agent 的工作区一起带走。
+   开工先 `git branch --show-current` 记下当前分支，就在上面干活。
+2. **不要 `git add -A` / `git add .`** —— 只加你自己改的路径。
+   看到不是你改的文件出现在 `git status` 里，**别碰、也别 stash**。
+
+---
+
 ## 现在卡在哪（读完这段就知道该干什么）
 
-**A / B / J 组完成，数据干净。C 组代码写完了，卡在用户那一次真实验收。**
+**A / B / J / C / D / E 六组基本落地。卡点只剩两个：一次 Instagram 复测，
+和用户提供翻译网关信息。**
 
 | 卡点         | 状态                                                                     | 阻塞了谁            |
 | ------------ | ------------------------------------------------------------------------ | ------------------- |
@@ -53,19 +89,50 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 | **C2 / C4 / C5** | 代码完成，**合作帖修复后还没实机跑过**                               | C 组合回 main       |
 | **用户复测** | ⬅️ **等这个。** `MANUAL_STEPS.md` 第 8 步，约 5 分钟                     | C2/C4/C5、E3        |
 | **E3 注册**  | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问             | 第 8 步通过后由用户装 |
-| **F 组验收** | 需用户提供网关 base_url / 模型名 / 鉴权风格，并配好 API 密钥             | F1/F2/F3 的真实验收 |
+| **F 组**     | ⬅️ **已交给另一个 Agent**，任务书是 `docs/TRANSLATION_PLAN.md`。仍需用户提供网关信息 | DE 站有内容可发 |
 | **G1**       | 需用户用**另一个 profile** 登录有 DE 发布权的账号，手工走一遍定时发帖    | G 组全部            |
 
-### 接手第一件事：先问用户第 8 步跑了没有
+### 接手第一件事：Instagram 增量的复测收尾
 
-- **跑了且 IG 那行显示「本账号 30 篇以上」** → 把 C2 / C4 / C5 勾上
-  （完成行写实际数字），C 组合回 `main`：
-  `git checkout main && git merge --ff-only feat/delta-logged-in` →
-  再合 `feat/integrity-alerts`。然后让用户走第 9 步装计划任务。
-- **IG 那行还是 1 篇左右** → 合作帖修复没生效，先看
-  `archive/in_neakasa.tech/_capture_delta_*.json`，**离线查，不要让用户反复跑**。
-- **还没跑** → 别催也别自己跑（每跑一次就是一次真实露面）。
-  可做的：F 组等用户配网关；G 组等 G1。C/D/E 已经没有不依赖真实抓取的活了。
+**这就是用户说的"当前遇到关于 Instagram 的问题"。** 状态是：
+**缺陷已经找到并修好、归档已重建，但修完之后还没实机跑过一次。**
+
+让用户跑（`MANUAL_STEPS.md` 第 8 步，约 5 分钟）：
+
+```bash
+.venv\Scripts\python.exe -m routes.delta --dry-run --no-jitter
+```
+
+**只看输出里 IG 那行的「本账号 N 篇」**，三种结果三种处理：
+
+| 结果 | 含义 | 你要做什么 |
+|---|---|---|
+| **本账号 30 篇以上** | 合作帖修复生效了 | 收尾（见下） |
+| **本账号 1–3 篇** | 修复没生效 | `archive/in_neakasa.tech/_capture_delta_*.json` 里有原始响应，**离线查**。先确认节点里有没有 `coauthor_producers`、`partition_by_owner` 有没有走 `on_timeline_of()` |
+| **`只看到 N 篇 … 大概率没有拿到时间线`** | 新加的闸拦住了 | 这是设计行为（宁可停下也不把"没看到"伪装成"没新帖"）。同上离线查 |
+
+**❌ 不要让用户反复跑。** 每跑一次就是一次真实露面，而增量的所有原始响应
+都转储在 `_capture_delta_*.json` 里，**一次跑够，剩下的离线查**——
+这是 B 组那次血的教训（用户滚了 40 分钟，靠转储才没白滚）。
+
+#### 复测通过后的收尾清单
+
+1. `IMPLEMENTATION_PLAN.md` 里 **C2 / C4 / C5** 勾上，完成行写实际数字
+   （尤其 C4：这是媒体下载第一次被真正触发——前几次都是 0 新增，没下过图）
+2. 合回 main（两个分支是线性的，依次快进）：
+   ```
+   git checkout main
+   git merge --ff-only feat/delta-logged-in
+   git merge --ff-only feat/integrity-alerts
+   ```
+   ⚠️ 切分支前先确认另一个 Agent 不在工作，或等它提交完
+3. 让用户走 `MANUAL_STEPS.md` **第 9 步**装计划任务（`tools.schedule install`）
+4. E3 勾上，写下实际的触发器行为
+
+#### 用户还没跑的话
+
+别催，也别自己跑。抓取侧已经没有不依赖真实抓取的活了。
+可以做的是：**主动提醒用户 F 和 G 才是业务价值所在**（见本节末尾）。
 
 ### ⚠️ 两条被推翻的"事实"，别再照旧文引用
 
@@ -154,7 +221,13 @@ archive/in_neakasa.tech/
 **Facebook 46 篇**（45 篇有正文，其中 18 篇含视频）。
 图片 IG 742 张 / FB 70 张，全部 1080px 上下。
 
-### 这次修复留下的四条经验（比修好的代码更值钱）
+### 这次修复留下的五条经验（比修好的代码更值钱）
+
+0. **用户对自己业务的观察，比你对数据的推理更可靠。** 2026-08-30 的 P0
+   （合作帖，CR-19）是**用户问出来的**——"很多帖子是两个账号共同发的，
+   会不会我们抓的这个只是转发角色？"。而我在此之前刚给出一个错误诊断，
+   并据此写了一整条新代码路径。
+   **看到数字不对时，先穷尽"这些数据到底是什么"，再去猜"数据从哪来"。**
 
 1. **"离线测试全绿"和"能处理真实数据"是两件事。** 282 项断言全过的同时，
    归档里混着 267 条他人帖、478 条轮播子项。测试覆盖的是我们想到的形态。
@@ -231,8 +304,9 @@ FacebookScraper/
   docs/
     IMPLEMENTATION_PLAN.md ← 进度真相源，你要持续更新它
     MANUAL_STEPS.md        ← 人工操作指南，需要用户操作时同步更新
-    HANDOFF.md             ← 本文件
-    CODE_REVIEW.md         ← 已实现代码二次审查、修复与验证记录
+    HANDOFF.md             ← 本文件（抓取侧的任务书）
+    CODE_REVIEW.md         ← 审查记录 CR-01~CR-19。**CR-19 是最值得读的一节**
+    TRANSLATION_PLAN.md    ← 翻译侧的任务书，另一个 Agent 在执行
   prompts/
     translate_de.md        英译德提示词，可直接编辑，改它不用动 Python
   core/
