@@ -70,24 +70,44 @@ class FakeResponse:
 
 
 class FakeMouse:
-    def __init__(self):
+    """滚轮会真的推动这张假页面的 scrollY —— `scroll_step=0` 模拟"滚了没动"。"""
+
+    def __init__(self, page):
+        self.page = page
         self.wheels = []
+        self.moves = []
+
+    async def move(self, x, y):
+        self.moves.append((x, y))
 
     async def wheel(self, dx, dy):
         self.wheels.append((dx, dy))
+        self.page.scroll_y += self.page.scroll_step
 
 
 class FakePage:
     """goto 时把预置的响应喂给监听器，模拟首屏接口。"""
 
-    def __init__(self, responses, final_url=None):
+    def __init__(self, responses, final_url=None, scroll_step=800, embedded=None):
         self._responses = responses
         self._final_url = final_url
         self.url = ""
-        self.mouse = FakeMouse()
+        self.scroll_y = 0.0
+        self.scroll_step = scroll_step
+        self.embedded = embedded or []
+        self.mouse = FakeMouse(self)
         self.handlers = {}
         self.closed = False
         self.goto_calls = []
+
+    async def evaluate(self, expr):
+        if "innerWidth" in expr:
+            return [1280, 800]
+        if "scrollY" in expr:
+            return self.scroll_y
+        if "querySelectorAll" in expr:
+            return [json.dumps(b) for b in self.embedded]
+        return None
 
     def on(self, event, fn):
         self.handlers.setdefault(event, []).append(fn)
@@ -195,15 +215,26 @@ print("\n[2] 抓取深度上限：只滚几屏，绝不滚到底（C7）")
 for limit in (0, 1, 3):
     page = FakePage([])
     cfg_l = test_cfg(max_scrolls=limit)
-    n = asyncio.run(human_scroll(page, cfg_l, cfg_l.pacer()))
+    n, moved = asyncio.run(human_scroll(page, cfg_l, cfg_l.pacer()))
     check(len(page.mouse.wheels) == limit == n,
           "max_scrolls=%d 时正好滚 %d 屏" % (limit, limit))
 
 page = FakePage([])
-asyncio.run(human_scroll(page, test_cfg(max_scrolls=4), test_cfg().pacer()))
+_, moved = asyncio.run(human_scroll(page, test_cfg(max_scrolls=4), test_cfg().pacer()))
 deltas = {dy for _, dy in page.mouse.wheels}
 check(len(deltas) > 1, "每屏的滚动距离不相同 —— 匀速等距滚动本身是行为指纹")
 check(all(0 < dy for _, dy in page.mouse.wheels), "只向下滚")
+
+# 2026-08-30 实测踩到的坑：mouse.wheel 在**当前鼠标位置**派发事件，
+# 默认位置 (0,0) 是导航栏，滚轮打在那儿页面一动不动，而日志里看不出异常。
+check(page.mouse.moves and page.mouse.moves[0] == (640, 400),
+      "滚之前先把鼠标移到视口中间（默认 (0,0) 是导航栏，滚了也白滚）")
+check(moved > 0, "返回值报出页面实际移动了多少像素")
+
+dead = FakePage([], scroll_step=0)
+_, moved0 = asyncio.run(human_scroll(dead, test_cfg(max_scrolls=2), test_cfg().pacer()))
+check(moved0 == 0,
+      "滚了但页面没动时返回 0 —— 这正是那次静默失败要被看见的地方")
 
 
 # ==========================================================================
@@ -214,7 +245,7 @@ with tempfile.TemporaryDirectory() as d:
     page = FakePage([resp(ig_payload())])
     ctx = FakeCtx(page)
     n1 = asyncio.run(delta_once(ctx, "instagram", "acme_us", arc, test_cfg()))
-    check(n1 == 1, "第一次跑：新增 1 篇")
+    check(n1.new == 1, "第一次跑：新增 1 篇")
     check(len(arc.rows()) == 1, "写进了 manifest")
     post_dirs = [p for p in (Path(d) / "in_acme_us" / "posts").iterdir() if p.is_dir()]
     check(len(post_dirs) == 1 and (post_dirs[0] / "post.json").exists(),
@@ -226,7 +257,7 @@ with tempfile.TemporaryDirectory() as d:
     arc2 = Archive(Path(d), "in_acme_us")
     page2 = FakePage([resp(ig_payload())])
     n2 = asyncio.run(delta_once(FakeCtx(page2), "instagram", "acme_us", arc2, test_cfg()))
-    check(n2 == 0, "第二次跑：新增 0 篇（幂等）")
+    check(n2.new == 0, "第二次跑：新增 0 篇（幂等）")
     check(FakeCtx(page2).request.gets == [], "幂等时不重复请求 CDN")
 
 with tempfile.TemporaryDirectory() as d:
@@ -237,7 +268,7 @@ with tempfile.TemporaryDirectory() as d:
     ]}}
     page = FakePage([resp(payload)])
     n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
-    check(n == 1, "他人帖不计入新增")
+    check(n.new == 1 and n.rejected == 1, "他人帖不计入新增，但计入丢弃数")
     rejected = (Path(d) / "in_acme_us" / "_rejected.jsonl").read_text(encoding="utf-8")
     check("someone_else" in rejected, "他人帖写进了 _rejected.jsonl，不是静默丢弃")
     check("222" not in json.dumps(arc.rows()), "他人帖没有进归档")
@@ -252,7 +283,7 @@ with tempfile.TemporaryDirectory() as d:
     arc.append(stub)
     page = FakePage([resp(ig_payload("111", n_media=3))])
     n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
-    check(n == 1, "已存但媒体不全的帖子会被重新抓取并升级（不是 has() 语义）")
+    check(n.new == 1, "已存但媒体不全的帖子会被重新抓取并升级（不是 has() 语义）")
     row = [r for r in arc.rows() if r["post_id"] == "111"][0]
     check(len(row["media"]) == 3 and row["media_complete"],
           "升级后媒体补全，media_complete 回到 True")
@@ -262,7 +293,7 @@ with tempfile.TemporaryDirectory() as d:
     ctx = FakeCtx(FakePage([resp(ig_payload())]))
     n = asyncio.run(delta_once(ctx, "instagram", "acme_us", arc, test_cfg(),
                                dry_run=True))
-    check(n == 1, "--dry-run 会报出将要新增的篇数")
+    check(n.new == 1, "--dry-run 会报出将要新增的篇数")
     check(arc.rows() == [], "--dry-run 不写 manifest")
     check(ctx.request.gets == [], "--dry-run 不下载媒体")
     check(not list((Path(d) / "in_acme_us").glob("_capture_delta_*.json")),
@@ -270,6 +301,72 @@ with tempfile.TemporaryDirectory() as d:
 
 
 # ==========================================================================
+print("\n[3b] 2026-08-30 实测暴露的两个缺陷（这一段是回归防线，别删）")
+
+# 缺陷一：IG 主页时间线的首屏随 HTML 下发、不走 XHR。
+# 那次实测 39 个候选里只有 1 篇是本账号的，且比归档里最新的还旧。
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    page = FakePage(
+        # XHR 里只有推荐位（别人的帖子）——实测就是这个样子
+        [resp({"data": {"items": [
+            ig_payload("777", owner="other_brand")["data"]["items"][0]]}})],
+        # 本账号的时间线在页面内嵌的 JSON 里
+        embedded=[ig_payload("888", ts=1756500000, text="newest post")])
+    n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
+    check(n.new == 1, "内嵌 JSON 里的时间线被抓到了（只拦 XHR 的话这里是 0）")
+    check(n.embedded == 1, "结果里报出有几段来自内嵌 JSON")
+    check(n.rejected == 1, "XHR 里的推荐位照常被归属过滤丢掉")
+
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    page = FakePage([resp(ig_payload())],
+                    embedded=[ig_payload("888", ts=1756500000)])
+    n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc,
+                               test_cfg(harvest_embedded=False)))
+    check(n.embedded == 0 and n.new == 1,
+          "harvest_embedded=false 时不读内嵌 JSON（留一个可关的开关）")
+
+# 缺陷二：那次 IG 只打了一句"新增 0 篇"，与"真的没新帖"完全无法区分。
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    for i in range(6):        # 归档里已有 6 篇，说明这账号是有时间线的
+        arc.append(Post(post_id="old%d" % i, platform="instagram",
+                        account="acme_us", text="x", owner="acme_us",
+                        created_at="2026-07-%02dT00:00:00Z" % (10 + i)))
+    others = [ig_payload(str(900 + i), owner="brand%d" % i)["data"]["items"][0]
+              for i in range(38)]
+    page = FakePage([resp({"data": {"items": others + [
+        ig_payload("111", ts=1749200000)["data"]["items"][0]]}})])
+    try:
+        asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
+        check(False, "只看到 1 篇自家帖子必须中止")
+    except DeltaBlocked as e:
+        check("没有拿到时间线" in str(e) and "38" in str(e),
+              "只看到 1 篇自家的、丢弃 38 篇他人的 → 判为『没拿到时间线』而不是『没新帖』")
+        check(not e.hard, "这是我们这边的问题，不是对面在拦 —— 不牵连另一个平台")
+
+with tempfile.TemporaryDirectory() as d:
+    # 反面：归档本来就只有 1 篇时，看到 1 篇不该报警（阈值取 min(配置, 已有篇数)）
+    arc = Archive(Path(d), "in_acme_us")
+    arc.append(Post(post_id="old", platform="instagram", account="acme_us",
+                    text="x", owner="acme_us", created_at="2026-07-01T00:00:00Z"))
+    page = FakePage([resp(ig_payload("111"))])
+    n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
+    check(n.new == 1, "归档本身就很小时不误报（新账号、刚开始抓的情况）")
+
+r = delta.ScanResult(new=0, own=1, rejected=38, newest_seen="2026-06-06T00:00:00Z",
+                     oldest_seen="2026-06-06T00:00:00Z",
+                     newest_known="2026-07-15T00:00:00Z")
+check(r.stale_view(), "看到的最新一篇比归档还旧 → 判为视图陈旧")
+check("新增 0 篇" in r.summary() and "本账号 1 篇" in r.summary()
+      and "丢弃 38" in r.summary() and "2026-07-15" in r.summary(),
+      "一行摘要同时给出：新增数、自家篇数与日期跨度、丢弃数、归档最新日期")
+check(not delta.ScanResult(new=0, own=6, newest_seen="2026-08-25T00:00:00Z",
+                           newest_known="2026-08-25T00:00:00Z").stale_view(),
+      "看到的和归档一样新 → 不报警（这就是 FB 那次『真的没新帖』）")
+
+
 print("\n[4] 异常即停：这四种都必须当次中止并说清原因")
 
 with tempfile.TemporaryDirectory() as d:

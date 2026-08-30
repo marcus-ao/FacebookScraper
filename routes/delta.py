@@ -45,7 +45,8 @@ from pathlib import Path
 
 import httpx
 
-from core.capture import Collector, download_media, prune_captures
+from core.capture import (Collector, download_media, harvest_embedded_json,
+                          prune_captures)
 from core.chrome import attach, cdp_ready, launch
 from core.config import cfg
 from core.http import ig_headers, logged_out_client
@@ -336,6 +337,8 @@ class DeltaConfig:
     slowdown_stale_after_hours: float = 72.0
     autostart_chrome: bool = True
     keep_captures: int = 7
+    harvest_embedded: bool = True
+    min_own_posts: int = 3
     _quiet_slowdown: object = None
 
     @classmethod
@@ -356,6 +359,8 @@ class DeltaConfig:
             slowdown_stale_after_hours=float(g("slowdown_stale_after_hours", 72.0)),
             autostart_chrome=bool(g("autostart_chrome", True)),
             keep_captures=int(g("keep_captures", 7)),
+            harvest_embedded=bool(g("harvest_embedded", True)),
+            min_own_posts=int(g("min_own_posts", 3)),
             _quiet_slowdown=g("quiet_days_before_slowdown", 7),
         )
 
@@ -534,16 +539,42 @@ async def _pause(pacer: Pacer) -> None:
     await asyncio.sleep(random.uniform(pacer.lo, pacer.hi))
 
 
-async def human_scroll(page, dcfg: DeltaConfig, pacer: Pacer) -> int:
-    """按 C7 的深度上限往下滚几屏，每屏之间随机停顿。返回实际滚的屏数。
+async def _eval(page, expr: str, default):
+    """页面求值，失败返回默认值。这些都是辅助信息，不该让抓取失败。"""
+    try:
+        value = await page.evaluate(expr)
+    except Exception:
+        return default
+    return default if value is None else value
+
+
+async def human_scroll(page, dcfg: DeltaConfig, pacer: Pacer) -> tuple[int, float]:
+    """按 C7 的深度上限往下滚几屏，每屏之间随机停顿。
+
+    返回 `(滚了几屏, 页面实际移动了多少像素)`。
+
+    ⚠️ **必须先把鼠标移到视口中间。** `mouse.wheel` 是在**当前鼠标位置**派发
+    滚轮事件，而默认位置是 (0, 0) —— 视口左上角通常是导航栏/侧边栏，
+    滚轮打在那里对主区域没有任何作用。2026-08-30 首次实测时就是这样：
+    程序以为自己滚了两屏，页面一动没动，而**日志里看不出任何异常**。
+
+    返回实际位移正是为了让这种失败可见：滚了却没动，就该说出来。
 
     ❌ **不滚到底。** 增量只需要看到最新几条；每天滚到底既无收益，
     又是这条路径上最明显的机器行为特征。
     """
-    for _ in range(max(0, dcfg.max_scrolls)):
+    screens = max(0, dcfg.max_scrolls)
+    if not screens:
+        return 0, 0.0
+    size = await _eval(page, "() => [window.innerWidth, window.innerHeight]",
+                       [1280, 800])
+    await page.mouse.move(int(size[0]) // 2, int(size[1]) // 2)
+    before = float(await _eval(page, "() => window.scrollY", 0) or 0)
+    for _ in range(screens):
         await page.mouse.wheel(0, random.randint(*WHEEL_PX))
         await _pause(pacer)
-    return max(0, dcfg.max_scrolls)
+    after = float(await _eval(page, "() => window.scrollY", 0) or 0)
+    return screens, after - before
 
 
 async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
@@ -556,8 +587,19 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
         await page.goto(url, wait_until="domcontentloaded")
         # 首屏的接口响应是异步来的，goto 返回时通常还没到齐
         await asyncio.sleep(dcfg.first_screen_seconds)
-        await human_scroll(page, dcfg, dcfg.pacer())
+        screens, moved = await human_scroll(page, dcfg, dcfg.pacer())
+        if screens and moved <= 0:
+            # 滚了却没动。这不是小事：增量看不到新内容时，
+            # "页面没滚动"和"确实没新帖"在输出里必须长得不一样。
+            print("[!] 滚了 %d 屏但页面没有移动（scrollY 未变）——"
+                  "滚轮事件可能没落在可滚动区域" % screens)
         final_url = page.url
+        # IG 的首屏时间线随 HTML 下发、不走 XHR，只拦响应会永远看不到最新几篇。
+        # 放在滚动之后取：这时页面已经把该渲染的都渲染了。
+        if dcfg.harvest_embedded:
+            embedded = await harvest_embedded_json(page)
+            col.embedded = len(embedded)
+            col.payloads.extend(embedded)
         page.remove_listener("response", handler)
         # 停止接收新事件后再等已到达的响应体读完，否则最后几段 JSON
         # 会在页面关闭时被取消，形成无提示的数据缺口（CR-05）
@@ -571,9 +613,41 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
             await page.close()
 
 
+@dataclass
+class ScanResult:
+    """一次增量的结果与**诊断信息**。
+
+    诊断字段不是可有可无的日志装饰。2026-08-30 首次实测时，Instagram 那边
+    只打了一句"新增 0 篇"——而真相是它**根本没看到本账号的时间线**
+    （39 个候选里 1 篇是自己的，还比归档里最新的更旧）。
+    "真的没新帖"和"没看到时间线"当时在输出里完全一样。
+    下面每个字段都是为了让这两件事长得不一样。
+    """
+    new: int = 0
+    own: int = 0
+    rejected: int = 0
+    newest_seen: str = ""
+    oldest_seen: str = ""
+    newest_known: str = ""
+    payloads: int = 0
+    embedded: int = 0
+
+    def summary(self) -> str:
+        span = ("%s ~ %s" % (self.oldest_seen[:10], self.newest_seen[:10])
+                if self.newest_seen else "—")
+        return ("新增 %d 篇 · 本账号 %d 篇（%s）· 丢弃 %d · 归档最新 %s"
+                % (self.new, self.own, span, self.rejected,
+                   self.newest_known[:10] or "—"))
+
+    def stale_view(self) -> bool:
+        """看到的最新一篇比归档里最新的还旧 —— 强烈提示"没看到时间线"。"""
+        return bool(self.newest_seen and self.newest_known
+                    and self.newest_seen < self.newest_known)
+
+
 async def delta_once(ctx, platform: str, account: str, arc: Archive,
-                     dcfg: DeltaConfig, *, dry_run: bool = False) -> int:
-    """跑一个平台的一次增量，返回新增篇数。被拦时抛 :class:`DeltaBlocked`。
+                     dcfg: DeltaConfig, *, dry_run: bool = False) -> ScanResult:
+    """跑一个平台的一次增量。被拦时抛 :class:`DeltaBlocked`。
 
     ⚠️ 判断"这条要不要写"用 `arc.should_append()` 而**不是 `has()`**：
     否则先前留下的残缺帖永远补不全（CR-03），而且下载会白跑一遍 CDN。
@@ -609,23 +683,37 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
                            "解析器可能已经与真实结构不符" % len(col.payloads))
 
     # 首屏同样会混进推荐内容与被 @ 的 UGC（回填时实测 IG 混进 266 条、
-    # FB 混进 1 条）。"增量只看几条"不是省掉这一步的理由。
+    # FB 混进 1 条；增量实测 IG 一次混进 38 条）。
+    # "增量只看几条"不是省掉这一步的理由。
     posts, rejected = partition_by_owner(posts, account)
     if rejected and not dry_run:
         arc.record_rejected(rejected)
-    if not posts:
-        raise DeltaBlocked("解析出的 %d 篇没有一篇属于 %s —— "
-                           "可能打开的不是本账号主页，或归属字段变了"
-                           % (len(rejected), account))
 
-    new = 0
+    known = arc.rows()
+    dates = sorted(p.created_at for p in posts if p.created_at)
+    res = ScanResult(
+        own=len(posts), rejected=len(rejected),
+        newest_seen=dates[-1] if dates else "", oldest_seen=dates[0] if dates else "",
+        newest_known=max((r.get("created_at") or "" for r in known), default=""),
+        payloads=len(col.payloads), embedded=col.embedded)
+
+    # 「看到的自家帖子太少」是"没看到时间线"最可靠的信号。
+    # ⚠️ 用篇数而不是"最新一篇的日期倒退"来判：后者在账号删掉最新一帖时会
+    # 每天误报、把失败预算耗光，而删帖是会真实发生的。
+    floor = min(dcfg.min_own_posts, len(known))
+    if len(posts) < floor:
+        raise DeltaBlocked(
+            "只看到 %d 篇属于 %s 的帖子（丢弃 %d 篇他人内容，期望至少 %d 篇）"
+            " —— 大概率没有拿到时间线，而不是没有新帖"
+            % (len(posts), account, len(rejected), floor))
+
     for post in sorted(posts, key=lambda p: p.created_at or "", reverse=True):
         if not arc.should_append(post):
             continue
         head = (post.text or "").replace("\n", " ")[:38]
         if dry_run:
             print("  ~ %s  %s  %s" % (post.post_id, post.created_at or "(无日期)", head))
-            new += 1
+            res.new += 1
             continue
         await download_media(ctx, arc, post, url)
         if not arc.append(post):
@@ -634,8 +722,8 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         imgs = sum(1 for m in post.media if m.kind == "image")
         vids = sum(1 for m in post.media if m.kind == "video")
         print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
-        new += 1
-    return new
+        res.new += 1
+    return res
 
 
 # ---- C6：主入口 ---------------------------------------------------------
@@ -652,7 +740,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
             entry = state.setdefault(platform, blank_entry())
             print("\n=== %s / %s ===" % (platform, account))
             try:
-                new = await delta_once(ctx, platform, account, arc, dcfg,
+                res = await delta_once(ctx, platform, account, arc, dcfg,
                                        dry_run=dry_run)
             except DeltaBlocked as e:
                 # C7「异常即停」：当次立即停止并告警，不重试、不换 UA、不绕。
@@ -679,10 +767,19 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 save_state(path, state)
                 continue
 
-            print("新增 %d 篇%s" % (new, "（--dry-run，未写盘）" if dry_run else ""))
+            print(res.summary() + ("（--dry-run，未写盘）" if dry_run else ""))
+            if res.embedded:
+                print("    （其中 %d 段来自页面内嵌 JSON —— IG 首屏时间线走这条）"
+                      % res.embedded)
+            if res.stale_view():
+                # 不当失败处理：账号删掉最新一帖时也会这样，天天误报会把
+                # 失败预算耗光。但必须说出来——它是"没看到时间线"的强提示。
+                print("[!] 看到的最新一篇（%s）比归档里最新的（%s）还旧 —— "
+                      "确认一下是不是没拿到时间线"
+                      % (res.newest_seen[:10], res.newest_known[:10]))
             if dry_run:
                 continue
-            record_success(entry, utcnow(), new)
+            record_success(entry, utcnow(), res.new)
             save_state(path, state)
             quiet = entry["consecutive_quiet_days"]
             if quiet >= dcfg.quiet_days_before_slowdown(platform):
