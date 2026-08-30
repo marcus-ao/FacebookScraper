@@ -1,0 +1,11 @@
+archive/
+state/
+.env
+__pycache__/
+*.pyc
+.fbscraper-chrome/
+_deprecated/__pycache__/
+.venv/
+venv/
+.ruff_cache/
+.history/

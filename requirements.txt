@@ -1,0 +1,9 @@
+# 回填（CDP 附着）与登出增量
+playwright>=1.49
+httpx>=0.27
+# httpx: fb_graph.py（API 只读验证）与 core/http.py（登出增量）
+
+# F 组德语翻译。官方 SDK，通过 base_url 指向公司内部兼容 Anthropic Messages 的端点。
+# 注意：anthropic 1.x 基于 httpx2（与上面的 httpx 是两个不同的发行包，可共存，
+# 已实测 httpx 0.28.1 / httpx2 2.12.0 同时安装无冲突）。
+anthropic>=1.2

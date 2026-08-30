@@ -1,0 +1,117 @@
+# 全部可调参数集中在这里，代码里不写死。
+
+[chrome]
+# 留空则自动探测（见 core/config.py 的 CHROME_CANDIDATES）
+exe = ""
+# 专用 profile：小号会话存在这里，与日常 Chrome 完全隔离
+profile_dir = "~/.fbscraper-chrome"
+debug_port = 9222
+
+[targets]
+# 回填与增量的目标账号
+facebook = "your-us-page"          # facebook.com/<这里>
+instagram = "your_us_handle"       # instagram.com/<这里>
+
+[backfill]
+# 人工滚动阶段的最长等待（秒）。到点自动收尾，防止忘了回车。
+max_session_seconds = 1800
+
+[delta]
+# 每天几次。1 = 每天一次；调大即缩短漏帖窗口，登出无账号风险。
+runs_per_day = 1
+# 距上次成功超过这个小时数就补跑（笔记本合盖场景）
+stale_after_hours = 26
+# 登出增量的请求间隔（秒），对该端点的频率敏感度留足余量
+request_gap_seconds = 8
+
+[integrity]
+# 连续 N 天零新增即告警（目标账号日均约 1 帖，含视频）
+alert_after_quiet_days = 4
+# 相邻两帖间隔超过这个天数，标记为疑似缺口
+gap_flag_days = 5
+
+[translate]
+# ---- 连接（对接公司内部兼容 Anthropic Messages 的第三方端点）----
+# 网关地址。留空则走 Anthropic 官方 api.anthropic.com。
+# 填到 /v1 的**上一级**：SDK 会自己拼 /v1/messages。
+# 例：网关是 https://llm.corp.example.com/v1/messages，这里就填
+#     https://llm.corp.example.com
+base_url = ""
+
+# API Key 从**环境变量**读，绝不写进本文件（本文件进版本库，密钥不能进）。
+# 下面填的是环境变量的**名字**，不是密钥本身。
+api_key_env = "ANTHROPIC_API_KEY"
+
+# 网关的鉴权头风格：
+#   "x-api-key" = Anthropic 官方风格，发 x-api-key: <key>
+#   "bearer"    = 发 Authorization: Bearer <key>（不少内部网关用这个）
+# 不确定就先用 x-api-key，跑 --check 试；401/403 再换成 bearer。
+auth_style = "x-api-key"
+
+# 模型名以**你们网关暴露的名字**为准，不一定是 Anthropic 官方 ID。
+model = "claude-opus-5"
+
+# 额外请求头，网关若要求路由标识/租户 ID 之类可填这里。例：
+# extra_headers = { "X-Corp-Route" = "translation" }
+extra_headers = {}
+
+# ---- 请求参数 ----
+max_tokens = 4096                  # 一条社媒文案远用不满；截断会被显式报错而非静默
+timeout_seconds = 120
+max_retries = 2                    # SDK 自带指数退避，重试 429/5xx/连接错误
+request_gap_seconds = 1.0          # 相邻两次调用的最小间隔，避免打爆内部网关
+
+# 下面两项默认**不发送**，因为第三方兼容网关未必认。
+# 仅在你确认网关支持时才打开（官方 Opus 5 上不发 thinking 即为自适应思考，
+# 所以留空反而是官方端点上的最佳状态）。
+# effort = "high"                  # low | medium | high | xhigh | max
+# temperature = 0.3                # ⚠️ Opus 5 / Sonnet 5 已移除该参数，发了会 400
+
+# 提示词缓存。官方 API 上能省掉大量重复的输入 token（system prompt 每篇都一样）；
+# 但兼容网关未必支持 cache_control，默认关闭。确认网关支持后再开。
+prompt_cache = false
+
+# ---- 翻译行为 ----
+# 目标语言不做成配置项：提示词模板 prompts/translate_de.md 是德语专用的
+# （德式排版、du/Sie、性别表达全是德语特有问题）。想加语言得新写一份模板，
+# 留一个改了不生效的 target_lang 只会误导人。
+# 风格来源：从该账号已抓到的 US 文案里取 N 篇作为提示词示例
+style_examples = 6
+# 额外的语气指令，营销同事可直接改这一行
+tone = "品牌口吻保持简洁直接，避免夸张营销词；控制长度，话题标签不超过 3 个。"
+
+# ---- 品牌语域决策 ----
+# ⚠️ 这三项决定每一篇译文的基调，改动后需要 --force 重译全量才会生效。
+# 它们是**模型无法自行知道的品牌决策**，必须在这里定死，
+# 否则模型会篇篇自己挑，整个 feed 读起来是散的。
+
+# 称呼形式。英文的 "you" 不含这个信息，德语必须二选一：
+#   "du"  = 非正式第二人称。消费品牌在 IG/FB 上的德语主流选择
+#   "Sie" = 正式敬称。B2B、金融、医疗、高端奢侈品常用
+address_form = "du"
+
+# 性别表达（德国市场的真实分歧点）：
+#   "neutral" = 改写成中性说法，尽量避开人称名词（最安全，不站队）
+#   "colon"   = 冒号式 Kund:innen（年轻/进步品牌常用，部分受众反感）
+#   "generic" = 传统阳性泛指 Kunden（最保守，部分受众视为过时）
+gender_style = "neutral"
+
+# 英语借词政策。德语营销对英语词的容忍度比多数语言高，但过量会显得廉价：
+#   "moderate" = 已通用的保留（Sale / Shop / Style / Look / Outfit / Hoodie），其余译出
+#   "minimal"  = 尽量用德语词
+#   "keep"     = 原文的英语词尽量保留
+anglicism_policy = "moderate"
+
+# 术语表：强制统一的译法。左边写英文（大小写不敏感），右边写德文。
+# 没有它，第 1 篇写 Kapuzenpullover、第 12 篇写 Hoodie —— 品牌内容不能这样。
+# 抓到真实文案后，把反复出现的产品名 / 卖点词填进来。
+# ⚠️ TOML 语法要求：本小节必须放在 [translate] 的**最后**，
+#    它下面的键都属于 glossary，不再属于 [translate]。
+[translate.glossary]
+# "hoodie"        = "Hoodie"
+# "free shipping" = "kostenloser Versand"
+# "sold out"      = "ausverkauft"
+
+[paths]
+archive = "archive"
+state = "state"
