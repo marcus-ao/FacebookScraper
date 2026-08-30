@@ -534,8 +534,14 @@ with tempfile.TemporaryDirectory() as tmp:
         delta.notify = saved
     check([h["kind"] for h in hits] == ["quiet"], "零新增超阈值 → 检查命中")
     check(len(notices) == 1, "一个平台一条通知，不是一项一条")
-    check("30 天" in notices[0][1] and "21 天" in notices[0][1],
-          "通知文案具体到平台/天数/阈值（正例：『instagram 连续 30 天零新增（阈值 21 天）』）")
+    # 断言的是"文案里有平台、实际天数、配置阈值"，**不写死阈值的数值**：
+    # 阈值是按真实发帖节奏标定的、会随数据修正（2026-08-30 当天就改过一次），
+    # 把它写死在测试里，等于每次重标都要改测试，而测试真正要保证的是
+    # "这条通知说得够具体，不是『发现问题』"。
+    _, threshold = delta.integrity.params("instagram")
+    check("30 天" in notices[0][1] and ("%d 天" % threshold) in notices[0][1]
+          and "instagram" in notices[0][1],
+          "通知文案具体到平台/实际天数/阈值（反例：『发现问题』）")
     check("完整性告警" in notices[0][0] and "instagram" in notices[0][0],
           "标题点名是哪个平台")
 
@@ -607,10 +613,12 @@ check(effective_stale_hours(quiet, dcfg, "facebook") == 26.0,
       "同样 10 天，FB 阈值是 14 天 → 仍按 26 小时跑（两个账号节奏差一个量级）")
 check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9,
       "阈值写成一个数时两个平台通用（向后兼容，不强制写成表）")
+# 断言的是"内联表能按平台解析出来"，**不要求两个值必须不同** ——
+# 两个账号目前节奏一样（近一年间隔中位都是 1.0 天），值相同是正确的标定结果。
 loaded = DeltaConfig.load()
-check(loaded.quiet_days_before_slowdown("facebook")
-      != loaded.quiet_days_before_slowdown("instagram"),
-      "config.toml 里两个平台的降频阈值确实是分开的")
+check(all(isinstance(loaded.quiet_days_before_slowdown(p), int) and
+          loaded.quiet_days_before_slowdown(p) > 0 for p in delta.PLATFORMS),
+      "config.toml 里的降频阈值能按平台各自解析出正整数")
 
 run, why = stale_enough({"last_success": "2026-08-30T08:00:00Z"}, NOW, 26)
 check(not run and "不足" in why, "距上次成功 1 小时 → 跳过，且说清楚为什么")

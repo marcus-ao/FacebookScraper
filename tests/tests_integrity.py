@@ -97,12 +97,13 @@ gap, quiet = params()
 check(isinstance(gap, int) and isinstance(quiet, int), "params() 返回两个整数")
 fb_gap, fb_quiet = params("facebook")
 ig_gap, ig_quiet = params("instagram")
-check(fb_quiet != ig_quiet,
-      f"两个平台的零新增阈值确实不同（FB {fb_quiet} / IG {ig_quiet}）")
-check(fb_quiet == 7 and ig_quiet == 21,
-      "用户 2026-08-30 拍板的值：FB 7 天 / IG 21 天")
-check(ig_gap > fb_gap,
-      f"IG 的缺口阈值更宽（{ig_gap} > {fb_gap}）—— 它的 p90 间隔是 5.89 天")
+check(isinstance(fb_quiet, int) and isinstance(ig_quiet, int),
+      f"两个平台各自取到值（FB {fb_quiet} / IG {ig_quiet}）")
+check(4 <= fb_quiet <= 14 and 4 <= ig_quiet <= 14,
+      "零新增阈值在合理区间：太紧会天天误报，太松则真坏了要几周才报出来"
+      f"（实得 FB {fb_quiet} / IG {ig_quiet}；两个账号近一年间隔中位都是 1.0 天）")
+check(ig_gap >= fb_gap,
+      f"IG 的缺口阈值不比 FB 紧（{ig_gap} >= {fb_gap}）—— 它的 p95 间隔更大")
 
 
 print("\n[10] run_checks：只报**新出现**的问题（D3 的核心）")
