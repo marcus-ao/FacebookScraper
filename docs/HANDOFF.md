@@ -12,7 +12,8 @@
 
 接手一个进行中的项目，按 `docs/IMPLEMENTATION_PLAN.md` 里的任务项继续实现、
 调试、跑通。**A / B / J 三组已完成，归档数据是干净可用的**；
-当前停在一个需要用户拍板的架构岔路口（见下面「现在卡在哪」）。
+增量方案也已定案（方案 B），**没有待拍板的事，可以直接开工**。
+你的第一个任务是 **C2**，见下面「现在卡在哪」。
 
 **运行环境是 Windows**。所有 `.bat`、Chrome 探测、CDP 连接**已在 Windows 实机
 跑通**，不再是未验证假设——这与上一版交接文件不同。
@@ -115,7 +116,7 @@ archive/in_neakasa.tech/
    **这条设计不许优化掉。**
 
 **别为了"有产出"去做依赖图下游的事。** 计划的依赖图是真的。
-尤其别在 C 组拍板之前动 C3–C6 —— 那三项的形态完全取决于走哪条路。
+C 组按 C2 → C3 → C4 → C5 → C6 → C7 的顺序做，**C7 不许跳过**。
 
 ---
 
@@ -169,7 +170,7 @@ FacebookScraper/
 
   scripts/                 双击入口。**纯 ASCII + CRLF，不得有中文**
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
-    run_delta.bat          ← 待建（E1），**等 C 组拍板后才知道要不要**
+    run_delta.bat          ← 待建（E1）。必须纯 ASCII + CRLF + PYTHONIOENCODING
   tools/                   .bat 的真正实现，中文提示的容身处
     setup.py  start_chrome.py
     replay.py              用 capture 离线重建归档（B7），不重新下载媒体
@@ -187,13 +188,13 @@ FacebookScraper/
     store.py               归档层（含"残缺→补全"升级语义）
     parse.py               三种 JSON 形态的解析 + walk() 全树搜索
     session.py             仅 Pacer 限速 + SAFARI_UA 常量
-    http.py                登出 HTTP 客户端（拒收一切 cookie）
+    http.py                登出 HTTP 客户端。**方案 B 下用不上，保留备用，不要删**
     integrity.py           连续性 / 长期零新增 / 媒体不全 三项检查
     notify.py              Windows 通知（toast → msg → alerts.log 三级降级）
     console.py             stdout/stderr 强制 UTF-8（本机代码页 936，重定向即崩）
   routes/
     backfill.py            登录态回填
-    delta.py               登出增量。C2 已实现，C3–C6 待建
+    delta.py               每日增量。旧的登出实现保留备用；C2–C7（登录态）待建
     fb_graph.py            API 只读通道，保留但未接入（缺 Token）
   publish/                 ← 待建（G 组）
   tests/                   10 套 400 项检查，全绿（重定向输出下也全绿）
@@ -219,7 +220,7 @@ FacebookScraper/
 | **D2**       | `core/notify.py` 通知降级，15 项断言 + 真实 toast 弹出验证 |
 | **F1/F2/F3** | 翻译流水线代码完成，162 项检查 ——**但计划里未勾选**，见下  |
 | **输出编码** | `core/console.py`：本机代码页 936，输出一旦被重定向就崩在 `⚠/❗/ß` 上。**这会直接炸掉 E1**（它要求把增量输出追加进 `state/delta.log`）。已修并验证 |
-| **C2**       | 登出增量 Instagram，55 项断言 ——**代码完成但未勾选**，端点对登出已关闭，见下 |
+| **旧 C2**    | 登出增量 Instagram，55 项断言 ——端点已对登出关闭，**代码保留备用**，见下 |
 | **B 组全部** | 解析器缺陷修复 + 归档离线重建 + 滚动进度显示，全部实测验收 |
 | **J 组全部** | 归档改为每帖一个文件夹 + `index.html` 总览，迁移完成且可回退 |
 
@@ -382,16 +383,51 @@ CDN URL 带签名且有时效，必须在拿到响应的**同一次运行内**�
 
 ## 版本库
 
-- **远端**：`https://github.com/marcus-ao/FacebookScraper.git`　**分支**：`main`
-- **首次提交**：2026-08-29，内容是 A/C1/D1/D2/F 组 + 二次审查后的完整快照
+- **远端**：`https://github.com/marcus-ao/FacebookScraper.git`（**私有仓库**，
+  2026-08-29 经匿名访问返回 404 确认）　**主干**：`main`
 - **不进版本库**（`.gitignore`）：`archive/`（抓取产物）、`state/`（运行状态）、
-  `.env`（API 密钥）、`.venv/`、`__pycache__/`。
+  `.env`（API 密钥）、`.venv/`、`__pycache__/`、`.history/`。
   Chrome profile 在 `%USERPROFILE%\.fbscraper-chrome`，本来就在仓库外。
 - `.gitattributes` 锁 `*.bat` 为 CRLF。**ASCII 得靠人守，git 管不了。**
 
-⚠️ **`config.toml` 进版本库**。它现在只有占位符（`your-us-page`）。
-填了真实账号名之后，那次提交就会把公司账号写进 git 历史——
-如果仓库是公开的，先想清楚这一点。密钥永远走 `.env`，不要动这条线。
+⚠️ **`config.toml` 进版本库，且已经填了真实账号名**
+（`neakasaofficial` / `neakasa.tech`）。仓库是私有的，风险可控；
+但**如果哪天要转公开，先想清楚这一点**。密钥永远走 `.env`，不要动这条线。
+
+### git 工作流（2026-08-30 约定，**请照做**）
+
+> 写在这里是因为：**约定不写进文档就会丢。** 这个项目已经反复吃过这个亏——
+> 附录 D 里记着好几次"上一轮定的事下一轮没人知道"。
+> 你是新会话，除了这些文档你什么都看不到。
+
+**一个任务组一个分支**，命名 `<type>/<简短描述>`：
+
+| 任务组 | 分支名 | 何时合回 main |
+|---|---|---|
+| C2–C7（登录态增量） | `feat/delta-logged-in` | C7 验收通过时 |
+| D3 | `feat/integrity-alerts` | D3 验收通过时 |
+| E 组 | `feat/scheduler` | E3 验收通过时 |
+| G 组 | `feat/business-suite-publish` | G8 验收通过时 |
+
+**规则**：
+
+1. **`main` 永远是"最后一个已验收的可用状态"。** 半成品不进 main。
+2. **合回 main 用 `--ff-only`**，保持历史线性：
+   ```
+   git checkout main && git merge --ff-only <分支名>
+   ```
+   合不上（非快进）说明 main 在你之外动过，**先查清楚再动手**，不要 `-f`。
+3. **该组的【验收】没过就不要合。** 这与工作协议里"未通过验收不得勾选"是同一条：
+   计划里打了 `[x]`、代码进了 main，两件事应当同时发生。
+4. **提交信息用 Conventional Commits**（`feat:` / `fix:` / `docs:` / `refactor:`），
+   破坏性变更加 `!` 与 `BREAKING CHANGE:` 脚注。
+   已有两个例子可参考：`76fc1d4`（带 BREAKING CHANGE）与本约定的 `docs:` 提交。
+5. **每次会话结束前提交一次**，并同步更新本文件的"现在卡在哪"。
+   下一个会话是从文档开工的，**文档和分支状态不一致比没有分支更糟**。
+
+⚠️ **不要在 `main` 上直接改 C 组的东西。** C 组直接碰封号风险面，
+是这个项目里唯一可能"整组推翻重来"的部分——万一方案 B 实测走不通，
+你要能整块丢掉，而不是从 main 里一点点往外挑。
 
 ## 代码质量工具
 
