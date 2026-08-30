@@ -11,6 +11,7 @@ from core.console import force_utf8   # noqa: E402
 
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
+import core.chrome as chrome
 from core.chrome import cdp_ready, port_open
 import tools.start_chrome as start_chrome
 
@@ -72,18 +73,20 @@ with tempfile.TemporaryDirectory() as d:
         profile_dir = Path(d)
         debug_port = 43210
 
+    # 拉起 Chrome 的实现 2026-08-30 搬进了 core.chrome.launch（增量在 Chrome
+    # 没开时要做同一件事），所以 Popen 现在挂在那个模块上，patch 点跟着走。
     original = (start_chrome.cfg, start_chrome.cdp_ready,
-                start_chrome.port_open, start_chrome.subprocess.Popen)
+                start_chrome.port_open, chrome.subprocess.Popen)
     launched = []
     try:
         start_chrome.cfg = lambda: FakeConfig()
         start_chrome.cdp_ready = lambda _port: False
         start_chrome.port_open = lambda _port: True
-        start_chrome.subprocess.Popen = lambda *_a, **_k: launched.append(True)
+        chrome.subprocess.Popen = lambda *_a, **_k: launched.append(True)
         rc = start_chrome.main()
     finally:
         (start_chrome.cfg, start_chrome.cdp_ready,
-         start_chrome.port_open, start_chrome.subprocess.Popen) = original
+         start_chrome.port_open, chrome.subprocess.Popen) = original
     check(rc == 1, "非 CDP 端口占用返回失败，而不是假报 Chrome 已运行")
     check(not launched, "没有在已占用端口上启动第二个进程")
 

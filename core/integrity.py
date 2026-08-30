@@ -37,6 +37,11 @@ def _parse_ts(value) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+# 时间戳解析是增量的状态文件（routes/delta.py）也要用的东西，
+# 公开一个不带下划线的名字，免得项目里出现第三份 fromisoformat 包装。
+parse_ts = _parse_ts
+
+
 def check_undated(rows: list[dict]) -> list[dict]:
     """created_at 缺失或无法解析的记录。
 

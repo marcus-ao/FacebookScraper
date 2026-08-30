@@ -21,14 +21,12 @@ import sys
 import threading
 import time
 
+from core.capture import INTEREST, Collector  # noqa: F401  （INTEREST 供外部引用）
+from core.capture import download_media as _download
 from core.chrome import attach
 from core.config import cfg
 from core.parse import extract, partition_by_owner
-from core.store import Archive, Post
-
-# 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
-INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
-            "/api/v1/users/", "/api/v1/media")
+from core.store import Archive
 
 # 多久没有新响应就提示"可以收尾了"。页面滚到底之后不会再发请求，
 # 但操作者看不见网络活动，只能靠猜。给个明确信号。
@@ -80,47 +78,6 @@ class ScrollProgress:
                 if quiet_seconds >= STALL_HINT_SECONDS else "")
         return "  已抓到 %d 篇（%s）· 最早 %s%s" % (
             len(self.ids), self.account, earliest, tail)
-
-
-class Collector:
-    def __init__(self) -> None:
-        self.payloads: list[dict] = []
-        self.hits = 0
-        self._tasks: set[asyncio.Task] = set()
-
-    def submit(self, response) -> None:
-        """登记响应处理任务，收尾时统一等待，避免最后几段 JSON 还没读完就落盘。"""
-        self._tasks.add(asyncio.create_task(self.on_response(response)))
-
-    async def drain(self) -> None:
-        """等待所有已登记的响应体读取完成，并消费后台任务异常。"""
-        if not self._tasks:
-            return
-        tasks, self._tasks = tuple(self._tasks), set()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, BaseException):
-                print(f"    ! 响应处理失败：{type(result).__name__}: {result}")
-
-    async def on_response(self, response) -> None:
-        if not any(k in response.url for k in INTEREST):
-            return
-        if response.status != 200:
-            return
-        try:
-            body = await response.text()
-        except Exception:
-            return
-        self.hits += 1
-        # FB 的 GraphQL 有时一个响应里多段 JSON，按行拆
-        for chunk in body.splitlines():
-            chunk = chunk.strip()
-            if not chunk.startswith("{"):
-                continue
-            try:
-                self.payloads.append(json.loads(chunk))
-            except json.JSONDecodeError:
-                continue
 
 
 def _stdin_waiter(readline=None) -> tuple[threading.Event, threading.Thread]:
@@ -241,39 +198,6 @@ async def run(platform: str) -> int:
                 await browser.close()
             finally:
                 await pw.stop()
-
-
-async def _download(ctx, arc: Archive, post: Post, referer: str) -> None:
-    """用浏览器自己的请求栈下载，复用其 cookie 与 TLS 指纹。
-
-    视频不下载（范围外），但保留 URL 与元数据，
-    否则连续性检查会把视频帖误报成缺口。
-    """
-    downloads_complete = True
-    for i, m in enumerate(post.media):
-        if m.kind == "video":
-            continue
-        try:
-            resp = await ctx.request.get(m.url, headers={"Referer": referer})
-            if not resp.ok:
-                print(f"    ! 媒体 {resp.status} {post.post_id}[{i}]")
-                downloads_complete = False
-                continue
-            data = await resp.body()
-        except Exception as e:
-            print(f"    ! 媒体失败 {post.post_id}[{i}]: {e}")
-            downloads_complete = False
-            continue
-        if not data:
-            print(f"    ! 媒体为空 {post.post_id}[{i}]")
-            downloads_complete = False
-            continue
-        p = arc.media_path(post, i, resp.headers.get("content-type"))
-        p.write_bytes(data)
-        m.local_path = str(p.relative_to(arc.base))
-    # ``media_complete`` 同时表示源响应是否给全、以及已知图片是否均已落盘。
-    # 下载失败必须留下 False，下一次回填才会被 Archive.should_append 接受并重试。
-    post.media_complete = post.media_complete and downloads_complete
 
 
 if __name__ == "__main__":

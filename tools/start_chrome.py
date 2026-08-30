@@ -11,19 +11,14 @@ r"""起专用 Chrome 并开放调试端口。对应实施计划的 A3。
 """
 from __future__ import annotations
 
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.chrome import cdp_ready, port_open  # noqa: E402
+from core.chrome import PORT_WAIT_SECONDS, cdp_ready, launch, port_open  # noqa: E402
 from core.config import cfg                # noqa: E402
 from core.console import force_utf8        # noqa: E402
-
-# Chrome 冷启动到端口可连有几秒延迟，立刻去连 CDP 会失败，看起来像"脚本坏了"
-PORT_WAIT_SECONDS = 15
 
 
 def main() -> int:
@@ -50,33 +45,17 @@ def main() -> int:
         print("    请关闭占用程序，或修改 config.toml 的 [chrome].debug_port。")
         return 1
 
-    profile.mkdir(parents=True, exist_ok=True)
-    argv = [
-        str(exe),
-        "--remote-debugging-port=%d" % port,
-        "--user-data-dir=%s" % profile,
-        "--no-first-run",
-        "--no-default-browser-check",
-    ]
-    # 脱离本进程存活：脚本退出后 Chrome 窗口必须还开着
-    flags = 0
-    if sys.platform.startswith("win"):
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(argv, creationflags=flags, close_fds=True)
-
+    # 实际的拉起与端口轮询在 core.chrome.launch —— 每日增量（routes/delta.py）
+    # 在 Chrome 没开时也要做同一件事，两处各写一份必然漂移。
     print("等待调试端口就绪...", end="", flush=True)
-    deadline = time.monotonic() + PORT_WAIT_SECONDS
-    while time.monotonic() < deadline:
-        if cdp_ready(port):
-            print()
-            print("[ok] 调试端口 %d 已就绪。" % port)
-            print()
-            print("若这是第一次运行，请在打开的窗口里登录抓取用的小号（含二次验证）。")
-            print("保持这个窗口开着，然后运行：")
-            print("    scripts\\run_backfill.bat facebook")
-            return 0
-        time.sleep(1)
-        print(".", end="", flush=True)
+    if launch(PORT_WAIT_SECONDS, on_tick=lambda: print(".", end="", flush=True)):
+        print()
+        print("[ok] 调试端口 %d 已就绪。" % port)
+        print()
+        print("若这是第一次运行，请在打开的窗口里登录抓取用的小号（含二次验证）。")
+        print("保持这个窗口开着，然后运行：")
+        print("    scripts\\run_backfill.bat facebook")
+        return 0
 
     print()
     print("[!] 等了 %d 秒，Chrome 调试端点 %d 仍未就绪。常见原因："

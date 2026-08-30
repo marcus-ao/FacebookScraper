@@ -19,32 +19,41 @@ r"""每日增量：**完全登出**，不带任何 cookie。对应实施计划�
 详见 `docs/IMPLEMENTATION_PLAN.md` 第 0 节的方案变更说明与 C7 的缓解措施。
 
 当前实现范围：
-    C2  Instagram 登录态增量  **待建**（方案 B）
-    C3  Facebook  登录态增量  待建
-    C4  增量的媒体下载        待建（走浏览器请求栈，不要用 core/http.py）
-    C5  运行状态记录          待建
-    C6  主入口（--platform / --dry-run / --if-stale）待建
-    C7  累积风险缓解          待建，**是方案的组成部分不是可选项**
+    C2  Instagram 登录态增量  已实现（方案 B）
+    C3  Facebook  登录态增量  已实现
+    C4  增量的媒体下载        已实现（走浏览器请求栈，不用 core/http.py）
+    C5  运行状态记录          已实现（state/delta_state.json）
+    C6  主入口                已实现（--platform / --dry-run / --if-stale）
+    C7  累积风险缓解          已实现，**是方案的组成部分不是可选项**
 
-⚠️ **本文件里现有的这份登出实现保留，不要删。**
+⚠️ **本文件里的登出实现（下半部分之前的那一段）保留，不要删。**
 它是对的（55 项离线断言全过，含归属过滤、登录墙三形态、429 退避上限），
 只是端点关了。若哪天该端点重新对登出开放，切回去是**风险更低**的路径。
-C2 的新实现请**并行新增**，不要覆盖它。
-
-因此本模块现在**只抓不写盘**：__main__ 是旧登出实现的探针，不是最终入口。
+登录态实现是**并行新增**的，没有覆盖它；`python -m routes.delta --logged-out-probe`
+仍可跑那条老路径做探针。
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
-import sys
+import random
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
+from core.capture import Collector, download_media, prune_captures
+from core.chrome import attach, cdp_ready, launch
 from core.config import cfg
 from core.http import ig_headers, logged_out_client
+from core.integrity import parse_ts
+from core.notify import notify
 from core.parse import extract, partition_by_owner
 from core.session import Pacer
-from core.store import Post
+from core.store import Archive, Post
 
 # 登出可用的公开端点。**不需要 doc_id**，这正是选它的理由：
 # IG 的 web GraphQL 端点要硬编码 doc_id，而那个值每 2-4 周轮换，
@@ -269,12 +278,546 @@ def _probe(account: str) -> int:
     return 0 if posts and with_text else 1
 
 
+# ==========================================================================
+# 方案 B：登录态 + CDP 附着（C2 / C3 / C4 / C5 / C6 / C7）
+#
+# 与上面那条登出路径的差别不是"更自动"，而是**身份**：这条路每天都带着
+# 小号的登录态去露一次面。封号风险因此从「一次性敞口」变成「累积性敞口」，
+# 而抓取小号被封是本项目**唯一不可恢复的失败模式**（回填与增量同时断掉）。
+#
+# 因此下面每一处看着"保守到没必要"的地方——只滚两屏、随机延迟、异常即停、
+# 失败预算、零新增降频——都是在为"每天都要来一次"买保险。
+# **不要因为"跑得挺好"就把它们优化掉**：这类风险的反馈是延迟的，且只反馈一次。
+# ==========================================================================
+
+PLATFORMS = ("facebook", "instagram")
+
+# 登录墙 / 安全挑战的 URL 特征。命中任一即**当次立即停止**，不重试、不换 UA。
+LOGIN_URL_MARKERS = ("/accounts/login", "/login.php", "/login/", "/login?",
+                     "/checkpoint", "/challenge")
+
+# 每屏滚动的像素区间。定成区间而不是定值：匀速等距滚动本身就是行为指纹。
+WHEEL_PX = (700, 1500)
+
+
+def profile_url(platform: str, account: str) -> str:
+    return {"instagram": "https://www.instagram.com/%s/",
+            "facebook": "https://www.facebook.com/%s/"}[platform] % account
+
+
+def _per_platform(raw, platform: str, default):
+    """配置项允许写成一个数（两平台通用）或 ``{ facebook = 7, instagram = 21 }``。
+
+    用**内联表**而不是 `[delta.facebook]` 子表，是为了避开 TOML 的排序陷阱：
+    子表一旦插在普通键中间，它后面的键就全归子表了——项目里
+    `[translate.glossary]` 已经因为这条规则专门写过警告。内联表是一行，
+    放在哪儿都不改变语义。
+
+    为什么需要按平台分：实测两个账号的节奏差一个量级——Facebook 发帖
+    中位间隔 1.0 天（2026-08-25 还在发），Instagram 中位 1.6 天但已经
+    连续 45 天没发。同一个阈值不可能同时适配这两种。
+    """
+    if isinstance(raw, dict):
+        value = raw.get(platform)
+        return default if value is None else value
+    return default if raw is None else raw
+
+
+@dataclass
+class DeltaConfig:
+    """`[delta]` 的全部参数。**代码里不写死数字**（计划第 2 节）。"""
+    request_gap_seconds: float = 8.0
+    stale_after_hours: float = 26.0
+    start_jitter_minutes: float = 45.0
+    max_scrolls: int = 2
+    first_screen_seconds: float = 6.0
+    max_session_seconds: float = 300.0
+    failure_budget: int = 3
+    slowdown_stale_after_hours: float = 72.0
+    autostart_chrome: bool = True
+    keep_captures: int = 7
+    _quiet_slowdown: object = None
+
+    @classmethod
+    def load(cls, c=None) -> "DeltaConfig":
+        c = c if c is not None else cfg()
+
+        def g(key, default):
+            return c.get("delta", key, default)
+
+        return cls(
+            request_gap_seconds=float(g("request_gap_seconds", 8.0)),
+            stale_after_hours=float(g("stale_after_hours", 26.0)),
+            start_jitter_minutes=float(g("start_jitter_minutes", 45.0)),
+            max_scrolls=int(g("max_scrolls", 2)),
+            first_screen_seconds=float(g("first_screen_seconds", 6.0)),
+            max_session_seconds=float(g("max_session_seconds", 300.0)),
+            failure_budget=int(g("failure_budget", 3)),
+            slowdown_stale_after_hours=float(g("slowdown_stale_after_hours", 72.0)),
+            autostart_chrome=bool(g("autostart_chrome", True)),
+            keep_captures=int(g("keep_captures", 7)),
+            _quiet_slowdown=g("quiet_days_before_slowdown", 7),
+        )
+
+    def quiet_days_before_slowdown(self, platform: str) -> int:
+        return int(_per_platform(self._quiet_slowdown, platform, 7))
+
+    def pacer(self) -> Pacer:
+        """滚动之间的停顿。配置给下界，上界取两倍——随机化本身比倍数重要。"""
+        return Pacer(lo=self.request_gap_seconds, hi=self.request_gap_seconds * 2)
+
+
+class DeltaBlocked(RuntimeError):
+    """当次抓取被中止的所有原因（登录墙、被拦、解析异常）共用这一个类型。
+
+    它们的处理办法大体相同——**立即停止、记一次失败、告警、不重试**——
+    区别只在给人看的那句话，所以不给每种原因单独造一个异常类型。
+
+    唯一需要程序区分的是 ``hard``：
+
+    * ``hard=True``（登录墙 / 401 / 403 / 429）—— **本次全部平台一起停**。
+      两个平台共用同一个会话、同一份浏览器指纹，IG 刚被限流就转头去敲 FB，
+      是把"可能被注意到"变成"确定被注意到"。
+    * ``hard=False``（解析不出来、页面没加载、超时）—— 只停这个平台。
+      这类问题出在我们这边，不是对面在拦，另一个平台照跑。
+    """
+
+    def __init__(self, reason: str, hard: bool = False):
+        super().__init__(reason)
+        self.hard = hard
+
+
+# ---- C5：运行状态 -------------------------------------------------------
+
+def state_path() -> Path:
+    return cfg().state_dir / "delta_state.json"
+
+
+def blank_entry() -> dict:
+    return {"first_success": None, "last_run": None, "last_success": None,
+            "last_new_at": None, "last_new_count": 0,
+            "consecutive_quiet_days": 0, "consecutive_failures": 0,
+            "last_error": None}
+
+
+def load_state(path: Path) -> dict:
+    """读状态文件。坏文件不得让整条链路停摆——重建一个空的继续跑。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def quiet_days(entry: dict, now: datetime) -> int:
+    """距上一次真的抓到新帖过了几天。
+
+    ⚠️ **不是"连续几次跑出 0 新增"**。按次数算的话，`runs_per_day` 一改
+    这个数的含义就变了（跑两次 = 一天算两天），而它下游要喂给
+    "连续 N 天零新增就告警/降频"——那两处说的都是**天**。
+    从没抓到过新帖时，从第一次成功之日起算。
+    """
+    anchor = parse_ts(entry.get("last_new_at")) or parse_ts(entry.get("first_success"))
+    if anchor is None:
+        return 0
+    return max(0, int((now - anchor).total_seconds() // 86400))
+
+
+def record_success(entry: dict, now: datetime, new_count: int) -> dict:
+    entry["last_run"] = iso(now)
+    entry["last_success"] = iso(now)
+    entry.setdefault("first_success", None)
+    if not entry["first_success"]:
+        entry["first_success"] = iso(now)
+    if new_count:
+        entry["last_new_at"] = iso(now)
+    entry["last_new_count"] = new_count
+    entry["consecutive_failures"] = 0
+    entry["last_error"] = None
+    entry["consecutive_quiet_days"] = quiet_days(entry, now)
+    return entry
+
+
+def record_failure(entry: dict, now: datetime, error: str) -> dict:
+    """失败也要写。
+
+    否则"连续三天失败"和"连续三天没新帖"在状态文件里长得**一模一样**，
+    而这两件事一个要人去重新登录、一个什么都不用做。
+    ⚠️ `last_success` **不刷新** —— 刷新了 `--if-stale` 就会以为跑过了。
+    """
+    entry["last_run"] = iso(now)
+    entry["last_error"] = error
+    entry["consecutive_failures"] = int(entry.get("consecutive_failures") or 0) + 1
+    return entry
+
+
+def budget_exhausted(entry: dict, budget: int) -> bool:
+    """连续失败达阈值 → 停止自动运行，要人来看一眼（C7「失败预算」）。
+
+    会话失效之后每天硬撞一个已经失效的会话，是这条路径上最坏的行为：
+    它把"可能被注意到"变成"每天主动提醒对方注意"。
+    """
+    if budget <= 0:
+        return False
+    return int(entry.get("consecutive_failures") or 0) >= budget
+
+
+def effective_stale_hours(entry: dict, dcfg: DeltaConfig, platform: str) -> float:
+    """长期零新增就自动降频（C7「频率可降级」）。
+
+    实测 Instagram 已经连续 45 天没发新帖，天天全速跑没有任何收益，
+    却每天都在累积敞口。降频是这条路径上**唯一能直接降低风险**的旋钮。
+    """
+    threshold = dcfg.quiet_days_before_slowdown(platform)
+    if threshold > 0 and int(entry.get("consecutive_quiet_days") or 0) >= threshold:
+        return dcfg.slowdown_stale_after_hours
+    return dcfg.stale_after_hours
+
+
+def stale_enough(entry: dict, now: datetime, hours: float) -> tuple[bool, str]:
+    """`--if-stale` 的判定。返回 (要不要跑, 给人看的理由)。"""
+    last = parse_ts(entry.get("last_success"))
+    if last is None:
+        return True, "还没有成功跑过"
+    elapsed = (now - last).total_seconds() / 3600.0
+    if elapsed < hours:
+        return False, "距上次成功 %.1f 小时，不足 %.0f 小时" % (elapsed, hours)
+    return True, "距上次成功 %.1f 小时" % elapsed
+
+
+# ---- C2/C3：页面扫描 ----------------------------------------------------
+
+def login_wall_reason(final_url: str, blocked: tuple[int, str] | None = None) -> str | None:
+    """这次访问是不是被登录墙 / 限流拦了？是就返回人话理由。
+
+    两个独立证据，都要看：
+      1. **落地 URL** —— 会话失效时页面会被重定向到登录页或 checkpoint；
+      2. **接口状态码** —— 页面壳可能照常渲染，但接口全在 401/403/429，
+         这时 URL 完全正常，只看 URL 会把"被拦"读成"这个号没发帖"。
+
+    单拆成纯函数是为了能离线测：这几种情况的最终表现都是"抓到 0 篇"，
+    只断言结果分不清走的哪条分支，而它们给用户的提示完全不同。
+    """
+    url = (final_url or "").lower()
+    for marker in LOGIN_URL_MARKERS:
+        if marker in url:
+            return "页面被重定向到 %s —— 会话可能已失效" % final_url
+    if blocked:
+        status, endpoint = blocked
+        if status == 429:
+            return "接口返回 429（限流）：%s" % endpoint
+        return "接口返回 %d（会话失效或权限不足）：%s" % (status, endpoint)
+    return None
+
+
+async def _pause(pacer: Pacer) -> None:
+    """Pacer 的间隔策略，但用 await 睡。
+
+    ⚠️ 不能直接调 `pacer.wait()`：那是 `time.sleep`，会把事件循环整个冻住，
+    而**响应体正是在那个循环上异步读的**——睡 8 秒等于这 8 秒里到达的响应
+    一段都读不到，最后表现为"抓到 0 篇"，且看不出原因。
+    """
+    await asyncio.sleep(random.uniform(pacer.lo, pacer.hi))
+
+
+async def human_scroll(page, dcfg: DeltaConfig, pacer: Pacer) -> int:
+    """按 C7 的深度上限往下滚几屏，每屏之间随机停顿。返回实际滚的屏数。
+
+    ❌ **不滚到底。** 增量只需要看到最新几条；每天滚到底既无收益，
+    又是这条路径上最明显的机器行为特征。
+    """
+    for _ in range(max(0, dcfg.max_scrolls)):
+        await page.mouse.wheel(0, random.randint(*WHEEL_PX))
+        await _pause(pacer)
+    return max(0, dcfg.max_scrolls)
+
+
+async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
+    """打开主页、滚有限几屏、把接口响应捞下来。返回 (collector, 落地 URL)。"""
+    col = Collector()
+    page = await ctx.new_page()
+    handler = col.submit
+    try:
+        page.on("response", handler)
+        await page.goto(url, wait_until="domcontentloaded")
+        # 首屏的接口响应是异步来的，goto 返回时通常还没到齐
+        await asyncio.sleep(dcfg.first_screen_seconds)
+        await human_scroll(page, dcfg, dcfg.pacer())
+        final_url = page.url
+        page.remove_listener("response", handler)
+        # 停止接收新事件后再等已到达的响应体读完，否则最后几段 JSON
+        # 会在页面关闭时被取消，形成无提示的数据缺口（CR-05）
+        await col.drain()
+        return col, final_url
+    finally:
+        try:
+            page.remove_listener("response", handler)
+            await col.drain()
+        finally:
+            await page.close()
+
+
+async def delta_once(ctx, platform: str, account: str, arc: Archive,
+                     dcfg: DeltaConfig, *, dry_run: bool = False) -> int:
+    """跑一个平台的一次增量，返回新增篇数。被拦时抛 :class:`DeltaBlocked`。
+
+    ⚠️ 判断"这条要不要写"用 `arc.should_append()` 而**不是 `has()`**：
+    否则先前留下的残缺帖永远补不全（CR-03），而且下载会白跑一遍 CDN。
+    """
+    url = profile_url(platform, account)
+    try:
+        col, final_url = await asyncio.wait_for(
+            scan_page(ctx, url, dcfg), timeout=dcfg.max_session_seconds)
+    except asyncio.TimeoutError:
+        raise DeltaBlocked("页面在 %.0f 秒内没有跑完，已放弃本次"
+                           % dcfg.max_session_seconds) from None
+
+    reason = login_wall_reason(final_url, col.blocked_status())
+    if reason:
+        # 对面在拦我们 —— 硬停，同一次运行不再碰另一个平台
+        raise DeltaBlocked(reason, hard=True)
+    if not col.payloads:
+        raise DeltaBlocked("一个接口响应都没捞到（命中 %d 次）—— "
+                           "页面可能没加载出来，或接口路径变了" % col.hits)
+
+    # 解析之前无条件转储。回填那边这条兜底救过一次 40 分钟的人工滚动；
+    # 增量重跑虽然便宜，但"解析器悄悄失效"与"这几天确实没发帖"在日志里
+    # 长得一模一样，没有原始响应就无从分辨。份数由 keep_captures 裁。
+    if not dry_run:
+        dump = arc.base / ("_capture_delta_%d.json" % int(time.time()))
+        dump.write_text(json.dumps(col.payloads, ensure_ascii=False),
+                        encoding="utf-8")
+        prune_captures(arc.base, dcfg.keep_captures)
+
+    posts = extract(col.payloads, platform, account, route="delta")
+    if not posts:
+        raise DeltaBlocked("捕获到 %d 段响应但一篇都没解析出来 —— "
+                           "解析器可能已经与真实结构不符" % len(col.payloads))
+
+    # 首屏同样会混进推荐内容与被 @ 的 UGC（回填时实测 IG 混进 266 条、
+    # FB 混进 1 条）。"增量只看几条"不是省掉这一步的理由。
+    posts, rejected = partition_by_owner(posts, account)
+    if rejected and not dry_run:
+        arc.record_rejected(rejected)
+    if not posts:
+        raise DeltaBlocked("解析出的 %d 篇没有一篇属于 %s —— "
+                           "可能打开的不是本账号主页，或归属字段变了"
+                           % (len(rejected), account))
+
+    new = 0
+    for post in sorted(posts, key=lambda p: p.created_at or "", reverse=True):
+        if not arc.should_append(post):
+            continue
+        head = (post.text or "").replace("\n", " ")[:38]
+        if dry_run:
+            print("  ~ %s  %s  %s" % (post.post_id, post.created_at or "(无日期)", head))
+            new += 1
+            continue
+        await download_media(ctx, arc, post, url)
+        if not arc.append(post):
+            print("    ! %s 媒体仍未补全，保留原归档并留待下次重试" % post.post_id)
+            continue
+        imgs = sum(1 for m in post.media if m.kind == "image")
+        vids = sum(1 for m in post.media if m.kind == "video")
+        print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
+        new += 1
+    return new
+
+
+# ---- C6：主入口 ---------------------------------------------------------
+
+async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
+                   path: Path, dry_run: bool) -> int:
+    """附着一次 Chrome，把到期的平台依次跑完。返回退出码。"""
+    pw, browser, ctx = await attach()
+    rc = 0
+    try:
+        for i, platform in enumerate(platforms):
+            account = cfg()["targets"][platform]
+            arc = Archive(cfg().archive_dir, "%s_%s" % (platform[:2], account))
+            entry = state.setdefault(platform, blank_entry())
+            print("\n=== %s / %s ===" % (platform, account))
+            try:
+                new = await delta_once(ctx, platform, account, arc, dcfg,
+                                       dry_run=dry_run)
+            except DeltaBlocked as e:
+                # C7「异常即停」：当次立即停止并告警，不重试、不换 UA、不绕。
+                # 继续试探是把"可能被注意到"变成"确定被注意到"。
+                print("[!] 本次中止：%s" % e)
+                rc = 1
+                if dry_run:
+                    continue
+                record_failure(entry, utcnow(), str(e))
+                left = dcfg.failure_budget - int(entry["consecutive_failures"])
+                notify("增量抓取中止 · %s" % platform,
+                       "%s：%s（连续失败 %d 次，再失败 %d 次将停止自动运行）"
+                       % (account, e, entry["consecutive_failures"], max(0, left)))
+                if e.hard:
+                    # 剩下的平台也一起记一次失败：它们没跑，但"今天被拦了"
+                    # 这件事必须体现在预算里，否则连续被拦时预算永远攒不满，
+                    # 自动运行就永远停不下来。
+                    for rest in platforms[i + 1:]:
+                        record_failure(state.setdefault(rest, blank_entry()),
+                                       utcnow(), "同批次的 %s 被拦，本次未执行" % platform)
+                        print("[i] %s 本次不再尝试（同一会话、同一指纹）" % rest)
+                    save_state(path, state)
+                    break
+                save_state(path, state)
+                continue
+
+            print("新增 %d 篇%s" % (new, "（--dry-run，未写盘）" if dry_run else ""))
+            if dry_run:
+                continue
+            record_success(entry, utcnow(), new)
+            save_state(path, state)
+            quiet = entry["consecutive_quiet_days"]
+            if quiet >= dcfg.quiet_days_before_slowdown(platform):
+                print("[i] 已连续 %d 天零新增，下次起按降频节奏（%.0f 小时一次）"
+                      % (quiet, dcfg.slowdown_stale_after_hours))
+        return rc
+    finally:
+        try:
+            await browser.close()
+        finally:
+            await pw.stop()
+
+
+def _print_status(state: dict) -> None:
+    now = utcnow()
+    for platform in PLATFORMS:
+        entry = state.get(platform) or blank_entry()
+        last = entry.get("last_success") or "从未成功"
+        print("%-10s 上次成功 %s · 上次新增 %s 篇 · 零新增 %d 天 · "
+              "连续失败 %d 次%s"
+              % (platform, last, entry.get("last_new_count", 0),
+                 quiet_days(entry, now), int(entry.get("consecutive_failures") or 0),
+                 "" if not entry.get("last_error") else
+                 "\n           最后一次错误：%s" % entry["last_error"]))
+
+
+def _parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="python -m routes.delta",
+        description="每日增量（登录态 + CDP 附着，方案 B）")
+    p.add_argument("--platform", choices=(*PLATFORMS, "all"), default="all")
+    p.add_argument("--dry-run", action="store_true", help="只抓不写盘")
+    p.add_argument("--if-stale", action="store_true",
+                   help="距上次成功不足阈值就直接退出（供计划任务的补跑触发器用）")
+    p.add_argument("--no-jitter", action="store_true",
+                   help="跳过随机延迟。手工跑用，计划任务不要加")
+    p.add_argument("--reset-failures", action="store_true",
+                   help="失败预算用尽后，人工确认已处理，用它清零")
+    p.add_argument("--status", action="store_true", help="只打印状态，不抓取")
+    p.add_argument("--logged-out-probe", action="store_true",
+                   help="跑保留的登出实现做探针（端点已关闭，预期失败）")
+    return p.parse_args(argv)
+
+
+def main(argv=None) -> int:
+    args = _parse_args(argv)
+    if args.logged_out_probe:
+        return _probe(cfg()["targets"]["instagram"])
+
+    dcfg = DeltaConfig.load()
+    path = state_path()
+    state = load_state(path)
+    platforms = list(PLATFORMS) if args.platform == "all" else [args.platform]
+
+    if args.status:
+        _print_status(state)
+        return 0
+
+    if args.reset_failures:
+        for platform in platforms:
+            entry = state.setdefault(platform, blank_entry())
+            entry["consecutive_failures"] = 0
+            entry["last_error"] = None
+        save_state(path, state)
+        print("已清零 %s 的失败计数。" % "、".join(platforms))
+        return 0
+
+    now = utcnow()
+    due: list[str] = []
+    blocked_by_budget: list[str] = []
+    for platform in platforms:
+        entry = state.setdefault(platform, blank_entry())
+        if budget_exhausted(entry, dcfg.failure_budget):
+            blocked_by_budget.append(platform)
+            print("[!] %s 已连续失败 %d 次（预算 %d），**停止自动运行**。"
+                  % (platform, entry["consecutive_failures"], dcfg.failure_budget))
+            print("    最后一次错误：%s" % entry.get("last_error"))
+            print("    请先确认专用 Chrome 里的小号还是登录态，处理后跑：")
+            print("    .venv\\Scripts\\python.exe -m routes.delta --reset-failures")
+            continue
+        if args.if_stale:
+            hours = effective_stale_hours(entry, dcfg, platform)
+            run, why = stale_enough(entry, now, hours)
+            if not run:
+                print("[i] %s 跳过：%s" % (platform, why))
+                continue
+        due.append(platform)
+
+    if blocked_by_budget:
+        notify("增量已停止自动运行",
+               "%s 连续失败达到预算，需要人工确认会话是否还有效"
+               % "、".join(blocked_by_budget))
+    if not due:
+        # ❌ 不得静默跳过：什么都没做也要说清楚是为什么，
+        # 否则"每天都在跑"会悄悄变成"一年没跑过"而无人察觉。
+        print("没有到期的平台，本次不抓取。")
+        return 2 if blocked_by_budget else 0
+
+    # C7「随机化触发时刻」：计划任务只能定固定时刻，抖动必须在这里做。
+    # ⚠️ 顺序是**先判 stale 再抖动**——反过来的话每次唤醒都要先睡半小时
+    # 才发现"其实不用跑"。
+    if not args.no_jitter and not args.dry_run and dcfg.start_jitter_minutes > 0:
+        delay = random.uniform(0, dcfg.start_jitter_minutes * 60)
+        print("随机延迟 %.1f 分钟后开始（避免每天固定整点发起请求）..."
+              % (delay / 60))
+        time.sleep(delay)
+
+    port = cfg().debug_port
+    if not cdp_ready(port):
+        if dcfg.autostart_chrome:
+            print("专用 Chrome 没在跑，正在拉起...")
+            # 这不是自动登录：会话是人留在 profile 目录里的，这里只是把
+            # 那个浏览器重新用起来（全项目红线 1 没有松动）。
+            if not launch():
+                msg = ("专用 Chrome 拉不起来（端口 %d 未就绪）。"
+                       "若端口被其它程序占用，改 config.toml 的 [chrome].debug_port"
+                       % port)
+                print("[!] %s" % msg)
+                if not args.dry_run:
+                    for platform in due:
+                        record_failure(state[platform], utcnow(), msg)
+                    save_state(path, state)
+                notify("增量没能启动", msg)
+                return 1
+        else:
+            msg = "专用 Chrome 没在跑（调试端口 %d 未就绪），本次跳过" % port
+            print("[!] %s" % msg)
+            notify("增量没能启动", msg)
+            return 1
+
+    return asyncio.run(_run_due(due, dcfg, state, path, args.dry_run))
+
+
 if __name__ == "__main__":
     from core.console import force_utf8
 
     force_utf8()
-    # C6 会把这里换成完整入口（--platform / --dry-run / --if-stale）。
-    # 当前只是 C2 的验收探针：不带参数用 config.toml 里的目标账号，
-    # 带一个参数就抓那个账号（验收要求的"已知公开账号"走这条）。
-    raise SystemExit(_probe(sys.argv[1] if len(sys.argv) > 1
-                            else cfg()["targets"]["instagram"]))
+    raise SystemExit(main())
