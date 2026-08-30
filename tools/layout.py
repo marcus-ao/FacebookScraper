@@ -128,6 +128,7 @@ PAGE = """<!doctype html><html lang="zh"><meta charset="utf-8">
  .date{{font-weight:600}} .pid{{color:#86868b;font-size:12px;font-family:ui-monospace,monospace}}
  .tag{{font-size:11px;padding:2px 7px;border-radius:20px;background:#eef;color:#3a3aa0}}
  .tag.v{{background:#fdeeee;color:#a03a3a}} .tag.w{{background:#fff4e0;color:#8a5a00}}
+ .tag.c{{background:#e8f5ea;color:#1f6b33}}
  .txt{{white-space:pre-wrap;margin:8px 0 12px}}
  .imgs{{display:flex;gap:8px;flex-wrap:wrap}}
  .imgs img{{max-height:190px;border-radius:8px;border:1px solid #e3e3e6}}
@@ -151,6 +152,11 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
         imgs = [m for m in media if m.get("kind") == "image" and m.get("local_path")]
         n_vid = sum(1 for m in media if m.get("kind") == "video")
         tags = []
+        # 合作帖：别人发布、本账号是 coauthor，但同样在本账号主页上。
+        # 标出来是因为**它的内容著作权在原作者手里**，二次使用要看授权。
+        if (r.get("owner") or "") != account.lower():
+            tags.append('<span class="tag c">合作 · @%s</span>'
+                        % html.escape(r.get("owner") or "?"))
         if n_vid:
             tags.append('<span class="tag v">视频 ×%d</span>' % n_vid)
         if not r.get("media_complete", True):
@@ -171,9 +177,11 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
                         % html.escape(m["local_path"]) for m in imgs)))
 
     with_text = sum(1 for r in rows if (r.get("text") or "").strip())
-    sub = ("%d 篇 · %s ~ %s · %d 篇有正文 · 按时间倒序" % (
+    n_collab = sum(1 for r in rows if (r.get("owner") or "") != account.lower())
+    collab = " · 其中 %d 篇是合作帖（原作者不是本账号）" % n_collab if n_collab else ""
+    sub = ("%d 篇 · %s ~ %s · %d 篇有正文%s · 按时间倒序" % (
         len(rows), (rows[-1].get("created_at") or "?")[:10],
-        (rows[0].get("created_at") or "?")[:10], with_text))
+        (rows[0].get("created_at") or "?")[:10], with_text, collab))
     page = PAGE.format(title=html.escape(account), sub=html.escape(sub),
                        cards="".join(cards))
     out = base / "index.html"

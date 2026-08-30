@@ -61,6 +61,29 @@ def is_iphone_struct(d: dict) -> bool:
             and d.get("product_type") != "carousel_item")
 
 
+def ig_coauthors(node: dict) -> list[str]:
+    """Instagram 合作帖（collab）的其他作者，归一化成小写 username。
+
+    **这个字段决定一篇帖子在不在本账号的主页上。** collab 帖会同时出现在
+    双方主页，但 `user.username` 只记原始发布者——只看它的话，
+    本账号主页上的一大批内容会被判成"别人的帖子"。
+    2026-08-30 实测：neakasa.tech 因此丢了 **263 篇自己主页上的帖子**
+    （其中 229 篇的原作者是宠物 UGC 账号、30 篇是 neakasa.global）。
+
+    ⚠️ **只取 `coauthor_producers`，不取 `invited_coauthor_producers`。**
+    后者是"邀请了但对方还没接受"，那种帖子不会出现在被邀请方的主页上。
+    两个字段在真实响应里都存在（1022 个节点全有），很容易顺手一起收。
+    """
+    out: list[str] = []
+    for c in node.get("coauthor_producers") or []:
+        if not isinstance(c, dict):
+            continue
+        name = (c.get("username") or "").strip().lower()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
 def from_iphone_struct(item: dict, account: str, route: str) -> Post:
     code = item.get("code", "")
     caption = (item.get("caption") or {}).get("text", "") or ""
@@ -95,7 +118,7 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
         text=caption, created_at=iso(item.get("taken_at")),
         permalink=f"{IG}/p/{code}/" if code else None,
         media=media, source_route=route, media_complete=True,
-        owner=owner, owner_name=owner_name,
+        owner=owner, owner_name=owner_name, coauthors=ig_coauthors(item),
     )
 
 
@@ -151,7 +174,7 @@ def from_graphql_node(node: dict, account: str, route: str) -> Post:
         text=text, created_at=iso(node.get("taken_at_timestamp")),
         permalink=f"{IG}/p/{code}/" if code else None,
         media=media, source_route=route, media_complete=complete,
-        owner=owner, owner_name=owner_name,
+        owner=owner, owner_name=owner_name, coauthors=ig_coauthors(node),
     )
 
 
@@ -299,9 +322,11 @@ def _merge_post(current: Post, candidate: Post) -> Post:
     winner, other = ((candidate, current)
                      if rank(candidate) > rank(current)
                      else (current, candidate))
-    # owner 也要补：同一帖的多份响应里，往往只有一份带 actors/user，
-    # 漏补的话这篇会因为"归属未知"被 partition_by_owner 丢掉 —— 丢的是真帖子。
-    for attr in ("text", "created_at", "permalink", "owner", "owner_name"):
+    # owner 与 coauthors 也要补：同一帖的多份响应里，往往只有一份带
+    # actors/user/coauthor_producers，漏补的话这篇会因为"归属未知"被
+    # partition_by_owner 丢掉 —— 丢的是真帖子。
+    for attr in ("text", "created_at", "permalink", "owner", "owner_name",
+                 "coauthors"):
         if not getattr(winner, attr) and getattr(other, attr):
             setattr(winner, attr, getattr(other, attr))
     if len(winner.media) == len(other.media):
@@ -333,6 +358,22 @@ def extract(payloads: list[dict], platform: str, account: str,
     return list(out.values())
 
 
+def on_timeline_of(post: Post, target: str) -> bool:
+    """这篇帖子出现在 `target` 的主页上吗？
+
+    两种情况都算，**这是 2026-08-30 修掉的一个 P0 缺陷**：
+
+    1. `owner == target` —— 本账号自己发的；
+    2. `target in coauthors` —— **合作帖**。它由别人发布，但同时出现在
+       本账号主页上，是这个账号内容的一部分。
+
+    只判第一种的话，实测 neakasa.tech 会丢掉 **263 篇自己主页上的帖子**，
+    而且丢的正是最近这一年的主要内容形式——账号看起来"一个多月没发帖"，
+    实际上一直在更。
+    """
+    return post.owner == target or target in (post.coauthors or [])
+
+
 def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], list[dict]]:
     """按归属把解析结果切成「本账号的」和「要丢弃的」两份。
 
@@ -357,7 +398,7 @@ def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], lis
     kept: list[Post] = []
     rejected: list[dict] = []
     for post in posts:
-        if post.owner == target:
+        if on_timeline_of(post, target):
             kept.append(post)
             continue
         rejected.append({
@@ -365,6 +406,7 @@ def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], lis
             "platform": post.platform,
             "owner": post.owner,
             "owner_name": post.owner_name,
+            "coauthors": post.coauthors,
             "created_at": post.created_at,
             "permalink": post.permalink,
             "text_head": (post.text or "")[:80],

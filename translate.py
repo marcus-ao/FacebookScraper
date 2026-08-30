@@ -592,6 +592,8 @@ def run_review(arc_base: Path) -> int:
     """
     arc = Archive(arc_base.parent, arc_base.name)
     rows = {r["post_id"]: r for r in arc.rows()}
+    # 目录名是 `<平台前缀>_<账号>`；用它判断一篇帖子是本账号原创还是合作帖
+    this_account = arc_base.name.split("_", 1)[-1].strip().lower()
     trans = load_translated(arc_base / "translated.jsonl")
     if not trans:
         print(f"  {arc_base.name}：还没有译文，跳过（先跑一次翻译）")
@@ -638,6 +640,12 @@ def run_review(arc_base: Path) -> int:
         lines += [f"## {i}. `{pid}`　{created}", ""]
         if src.get("permalink"):
             lines += [f"原帖：<{src['permalink']}>", ""]
+        # 合作帖：它在本账号主页上，但**内容是别人创作的**。
+        # 审校人需要知道这一点——二次发布到 DE Page 涉及的是对方的著作权，
+        # 而译文本身看不出这个区别。
+        if src.get("owner") and src["owner"] != this_account:
+            lines += [f"> 🤝 **合作帖**：原作者是 `@{src['owner']}`，"
+                      f"本账号是 coauthor。发布前确认二次使用授权。", ""]
 
         lines += ["**英文原文**", "", "```text", (src.get("text") or "").rstrip(), "```", ""]
         lines += ["**德语译文**", "", "```text", t.get("text_de", "").rstrip(), "```", ""]

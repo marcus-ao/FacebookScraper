@@ -81,6 +81,13 @@ class Post:
     # 展示名，只给人看（_rejected.jsonl 里 "The Garden State Cat Club"
     # 比一串 slug 有用得多）。不参与任何判等。
     owner_name: str | None = None
+    # 合作帖的其他作者（Instagram 的 collab）。**这个字段决定一篇帖子在不在
+    # 本账号主页上**：collab 帖会同时出现在双方主页，但 `user.username`
+    # 只记原始发布者。2026-08-30 实测，只看 owner 的话 neakasa.tech 有
+    # **263 篇自己主页上的帖子被当成他人帖丢掉**，其中 2026-08 那个月
+    # 21 篇里绝大多数都是这种——账号看起来"一个多月没发帖"，其实一直在更。
+    # 归一化为小写 username，便于与 [targets] 直接比对。
+    coauthors: list[str] = field(default_factory=list)
     # 源响应只给轮播封面拿不到子项时（IG 的 web_profile_info 就是这样），标 False，
     # 由完整性检查汇总，留给人工或下一次登录态回填补齐。
     media_complete: bool = True

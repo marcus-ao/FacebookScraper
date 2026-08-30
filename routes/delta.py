@@ -38,6 +38,7 @@ import argparse
 import asyncio
 import json
 import random
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,8 +49,9 @@ import httpx
 from core.capture import (Collector, download_media, harvest_embedded_json,
                           prune_captures)
 from core.chrome import attach, cdp_ready, launch
-from core.config import cfg
+from core.config import cfg, per_platform
 from core.http import ig_headers, logged_out_client
+from core import integrity
 from core.integrity import parse_ts
 from core.notify import notify
 from core.parse import extract, partition_by_owner
@@ -306,24 +308,6 @@ def profile_url(platform: str, account: str) -> str:
             "facebook": "https://www.facebook.com/%s/"}[platform] % account
 
 
-def _per_platform(raw, platform: str, default):
-    """配置项允许写成一个数（两平台通用）或 ``{ facebook = 7, instagram = 21 }``。
-
-    用**内联表**而不是 `[delta.facebook]` 子表，是为了避开 TOML 的排序陷阱：
-    子表一旦插在普通键中间，它后面的键就全归子表了——项目里
-    `[translate.glossary]` 已经因为这条规则专门写过警告。内联表是一行，
-    放在哪儿都不改变语义。
-
-    为什么需要按平台分：实测两个账号的节奏差一个量级——Facebook 发帖
-    中位间隔 1.0 天（2026-08-25 还在发），Instagram 中位 1.6 天但已经
-    连续 45 天没发。同一个阈值不可能同时适配这两种。
-    """
-    if isinstance(raw, dict):
-        value = raw.get(platform)
-        return default if value is None else value
-    return default if raw is None else raw
-
-
 @dataclass
 class DeltaConfig:
     """`[delta]` 的全部参数。**代码里不写死数字**（计划第 2 节）。"""
@@ -365,7 +349,7 @@ class DeltaConfig:
         )
 
     def quiet_days_before_slowdown(self, platform: str) -> int:
-        return int(_per_platform(self._quiet_slowdown, platform, 7))
+        return int(per_platform(self._quiet_slowdown, platform, 7))
 
     def pacer(self) -> Pacer:
         """滚动之间的停顿。配置给下界，上界取两倍——随机化本身比倍数重要。"""
@@ -726,6 +710,33 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     return res
 
 
+# ---- D3：把完整性检查接进增量 -------------------------------------------
+
+def run_integrity(arc: Archive, entry: dict, platform: str,
+                  now: datetime | None = None) -> list[dict]:
+    """跑完整性检查并把命中项告警出去。返回命中项，便于测试与打印。
+
+    **为什么这一步在方案 B 之下比原来更重要**：登出增量最坏只是抓不到；
+    登录态增量最坏是**会话失效后每天硬撞，直到账号被处理**。
+    爬取路径没有 ground truth——"滚到这里就没了"和"被限流截断了"在响应上
+    长得一样——这一层是唯一能让"悄悄坏掉"变成"看得见地坏掉"的东西。
+
+    告警走 `core.notify.notify()`，它**无条件先写 `state/alerts.log`**，
+    所以这里不需要再自己写一遍日志（D2 已确立的职责划分）。
+    """
+    gap_days, alert_after = integrity.params(platform)
+    findings = integrity.run_checks(
+        arc.rows(), arc.needs_media(), entry, platform,
+        gap_days=gap_days, alert_after=alert_after, now=now or utcnow())
+    for f in findings:
+        print("[!] %s" % f["message"])
+    if findings:
+        # 一个平台一条通知，不是一项一条：四条 toast 连弹的结果是全被划掉。
+        notify("归档完整性告警 · %s" % platform,
+               "\n".join(f["message"] for f in findings))
+    return findings
+
+
 # ---- C6：主入口 ---------------------------------------------------------
 
 async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
@@ -780,6 +791,9 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
             if dry_run:
                 continue
             record_success(entry, utcnow(), res.new)
+            # D3：检查放在写完状态之后、存盘之前——它要读刚更新的
+            # consecutive_quiet_days，而它自己的"报过了"标记也要一起落盘。
+            run_integrity(arc, entry, platform)
             save_state(path, state)
             quiet = entry["consecutive_quiet_days"]
             if quiet >= dcfg.quiet_days_before_slowdown(platform):
@@ -826,6 +840,11 @@ def _parse_args(argv):
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
+    # 运行分隔线由 Python 打，不由 .bat 的 echo %DATE% 打：
+    # cmd 按控制台代码页（本机 936）写，会在一份 UTF-8 日志里插进 GBK 字节。
+    # 输出被 run_delta.bat 追加进 state/delta.log，没有这行就分不清哪段是哪次跑的。
+    print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
+                                     or "(无参数)"))
     if args.logged_out_probe:
         return _probe(cfg()["targets"]["instagram"])
 

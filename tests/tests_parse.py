@@ -285,5 +285,60 @@ check(kept2 == [] and rejected2[0]["reason"] == "owner_unknown",
 kept3, _ = partition_by_owner(mixed, "NeakasaOfficial")
 check(len(kept3) == 1, "目标账号大小写不敏感（config 里怎么写都能匹配上）")
 
+print("\n[真实结构 5] 合作帖（collab）必须算本账号的（CR-19）")
+
+# 照抄真实响应：`coauthor_producers` 与 `invited_coauthor_producers` 两个键
+# 在 1022 个节点上**全都存在**，绝大多数为空数组。很容易顺手一起收，
+# 而"邀请了但没接受"的帖子并不会出现在被邀请方主页上。
+def ig_node(pk, owner, coauthors=(), invited=(), ts=1756000000, text="collab"):
+    return {"pk": pk, "code": "c%s" % pk, "taken_at": ts,
+            "product_type": "clips",
+            "user": {"username": owner, "full_name": owner.title()},
+            "caption": {"text": text},
+            "coauthor_producers": [{"pk": "9%d" % i, "username": u}
+                                   for i, u in enumerate(coauthors)],
+            "invited_coauthor_producers": [{"pk": "8%d" % i, "username": u}
+                                           for i, u in enumerate(invited)],
+            "image_versions2": {"candidates": [
+                {"url": "https://cdn.example.com/%s.jpg" % pk,
+                 "width": 1080, "height": 1080}]}}
+
+
+timeline = extract([{"items": [
+    ig_node("1", "neakasa.tech"),                                  # 自己发的
+    ig_node("2", "neakasa.global", coauthors=["neakasa.tech"]),    # 自家兄弟账号合作
+    ig_node("3", "ruka.bsh", coauthors=["neakasa.tech"]),          # 第三方创作者合作
+    ig_node("4", "some.brand", invited=["neakasa.tech"]),          # 只是被邀请，没接受
+    ig_node("5", "chicago.fire"),                                  # 纯推荐位
+]}], "instagram", "neakasa.tech", route="backfill")
+kept, rejected = partition_by_owner(timeline, "neakasa.tech")
+kept_ids = sorted(p.post_id for p in kept)
+check(kept_ids == ["1", "2", "3"],
+      "自己发的 + 两种合作帖都留下（实测漏判会丢掉 263 篇自己主页上的帖子）")
+check(sorted(r["post_id"] for r in rejected) == ["4", "5"],
+      "只被邀请、没接受的不算；纯推荐位也不算")
+check([p.owner for p in kept if p.post_id == "3"] == ["ruka.bsh"],
+      "owner 仍然是**真实作者**，没有被改写成目标账号")
+check([p.coauthors for p in kept if p.post_id == "3"] == [["neakasa.tech"]],
+      "coauthors 记下了合作关系，下游据此区分原创与合作")
+check([p.coauthors for p in kept if p.post_id == "1"] == [[]],
+      "自己原创的帖子 coauthors 为空")
+
+upper = extract([{"items": [ig_node("6", "x.brand", coauthors=["Neakasa.Tech"])]}],
+                "instagram", "neakasa.tech", route="backfill")
+check(partition_by_owner(upper, "neakasa.tech")[0], "coauthor 的大小写不影响判定")
+
+# 合并：同一帖的两份响应里只有一份带 coauthor_producers 时不能丢
+half = extract([{"items": [ig_node("7", "brand.a", coauthors=["neakasa.tech"])]},
+                {"items": [{"pk": "7", "code": "c7", "taken_at": 1756000000,
+                            "user": {"username": "brand.a"},
+                            "caption": {"text": "同一帖的另一份响应"},
+                            "image_versions2": {"candidates": [
+                                {"url": "https://cdn.example.com/7.jpg",
+                                 "width": 1440, "height": 1440}]}}]}],
+               "instagram", "neakasa.tech", route="backfill")
+check(len(half) == 1 and half[0].coauthors == ["neakasa.tech"],
+      "跨响应合并时 coauthors 会被补齐 —— 漏补就会把真帖子丢掉")
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

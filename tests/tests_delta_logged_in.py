@@ -516,6 +516,53 @@ with tempfile.TemporaryDirectory() as tmp:
           "Facebook 侧的归属取自 actors[0].url 的账号名段，不是展示名")
 
 
+print("\n[4c] 完整性检查接进增量收尾（D3）")
+
+with tempfile.TemporaryDirectory() as tmp:
+    arc = Archive(Path(tmp), "in_acme_us")
+    for i in range(5):
+        arc.append(Post(post_id="p%d" % i, platform="instagram", account="acme_us",
+                        text="x", owner="acme_us",
+                        created_at="2026-07-%02dT00:00:00Z" % (10 + i)))
+    notices = []
+    saved = delta.notify
+    try:
+        delta.notify = lambda t, m, **k: notices.append((t, m))
+        entry = {**blank_entry(), "consecutive_quiet_days": 30}
+        hits = delta.run_integrity(arc, entry, "instagram", now=NOW)
+    finally:
+        delta.notify = saved
+    check([h["kind"] for h in hits] == ["quiet"], "零新增超阈值 → 检查命中")
+    check(len(notices) == 1, "一个平台一条通知，不是一项一条")
+    check("30 天" in notices[0][1] and "21 天" in notices[0][1],
+          "通知文案具体到平台/天数/阈值（正例：『instagram 连续 30 天零新增（阈值 21 天）』）")
+    check("完整性告警" in notices[0][0] and "instagram" in notices[0][0],
+          "标题点名是哪个平台")
+
+with tempfile.TemporaryDirectory() as tmp:
+    # ⚠️ D3 原验收写的是"把 consecutive_quiet_days 改大"，**那样测不出来**：
+    # record_success 每次都会用 last_new_at 重算这个字段，手改的值当场被覆盖。
+    # 能真正触发的是把 last_new_at 往前推。这条差异写进 MANUAL_STEPS 了。
+    seed = Archive(Path(tmp), "in_acme_us")      # 这篇已经在归档里 -> 本次 0 新增
+    seed.append(Post(post_id="111", platform="instagram", account="acme_us",
+                     text="hello world", owner="acme_us",
+                     created_at="2025-08-12T12:00:00Z",
+                     media=[Media(url="https://cdn.example.com/111.jpg",
+                                  kind="image")]))
+    ig_page = FakePage([resp(ig_payload())])
+    long_ago = delta.iso(delta.utcnow() - timedelta(days=40))
+    state = {"instagram": {**blank_entry(), "first_success": long_ago,
+                           "last_new_at": long_ago, "last_success": long_ago}}
+    rc, notices = run_due([ig_page], state, tmp, platforms=("instagram",))
+    check(rc == 0, "检查命中不影响本次抓取的成败")
+    check(state["instagram"]["consecutive_quiet_days"] == 40,
+          "零新增天数由 last_new_at 重算得来（手改那个字段没用）")
+    check(any("零新增" in m for _, m in notices),
+          "成功跑完之后会自动跑一遍完整性检查并告警（D3 的接入点）")
+    check(state["instagram"].get("alerts", {}).get("quiet_at"),
+          "报过的记号落进了状态文件，明天不会再报一次")
+
+
 print("\n[5] 运行状态：失败也要写，且不能刷新 last_success（C5）")
 
 entry = blank_entry()

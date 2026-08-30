@@ -5,6 +5,7 @@
 它自己漏报（返回空）比崩掉更危险，因为崩掉至少看得见。
 """
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 
@@ -14,7 +15,7 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.integrity import (check_continuity, check_incomplete, check_quiet,
-                            check_undated, params)
+                            check_undated, params, run_checks)
 from core.store import Archive, Media, Post
 
 fails = []
@@ -91,10 +92,90 @@ with tempfile.TemporaryDirectory() as d:
     check(len(inc) == 1, f"1 条进待补清单，实得 {len(inc)}")
     check(inc[0]["post_id"] == "cover_only", "正是那条只有封面的轮播帖")
 
-print("\n[9] 阈值来自 config.toml，不写死")
+print("\n[9] 阈值来自 config.toml，且按平台分开（D3）")
 gap, quiet = params()
 check(isinstance(gap, int) and isinstance(quiet, int), "params() 返回两个整数")
-check((gap, quiet) == (5, 4), f"读到 config.toml 的 [integrity]，实得 gap={gap} quiet={quiet}")
+fb_gap, fb_quiet = params("facebook")
+ig_gap, ig_quiet = params("instagram")
+check(fb_quiet != ig_quiet,
+      f"两个平台的零新增阈值确实不同（FB {fb_quiet} / IG {ig_quiet}）")
+check(fb_quiet == 7 and ig_quiet == 21,
+      "用户 2026-08-30 拍板的值：FB 7 天 / IG 21 天")
+check(ig_gap > fb_gap,
+      f"IG 的缺口阈值更宽（{ig_gap} > {fb_gap}）—— 它的 p90 间隔是 5.89 天")
+
+
+print("\n[10] run_checks：只报**新出现**的问题（D3 的核心）")
+
+NOW = datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def rows_every(n_days, count, start="2026-07-01"):
+    base = datetime.fromisoformat(start + "T00:00:00+00:00")
+    return [{"post_id": "p%d" % i,
+             "created_at": (base + timedelta(days=i * n_days)).strftime(
+                 "%Y-%m-%dT%H:%M:%SZ")}
+            for i in range(count)]
+
+
+def run(rows, entry, inc=(), platform="instagram", now=NOW, **kw):
+    kw.setdefault("gap_days", 5)
+    kw.setdefault("alert_after", 21)
+    return run_checks(rows, list(inc), entry, platform, now=now, **kw)
+
+
+entry = {"consecutive_quiet_days": 25}
+hits = run([], entry)
+check([h["kind"] for h in hits] == ["quiet"], "零新增超阈值 -> 告警")
+check("25 天" in hits[0]["message"] and "21 天" in hits[0]["message"]
+      and "instagram" in hits[0]["message"],
+      "文案含平台、实际天数、阈值（反例：『发现问题』）")
+check(run([], entry) == [], "同一个问题第二天不再重复报（否则用户会关掉通知）")
+check(run([], entry, now=NOW + timedelta(days=8)),
+      "隔了 8 天（> ALERT_REPEAT_DAYS）才允许再报一次")
+
+entry = {"consecutive_quiet_days": 20}
+check(run([], entry) == [], "没到阈值不报")
+check(run([], {"consecutive_quiet_days": 25}, platform="facebook",
+          alert_after=7), "FB 用自己的阈值（7 天）")
+
+# 连续性：只看窗口内，且同一个缺口只报一次
+gapped = [{"post_id": "a", "created_at": "2026-08-01T00:00:00Z"},
+          {"post_id": "b", "created_at": "2026-08-20T00:00:00Z"}]
+entry = {}
+hits = run(gapped, entry)
+check([h["kind"] for h in hits] == ["gap"], "窗口内的新缺口 -> 告警")
+check("19.0 天" in hits[0]["message"] and "a" in hits[0]["message"],
+      "文案含缺口天数与两端的 post_id")
+check(run(gapped, entry) == [], "同一个缺口不再重复报")
+check(entry["alerts"]["gaps"] == ["a->b"], "报过的缺口记在 state 里")
+
+old = [{"post_id": "x", "created_at": "2021-01-01T00:00:00Z"},
+       {"post_id": "y", "created_at": "2021-03-01T00:00:00Z"}]
+check(run(old, {}) == [],
+      "几年前的缺口不报 —— 现在也补不回来，天天重报只会淹掉今天的问题")
+
+check(run(rows_every(1, 20, "2026-08-10"), {}) == [], "节奏正常时不误报")
+
+# 媒体不全 / 无日期：只在变多时报
+entry = {}
+check([h["kind"] for h in run([], entry, inc=[{"post_id": "1"}])] == ["incomplete"],
+      "媒体不全从 0 涨到 1 -> 告警")
+check(run([], entry, inc=[{"post_id": "1"}]) == [], "数量没变不重复报")
+check([h["kind"] for h in run([], entry, inc=[{"post_id": "1"}, {"post_id": "2"}])]
+      == ["incomplete"], "数量继续增加 -> 再报")
+check(run([], entry, inc=[]) == [], "数量下降时静默更新，不打扰")
+check(entry["alerts"]["incomplete"] == 0, "但记号跟着降下来了")
+
+entry = {}
+undated = [{"post_id": "u1", "created_at": ""}, {"post_id": "u2"}]
+check([h["kind"] for h in run(undated, entry)] == ["undated"],
+      "无日期记录变多 -> 告警（它们是连续性检查的盲区）")
+
+entry = {"consecutive_quiet_days": 25}
+hits = run(gapped, entry, inc=[{"post_id": "1"}])
+check(len(hits) == 3 and {h["kind"] for h in hits} == {"quiet", "gap", "incomplete"},
+      "多项同时命中时一起返回（调用方合成一条通知，不是弹三次）")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

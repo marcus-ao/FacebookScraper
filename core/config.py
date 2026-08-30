@@ -22,6 +22,24 @@ CHROME_CANDIDATES = [
 ]
 
 
+def per_platform(raw, platform: str, default):
+    """配置项允许写成一个数（两平台通用）或 ``{ facebook = 7, instagram = 21 }``。
+
+    用**内联表**而不是 ``[delta.facebook]`` 子表，是为了避开 TOML 的排序陷阱：
+    子表一旦插在普通键中间，它后面的键就全归子表了——项目里
+    ``[translate.glossary]`` 已经因为这条规则专门写过警告。内联表是一行，
+    放在哪儿都不改变语义。
+
+    为什么需要按平台分：实测两个账号的节奏差一个量级——Facebook 发帖
+    中位间隔 1.0 天（2026-08-25 还在发），Instagram 中位 1.6 天但已经
+    连续 45 天没发。同一个阈值不可能同时适配这两种。
+    """
+    if isinstance(raw, dict):
+        value = raw.get(platform)
+        return default if value is None else value
+    return default if raw is None else raw
+
+
 class Config:
     def __init__(self, path: Path | str | None = None):
         p = Path(path) if path else ROOT / "config.toml"
@@ -34,6 +52,10 @@ class Config:
 
     def get(self, section: str, key: str, default=None):
         return self._d.get(section, {}).get(key, default)
+
+    def get_platform(self, section: str, key: str, platform: str, default=None):
+        """按平台取值。写成一个数时两平台通用，写成内联表时各取各的。"""
+        return per_platform(self.get(section, key, None), platform, default)
 
     # ---- 派生路径 ----
     @property
