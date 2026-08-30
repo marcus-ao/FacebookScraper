@@ -17,6 +17,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from core.console import force_utf8   # noqa: E402  纯标准库，系统 Python 也能导
 
 # PyPI 镜像。官方源 files.pythonhosted.org 在国内网络实测吞吐近 0：
 # playwright（36 MB）跑 8 分钟零进展，换清华镜像后 45 秒装完。
@@ -150,10 +153,11 @@ def run_tests():
 
 
 def main():
-    if hasattr(sys.stdout, "reconfigure"):
-        # 输出被重定向到管道时，locale 编码可能表示不了某些字符；
-        # 别让一条打印语句把整个安装流程搞崩。
-        sys.stdout.reconfigure(errors="replace")
+    force_utf8()
+    # 子进程（尤其是 run_tests 里的每一套离线测试）也得是 UTF-8：
+    # 本机代码页是 936，测试里的 ß / ⚠ 一旦被重定向就编不出来，整套崩掉。
+    # setup.bat 已经设了同一个变量，这里是给 `py -3 tools\setup.py` 直调的路径兜底。
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
     step("检查工具链")
     toolchain = pick_toolchain()

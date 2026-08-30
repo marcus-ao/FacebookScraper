@@ -21,11 +21,28 @@
 | 路径     | 模块                       | 身份                            | 频次   | 封号风险       |
 | -------- | -------------------------- | ------------------------------- | ------ | -------------- |
 | **回填** | `routes/backfill.py`       | 登录态（专用小号）+**人工滚动** | 跑一次 | 一次性敞口     |
-| **增量** | `routes/delta.py` _(待建)_ | **完全登出**，无 cookie         | 每天   | **无账号可封** |
+| **增量** | `routes/delta.py` _(方案 B 待建)_ | **登录态**（同一专用小号）+ CDP 附着 | 每天 | ⚠️ **累积性敞口** |
 
-为什么拆：每日定时会把风险从"一次性"变成"累积性"——单次会不会被封，
-和 365 次里会不会被封一次，是两个量级的问题。登出增量没有会话可以丢，
-最坏情况只是 IP 被临时限流，换个时间重试即可。
+> ⚠️ **2026-08-30 增量方案变更（用户拍板，方案 B）。**
+> 原设计是"增量完全登出"——没有账号、没有 session、没有 cookie，
+> **因此没有可封的东西**。但实测 + 用户确认，**FB/IG 在没有登录态时直接报错**
+> （对公开账号请求 `web_profile_info` 首次即 429），登出这条腿不存在了。
+>
+> 增量因此改走登录态，复用回填那条 CDP 通道。**代价必须说清楚**：
+> 封号风险从「一次性敞口」变成「累积性敞口」，而抓取小号被封是本项目
+> **唯一不可恢复的失败模式**——回填与增量会同时断掉。
+>
+> 所以 `docs/IMPLEMENTATION_PLAN.md` 的 **C7「累积风险缓解」是方案的组成部分**，
+> 不是锦上添花：随机化触发时刻、抓取深度上限（只滚几屏不滚到底）、
+> 滚动节奏拟人、异常即停不重试、频率可降级、失败预算。
+> **不要因为"跑得挺好"就把它们优化掉**——这类风险的反馈是延迟的，且只反馈一次。
+>
+> **两条红线没变**：仍然不得实现自动登录（复用的是人工登录留下的会话）；
+> 回填仍然是人工滚动。
+
+为什么仍要拆两条路径：回填是一次性的深度抓取（滚完整个历史），
+增量是每天看一眼最新几条。两者的频率、深度、风险特征完全不同，
+共用一套代码只会让两边都做不好。
 
 回填之所以让人工滚动而不是脚本自动滚，是因为**滚动的确实是人**，
 没有可识别的自动化行为特征。代价是你要花 20 分钟手动滚一次。
@@ -77,6 +94,8 @@ FacebookScraper/
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
   tools/                   .bat 的真正实现（中文提示只能待在 Python 里）
     setup.py  start_chrome.py
+    replay.py               用 _capture_*.json 离线重建归档，不重新下载媒体
+    layout.py               归档布局：migrate / reindex / index
   docs/
     IMPLEMENTATION_PLAN.md  进度真相源
     MANUAL_STEPS.md         人工操作指南
@@ -86,9 +105,9 @@ FacebookScraper/
     translate_de.md         英译德提示词，可直接编辑，改它不用动 Python
   core/                    库层
     config.py  chrome.py  store.py  parse.py  session.py
-    http.py  integrity.py  notify.py
+    http.py  integrity.py  notify.py  console.py
   routes/                  抓取路径
-    backfill.py  fb_graph.py  (delta.py 待建)
+    backfill.py  fb_graph.py  delta.py (C2 已实现，C3-C6 待建)
   tests/                   离线测试，setup.bat 用 glob 全跑
   _deprecated/             已否决路线的存档，不要引用、不要复活
 
@@ -102,45 +121,83 @@ FacebookScraper/
 所有中文提示放在 `tools/*.py`（Python 在 Windows 控制台走 Unicode API，
 任何码页下都正确显示）。`.gitattributes` 锁了 CRLF，ASCII 得靠人守。
 
-## 归档格式
+**每个新入口都要调 `core.console.force_utf8()`。** 上一条只在**控制台**成立——
+本机代码页是 936，Python 的 stdout 一旦被重定向到文件或管道就回落到 GBK，
+而 `⚠ ❗ ✅ ❌ ß` 在 GBK 下一个都编码不出来，print 直接把进程带走。
+双击 `.bat` 时永远看不到这个故障，它只在计划任务、日志重定向这些
+真正需要可靠的场合发作。`.bat` 那侧另设了 `PYTHONIOENCODING=utf-8`。
+
+## 归档格式：每帖一个文件夹
 
 ```
-archive/<platform>_<account>/
-  manifest.jsonl          每行一个 Post，抓取产物，**不要手工改**
-  translated.jsonl        德语译文，独立文件，重跑抓取不会冲掉它
-  review.md               人工审校清单
-  media/<post_id>_<n>.jpg
-  raw/<post_id>.json      原始响应，schema 变更后可重放
-  _capture_*.json         回填时的原始响应转储
+archive/<平台前缀>_<账号>/
+  index.html                        全账号总览（派生，双击即可看）
+  manifest.jsonl                    **派生索引**，可从 posts/ 重建
+  _rejected.jsonl                   被丢弃的节点及原因（不得静默丢弃）
+  _orphan_media/                    重建后无主的媒体文件（移动不是删除）
+  posts/
+    2026-08-25_1423_<post_id>/
+      post.json                     **真相源**
+      text.txt                      正文纯文本（派生）
+      text_de.txt                   德语译文副本（派生）
+      01.jpg  02.jpg                原图，编号跟的是帖内位置
+      media_de/                     设计同事回填的德文版图
+    undated_<post_id>/              时间解析不出来的进这里，**不猜**
+  translated.jsonl                  德语译文的真相源
+  review.md                         人工审校清单
+  _capture_*.json                   原始响应转储，离线重放的唯一输入
 ```
 
-`manifest.jsonl` 每行：
+**文件夹名 `<日期>_<时分>_<post_id>`**：日期在前，按名称排序即按时间排序；
+post_id 在后，幂等查找不用打开文件。
+
+`post.json` 每篇：
 
 ```json
 {
-  "post_id": "...",
-  "platform": "instagram",
-  "account": "nasa",
-  "text": "正文",
-  "created_at": "2026-08-01T12:00:00Z",
-  "permalink": "https://...",
-  "source_route": "backfill",
-  "media": [
-    {
-      "url": "https://...",
-      "kind": "image",
-      "local_path": "media/xxx_0.jpg",
-      "ocr_text": null
-    }
-  ],
+  "post_id": "...", "platform": "instagram", "account": "neakasa.tech",
+  "owner": "neakasa.tech", "owner_name": "Neakasa",
+  "text": "正文", "created_at": "2026-08-01T12:00:00Z",
+  "permalink": "https://...", "source_route": "backfill",
+  "media": [{"url": "https://...", "kind": "image",
+             "local_path": "posts/2026-08-01_1200_x/01.jpg", "ocr_text": null}],
   "media_complete": true
 }
 ```
 
+### 三条必须守住的规则
+
+1. **`post.json` 是真相，`manifest.jsonl` 是派生索引。** 冲突时以文件夹为准，
+   跑 `python -m tools.layout reindex <平台>` 重建——**永远不反过来**。
+   方向必须单一，否则会退化成"两个都不可信"。
+2. **译文的真相源是账号级的 `translated.jsonl`**，不是文件夹里的 `text_de.txt`
+   （那是派生副本）。manifest 是重跑抓取就能重现的事实，译文是花钱买的加工结果，
+   混在一起会导致"重抓一次把译文冲掉"。
+3. **`owner` 与 `account` 必须分开。** `account` 是我们要抓的目标，
+   `owner` 是节点自己声明的归属。人工滚动时页面会加载推荐内容和被 @ 的 UGC——
+   2026-08-30 实测一次 IG 回填混进了 266 条来自另外 195 个账号的帖子。
+   不筛的话下游会翻译并发布他人内容，**这是法务风险**。
+   筛掉的必须写进 `_rejected.jsonl`，不得静默丢弃。
+
 `media[].ocr_text` 预留给下游 OCR 阶段回填，本层不填。
 
-**译文写在独立的 `translated.jsonl`，不动 manifest。** manifest 是重跑抓取
-就能重现的事实，译文是花钱买的加工结果，混在一起会导致"重抓一次把译文冲掉"。
+## 出问题时：不用重滚
+
+`routes/backfill.py` 在**解析之前**无条件把原始响应转储到 `_capture_*.json`。
+解析器再怎么改坏，20 分钟的人工滚动成果都不会丢：
+
+```
+python -m tools.replay instagram --dry-run    # 先看重建结果
+python -m tools.replay instagram              # 真正重建（媒体不重新下载）
+```
+
+**媒体一律不重新下载**——CDN 签名 URL 有时效，重下必然 403。
+已在盘上的文件按 URL 重新关联，关联不上的移进 `_orphan_media/`。
+
+2026-08-30 这条兜底第一次兑现价值：解析器发现三个缺陷后，
+整个归档（IG 756 篇 / FB 46 篇）完全离线重建，用户一次都没有重滚。
+**这条设计不许优化掉。**
+
 
 ## 只允许存在一条登录路径
 
@@ -172,8 +229,10 @@ archive/<platform>_<account>/
 **误导的**，它不是限流，等多久都不会恢复。硬编码 doc_id 的工具
 （包括 instaloader 的 `Profile.get_posts()`）会周期性失效。
 
-本项目规避方式：登出增量走不依赖 doc_id 的 `web_profile_info` 端点；
-回填让真实浏览器自己带上当周有效的 doc_id，我们只拦响应。**任何代码都不得硬编码 doc_id。**
+本项目规避方式：回填让真实浏览器自己带上当周有效的 doc_id，我们只拦响应。
+**任何代码都不得硬编码 doc_id。**
+（原本还有一条"登出增量走不依赖 doc_id 的 `web_profile_info`"——
+该端点 2026-08-30 已确认对登出访客关闭，见本文开头的 ⛔。）
 
 **mbasic.facebook.com 不要用作地基。** 官宣 2024-12-03 下线，
 2026 年仍有解析记录但行为不稳定。依赖它的老教程和库（如 `facebook-scraper`）

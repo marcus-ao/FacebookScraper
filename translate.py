@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                        # noqa: E402
-from core.store import Archive                     # noqa: E402
+from core.console import force_utf8                # noqa: E402
+from core.store import Archive, post_dirname       # noqa: E402
 
 # 提示词模板。放在独立文件里，改翻译行为不用改 Python，营销同事也能改。
 TEMPLATE_PATH = ROOT / "prompts" / "translate_de.md"
@@ -684,8 +685,38 @@ def run_review(arc_base: Path) -> int:
 
     out = arc_base / "review.md"
     out.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  {arc_base.name}：{out}　（{len(ordered)} 篇）")
+    n_de = sync_text_de(arc_base, rows, trans)
+    print(f"  {arc_base.name}：{out}　（{len(ordered)} 篇，"
+          f"另写出 {n_de} 个 text_de.txt）")
     return len(ordered)
+
+
+def sync_text_de(arc_base: Path, rows: list[dict], trans: dict[str, dict]) -> int:
+    """把译文同步一份 `text_de.txt` 到每帖文件夹里（J 组布局）。
+
+    **`translated.jsonl` 仍然是译文的唯一真相源**，这里写的是**派生副本**。
+    这条边界是刻意保留的：计划里已经拍板"译文写独立文件，重跑抓取不能冲掉
+    花钱买来的结果"，把真相源挪进文件夹会动到那个决策，不值得为整洁去动它。
+
+    副本的价值在人：设计同事拿到一个文件夹，里面英文、德文、配图齐全，
+    不用再去翻一个几 MB 的 JSONL。删了也没关系，跑一次 --review 就回来了。
+    """
+    written = 0
+    for row in rows:
+        # manifest 可能有脏行（run_review 明确承诺脏输入不崩）。
+        # 这是个派生副本的生成器，没有任何理由成为整批的失败点。
+        if not isinstance(row, dict) or not row.get("post_id"):
+            continue
+        entry = trans.get(row["post_id"])
+        de = entry.get("text_de") if isinstance(entry, dict) else None
+        if not de:
+            continue
+        d = arc_base / "posts" / post_dirname(row["post_id"], row.get("created_at"))
+        if not d.is_dir():
+            continue          # 还没迁移到新布局，或该帖文件夹被人删了
+        (d / "text_de.txt").write_text(de, encoding="utf-8")
+        written += 1
+    return written
 
 
 # --------------------------------------------------------------------------
@@ -754,6 +785,10 @@ def run_check(s: Settings) -> int:
 # --------------------------------------------------------------------------
 
 def main(argv=None) -> int:
+    # 本模块打 ❗金额被改动 —— 全项目最重要的一条安全信号。cp936 编不出这个字符，
+    # 输出一旦被重定向就会崩在那一行，正好是最需要它出现的时候。
+    force_utf8()
+
     ap = argparse.ArgumentParser(
         description="把归档的英文文案翻译成德语（F 组）",
         formatter_class=argparse.RawDescriptionHelpFormatter)

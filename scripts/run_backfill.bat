@@ -11,6 +11,9 @@ REM Pure ASCII on purpose -- see the comment block in setup.bat.
 REM Argument validation and all Chinese output live in routes\backfill.py.
 REM ---------------------------------------------------------------------
 setlocal
+REM Console code page here is 936; a redirected stdout would fall back to
+REM GBK and crash on the first non-encodable character. See core\console.py.
+set "PYTHONIOENCODING=utf-8"
 REM scripts\ lives one level below the project root -- go up first.
 cd /d "%~dp0.."
 

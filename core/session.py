@@ -17,7 +17,8 @@ import random
 import time
 
 # Safari UA：Instagram 的 web_profile_info 端点对 UA 敏感，
-# 换成 Chrome UA 时该端点行为不一致。登出增量必须带这个。
+# 换成 Chrome UA 时该端点行为不一致。
+# ⚠️ 该端点 2026-08-30 起对登出访客关闭，本常量随 core/http.py 一并保留备用。
 SAFARI_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/17.0 Safari/605.1.15"

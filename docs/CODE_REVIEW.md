@@ -211,3 +211,150 @@
 
 复核后再次运行 9 套离线测试，282 项检查全部通过；根目录、归档目录、状态目录、
 提示词路径和 venv 解释器的专项断言也全部通过。未调用 Chrome、社媒或翻译 API。
+
+## 7. 真实数据暴露的缺陷（2026-08-30）
+
+B1/B3 的首次真实回填跑完后，对两份 `_capture_*.json` 与产出的 `manifest.jsonl`
+做了逐条核对。**解析器在真实响应上失效的方式，和离线测试里假设的完全不同**——
+测试构造的是"结构正确的单一账号响应"，真实响应里混着推荐内容、被 @ 的 UGC、
+轮播子项和视频帖。以下四项都**已用真实数据证实**，不是推测。
+
+原始证据（可复现）：
+
+| 平台 | capture | 段数 | manifest 行数 |
+| --- | --- | ---: | ---: |
+| Facebook | `archive/fa_neakasaofficial/_capture_1788072462.json`（7.7 MB） | 220 | 47 |
+| Instagram | `archive/in_neakasa.tech/_capture_1788073013.json`（17.2 MB） | 99 | 1500 |
+
+### CR-12 · P0 · 归档写入了其它账号的帖子，且被标成本账号
+
+- **位置**：`core/parse.py::from_iphone_struct` / `from_graphql_node` / `from_fb_story`
+- **问题**：三个构造函数都把**调用方传入的** `account` 直接写进 `Post.account`，
+  **从不检查节点自身的归属**。而 `extract()` 走的是 `walk()` 全树搜索，
+  人工滚动时页面加载的推荐内容、被 @ 的 UGC、关联账号帖子全在同一批响应里。
+- **实测**：Instagram 1500 条去重记录中，仅 **756 条**的 owner 是 `neakasa.tech`；
+  **266 条来自另外 195 个账号**（`neakasa.global` 30 条、`neakasa.de` 4 条，
+  其余为宠物 UGC 账号，如 `ruka.bsh`、`daria.and.zoe` 等各 2–3 条）。
+  Facebook 47 条中 1 条 owner 是 `The Garden State Cat Club`
+  （`post_id=1514468247386817`，长度 16 而非本账号的 18，且无 `created_at`）。
+- **业务后果**：这不只是数据脏。下游 `translate.py` 会翻译他人文案，
+  G 组发布会把第三方 UGC 当作自家内容发到 DE Page —— **法务风险**。
+- **修复方向**：`Post` 增加 `owner` 字段，取自节点自身
+  （IG：`node.user.username` 或 `node.owner.username`；FB：`node.actors[0].name`/`id`）。
+  `extract()` 增加目标账号过滤：owner 与目标不一致的丢弃，
+  但**必须写进 `_rejected.jsonl`**（post_id + owner + 原因），不得静默丢弃。
+  ⚠️ IG 的 owner 匹配要注意大小写与 `username` vs `full_name` 的区别；
+  FB 的 `actors[0].name` 是**显示名**（"Neakasa Official"）而非 URL 里的
+  `neakasaofficial`，两者不相等，不能直接字符串比对——需要在首次回填时
+  从响应里确定本账号的 page id / 显示名并记录下来。
+
+### CR-13 · P0 · 轮播子项被当成独立帖子写入
+
+- **位置**：`core/parse.py::is_iphone_struct`
+- **问题**：判定写的是 `"pk" in d and "code" in d and "taken_at" in d` ——
+  **判断的是键存在，不是值非空**。Instagram 的 `carousel_media` 子项里
+  `code` 这个键确实存在，但值是 `None`；`pk` 和 `taken_at` 也都在。
+  于是每个子项都命中判定，被 `from_iphone_struct` 构造成一篇独立帖子。
+- **实测**：Instagram 1500 条中 **478 条是 `product_type == "carousel_item"` 的子项**
+  （全部无 owner 字段、`code` 为 `None`）。它们没有 caption，
+  因此 manifest 里 487 条空正文记录绝大多数来自这里。
+  轮播父帖共 145 篇。
+- **清洗无损性已验证**：145 个父帖的 `media` 数量**全部 ≥ 其子项数**
+  （不足的 0 个），说明父帖已收全所有子图，删除这 478 条子项行不丢任何图片。
+- **修复方向**：判定改为值非空（`d.get("code")` 而非 `"code" in d`），
+  并显式排除 `product_type == "carousel_item"`。
+  ⚠️ 改完要同时在 `tests_parse.py` 里加一条**用真实结构构造**的断言：
+  给一个带 `carousel_media` 的父节点，断言 `extract()` 只产出 1 篇。
+
+### CR-14 · P1 · Facebook 视频帖被记成"图片抓取失败"
+
+- **位置**：`core/parse.py::from_fb_story`
+- **问题**：只抽取 `walk()` 里同时含 `uri`/`width`/`height` 的图片节点，
+  **完全不识别视频**。视频帖因此得到 `media == []`，
+  再经 `media_complete=bool(media)` 得到 `False`。
+- **实测**：Facebook 47 条中 **20 条 `media` 为空且 `media_complete=False`**。
+  核对 capture 后确认这 20 条的 attachments 里主导 `__typename` 是
+  `Video` / `VideoAttachmentStyleInfo` / `FbShortsVideoAttachmentStyleInfo`
+  （对比：有图帖子的 attachments 主导 `__typename` 是 `Photo`），
+  即**它们是视频帖，不是抓取失败**。
+- **后果**：与计划固化的"视频只记元数据不下载"边界相违背。这 20 条会永久停留在
+  `Archive.needs_media()` 的待补清单里、每次回填都被 `should_append()` 判为可升级
+  从而重复尝试，且完整性检查会把它们当成媒体缺失。
+- **修复方向**：`from_fb_story` 识别视频附件并记 `Media(kind="video")`（只记 URL
+  与元数据，**不下载**），`media_complete` 的判定改为"已知媒体都已处理"，
+  而不是"有图片"。参考 `from_iphone_struct` 里对 `video_versions` 的既有处理。
+
+### CR-15 · P2 · 人工滚动时无法判断是否已滚到底
+
+- **位置**：`routes/backfill.py::run` 的进度打印
+- **问题**：终端只显示"已捕获 N 个响应 / M 段 JSON"。这两个数字对操作者**没有意义**——
+  他无法据此判断还要滚多久、是否已经到了最早一篇。
+- **可能已造成的实际损失**：Facebook 归档的时间范围只有
+  `2026-06-29 → 2026-08-25`（约 2 个月，46 篇），而 Instagram 是
+  `2020-09-03 → 2026-08-30`（约 6 年）。两者差距如此之大，
+  **无法排除"FB 根本没滚到底"**。在补上进度显示之前，这个问题无法自证。
+- **修复方向**：把计数改为对操作者有意义的量——**已解析出的本账号帖子数**
+  与**目前最早一篇的日期**，边滚边刷新。同时在连续 N 秒无新响应时提示
+  "页面似乎不再加载，可以按 Enter 收尾"。
+  ⚠️ 这只是改打印，**不得因此引入任何驱动页面的动作**（禁止事项：人工滚动的
+  全部价值在于滚动的确实是人）。
+
+### 这四项对既有结论的影响
+
+- 计划第 3 节"现状盘点"里 `core/parse.py` 的"未验证：与真实响应的匹配度"
+  **现已验证，且结果是不匹配**。
+- B5「媒体下载验证」与 B6「回填结果盘点」的验收**不能基于当前 manifest 进行**——
+  现在的数字（1500 / 47）是错的，真实值是 **756 / 46**（其中 FB 20 篇为视频）。
+  必须先修 CR-12/13/14 并离线重放重建归档，再做 B5/B6。
+- **不需要重新人工滚动。** 两份 capture 完整保留，重建走离线重放即可。
+
+### CR-12 ~ CR-15 的修复与验证（2026-08-30 当日完成）
+
+四项全部修复并用**真实 capture 验证**，归档已重建。
+
+| 编号 | 修复位置 | 验证结果 |
+| --- | --- | --- |
+| CR-12 | `core/parse.py`：`Post.owner`/`owner_name` 新字段、`_fb_actor()`、`_fb_slug()`、`partition_by_owner()` | IG 丢弃 266 条（195 个账号）、FB 丢弃 1 条；保留的帖子 owner 100% 为目标账号 |
+| CR-13 | `core/parse.py::is_iphone_struct` 改为判值 + 排除 `product_type == "carousel_item"` | 候选从 1500 降到 1022，**正好剔除 478 条子项**；轮播父帖仍收全子图（128 篇媒体数 > 1） |
+| CR-14 | `core/parse.py::_fb_videos()`，`media_complete` 语义改为解析层恒 True | FB 18 篇含视频；`media_complete=False` 从 20 降到 0 |
+| CR-15 | `routes/backfill.py::ScrollProgress` | 滚动时显示篇数 / 最早日期 / 静默秒数；未引入任何驱动页面的动作 |
+
+**归属判等的两个平台不对称，实现时才发现，记在这里**：
+
+- Instagram：`user.username` 与 `config.toml` 的值**直接相等**（`neakasa.tech`）。
+- Facebook：`actors[0].name` 是**展示名**（`"Neakasa Official"`），
+  与 URL 里的 `neakasaofficial` **不相等**。必须从 `actors[0].url` 取 slug 才能判等。
+  没有自定义用户名的主页（`profile.php?id=NNN`）退回 `id:NNN`。
+
+**归属未知一律丢弃**（`reason: "owner_unknown"`，与 `owner_mismatch` 分开记）。
+宁可漏一篇自家的，不可混进一篇别人的：漏的下次回填还能补，发出去的收不回来。
+
+**`_rejected.jsonl` 只记 266 条而不是计划里写的 744 条，这是有意的偏差**：
+那 478 条轮播子项**根本不是帖子，是帖子的一部分**，判定修好之后解析器压根不会把
+它们当候选，"丢弃"这个词对它们不成立。478 这个数字由 `tools/replay.py` 的重建
+报告体现（旧 1500 → 新 756，差额 744 拆成 478 子项 + 266 他人帖），审计链条不断。
+
+### 归档重建与布局重构（B7 / J 组）
+
+- `tools/replay.py`：用 `_capture_*.json` 离线重建，**媒体不重新下载**
+  （CDN 签名 URL 早已过期）。已在盘上的文件**按 URL 而不是按下标**重新关联——
+  修复后媒体排列顺序变了（FB 会在图片后追加视频），下标关联会张冠李戴。
+  实测 718 个文件全部正确关联、0 个失配。孤儿文件**移入 `_orphan_media/`，
+  不删除**。
+- `tools/layout.py`：`migrate` / `reindex` / `index`。归档改为每帖一个文件夹
+  （`posts/<日期>_<时分>_<post_id>/`），`post.json` 为真相源、
+  `manifest.jsonl` 降为派生索引，冲突时以文件夹为准。
+- 删除了 `Archive.save_raw()` 与 `raw/` 目录：docstring 声称存原始响应，
+  **代码实际写的是 `post.to_row()`**，与 manifest 逐字段相同。真正的原始响应
+  一直在 `_capture_*.json`。`post.json` 落地后它是纯重复。
+  ⚠️ 已存在的 `raw/`（FB 47 / IG 1500 个文件）**没有自动删除**，只打印提示。
+
+### 本轮之后的测试基线
+
+**10 套 400 项，全绿**（本轮开始时是 9 套 282 项）。
+新增 `tests_delta.py`（55）、`tests_parse.py` 的真实结构断言段、
+`tests_store.py` 的布局与 reindex 段、`tests_backfill.py` 的归属拦截与进度显示段。
+
+⚠️ 新增了一条以前没有的验证条件：**全套测试在 stdout 被管道重定向的情况下也必须全绿**。
+本机代码页是 936，修复前 `tests_translate.py` 在这个条件下必崩
+（`UnicodeEncodeError: 'gbk' codec can't encode character '\xdf'`）。

@@ -20,14 +20,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.chrome import cdp_ready, port_open  # noqa: E402
 from core.config import cfg                # noqa: E402
+from core.console import force_utf8        # noqa: E402
 
 # Chrome 冷启动到端口可连有几秒延迟，立刻去连 CDP 会失败，看起来像"脚本坏了"
 PORT_WAIT_SECONDS = 15
 
 
 def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(errors="replace")
+    force_utf8()
 
     c = cfg()
     exe = c.chrome_exe            # 找不到会 SystemExit 并给出可照做的提示

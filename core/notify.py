@@ -137,5 +137,8 @@ def notify(title: str, message: str, popup: bool = True) -> None:
 
 if __name__ == "__main__":
     # 手工验收：python -m core.notify
+    from core.console import force_utf8
+
+    force_utf8()
     notify("测试", "这是一条测试通知")
     print("已发送；记录见 %s" % (_state_dir() / "alerts.log"))

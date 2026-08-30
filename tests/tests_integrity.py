@@ -9,6 +9,9 @@ from pathlib import Path
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # tests/ 在子目录，得把项目根加进来
+from core.console import force_utf8   # noqa: E402
+
+force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.integrity import (check_continuity, check_incomplete, check_quiet,
                             check_undated, params)

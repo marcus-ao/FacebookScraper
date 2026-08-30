@@ -58,7 +58,7 @@ def _download_images(client, arc: Archive, post: Post) -> None:
             print(f"    ! 媒体为空 {post.post_id}[{i}]")
             downloads_complete = False
             continue
-        path = arc.media_path(post.post_id, i, response.headers.get("content-type"))
+        path = arc.media_path(post, i, response.headers.get("content-type"))
         path.write_bytes(response.content)
         media.local_path = str(path.relative_to(arc.base))
     post.media_complete = post.media_complete and downloads_complete
@@ -92,10 +92,13 @@ def scrape_page(page_id: str, token: str, archive_root: str | Path = "archive",
                     created_at=item.get("created_time", ""),
                     permalink=item.get("permalink_url"),
                     media=media, source_route="graph_api",
+                    # Graph API 只会返回该 page 自己的帖子，归属是路径固有的，
+                    # 不像爬取路径那样会混进别人的内容。仍然显式写上：
+                    # 留 None 的话，将来任何按 owner 过滤的地方都会把它们全丢掉。
+                    owner=str(page_id).strip().lower(),
                 )
                 if not arc.should_append(post):
                     continue
-                arc.save_raw(pid, item)
                 _download_images(client, arc, post)
                 if not arc.append(post):
                     continue
@@ -143,10 +146,10 @@ def scrape_ig_professional(ig_user_id: str, token: str,
                     created_at=item.get("timestamp", ""),
                     permalink=item.get("permalink"),
                     media=media, source_route="graph_api",
+                    owner=str(ig_user_id).strip().lower(),   # 同上
                 )
                 if not arc.should_append(post):
                     continue
-                arc.save_raw(pid, item)
                 _download_images(client, arc, post)
                 if not arc.append(post):
                     continue

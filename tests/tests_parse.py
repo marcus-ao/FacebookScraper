@@ -2,6 +2,9 @@
 import sys, json
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # tests/ 在子目录，得把项目根加进来
+from core.console import force_utf8   # noqa: E402
+
+force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 from core.parse import extract
 
 # --- 形态 2：登出 web_profile_info 的 timeline node ---
@@ -139,6 +142,148 @@ try:
     check(True, "缺字段/异常结构被跳过而非抛异常")
 except Exception as e:
     check(False, f"崩了: {e}")
+
+# ==========================================================================
+# 以下样本**照抄 2026-08-30 首次真实回填的响应结构**（脱敏后），不是想象出来的。
+# 上面那些样本全绿的同时，真实响应里混进了 267 条别人的帖子、478 条轮播子项
+# 被当成独立帖子、20 篇视频帖被当成抓取失败 —— 测试覆盖的是我们想到的形态，
+# 不是真实的形态。这一段就是为了把真实形态钉住。
+# 详见 docs/CODE_REVIEW.md 第 7 节 CR-12 ~ CR-15。
+# ==========================================================================
+from core.parse import _fb_slug, partition_by_owner   # noqa: E402
+
+print("\n[真实结构 1] 轮播子项不得成为独立帖子（CR-13）")
+# 真实形态：子项里 `code` 这个键**在**，值是 None；pk / taken_at 都在；
+# product_type == "carousel_item"。旧判定用 `"code" in d`，478 个子项全部命中。
+ig_carousel_real = {
+    "pk": "3712000000000000001", "code": "DXpArent", "taken_at": 1756300000,
+    "media_type": 8, "product_type": "carousel_container",
+    "user": {"username": "neakasa.tech", "full_name": "Neakasa"},
+    "caption": {"text": "Three ways to keep the litter box fresh"},
+    "carousel_media": [
+        {"pk": "3712000000000000002", "code": None, "taken_at": 1756300000,
+         "product_type": "carousel_item",
+         "image_versions2": {"candidates": [{"url": "https://cdn/c1.jpg",
+                                             "width": 1080, "height": 1080}]}},
+        {"pk": "3712000000000000003", "code": None, "taken_at": 1756300000,
+         "product_type": "carousel_item",
+         "image_versions2": {"candidates": [{"url": "https://cdn/c2.jpg",
+                                             "width": 1080, "height": 1080}]}},
+        {"pk": "3712000000000000004", "code": None, "taken_at": 1756300000,
+         "product_type": "carousel_item",
+         "video_versions": [{"url": "https://cdn/c3.mp4", "width": 720, "height": 1280}]},
+    ],
+}
+posts = extract([ig_carousel_real], "instagram", "neakasa.tech", route="backfill")
+check(len(posts) == 1, "一篇 3 项的轮播只产出 1 篇帖子（旧代码产出 4 篇）")
+check(posts[0].post_id == "3712000000000000001", "留下的是父帖不是子项")
+check(len(posts[0].media) == 3, "父帖收全了 3 个子项的媒体")
+check(sum(1 for m in posts[0].media if m.kind == "video") == 1, "子项里的视频被标成 video")
+check(posts[0].text.startswith("Three ways"), "正文来自父帖的 caption")
+check(posts[0].owner == "neakasa.tech", "归属取自 user.username")
+
+print("\n[真实结构 2] Facebook 归属：name 与 URL 里的账号名并不相等（CR-12）")
+def fb_story(pid, actor_name, actor_url, attachments, text="hi", ts=1756400000):
+    return {"post_id": pid, "creation_time": ts,
+            "message": {"text": text},
+            "actors": [{"__typename": "User", "id": "61591381265280",
+                        "name": actor_name, "url": actor_url}],
+            "attachments": attachments,
+            "url": "https://www.facebook.com/neakasaofficial/posts/%s" % pid}
+
+photo_att = [{"__typename": "StoryAttachment",
+              "media": {"__typename": "Photo", "id": "p1",
+                        "image": {"uri": "https://cdn/fb1.jpg",
+                                  "width": 1440, "height": 1440}},
+              "all_subattachments": None}]
+p = extract([fb_story("122100000000000001", "Neakasa Official",
+                      "https://www.facebook.com/neakasaofficial", photo_att)],
+            "facebook", "neakasaofficial", route="backfill")[0]
+check(p.owner == "neakasaofficial", "owner 归一化成 URL 里的账号名段")
+check(p.owner_name == "Neakasa Official", "展示名单独留着，给人看")
+check(p.owner != p.owner_name, "两者确实不相等 —— 所以判等不能用 name")
+check(len(p.media) == 1 and p.media[0].kind == "image", "图片照常抽出")
+
+check(_fb_slug("https://www.facebook.com/neakasaofficial") == "neakasaofficial",
+      "_fb_slug 取普通主页的账号名")
+check(_fb_slug("https://www.facebook.com/neakasaofficial/") == "neakasaofficial",
+      "_fb_slug 容忍结尾的斜杠")
+check(_fb_slug("https://www.facebook.com/profile.php?id=100064709675058")
+      == "id:100064709675058", "没有自定义用户名的主页退回数字 ID")
+check(_fb_slug(None) is None and _fb_slug("") is None, "空 URL 不崩")
+
+print("\n[真实结构 3] Facebook 视频帖必须被认成视频，而不是抓取失败（CR-14）")
+video_att = [{"__typename": "StoryAttachment",
+              "media": {"__typename": "Video", "__isNode": "Video",
+                        "id": "2895895450769921"},
+              "all_subattachments": None}]
+v = extract([fb_story("122100000000000002", "Neakasa Official",
+                      "https://www.facebook.com/neakasaofficial", video_att,
+                      text="Quiet protection. Real efficiency.")],
+            "facebook", "neakasaofficial", route="backfill")[0]
+check(len(v.media) == 1 and v.media[0].kind == "video", "视频附件被记成一条 video 媒体")
+check(v.media[0].url.endswith("2895895450769921"), "URL 由 video id 拼出，可定位")
+check(v.media_complete is True,
+      "视频帖是完整的 —— 旧代码判 False，让它永久挂在待补清单上")
+
+# 真实形态：相册帖，attachments[0].all_subattachments.nodes 里混着图和视频
+album_att = [{"__typename": "StoryAttachment",
+              "media": {"__typename": "Photo", "id": "p9",
+                        "image": {"uri": "https://cdn/a1.jpg",
+                                  "width": 1440, "height": 1440}},
+              "all_subattachments": {"nodes": [
+                  {"media": {"__typename": "Photo", "id": "p10",
+                             "image": {"uri": "https://cdn/a2.jpg",
+                                       "width": 1440, "height": 1440}}},
+                  {"media": {"__typename": "Video", "id": "778899"}},
+              ]}}]
+a = extract([fb_story("122100000000000003", "Neakasa Official",
+                      "https://www.facebook.com/neakasaofficial", album_att,
+                      text="Production Update")],
+            "facebook", "neakasaofficial", route="backfill")[0]
+check(sum(1 for m in a.media if m.kind == "image") == 2, "相册里两张图都抽到")
+check(sum(1 for m in a.media if m.kind == "video") == 1,
+      "相册里夹带的视频也记下来（真实数据里有这么一篇 9图+1视频）")
+
+# 真实形态：头像/封面更新帖 —— Photo 只有 id，没有 uri，正文为空
+avatar_att = [{"__typename": "StoryAttachment",
+               "media": {"__typename": "Photo", "__isNode": "Photo",
+                         "id": "122098419195379375"},
+               "styles": {"__typename": "StoryAttachmentProfileMediaStyleRenderer"}}]
+av = extract([fb_story("122098419195379375", "Neakasa Official",
+                       "https://www.facebook.com/neakasaofficial", avatar_att, text="")],
+             "facebook", "neakasaofficial", route="backfill")[0]
+check(av.media == [], "头像更新帖抽不到媒体（响应里本来就没有 uri）")
+check(av.media_complete is True,
+      "但它是完整的 —— 没有图可下不等于下载失败，否则会永远重试")
+
+print("\n[真实结构 4] 归属过滤：混进来的别人的帖子必须被拦下（CR-12）")
+mixed = extract([
+    fb_story("122100000000000004", "Neakasa Official",
+             "https://www.facebook.com/neakasaofficial", photo_att),
+    fb_story("1514468247386817", "The Garden State Cat Club",
+             "https://www.facebook.com/thegardenstatecatclub", photo_att,
+             text="THE WINNERS OF THE NEAKASA M1"),
+], "facebook", "neakasaofficial", route="backfill")
+kept, rejected = partition_by_owner(mixed, "neakasaofficial")
+check(len(kept) == 1 and kept[0].post_id == "122100000000000004", "只留本账号的")
+check(len(rejected) == 1, "另一条被丢弃")
+check(rejected[0]["owner"] == "thegardenstatecatclub"
+      and rejected[0]["owner_name"] == "The Garden State Cat Club",
+      "丢弃记录同时留下归一化归属和展示名")
+check(rejected[0]["reason"] == "owner_mismatch", "原因是归属不符")
+check(rejected[0]["text_head"].startswith("THE WINNERS"),
+      "留了正文开头，人能一眼看出丢的是什么")
+
+no_owner = extract([{"post_id": "999", "message": {"text": "no actor here"},
+                     "attachments": [], "creation_time": 1756400000}],
+                   "facebook", "neakasaofficial", route="backfill")
+kept2, rejected2 = partition_by_owner(no_owner, "neakasaofficial")
+check(kept2 == [] and rejected2[0]["reason"] == "owner_unknown",
+      "归属未知的一律丢弃，原因与「归属不符」分开记")
+
+kept3, _ = partition_by_owner(mixed, "NeakasaOfficial")
+check(len(kept3) == 1, "目标账号大小写不敏感（config 里怎么写都能匹配上）")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

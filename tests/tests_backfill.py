@@ -1,15 +1,20 @@
 """登录态回填主干自测：响应收尾、超时等待与媒体失败重试语义。"""
 import asyncio
+import json
 import sys
 import tempfile
 import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.console import force_utf8   # noqa: E402
+
+force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.store import Archive, Media, Post
 import routes.backfill as backfill
-from routes.backfill import Collector, _download, _stdin_waiter
+from routes.backfill import (
+    STALL_HINT_SECONDS, Collector, ScrollProgress, _download, _stdin_waiter)
 
 
 fails = []
@@ -161,6 +166,14 @@ with tempfile.TemporaryDirectory() as d:
         created_at="2026-08-29T00:00:00Z", media_complete=True,
         media=[Media(url="https://cdn/one.jpg", kind="image"),
                Media(url="https://cdn/two.jpg", kind="image")],
+        owner="acme",   # 主流程现在按 owner 过滤，不带归属的会被丢掉
+    )
+    # 同一批里混一条别人的帖子——这正是真实回填里发生的事
+    foreign = Post(
+        post_id="x9", platform="facebook", account="acme", text="someone else",
+        created_at="2026-08-29T00:00:00Z",
+        media=[Media(url="https://cdn/other.jpg", kind="image")],
+        owner="somebodyelse", owner_name="Somebody Else",
     )
 
     class Config:
@@ -189,7 +202,7 @@ with tempfile.TemporaryDirectory() as d:
     try:
         backfill.cfg = lambda: Config()
         backfill.attach = fake_attach
-        backfill.extract = lambda *_a, **_k: [complete]
+        backfill.extract = lambda *_a, **_k: [complete, foreign]
         backfill._download = fake_download
         backfill._stdin_waiter = lambda: (done, None)
         added = asyncio.run(backfill.run("facebook"))
@@ -197,12 +210,69 @@ with tempfile.TemporaryDirectory() as d:
         (backfill.cfg, backfill.attach, backfill.extract,
          backfill._download, backfill._stdin_waiter) = original
 
-    current = {row["post_id"]: row for row in Archive(root, "fa_acme").rows()}["p3"]
+    rebuilt = Archive(root, "fa_acme")
+    rows = {row["post_id"]: row for row in rebuilt.rows()}
+    current = rows["p3"]
     check(downloaded == ["p3"], "已存在但残缺的帖子仍进入媒体补全")
     check(added == 1, "补全版被计入本次新增/升级结果")
     check(current["media_complete"] is True and len(current["media"]) == 2,
           "归档最终由残缺封面升级为完整两图记录")
 
+    # ↓ 2026-08-30 新增：真实回填混进了 266 条别人的帖子，主流程必须拦住
+    check("x9" not in rows, "别人账号的帖子没有进 manifest")
+    check("x9" not in downloaded,
+          "别人账号的帖子连媒体都不下载（省流量，更省下游的麻烦）")
+    rejected_path = rebuilt.base / "_rejected.jsonl"
+    check(rejected_path.exists(), "被丢弃的帖子写进了 _rejected.jsonl（不得静默丢弃）")
+    rej = [json.loads(line) for line in
+           rejected_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    check(len(rej) == 1 and rej[0]["post_id"] == "x9", "_rejected.jsonl 里正是那一条")
+    check(rej[0]["reason"] == "owner_mismatch" and rej[0]["owner"] == "somebodyelse",
+          "丢弃原因与真实归属都记下来了")
+
+
+print("\n[5] 滚动进度显示（B8）—— 让人知道自己滚到哪一年了")
+
+
+def ig_node(pk, code, ts, owner="acme_us"):
+    return {"pk": pk, "code": code, "taken_at": ts,
+            "user": {"username": owner, "full_name": owner},
+            "caption": {"text": "hi"},
+            "image_versions2": {"candidates": [
+                {"url": "https://cdn/%s.jpg" % code, "width": 1080, "height": 1080}]}}
+
+
+prog = ScrollProgress("instagram", "acme_us")
+payloads = [ig_node("1", "AAA", 1756000000)]          # 2025-08-24
+prog.update(payloads)
+check(len(prog.ids) == 1, "第一批解析出 1 篇")
+first_earliest = prog.earliest
+
+payloads.append(ig_node("2", "BBB", 1600000000))      # 更早：2020-09-13
+prog.update(payloads)
+check(len(prog.ids) == 2, "增量只处理新到的那段，累计 2 篇")
+check(prog.earliest < first_earliest, "最早日期随着往下滚不断前移")
+check(prog.earliest.startswith("2020-09"), "最早日期取的是最小值")
+
+payloads.append(ig_node("1", "AAA", 1756000000))      # 同一帖再次出现
+prog.update(payloads)
+check(len(prog.ids) == 2, "同一帖在多个响应里重复出现只算一篇")
+
+payloads.append(ig_node("9", "ZZZ", 1750000000, owner="someone_else"))
+prog.update(payloads)
+check(len(prog.ids) == 2, "别人账号的帖子不计入进度（否则数字会虚高）")
+
+line = prog.line(0)
+check("2 篇" in line and "acme_us" in line, "进度行里有篇数和账号名")
+check("2020-09" in line, "进度行里有最早日期 —— 这才是判断到没到底的依据")
+check("秒没有新内容" not in line, "刚有新内容时不提示收尾")
+check("秒没有新内容" in prog.line(STALL_HINT_SECONDS + 1), "长时间没新内容时提示可以收尾")
+check("—" in ScrollProgress("instagram", "x").line(0), "一篇都还没抓到时不显示假日期")
+
+broken = ScrollProgress("instagram", "acme_us")
+broken.update([{"pk": "1", "code": "A", "taken_at": "not-a-number",
+                "user": "这里本该是个对象"}])
+check(True, "脏响应不会让进度显示把整场抓取带崩")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

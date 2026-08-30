@@ -10,7 +10,8 @@ r"""Day 1 · 一次性历史回填（登录态 + 人工滚动 + 响应拦截）
     3. 保持窗口开着，运行本脚本
 
 跑一次就够。跑完这个账号的历史内容就全在 archive/ 里了，
-之后的新帖由 routes/delta.py 每天登出增量接手。
+之后的新帖由 routes/delta.py 每天接手（方案 B：登录态 + CDP 附着，
+见 docs/IMPLEMENTATION_PLAN.md 第 0 节的方案变更说明）。
 """
 from __future__ import annotations
 
@@ -22,12 +23,63 @@ import time
 
 from core.chrome import attach
 from core.config import cfg
-from core.parse import extract
+from core.parse import extract, partition_by_owner
 from core.store import Archive, Post
 
 # 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
 INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
             "/api/v1/users/", "/api/v1/media")
+
+# 多久没有新响应就提示"可以收尾了"。页面滚到底之后不会再发请求，
+# 但操作者看不见网络活动，只能靠猜。给个明确信号。
+STALL_HINT_SECONDS = 20
+
+
+class ScrollProgress:
+    """给滚动的人看的进度。对应实施计划的 B8。
+
+    **旧版打印的是"已捕获 N 个响应 / M 段 JSON"，那两个数字对操作者没有意义**——
+    他无法据此判断还要滚多久、有没有到最早一篇。2026-08-30 的首次回填里，
+    Facebook 只拿到约 2 个月的内容而 Instagram 有 6 年，当时**没人能判断
+    这是"FB 就这么多"还是"没滚到底"**（后经用户确认是前者，但那是事后追认，
+    不是当场可见）。
+
+    这里只做增量解析用于显示：每次只解析新到的那几段 JSON，
+    结果并不参与最终归档——收尾时会对全部 payload 重新做一次权威解析。
+    显示用的统计允许有一点点偏差，换的是不卡住滚动的人。
+
+    ❌ **本类不得驱动页面。** 人工滚动的全部价值在于滚动的确实是人。
+    """
+
+    def __init__(self, platform: str, account: str) -> None:
+        self.platform = platform
+        self.account = account
+        self.ids: set[str] = set()
+        self.earliest: str = ""
+        self._scanned = 0
+
+    def update(self, payloads: list[dict]) -> None:
+        fresh = payloads[self._scanned:]
+        self._scanned = len(payloads)
+        if not fresh:
+            return
+        try:
+            posts, _ = partition_by_owner(
+                extract(fresh, self.platform, self.account, route="backfill"),
+                self.account)
+        except Exception:
+            return          # 显示用的统计，坏了也不能影响正在进行的抓取
+        for p in posts:
+            self.ids.add(p.post_id)
+            if p.created_at and (not self.earliest or p.created_at < self.earliest):
+                self.earliest = p.created_at
+
+    def line(self, quiet_seconds: float) -> str:
+        earliest = self.earliest[:10] if self.earliest else "—"
+        tail = ("  ·  %d 秒没有新内容了，可以按 Enter 收尾" % int(quiet_seconds)
+                if quiet_seconds >= STALL_HINT_SECONDS else "")
+        return "  已抓到 %d 篇（%s）· 最早 %s%s" % (
+            len(self.ids), self.account, earliest, tail)
 
 
 class Collector:
@@ -109,18 +161,27 @@ async def run(platform: str) -> int:
         print("=" * 62)
         print("  现在请在那个 Chrome 窗口里手工向下滚动，直到看见最早的帖子。")
         print("  慢慢滚，让每屏内容都加载出来（看到图片显示出来再继续）。")
+        print("  下面的「最早」会随着你往下滚不断往前走 —— 它不动了就是到底了。")
         print("  滚完之后回到这里按 Enter。")
         print("=" * 62)
 
         deadline = time.monotonic() + c.get("backfill", "max_session_seconds", 1800)
+        progress = ScrollProgress(platform, account)
+        last_hits, last_change = col.hits, time.monotonic()
+        width = 0
         waiter, _ = _stdin_waiter()
         while not waiter.is_set():
             await asyncio.sleep(2)
             if time.monotonic() > deadline:
                 print("\n达到最长会话时间，自动收尾。")
                 break
-            print(f"\r  已捕获 {col.hits} 个响应 / {len(col.payloads)} 段 JSON",
-                  end="", flush=True)
+            progress.update(col.payloads)
+            if col.hits != last_hits:
+                last_hits, last_change = col.hits, time.monotonic()
+            line = progress.line(time.monotonic() - last_change)
+            # 补空格盖掉上一行的残留：新行比旧行短时，尾巴会留在屏幕上
+            print("\r" + line.ljust(width), end="", flush=True)
+            width = max(width, len(line))
         print()
 
         # 停止接收新事件，再等已经到达的响应体读完；否则用户按 Enter 时仍在处理的
@@ -137,18 +198,29 @@ async def run(platform: str) -> int:
         print(f"原始响应已转储 → {dump}  ({dump.stat().st_size // 1024} KB)")
 
         posts = extract(col.payloads, platform, account, route="backfill")
-        print(f"解析出 {len(posts)} 篇帖子")
+        print(f"解析出 {len(posts)} 个候选帖子")
         if not posts and col.payloads:
             print("\n[!] 捕获到响应但一篇都没解析出来 —— 说明响应结构与解析器不符。")
             print(f"    原始数据在 {dump.name}，把它发给我，我按真实结构改解析器。")
             print("    不用重滚。")
+
+        # 人工滚动时页面会加载推荐内容和被 @ 的 UGC，它们和目标账号的帖子混在
+        # 同一批响应里。不筛的话下游会翻译并发布他人内容（2026-08-30 实测，
+        # Instagram 一次回填混进 266 条来自另外 195 个账号的帖子）。
+        posts, rejected = partition_by_owner(posts, account)
+        if rejected:
+            n_rej = arc.record_rejected(rejected)
+            others = {r["owner_name"] or r["owner"] for r in rejected if r["owner"]}
+            print(f"  - 丢弃 {len(rejected)} 个不属于 {account} 的节点"
+                  f"（来自 {len(others)} 个其它账号），已记入 _rejected.jsonl"
+                  f"（新增 {n_rej} 条）")
+        print(f"本账号帖子 {len(posts)} 篇")
 
         n = 0
         for post in posts:
             if not arc.should_append(post):
                 continue
             await _download(ctx, arc, post, url)
-            arc.save_raw(post.post_id, post.to_row())
             if not arc.append(post):
                 print(f"    ! {post.post_id} 媒体仍未补全，保留原归档并留待下次重试")
                 continue
@@ -196,7 +268,7 @@ async def _download(ctx, arc: Archive, post: Post, referer: str) -> None:
             print(f"    ! 媒体为空 {post.post_id}[{i}]")
             downloads_complete = False
             continue
-        p = arc.media_path(post.post_id, i, resp.headers.get("content-type"))
+        p = arc.media_path(post, i, resp.headers.get("content-type"))
         p.write_bytes(data)
         m.local_path = str(p.relative_to(arc.base))
     # ``media_complete`` 同时表示源响应是否给全、以及已知图片是否均已落盘。
@@ -205,6 +277,9 @@ async def _download(ctx, arc: Archive, post: Post, referer: str) -> None:
 
 
 if __name__ == "__main__":
+    from core.console import force_utf8
+
+    force_utf8()
     if len(sys.argv) != 2 or sys.argv[1] not in ("facebook", "instagram"):
         # 提示里给 .bat 的用法：实际跑这个脚本的人多半是双击 .bat 进来的，
         # 告诉他一条他敲不出来的命令没有意义
