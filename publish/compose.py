@@ -31,7 +31,6 @@ WarningSink = Callable[[str], None]
 
 _PROBE_REQUIRED_OBSERVATIONS = (
     "business_suite_entry_url",
-    "facebook_page_slug",
     "ui_timezone",
     "schedule_min_ahead",
     "schedule_max_ahead",

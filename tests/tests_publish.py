@@ -147,7 +147,6 @@ class FakePage:
 
 PROBE_OBSERVATIONS = {
     "business_suite_entry_url": "https://business.example.invalid/create?token=drop-me",
-    "facebook_page_slug": "neakasa-deutschland",
     "ui_timezone": "Europe/Berlin shown by Page UI",
     "schedule_min_ahead": "1 hour",
     "schedule_max_ahead": "10 days",
@@ -472,7 +471,7 @@ with tempfile.TemporaryDirectory() as d:
     finally:
         compose_module.cfg = original_cfg
     check(len(post.image_paths) == 2,
-          "只有 config 审核过且内容完整、数值一致的真实 probe 才能严格组装")
+          "审核过且数值一致的完整 probe 才能严格组装，空白可选 FB slug 不阻塞")
     check(not any("尚无 G1" in item or "只是 API 占位" in item
                   for item in post.warnings),
           "严格组装不再携带『约束未知』假绿警告")
