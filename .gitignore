@@ -4,6 +4,7 @@ state/
 __pycache__/
 *.pyc
 .fbscraper-chrome/
+.fbscraper-publish/
 _deprecated/__pycache__/
 .venv/
 venv/

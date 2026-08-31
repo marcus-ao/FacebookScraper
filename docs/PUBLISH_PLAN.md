@@ -2,7 +2,9 @@
 
 > 对应 `IMPLEMENTATION_PLAN.md` 的 G 组。本文件是 G 组的任务书。
 >
-> **建立日期：2026-08-31。状态：G0 / G0b 可立即实施；G1 需你操作；G2–G8 被 G1 阻塞。**
+> **建立日期：2026-08-31。状态：G0 已完成并实机验收；G0b 代码与离线验收完成，
+> 但计划点名的最新 3 篇尚无当前译文，真实验收未勾；G1 记录工具已就绪、需你操作；
+> G2–G8 仍被 G1 阻塞。**
 >
 > **开发分支：`feat/business-suite-publish`**（详见第 12 节的分支与文件所有权约定）。
 > 本组与 K 组（`feat/image-de`）**并行开发**，
@@ -95,6 +97,14 @@ FB  122123185335379375  2026-08-27  5 图  原创
 且各自的登录态互不可见（在发布 Chrome 里打开 instagram.com 不是抓取小号）。
 
 > **G0 不依赖 G1，现在就能做。** 它是整组唯一一件不需要真实 DOM 的事。
+>
+> **完成：2026-08-31。** `launch()` / `attach()` 接受显式 port/profile，
+> `cdp_ready()` 不给 port 时保持读 `[chrome]`，显式给 profile 时还会在 Windows
+> 只读核对监听进程的 `--user-data-dir`；端口是 CDP 但 profile 不对也失败闭合。
+> 配置把两侧端口或 profile 误写成相同值时同样拒绝启动。现有 backfill/delta 零改动。
+> 实机同时拉起 9222 与 9223 后两者均为 True：抓取 profile 有 FB/IG 登录 cookie，
+> 新建的发布 profile 两边 cookie 都为 0（只比较 cookie 名，不读取/打印值），
+> 登录态互不可见。入口为 `scripts\start_chrome_publish.bat`。
 
 ---
 
@@ -104,7 +114,7 @@ FB  122123185335379375  2026-08-27  5 图  原创
 > Business Suite 是 React SPA，class name 是构建期混淆的，
 > 任何"看起来合理"的选择器都是错的。**这一步之前，一行选择器都不写。**
 
-### 3.1 交付物：`tools/probe_publish.py`（我写，不需要等你）
+### 3.1 交付物：`tools/probe_publish.py`（已实现，运行需要你）
 
 **不用 `playwright codegen`。** 它产出的是脆的 CSS 选择器
 （`div > div:nth-child(3) > span`），混淆 class 一变就全废。
@@ -118,6 +128,20 @@ FB  122123185335379375  2026-08-27  5 图  原创
    （tag / role / aria-label / data-testid / name / placeholder / 可见文本 / 是否 contenteditable）
    dump 成 `state/publish_probe_<时间戳>.json`；
 4. 同时在每一步存一张截图，便于事后对照"这一步到底点的是哪个控件"。
+
+实际入口：
+
+```bat
+.venv\Scripts\python.exe tools\probe_publish.py
+```
+
+工具对 click / input（700ms 去抖）/ change / submit 逐条原子刷新 JSON，
+点击命中内层图标或 `<span>` 时还会记录最多 8 层语义祖先；不记录 class/CSS path、
+cookie 或密码输入值。结束时会让操作者原样补记入口 URL、FB slug、UI 时区、
+定时上下限与成功信号。不知道的项留空，绝不猜。
+
+> **当前状态：工具与离线 recorder 测试已完成，但用户尚未实际跑 G1。**
+> 因此 `publish/selectors.py` 仍只有 TODO，没有任何定位常量；G1 不得勾选。
 
 **与回填的人工滚动是同一条设计**：驱动页面的是人，程序只在旁边捞。
 
@@ -228,6 +252,17 @@ UI 自动化最贵的是时间，最险的是半成品——能在离线阶段�
 【验收】对最新 3 篇真实帖组装成功；人为把译文改过期 / 删掉一张图，
 各自被正确拒绝且说清原因。
 
+> **实现状态（2026-08-31，未勾验收）：** `publish/compose.py` 已完成当前译文与
+> 源正文指纹、`translate.money_preserved`、Pillow 解码/非零字节、残缺轮播、
+> `media_de` 逐图优先/原图逐图告警回退、合作帖原作者提示、显式时区 datetime 等硬闸。
+> IG 四类限制与定时窗口使用“必须带 probe dump 来源”的可注入契约；G1 前严格发布模式
+> 会失败闭合，绝不消费 `10 分钟/75 天` 的 API 占位值。
+>
+> 真实归档复核：现有当前版本译文中 5 篇图文帖可组装，1 篇纯视频被正确拦下；
+> 但计划点名的最新三篇 `3975547640610092585` / `3973012230169803390` /
+> `122123185335379375` 在各自 `translated.jsonl` 中都没有译文，均被正确拦下。
+> 所以“最新 3 篇成功”尚未通过，按协议不把 G0b 勾成完成。
+
 ---
 
 ## 6. 幂等与留痕：`state/published.jsonl`
@@ -291,8 +326,9 @@ G2 → G3 → G4 → G5 → G6 → G7
 G8 端到端（需要 F 的译文 + K 的德语图）
 ```
 
-**当前唯一的外部卡点是 G1。** 在它完成前，G 组能推进的就是 G0 与 compose.py，
-其余全部只有骨架——**这是设计，不是拖延**。
+**当前 UI 实现的唯一外部卡点是 G1。** G0 已完成；compose.py 已完成当前可离线
+验证的部分，但最新三篇还需要 F 组当前译文，IG/定时数字还需要 G1 dump。
+G2–G7 只有会在接触 page 前明确报 `ProbeRequired` 的函数签名——**这是设计，不是拖延**。
 
 ---
 
