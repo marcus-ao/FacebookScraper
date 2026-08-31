@@ -12,6 +12,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -20,6 +21,136 @@ from core.config import cfg                                # noqa: E402
 from core.console import force_utf8                        # noqa: E402
 
 BINDING_NAME = "__fbscraperPublishProbeRecord"
+_EVENT_TYPES = {"click", "input", "change", "submit"}
+_OBSERVATION_KEYS = {
+    "business_suite_entry_url",
+    "facebook_page_slug",
+    "ui_timezone",
+    "schedule_min_ahead",
+    "schedule_max_ahead",
+    "schedule_min_ahead_seconds",
+    "schedule_max_ahead_seconds",
+    "schedule_input_behavior",
+    "success_signal",
+    "instagram_min_aspect_ratio",
+    "instagram_max_aspect_ratio",
+    "instagram_max_images",
+    "instagram_max_caption_length",
+    "instagram_caption_length_mode",
+    "instagram_max_hashtags",
+    "instagram_aspect_ratio_rejection",
+    "instagram_image_count_rejection",
+    "instagram_caption_length_rejection",
+    "instagram_hashtag_rejection",
+    "extra_notes",
+}
+# 只用于 screenshot 的通用 HTML 凭据遮罩，不是 Business Suite 流程定位器，
+# 不参与点击/填写/导航，也不代表任何真实 DOM 探查结论。
+_SENSITIVE_INPUT_SELECTOR = (
+    'input[type="password"], input[type="email"], '
+    'input[autocomplete~="username"], input[autocomplete~="current-password"], '
+    'input[autocomplete~="new-password"], input[autocomplete~="one-time-code"]'
+)
+_ELEMENT_STRING_FIELDS = {
+    "tag": 64,
+    "role": 128,
+    "explicit_role": 128,
+    "aria_label": 500,
+    "aria_labelledby": 500,
+    "data_testid": 500,
+    "name": 500,
+    "placeholder": 500,
+    "visible_text": 500,
+    "accessible_name": 500,
+    "accessible_name_source": 64,
+    "contenteditable": 64,
+    "input_type": 64,
+    "accept": 500,
+}
+_ELEMENT_BOOL_FIELDS = {
+    "visible_text_truncated",
+    "is_contenteditable",
+    "multiple",
+    "checked",
+    "disabled",
+}
+
+
+def _safe_text(value: object, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:limit]
+
+
+def _safe_url(value: object) -> str:
+    raw = _safe_text(value, 4096)
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return ""
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return ""
+    if parts.username is not None or parts.password is not None:
+        return ""
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))[:2048]
+
+
+def _safe_element(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    input_type = _safe_text(value.get("input_type"), 64).lower()
+    if input_type in {"password", "hidden"}:
+        return None
+    out: dict[str, object] = {}
+    depth = value.get("ancestor_depth")
+    if isinstance(depth, int) and not isinstance(depth, bool) and 0 <= depth < 8:
+        out["ancestor_depth"] = depth
+    for key, limit in _ELEMENT_STRING_FIELDS.items():
+        out[key] = _safe_text(value.get(key), limit)
+    for key in _ELEMENT_BOOL_FIELDS:
+        raw = value.get(key)
+        out[key] = raw if isinstance(raw, bool) else None
+    out["href"] = _safe_url(value.get("href"))
+    if not out["tag"] or out["tag"] in {"body", "html"}:
+        return None
+    return out
+
+
+def _safe_payload(payload: object, session_id: str) -> dict | None:
+    """页面只能提交固定 schema；未知字段和非可信事件一律丢弃。"""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("session_id") != session_id or payload.get("is_trusted") is not True:
+        return None
+    event_type = payload.get("event_type")
+    if event_type not in _EVENT_TYPES:
+        return None
+    target = _safe_element(payload.get("target"))
+    if target is None:
+        return None
+    candidates = []
+    raw_candidates = payload.get("candidates")
+    if isinstance(raw_candidates, list):
+        for candidate in raw_candidates[:8]:
+            safe = _safe_element(candidate)
+            if safe is not None:
+                candidates.append(safe)
+    if candidates:
+        target = candidates[0]
+    else:
+        candidates = [target]
+    return {
+        "session_id": session_id,
+        "event_type": event_type,
+        "is_trusted": True,
+        "client_timestamp": _safe_text(payload.get("client_timestamp"), 64),
+        "page_url": _safe_url(payload.get("page_url")),
+        "document_title": _safe_text(payload.get("document_title"), 300),
+        "target": target,
+        "candidates": candidates,
+    }
 
 # 这个函数只安装事件监听器。刻意没有 querySelector 驱动、click/fill/goto，
 # 更没有 className/CSS path。点击到 span 时把语义祖先链一起记下，避免按钮的
@@ -84,6 +215,16 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
     return compact(chunks.join(" ")).text;
   };
 
+  const sensitiveTarget = (element) => {
+    if (!(element instanceof Element)) return false;
+    const input = element.closest?.(
+      'input[type="password"], input[type="hidden"], input[type="email"], ' +
+      'input[autocomplete~="username"], input[autocomplete~="current-password"], ' +
+      'input[autocomplete~="new-password"], input[autocomplete~="one-time-code"]'
+    );
+    return Boolean(input);
+  };
+
   const describe = (element, depth = 0) => {
     if (!(element instanceof Element)) return null;
     const tag = String(element.tagName || "").toLowerCase();
@@ -102,6 +243,11 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
       ariaLabel || labelled || label || element.getAttribute("alt") ||
       placeholder || visibleText.text
     );
+    const semantic = depth === 0 || explicitRole || implicitRole(element) ||
+      ariaLabel || labelled || label || element.getAttribute("data-testid") ||
+      element.getAttribute("name") || placeholder || element.isContentEditable ||
+      ["button", "a", "input", "textarea", "select"].includes(tag);
+    if (!semantic) return null;
     return {
       ancestor_depth: depth,
       tag,
@@ -135,22 +281,25 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
     let element = target instanceof Element ? target : target?.parentElement;
     let depth = 0;
     while (element && depth < 8) {
+      const tag = String(element.tagName || "").toLowerCase();
+      if (["body", "html"].includes(tag)) break;
       const item = describe(element, depth);
       if (item) result.push(item);
-      if (["body", "html"].includes(String(element.tagName || "").toLowerCase())) break;
       element = element.parentElement;
       depth += 1;
     }
     return result;
   };
 
-  const emit = (eventType, target) => {
+  const emit = (eventType, target, event) => {
+    if (!event?.isTrusted || sensitiveTarget(target)) return;
     const binding = window[bindingName];
     if (typeof binding !== "function") return;
     const chain = candidates(target);
     const payload = {
       session_id: sessionId,
       event_type: eventType,
+      is_trusted: true,
       client_timestamp: new Date().toISOString(),
       page_url: window.location.href,
       document_title: document.title,
@@ -162,16 +311,18 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
 
   const timers = new Map();
   const handlers = {
-    click: (event) => emit("click", event.target),
-    change: (event) => emit("change", event.target),
-    submit: (event) => emit("submit", event.submitter || document.activeElement || event.target),
+    click: (event) => emit("click", event.target, event),
+    change: (event) => emit("change", event.target, event),
+    submit: (event) => emit(
+      "submit", event.submitter || document.activeElement || event.target, event),
     input: (event) => {
+      if (!event.isTrusted || sensitiveTarget(event.target)) return;
       const target = event.target;
       const old = timers.get(target);
       if (old) clearTimeout(old);
       timers.set(target, setTimeout(() => {
         timers.delete(target);
-        emit("input", target);
+        emit("input", target, event);
       }, 700));
     },
   };
@@ -215,7 +366,9 @@ class ProbeRecorder:
             "cdp_port": int(port),
             "profile_dir": str(profile),
             "mode": "record-only",
-            "privacy": ("不记录 cookie、密码输入值或 CSS/class；visible_text 最长 500 字符"),
+            "privacy": (
+                "只保留白名单稳定属性；不记录 cookie/输入值/CSS/class，"
+                "敏感输入不产生事件且截图遮罩，URL 去掉 query/fragment"),
             "interactions": [],
             "observations": {},
         }
@@ -230,9 +383,10 @@ class ProbeRecorder:
             encoding="utf-8")
         temporary.replace(self.output_path)
 
-    async def record(self, page, payload: object) -> None:
-        if not isinstance(payload, dict):
-            payload = {"event_type": "invalid-payload", "raw_type": type(payload).__name__}
+    async def record(self, page, payload: object) -> bool:
+        payload = _safe_payload(payload, self.session_id)
+        if payload is None:
+            return False
         async with self._lock:
             self._counter += 1
             sequence = self._counter
@@ -242,7 +396,9 @@ class ProbeRecorder:
                 "%03d_%s.png" % (sequence, safe_event or "interaction"))
             screenshot_error = None
             try:
-                await page.screenshot(path=str(screenshot), full_page=False)
+                masks = [page.locator(_SENSITIVE_INPUT_SELECTOR)]
+                await page.screenshot(
+                    path=str(screenshot), full_page=False, mask=masks)
             except Exception as exc:  # 页面恰在导航/关闭时，记录失败但不丢交互本身
                 screenshot_error = "%s: %s" % (type(exc).__name__, exc)
 
@@ -251,14 +407,24 @@ class ProbeRecorder:
             record["recorded_at"] = _utc_iso()
             record["screenshot"] = str(screenshot)
             record["screenshot_error"] = screenshot_error
-            record["playwright_page_url"] = getattr(page, "url", "")
+            record["playwright_page_url"] = _safe_url(getattr(page, "url", ""))
             self.data["interactions"].append(record)
             self._write()
+            return True
 
     async def set_observations(self, values: dict[str, str]) -> None:
         async with self._lock:
-            self.data["observations"].update(
-                {key: value for key, value in values.items() if value})
+            clean = {}
+            for key, value in values.items():
+                if key not in _OBSERVATION_KEYS or not value:
+                    continue
+                if key == "business_suite_entry_url":
+                    safe = _safe_url(value)
+                else:
+                    safe = _safe_text(value, 2000 if key == "extra_notes" else 500)
+                if safe:
+                    clean[key] = safe
+            self.data["observations"].update(clean)
             self._write()
 
     async def finish(self) -> None:
@@ -326,8 +492,21 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
                 "ui_timezone": "日期/时间控件原样显示的时区字符串：",
                 "schedule_min_ahead": "UI 实测最早可排多久之后：",
                 "schedule_max_ahead": "UI 实测最晚可排多远：",
+                "schedule_min_ahead_seconds": "同一下限换算成整数秒：",
+                "schedule_max_ahead_seconds": "同一上限换算成整数秒：",
                 "schedule_input_behavior": "日期/时间能直接输入还是必须点选：",
                 "success_signal": "提交成功的明确信号（toast/跳转/列表项）：",
+                "instagram_min_aspect_ratio": "IG 实测最小宽高比（小数）：",
+                "instagram_max_aspect_ratio": "IG 实测最大宽高比（小数）：",
+                "instagram_max_images": "IG 实测单帖图片数上限（整数）：",
+                "instagram_max_caption_length": "IG 实测正文长度上限（整数）：",
+                "instagram_caption_length_mode": (
+                    "UI 计数方式（codepoints/utf16_units/utf8_bytes）："),
+                "instagram_max_hashtags": "IG 实测标签数上限（整数）：",
+                "instagram_aspect_ratio_rejection": "超出画幅边界时 UI 的实际拒绝行为：",
+                "instagram_image_count_rejection": "超出图片数时 UI 的实际拒绝行为：",
+                "instagram_caption_length_rejection": "超出正文长度时 UI 的实际拒绝行为：",
+                "instagram_hashtag_rejection": "超出标签数时 UI 的实际拒绝行为：",
                 "extra_notes": "其它观察：",
             }
             values = {}

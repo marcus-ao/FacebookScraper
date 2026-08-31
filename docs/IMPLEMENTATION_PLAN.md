@@ -1903,8 +1903,9 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
 
   > 进展：2026-08-31 · 代码与离线测试已完成：复用
   > `translate.money_preserved` / `translation_is_current`，逐图优先 `media_de`、
-  > 缺图告警回退原图，Pillow 解码、残缺轮播、合作方原作者、aware datetime
-  > 均有硬闸；IG/定时数字必须携带 G1 probe dump 来源，严格发布模式缺值即失败。
+  > 缺图告警回退原图，Pillow 完整像素解码、缺失完整性标记、残缺/混合/脏媒体、
+  > 合作方原作者、aware datetime 均有硬闸；IG/定时数字必须与 config 人工确认的
+  > 完整 G1 dump 逐项一致，严格发布会核对 9223/profile/交互/截图/观察，缺值即失败。
   > 真实当前译文中 5 篇图文帖组装成功、1 篇纯视频被正确拒绝；但计划点名的
   > 最新三篇均尚无译文，所以“最新 3 篇成功”未通过，本项按协议不勾选。
 - [ ] **G1** 探查 Business Suite 的真实 DOM 与流程　**← 需要你操作，且它阻塞 G2–G7**
@@ -1933,8 +1934,10 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
 
   > 进展：2026-08-31 · `tools/probe_publish.py` 已交付并通过离线 recorder 测试：
   > 只监听人工 click/input/change/submit，逐步截图、原子写 JSON，记录命中元素与
-  > 语义祖先的稳定属性，不记录 class/CSS path/cookie/密码值；结束时补记时区、
-  > 窗口、slug 与成功信号。用户尚未实际运行，`selectors.py` 仍只有 TODO，故不勾选。
+  > 语义祖先的稳定属性；合成事件/敏感输入丢弃，Python 侧再做字段白名单、URL 去参、
+  > 登录输入截图遮罩，不记录 class/CSS path/cookie/输入值；结束时补记时区、窗口、
+  > 四类 IG 实测拒绝、slug 与成功信号。用户尚未实际运行，`selectors.py` 仍只有
+  > TODO，故不勾选。
 - [ ] **G2** 登录态与**目标 Page**检查
 
   - `publish/business_suite.py::ensure_logged_in(page) -> bool`
@@ -3177,10 +3180,21 @@ reasoning 实际成本通过后，才允许全量。
   `--user-data-dir`。两端实机同时可附着，且只核对 cookie 名得到抓取侧已登录、
   新发布侧未登录，证明会话没有串用。
 - **G0b 只完成代码与离线验收，未完成任务书的真实验收。** `compose_post()` 已把
-  当前版译文、金额不变、媒体完整性与可解码、合作帖来源、aware 排期以及带 probe
-  来源的未知 UI 约束做成失败闭合；当前库里 5 篇图文实帖可组装、1 篇纯视频被拒绝，
+  当前版译文、金额不变、媒体完整性与完整解码、混合/脏媒体、合作帖来源、aware 排期
+  以及与 config 审核 dump 逐项一致的 UI 约束做成失败闭合；当前库里 5 篇图文实帖
+  可组装、1 篇纯视频被拒绝，
   但计划点名的最新三篇都没有当前版译文，故 G0b 保持未勾选。
 - **G1 只交付记录器。** `tools/probe_publish.py` 附着 9223 后仅监听人工交互、记录
-  稳定语义属性并逐步截图，不导航、不点击、不填表、不上传、不提交；用户尚未手工
+  白名单稳定语义属性并对敏感输入截图遮罩，不导航、不点击、不填表、不上传、不提交；
+  用户尚未手工
   跑完流程，因此真实选择器、FB slug、定时窗口和 Page 时区仍为空，G1 保持未勾选，
-  `publish/selectors.py` 只有 TODO，G2–G7 也只有失败闭合的函数契约。
+  `publish/selectors.py` 只有 TODO；G2–G6 只有失败闭合函数，G7 仍只有任务书契约。
+
+#### 独立代码审查修正（同分支）
+
+首轮审查无 Critical，发现 5 个 Important，已全部补反例后修正：截断 JPEG 必须
+完整加载像素；缺失 `media_complete=True`、混合视频或脏媒体行不得被静默过滤；
+严格模式不能用任意字符串冒充 probe；记录器过滤合成/敏感事件与任意 payload；
+无参 `launch/attach` 恢复旧 CDP-only 行为，只有显式 profile 才核对进程归属。
+修正后原 16 套加新增发布套件共 **17 套全绿**；`ruff`、`compileall -q .` 与
+`git diff --check` 均通过，发布 `.bat` 的 ASCII/CRLF/无 BOM 断言包含在全量测试中。

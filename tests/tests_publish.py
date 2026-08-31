@@ -27,6 +27,7 @@ from publish.compose import (ComposeError, InstagramConstraints,  # noqa: E402
                              ScheduleWindow, compose_post)
 from tools.probe_publish import ProbeRecorder, install_script  # noqa: E402
 from translate import PROMPT_VERSION, source_text_sha256  # noqa: E402
+import publish.compose as compose_module  # noqa: E402
 import tools.start_chrome_publish as start_publish  # noqa: E402
 
 
@@ -124,6 +125,104 @@ def rewrite_translation(fixture, **changes):
     row.update(changes)
     fixture["translated_path"].write_text(
         json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+class FakeLocator:
+    pass
+
+
+class FakePage:
+    url = "https://business.example.invalid/create?access_token=must-not-leak#dialog"
+
+    def __init__(self):
+        self.mask_selectors = []
+
+    def locator(self, selector):
+        self.mask_selectors.append(selector)
+        return FakeLocator()
+
+    async def screenshot(self, *, path, full_page, mask):
+        Image.new("RGB", (24, 16), (1, 2, 3)).save(path, format="PNG")
+
+
+PROBE_OBSERVATIONS = {
+    "business_suite_entry_url": "https://business.example.invalid/create?token=drop-me",
+    "facebook_page_slug": "neakasa-deutschland",
+    "ui_timezone": "Europe/Berlin shown by Page UI",
+    "schedule_min_ahead": "1 hour",
+    "schedule_max_ahead": "10 days",
+    "schedule_min_ahead_seconds": "3600",
+    "schedule_max_ahead_seconds": "864000",
+    "schedule_input_behavior": "direct input accepted and read back",
+    "success_signal": "scheduled-list row appeared",
+    "instagram_min_aspect_ratio": "0.5",
+    "instagram_max_aspect_ratio": "2.0",
+    "instagram_max_images": "5",
+    "instagram_max_caption_length": "1000",
+    "instagram_caption_length_mode": "codepoints",
+    "instagram_max_hashtags": "10",
+    "instagram_aspect_ratio_rejection": "UI rejected 0.49 and 2.01",
+    "instagram_image_count_rejection": "UI rejected the sixth image",
+    "instagram_caption_length_rejection": "UI rejected 1001 codepoints",
+    "instagram_hashtag_rejection": "UI rejected the eleventh hashtag",
+}
+
+
+async def make_completed_probe(state_dir: Path, profile: Path):
+    recorder = ProbeRecorder(
+        state_dir, port=9223, profile=profile,
+        timestamp="20260831_120000")
+    page = FakePage()
+    events = ["click", "change", "input", "click", "click", "input", "submit"]
+    for index, event_type in enumerate(events):
+        tag = "input" if event_type in {"input", "change"} else "button"
+        role = "textbox" if tag == "input" else "button"
+        accepted = await recorder.record(page, {
+            "session_id": recorder.session_id,
+            "event_type": event_type,
+            "is_trusted": True,
+            "client_timestamp": "2026-08-31T19:00:%02dZ" % index,
+            "page_url": FakePage.url,
+            "document_title": "Create post",
+            "target": {
+                "ancestor_depth": 0,
+                "tag": tag,
+                "role": role,
+                "aria_label": "Step %d" % index,
+                "data_testid": "fixture-step",
+                "name": "",
+                "placeholder": "",
+                "visible_text": "Step %d" % index,
+                "is_contenteditable": False,
+                "input_type": "text" if tag == "input" else "button",
+                "href": "https://business.example.invalid/action?secret=drop",
+                "injected_secret": "must not persist",
+            },
+            "candidates": [],
+            "injected_secret": "must not persist",
+        })
+        if not accepted:
+            raise AssertionError("fixture trusted event was rejected")
+    await recorder.set_observations(PROBE_OBSERVATIONS)
+    await recorder.finish()
+    return recorder, page
+
+
+class VerifiedProbeConfig:
+    def __init__(self, state_dir: Path, profile: Path, dump: Path, *,
+                 verified: bool = True):
+        self.state_dir = state_dir
+        self.publish_profile_dir = profile
+        self.publish_debug_port = 9223
+        self._dump = dump
+        self._verified = verified
+
+    def get(self, section, key, default=None):
+        values = {
+            ("publish", "ui_constraints_verified"): self._verified,
+            ("publish", "ui_probe_dump"): str(self._dump),
+        }
+        return values.get((section, key), default)
 
 
 print("[1] G0 发布 Chrome 配置/入口与抓取侧硬隔离")
@@ -259,12 +358,53 @@ with tempfile.TemporaryDirectory() as d:
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
+    fixture = make_fixture(root, image_count=1)
+    image_path = fixture["post_dir"] / "01.jpg"
+    image_path.write_bytes(image_path.read_bytes()[:-2])
+    check(raises(ComposeError,
+                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
+                                      warning_sink=None),
+                 "Pillow"),
+          "缺少 JPEG 结尾但 verify 可能放过的截断图会在完整像素解码时被拒绝")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
     make_fixture(root, media_complete=False)
     check(raises(ComposeError,
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
-                 "media_complete=False"),
+                 "media_complete=True"),
           "只拿到轮播封面时不发布残缺内容")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root, image_count=1)
+    source = dict(fixture["source"])
+    source.pop("media_complete")
+    (fixture["post_dir"] / "post.json").write_text(
+        json.dumps(source, ensure_ascii=False), encoding="utf-8")
+    check(raises(ComposeError,
+                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
+                                      warning_sink=None),
+                 "media_complete=True"),
+          "缺少完整性标记时失败闭合，不把缺字段当作完整")
+
+for bad_item, label in [
+        ({"kind": "video", "local_path": "posts/x/02.mp4"}, "混合图片/视频"),
+        ({"local_path": "posts/x/02.jpg"}, "缺 kind 的脏媒体行"),
+        ("not-an-object", "非对象媒体行")]:
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "archive"
+        fixture = make_fixture(root, image_count=1)
+        source = dict(fixture["source"])
+        source["media"] = [*source["media"], bad_item]
+        (fixture["post_dir"] / "post.json").write_text(
+            json.dumps(source, ensure_ascii=False), encoding="utf-8")
+        check(raises(ComposeError,
+                     lambda: compose_post("fixture-post", WHEN,
+                                          archive_root=root, warning_sink=None),
+                     "不得静默丢弃" if isinstance(bad_item, str) else "第 2 个媒体项"),
+              "%s会整体拒绝，不会悄悄缩成少图帖" % label)
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
@@ -296,37 +436,102 @@ check(raises(ValueError,
              lambda: ScheduleWindow("", timedelta(minutes=1), timedelta(days=1)),
              "probe"),
       "定时窗口同样必须点名真实 probe dump 来源")
+check(raises(ValueError,
+             lambda: InstagramConstraints(
+                 probe_dump="x", min_aspect_ratio=float("nan")),
+             "有限数"),
+      "NaN/Infinity 不能伪装成已实测画幅边界")
 
-limits = InstagramConstraints(
-    probe_dump="state/publish_probe_fixture.json",
-    min_aspect_ratio=0.5,
-    max_aspect_ratio=2.0,
-    max_images=5,
-    max_caption_length=1000,
-    caption_length_mode="codepoints",
-    max_hashtags=10)
-window = ScheduleWindow(
-    probe_dump="state/publish_probe_fixture.json",
-    min_ahead=timedelta(hours=1),
-    max_ahead=timedelta(days=10))
 with tempfile.TemporaryDirectory() as d:
-    root = Path(d) / "archive"
+    temp = Path(d)
+    root = temp / "archive"
+    state_dir = temp / "state"
+    profile = temp / "publish-profile"
     make_fixture(root)
-    post = compose_post(
-        "fixture-post", WHEN, archive_root=root,
-        instagram_constraints=limits, schedule_window=window, now=NOW,
-        require_verified_ui_constraints=True, warning_sink=None)
+    recorder, _page = asyncio.run(make_completed_probe(state_dir, profile))
+    limits = InstagramConstraints(
+        probe_dump=str(recorder.output_path),
+        min_aspect_ratio=0.5,
+        max_aspect_ratio=2.0,
+        max_images=5,
+        max_caption_length=1000,
+        caption_length_mode="codepoints",
+        max_hashtags=10)
+    window = ScheduleWindow(
+        probe_dump=str(recorder.output_path),
+        min_ahead=timedelta(hours=1),
+        max_ahead=timedelta(days=10))
+    original_cfg = compose_module.cfg
+    try:
+        compose_module.cfg = lambda: VerifiedProbeConfig(
+            state_dir, profile, recorder.output_path)
+        post = compose_post(
+            "fixture-post", WHEN, archive_root=root,
+            instagram_constraints=limits, schedule_window=window, now=NOW,
+            require_verified_ui_constraints=True, warning_sink=None)
+    finally:
+        compose_module.cfg = original_cfg
     check(len(post.image_paths) == 2,
-          "四类 IG 约束与定时窗口都有 probe 来源时可完成严格组装")
+          "只有 config 审核过且内容完整、数值一致的真实 probe 才能严格组装")
     check(not any("尚无 G1" in item or "只是 API 占位" in item
                   for item in post.warnings),
           "严格组装不再携带『约束未知』假绿警告")
 
-with tempfile.TemporaryDirectory() as d:
-    root = Path(d) / "archive"
-    make_fixture(root)
+    original_cfg = compose_module.cfg
+    try:
+        compose_module.cfg = lambda: VerifiedProbeConfig(
+            state_dir, profile, recorder.output_path, verified=False)
+        disabled = raises(
+            ComposeError,
+            lambda: compose_post(
+                "fixture-post", WHEN, archive_root=root,
+                instagram_constraints=limits, schedule_window=window, now=NOW,
+                require_verified_ui_constraints=True, warning_sink=None),
+            "ui_constraints_verified")
+        missing_dump = state_dir / "publish_probe_missing.json"
+        compose_module.cfg = lambda: VerifiedProbeConfig(
+            state_dir, profile, missing_dump)
+        fabricated = raises(
+            ComposeError,
+            lambda: compose_post(
+                "fixture-post", WHEN, archive_root=root,
+                instagram_constraints=InstagramConstraints(
+                    probe_dump=str(missing_dump), min_aspect_ratio=0.5,
+                    max_aspect_ratio=2.0, max_images=5,
+                    max_caption_length=1000, caption_length_mode="codepoints",
+                    max_hashtags=10),
+                schedule_window=ScheduleWindow(
+                    str(missing_dump), timedelta(hours=1), timedelta(days=10)),
+                now=NOW, require_verified_ui_constraints=True,
+                warning_sink=None),
+            "不存在")
+    finally:
+        compose_module.cfg = original_cfg
+    check(disabled, "config 人工审核开关未开启时严格发布失败闭合")
+    check(fabricated, "仅写一个不存在的 probe_dump 字符串不能解锁严格发布")
+
+    mismatched_limits = InstagramConstraints(
+        probe_dump=str(recorder.output_path), min_aspect_ratio=0.5,
+        max_aspect_ratio=2.0, max_images=4, max_caption_length=1000,
+        caption_length_mode="codepoints", max_hashtags=10)
+    original_cfg = compose_module.cfg
+    try:
+        compose_module.cfg = lambda: VerifiedProbeConfig(
+            state_dir, profile, recorder.output_path)
+        mismatch = raises(
+            ComposeError,
+            lambda: compose_post(
+                "fixture-post", WHEN, archive_root=root,
+                instagram_constraints=mismatched_limits,
+                schedule_window=window, now=NOW,
+                require_verified_ui_constraints=True, warning_sink=None),
+            "与 G1 probe 实测值不一致")
+    finally:
+        compose_module.cfg = original_cfg
+    check(mismatch, "注入数字与已审核 dump 不一致时不能借真 dump 夹带猜测值")
+
     too_few = InstagramConstraints(
-        probe_dump="state/publish_probe_fixture.json",
+        probe_dump=str(recorder.output_path),
         min_aspect_ratio=0.5, max_aspect_ratio=2.0, max_images=1,
         max_caption_length=1000, caption_length_mode="codepoints",
         max_hashtags=10)
@@ -334,13 +539,12 @@ with tempfile.TemporaryDirectory() as d:
                  lambda: compose_post(
                      "fixture-post", WHEN, archive_root=root,
                      instagram_constraints=too_few, schedule_window=window,
-                     now=NOW, require_verified_ui_constraints=True,
-                     warning_sink=None),
+                     now=NOW, warning_sink=None),
                  "图片数"),
           "注入的 G1 图片数上限会在浏览器前生效")
 
     base_limits = {
-        "probe_dump": "state/publish_probe_fixture.json",
+        "probe_dump": str(recorder.output_path),
         "min_aspect_ratio": 0.5,
         "max_aspect_ratio": 2.0,
         "max_images": 5,
@@ -362,7 +566,6 @@ with tempfile.TemporaryDirectory() as d:
                          "fixture-post", WHEN, archive_root=root,
                          instagram_constraints=constrained,
                          schedule_window=window, now=NOW,
-                         require_verified_ui_constraints=True,
                          warning_sink=None),
                      expected),
               "注入的 G1 %s上限会在浏览器前生效" % expected)
@@ -371,10 +574,9 @@ with tempfile.TemporaryDirectory() as d:
                      "fixture-post", WHEN, archive_root=root,
                      instagram_constraints=limits,
                      schedule_window=ScheduleWindow(
-                         "state/publish_probe_fixture.json",
+                         str(recorder.output_path),
                          timedelta(hours=1), timedelta(days=2)),
-                     now=NOW, require_verified_ui_constraints=True,
-                     warning_sink=None),
+                     now=NOW, warning_sink=None),
                  "晚于"),
           "排期超出注入的 G1 UI 上限会被拒绝")
     check(raises(ComposeError,
@@ -392,7 +594,7 @@ with tempfile.TemporaryDirectory() as d:
           "真正发布模式下缺 G1 约束会失败闭合")
 
 
-print("\n[5] G2–G7 只有会先失败的契约骨架，selectors 仍为空")
+print("\n[5] G2–G6 只有会先失败的函数骨架；G7 仍仅有任务书契约")
 selector_path = ROOT / "publish" / "selectors.py"
 tree = ast.parse(selector_path.read_text(encoding="utf-8"))
 assignments = [node for node in ast.walk(tree)
@@ -441,53 +643,67 @@ for token, label in [
     check(token in script, "监听脚本会记录 %s" % label)
 check("addEventListener" in script and "candidates" in script,
       "工具监听人工事件，并记录命中元素到语义祖先链")
+check("isTrusted" in script and "sensitiveTarget" in script,
+      "监听器只接收浏览器标记的真人事件，并跳过敏感输入")
 check("className" not in script and "cssPath" not in script,
       "dump 不记录混淆 class 或脆 CSS path")
 check(all(forbidden not in script for forbidden in (
     ".click(", ".fill(", ".goto(", "setInputFiles(", "querySelector(")),
     "监听脚本没有点击/填写/导航/上传等页面驱动")
-
-
-class FakePage:
-    url = "https://business.example.invalid/create"
-
-    async def screenshot(self, *, path, full_page):
-        Path(path).write_bytes(b"fixture-png")
-
-
-async def record_fixture(state_dir: Path):
-    recorder = ProbeRecorder(
-        state_dir, port=9223, profile=Path("publish-profile"),
-        timestamp="20260831_120000")
-    await recorder.record(FakePage(), {
-        "event_type": "click",
-        "page_url": FakePage.url,
-        "target": {
-            "tag": "button", "role": "button", "aria_label": "Create",
-            "data_testid": "create", "name": "", "placeholder": "",
-            "visible_text": "Create post", "is_contenteditable": False,
-        },
-        "candidates": [],
-    })
-    await recorder.set_observations({"ui_timezone": "fixture timezone"})
-    await recorder.finish()
-    return recorder
-
-
 with tempfile.TemporaryDirectory() as d:
-    recorder = asyncio.run(record_fixture(Path(d) / "state"))
+    temp = Path(d)
+    recorder, page = asyncio.run(make_completed_probe(
+        temp / "state", temp / "publish-profile"))
     data = json.loads(recorder.output_path.read_text(encoding="utf-8"))
     item = data["interactions"][0]
     check(recorder.output_path.name == "publish_probe_20260831_120000.json",
           "dump 文件名符合 state/publish_probe_<时间戳>.json 契约")
-    check(len(data["interactions"]) == 1 and item["sequence"] == 1,
+    check(len(data["interactions"]) == 7 and item["sequence"] == 1,
           "每次人工交互按顺序持久化")
     check(Path(item["screenshot"]).is_file() and item["screenshot_error"] is None,
           "每条交互都有对应截图")
-    check(data["observations"]["ui_timezone"] == "fixture timezone",
+    check(data["observations"]["ui_timezone"] == PROBE_OBSERVATIONS["ui_timezone"],
           "时区/窗口等人工观察与事件 dump 存在同一份记录里")
+    serialized = json.dumps(data, ensure_ascii=False)
+    check("must not persist" not in serialized and "access_token" not in serialized,
+          "Python 侧白名单会丢弃任意注入字段，并从 URL 移除 query/fragment")
+    check(item["page_url"] == "https://business.example.invalid/create"
+          and item["target"]["href"] == "https://business.example.invalid/action",
+          "页面 URL 与 href 只保留稳定的 scheme/host/path")
+    check(bool(page.mask_selectors) and all("password" in value
+                                           for value in page.mask_selectors),
+          "每步截图都请求遮罩密码/登录类敏感输入")
     check(data["mode"] == "record-only" and data["finished_at"],
           "dump 明确标记只记录模式，并在正常收尾时写完成时间")
+
+
+async def rejected_probe_payloads(state_dir: Path):
+    recorder = ProbeRecorder(
+        state_dir, port=9223, profile=Path("publish-profile"),
+        timestamp="20260831_130000")
+    page = FakePage()
+    base = {
+        "session_id": recorder.session_id,
+        "event_type": "input",
+        "is_trusted": False,
+        "target": {"tag": "input", "input_type": "text"},
+        "candidates": [],
+    }
+    synthetic = await recorder.record(page, base)
+    password = dict(base)
+    password["is_trusted"] = True
+    password["target"] = {"tag": "input", "input_type": "password"}
+    sensitive = await recorder.record(page, password)
+    await recorder.finish()
+    return synthetic, sensitive, recorder
+
+
+with tempfile.TemporaryDirectory() as d:
+    synthetic, sensitive, rejected = asyncio.run(
+        rejected_probe_payloads(Path(d) / "state"))
+    rejected_data = json.loads(rejected.output_path.read_text(encoding="utf-8"))
+    check(not synthetic and not sensitive and not rejected_data["interactions"],
+          "合成事件与密码输入即使直接调用 exposed binding 也不会持久化或截图")
 
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))

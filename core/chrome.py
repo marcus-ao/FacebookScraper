@@ -42,6 +42,18 @@ def _resolved_profile(profile: Path | str | None) -> Path:
     return Path(os.path.expandvars(str(profile))).expanduser()
 
 
+def _profile_from_command_line(command_line: str) -> str | None:
+    """取 Chrome ``--user-data-dir``，兼容 Windows 对整段参数加引号。"""
+    match = re.search(
+        r'(?:(?:"--user-data-dir=([^\"]+)")|'
+        r'(?:--user-data-dir(?:=|\s+)(?:"([^\"]+)"|(\S+))))',
+        command_line,
+        flags=re.IGNORECASE)
+    if not match:
+        return None
+    return next((value for value in match.groups() if value is not None), None)
+
+
 def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
     """Windows 上确认监听端口的 Chrome 命令行确实使用目标 profile。
 
@@ -69,12 +81,10 @@ def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
         return None
     if result.returncode != 0 or not result.stdout.strip():
         return None
-    match = re.search(
-        r'--user-data-dir=(?:"([^"]+)"|(\S+))', result.stdout,
-        flags=re.IGNORECASE)
-    if not match:
+    raw_profile = _profile_from_command_line(result.stdout)
+    if raw_profile is None:
         return None
-    actual = Path(match.group(1) or match.group(2)).resolve(strict=False)
+    actual = Path(raw_profile).resolve(strict=False)
     expected = profile.resolve(strict=False)
     return os.path.normcase(str(actual)) == os.path.normcase(str(expected))
 
@@ -130,9 +140,10 @@ def launch(wait_seconds: float = PORT_WAIT_SECONDS,
 
     `on_tick` 每等一秒回调一次，供命令行打进度点；不给就安静地等。
     """
+    verify_profile = profile is not None
     port = _resolved_port(port)
     profile = _resolved_profile(profile)
-    if cdp_ready(port, profile=profile):
+    if cdp_ready(port, profile=profile if verify_profile else None):
         return True
     if port_open(port):
         return False        # 端口被别的程序占了，起了也连不上，交给调用方报错
@@ -154,12 +165,12 @@ def launch(wait_seconds: float = PORT_WAIT_SECONDS,
 
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
-        if cdp_ready(port, profile=profile):
+        if cdp_ready(port, profile=profile if verify_profile else None):
             return True
         time.sleep(1)
         if on_tick is not None:
             on_tick()
-    return cdp_ready(port, profile=profile)
+    return cdp_ready(port, profile=profile if verify_profile else None)
 
 
 async def attach(port: int | None = None,
@@ -177,6 +188,7 @@ async def attach(port: int | None = None,
     from playwright.async_api import async_playwright
 
     using_default_target = port is None and profile is None
+    verify_profile = profile is not None
     port = _resolved_port(port)
     profile = _resolved_profile(profile)
     if start_script is None:
@@ -185,7 +197,7 @@ async def attach(port: int | None = None,
     if login_hint is None:
         login_hint = "抓取小号" if using_default_target else "对应账号"
 
-    if not cdp_ready(port, profile=profile):
+    if not cdp_ready(port, profile=profile if verify_profile else None):
         if cdp_ready(port):
             detail = (f"端口 {port} 是 Chrome 调试端口，但不属于目标 profile，"
                       f"或 Windows 无法读取其进程归属。\n"

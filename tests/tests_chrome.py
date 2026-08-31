@@ -82,6 +82,14 @@ try:
     finally:
         chrome._cdp_profile_matches = original_match
 
+    spaced = r"C:\Users\Test User\.fbscraper-publish"
+    check(chrome._profile_from_command_line(
+        '"chrome.exe" "--user-data-dir=%s"' % spaced) == spaced,
+        "Windows 把整段 --user-data-dir 参数加引号时仍能识别含空格 profile")
+    check(chrome._profile_from_command_line(
+        'chrome.exe --user-data-dir="%s"' % spaced) == spaced,
+        "只给 --user-data-dir 的值加引号时同样能识别")
+
     Handler.body = b"not-json"
     check(not cdp_ready(port), "端口返回脏响应时安全地判定为未就绪")
 finally:
@@ -151,6 +159,27 @@ with tempfile.TemporaryDirectory() as d:
           "没有悄悄退回抓取 profile")
     check(publish_profile.is_dir(), "显式发布 profile 会在启动前创建")
 
+    original = (chrome.cfg, chrome.cdp_ready, chrome.port_open,
+                chrome.subprocess.Popen)
+    default_profile_checks = []
+    try:
+        chrome.cfg = lambda: FakeConfig()
+
+        def default_ready(_port, **kwargs):
+            default_profile_checks.append(kwargs.get("profile"))
+            return False
+
+        chrome.cdp_ready = default_ready
+        chrome.port_open = lambda _port: False
+        chrome.subprocess.Popen = lambda *_a, **_k: None
+        chrome.launch(wait_seconds=0)
+    finally:
+        (chrome.cfg, chrome.cdp_ready, chrome.port_open,
+         chrome.subprocess.Popen) = original
+    check(default_profile_checks and all(value is None
+                                         for value in default_profile_checks),
+          "无参 launch 保持旧 CDP-only 行为，不调用 Windows profile 归属检查")
+
 
 print("\n[4] attach 参数化保留旧调用，并给发布入口正确提示")
 params = inspect.signature(chrome.attach).parameters
@@ -176,6 +205,25 @@ check(r"scripts\start_chrome_publish.bat" in detail,
       "发布端口没开时提示发布专用启动脚本，不误导去开抓取 Chrome")
 check("DE 发布账号" in detail and "publish-profile" in detail,
       "提示同时点名发布账号与目标 profile")
+
+original = (chrome.cdp_ready, chrome.port_open)
+default_attach_checks = []
+try:
+    def default_attach_ready(_port, **kwargs):
+        default_attach_checks.append(kwargs.get("profile"))
+        return False
+
+    chrome.cdp_ready = default_attach_ready
+    chrome.port_open = lambda _port: False
+    try:
+        asyncio.run(chrome.attach())
+    except SystemExit:
+        pass
+finally:
+    chrome.cdp_ready, chrome.port_open = original
+check(default_attach_checks and all(value is None
+                                    for value in default_attach_checks),
+      "无参 attach 保持旧 CDP-only 行为，PowerShell 归属不可用也不阻断抓取")
 
 
 print("\n[5] [publish] 的派生配置与 [chrome] 彼此独立")

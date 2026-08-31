@@ -1,7 +1,8 @@
-"""Business Suite UI 操作契约（G2–G7 的 G1 前骨架）。
+"""Business Suite UI 操作契约（G2–G6 的 G1 前骨架）。
 
 这些函数故意在接触 ``page`` 前失败。G1 的真实 DOM、时区、定时窗口与成功信号
 尚未记录，当前实现任何点击/填写都会违反项目的“不得猜选择器”红线。
+G7 目前只保留在任务书中，不声称已有代码骨架。
 """
 from __future__ import annotations
 

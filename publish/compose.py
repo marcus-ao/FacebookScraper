@@ -6,6 +6,9 @@ Business Suite 没有事务性；越早失败，就越不可能留下半成品�
 from __future__ import annotations
 
 import json
+import math
+import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -14,6 +17,7 @@ from typing import Literal
 
 from PIL import Image, UnidentifiedImageError
 
+from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)
@@ -24,6 +28,28 @@ from translate import (PROMPT_VERSION, account_dirs, extract_hashtags,
 Platform = Literal["facebook", "instagram"]
 CaptionLengthMode = Literal["codepoints", "utf16_units", "utf8_bytes"]
 WarningSink = Callable[[str], None]
+
+_PROBE_REQUIRED_OBSERVATIONS = (
+    "business_suite_entry_url",
+    "facebook_page_slug",
+    "ui_timezone",
+    "schedule_min_ahead",
+    "schedule_max_ahead",
+    "schedule_min_ahead_seconds",
+    "schedule_max_ahead_seconds",
+    "schedule_input_behavior",
+    "success_signal",
+    "instagram_min_aspect_ratio",
+    "instagram_max_aspect_ratio",
+    "instagram_max_images",
+    "instagram_max_caption_length",
+    "instagram_caption_length_mode",
+    "instagram_max_hashtags",
+    "instagram_aspect_ratio_rejection",
+    "instagram_image_count_rejection",
+    "instagram_caption_length_rejection",
+    "instagram_hashtag_rejection",
+)
 
 
 class ComposeError(ValueError):
@@ -48,14 +74,16 @@ class InstagramConstraints:
     max_hashtags: int | None = None
 
     def __post_init__(self) -> None:
-        if not self.probe_dump.strip():
+        if not isinstance(self.probe_dump, str) or not self.probe_dump.strip():
             raise ValueError("IG 约束必须写明来自哪份 G1 probe dump")
-        if (self.min_aspect_ratio is not None
-                and self.min_aspect_ratio <= 0):
-            raise ValueError("min_aspect_ratio 必须大于 0")
-        if (self.max_aspect_ratio is not None
-                and self.max_aspect_ratio <= 0):
-            raise ValueError("max_aspect_ratio 必须大于 0")
+        for label, value in (("min_aspect_ratio", self.min_aspect_ratio),
+                             ("max_aspect_ratio", self.max_aspect_ratio)):
+            if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or value <= 0):
+                raise ValueError("%s 必须是大于 0 的有限数" % label)
         if (self.min_aspect_ratio is not None
                 and self.max_aspect_ratio is not None
                 and self.min_aspect_ratio > self.max_aspect_ratio):
@@ -63,11 +91,21 @@ class InstagramConstraints:
         for label, value in (("max_images", self.max_images),
                              ("max_caption_length", self.max_caption_length),
                              ("max_hashtags", self.max_hashtags)):
-            if value is not None and value < 0:
-                raise ValueError("%s 不得为负数" % label)
+            if value is not None and (
+                    isinstance(value, bool) or not isinstance(value, int)
+                    or value < 0):
+                raise ValueError("%s 必须是非负整数" % label)
+        if self.max_images == 0:
+            raise ValueError("max_images 必须大于 0")
+        if self.max_caption_length == 0:
+            raise ValueError("max_caption_length 必须大于 0")
         if ((self.max_caption_length is None)
                 != (self.caption_length_mode is None)):
             raise ValueError("正文上限与 UI 的字符计数方式必须一起提供")
+        if (self.caption_length_mode is not None
+                and self.caption_length_mode not in {
+                    "codepoints", "utf16_units", "utf8_bytes"}):
+            raise ValueError("未知正文计数方式：%s" % self.caption_length_mode)
 
     def complete(self) -> bool:
         """G0b 点名的四类约束是否都已有真实值。"""
@@ -90,8 +128,11 @@ class ScheduleWindow:
     max_ahead: timedelta
 
     def __post_init__(self) -> None:
-        if not self.probe_dump.strip():
+        if not isinstance(self.probe_dump, str) or not self.probe_dump.strip():
             raise ValueError("定时窗口必须写明来自哪份 G1 probe dump")
+        if not isinstance(self.min_ahead, timedelta) or not isinstance(
+                self.max_ahead, timedelta):
+            raise ValueError("定时窗口上下限必须是 timedelta")
         if self.min_ahead < timedelta(0):
             raise ValueError("定时窗口下限不得为负数")
         if self.max_ahead < self.min_ahead:
@@ -155,6 +196,172 @@ def _text_length(text: str, mode: CaptionLengthMode) -> int:
     if mode == "utf8_bytes":
         return len(text.encode("utf-8"))
     raise ValueError("未知正文计数方式：%s" % mode)
+
+
+def _probe_path(raw: str, state_dir: Path) -> Path:
+    value = Path(os.path.expandvars(raw)).expanduser()
+    if not value.is_absolute():
+        value = ((state_dir / value) if value.parent == Path(".")
+                 else (PROJECT_ROOT / value))
+    return value.resolve(strict=False)
+
+
+def _parse_probe_number(observations: dict, key: str, *, integer: bool):
+    raw = observations.get(key)
+    try:
+        if integer:
+            if not isinstance(raw, str) or not re.fullmatch(r"\d+", raw.strip()):
+                raise ValueError
+            return int(raw)
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError
+        return value
+    except (TypeError, ValueError) as exc:
+        raise ComposeError("G1 probe 的 %s 不是有效实测数字：%r" % (key, raw)) from exc
+
+
+def _parse_probe_time(value: object, label: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ComposeError("G1 probe 缺少 %s" % label)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ComposeError("G1 probe 的 %s 不是 ISO 时间：%r" % (label, value)) from exc
+    _aware(parsed, "G1 probe %s" % label)
+
+
+def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
+    """严格发布只接受 config 明确审核过的真实、完整 G1 记录。"""
+    c = cfg()
+    if c.get("publish", "ui_constraints_verified", False) is not True:
+        raise ComposeError(
+            "[publish].ui_constraints_verified 仍为 false；必须先人工完成并复核 G1")
+    configured = c.get("publish", "ui_probe_dump", "")
+    if not isinstance(configured, str) or not configured.strip():
+        raise ComposeError("[publish].ui_probe_dump 为空；严格发布不能伪造 G1 来源")
+
+    state_dir = Path(c.state_dir).resolve(strict=False)
+    expected = _probe_path(configured, state_dir)
+    if (expected.parent != state_dir
+            or not expected.name.startswith("publish_probe_")
+            or expected.suffix.lower() != ".json"):
+        raise ComposeError("已审核的 G1 probe 必须是 state/ 下的 publish_probe_*.json")
+    try:
+        assert_physical_direct_path(
+            state_dir.parent, state_dir, kind="directory", label="state 目录")
+        assert_physical_direct_path(
+            state_dir, expected, kind="file", label="G1 probe dump")
+    except ArchivePathError as exc:
+        raise ComposeError("G1 probe 路径不安全：%s" % exc) from exc
+    if not expected.is_file():
+        raise ComposeError("config 指定的 G1 probe 不存在：%s" % expected)
+
+    for supplied in probe_dumps:
+        if not isinstance(supplied, str) or _probe_path(supplied, state_dir) != expected:
+            raise ComposeError(
+                "注入的 UI 约束必须全部来自 config 已审核的同一份 G1 probe：%s"
+                % expected)
+    try:
+        data = json.loads(expected.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ComposeError("G1 probe 无法读取：%s" % exc) from exc
+    if not isinstance(data, dict):
+        raise ComposeError("G1 probe 顶层不是对象")
+    if data.get("schema_version") != 1 or data.get("mode") != "record-only":
+        raise ComposeError("G1 probe schema/mode 不符合 record-only v1 契约")
+    _parse_probe_time(data.get("started_at"), "started_at")
+    _parse_probe_time(data.get("finished_at"), "finished_at")
+    if data.get("cdp_port") != c.publish_debug_port:
+        raise ComposeError("G1 probe 不是从 [publish] 调试端口记录的")
+    raw_profile = data.get("profile_dir")
+    if (not isinstance(raw_profile, str)
+            or os.path.normcase(str(Path(raw_profile).resolve(strict=False)))
+            != os.path.normcase(str(c.publish_profile_dir.resolve(strict=False)))):
+        raise ComposeError("G1 probe 不是从 [publish] 专用 profile 记录的")
+
+    observations = data.get("observations")
+    if not isinstance(observations, dict):
+        raise ComposeError("G1 probe 缺少人工观察记录")
+    missing = [key for key in _PROBE_REQUIRED_OBSERVATIONS
+               if not isinstance(observations.get(key), str)
+               or not observations[key].strip()]
+    if missing:
+        raise ComposeError("G1 probe 尚未完成必填观察：%s" % "、".join(missing))
+
+    interactions = data.get("interactions")
+    if not isinstance(interactions, list) or len(interactions) < 7:
+        raise ComposeError("G1 probe 至少要有 7 条可信人工交互记录")
+    screenshot_dir = state_dir / (expected.stem + "_screenshots")
+    try:
+        assert_physical_direct_path(
+            state_dir, screenshot_dir, kind="directory", label="G1 截图目录")
+    except ArchivePathError as exc:
+        raise ComposeError("G1 截图目录不安全：%s" % exc) from exc
+    if not screenshot_dir.is_dir():
+        raise ComposeError("G1 probe 的截图目录不存在：%s" % screenshot_dir)
+
+    event_types: set[str] = set()
+    for sequence, item in enumerate(interactions, 1):
+        if not isinstance(item, dict) or item.get("sequence") != sequence:
+            raise ComposeError("G1 probe 的交互序号不连续")
+        event_type = item.get("event_type")
+        if item.get("is_trusted") is not True or event_type not in {
+                "click", "input", "change", "submit"}:
+            raise ComposeError("G1 probe 含非可信/未知交互事件")
+        if not isinstance(item.get("target"), dict):
+            raise ComposeError("G1 probe 第 %d 条交互缺少稳定目标属性" % sequence)
+        if item.get("screenshot_error") not in {None, ""}:
+            raise ComposeError("G1 probe 第 %d 条交互截图失败" % sequence)
+        raw_screenshot = item.get("screenshot")
+        if not isinstance(raw_screenshot, str):
+            raise ComposeError("G1 probe 第 %d 条交互没有截图" % sequence)
+        screenshot = Path(raw_screenshot).resolve(strict=False)
+        try:
+            assert_physical_direct_path(
+                screenshot_dir, screenshot, kind="file", label="G1 交互截图")
+        except ArchivePathError as exc:
+            raise ComposeError("G1 probe 截图路径不安全：%s" % exc) from exc
+        if not screenshot.is_file() or screenshot.stat().st_size <= 0:
+            raise ComposeError("G1 probe 第 %d 条交互截图不存在/为空" % sequence)
+        event_types.add(event_type)
+    if "click" not in event_types or not event_types.intersection({"input", "change"}):
+        raise ComposeError("G1 probe 必须同时覆盖点击与输入/变更事件")
+    return data
+
+
+def _match_probe_measurements(data: dict,
+                              limits: InstagramConstraints | None,
+                              window: ScheduleWindow) -> None:
+    """注入值必须与 dump 里人工实测并复核的结构化值逐项一致。"""
+    observations = data["observations"]
+    observed_min_seconds = _parse_probe_number(
+        observations, "schedule_min_ahead_seconds", integer=True)
+    observed_max_seconds = _parse_probe_number(
+        observations, "schedule_max_ahead_seconds", integer=True)
+    if (window.min_ahead.total_seconds() != observed_min_seconds
+            or window.max_ahead.total_seconds() != observed_max_seconds):
+        raise ComposeError("注入的定时窗口与 G1 probe 实测秒数不一致")
+    if limits is None:
+        return
+    numeric_pairs = (
+        ("instagram_min_aspect_ratio", limits.min_aspect_ratio, False),
+        ("instagram_max_aspect_ratio", limits.max_aspect_ratio, False),
+        ("instagram_max_images", limits.max_images, True),
+        ("instagram_max_caption_length", limits.max_caption_length, True),
+        ("instagram_max_hashtags", limits.max_hashtags, True),
+    )
+    for key, actual, integer in numeric_pairs:
+        observed = _parse_probe_number(observations, key, integer=integer)
+        if integer:
+            matches = actual == observed
+        else:
+            matches = actual is not None and math.isclose(
+                float(actual), float(observed), rel_tol=1e-12, abs_tol=1e-12)
+        if not matches:
+            raise ComposeError("注入的 %s 与 G1 probe 实测值不一致" % key)
+    if limits.caption_length_mode != observations["instagram_caption_length_mode"]:
+        raise ComposeError("注入的 IG 正文计数方式与 G1 probe 不一致")
 
 
 def _relative_archive_path(account_dir: Path, raw: str, *,
@@ -279,6 +486,7 @@ def _validate_image(path: Path, post_id: str) -> tuple[int, int]:
         with Image.open(path) as image:
             image.verify()
         with Image.open(path) as image:
+            image.load()
             width, height = image.size
         if width <= 0 or height <= 0:
             raise _fail(post_id, "图片尺寸无效：%s" % path)
@@ -295,15 +503,24 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
                        tuple[Literal["media_de", "original"], ...],
                        tuple[tuple[int, int], ...]]:
     post_id = source.get("post_id") or "?"
-    if source.get("media_complete", True) is not True:
-        raise _fail(post_id, "归档标记 media_complete=False；不得发布残缺轮播")
+    if source.get("media_complete") is not True:
+        raise _fail(post_id, "归档未明确标记 media_complete=True；不得发布残缺内容")
     media = source.get("media")
     if not isinstance(media, list):
         raise _fail(post_id, "post.json 的 media 不是列表")
-    images = [item for item in media
-              if isinstance(item, dict) and item.get("kind") == "image"]
-    if not images:
+    if not media:
         raise _fail(post_id, "至少需要 1 张图片；纯视频/无媒体帖不进入发布")
+    images: list[dict] = []
+    for position, item in enumerate(media, 1):
+        if not isinstance(item, dict):
+            raise _fail(post_id, "第 %d 个媒体项不是对象；不得静默丢弃" % position)
+        kind = item.get("kind")
+        if kind != "image":
+            raise _fail(
+                post_id,
+                "第 %d 个媒体项 kind=%r；本期图文发布只支持纯图片，禁止少发混合媒体"
+                % (position, kind))
+        images.append(item)
 
     media_de = post_dir / "media_de"
     try:
@@ -426,6 +643,19 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
     expected_dir = expected_prefix + source_account
     if arc.base.name.lower() != expected_dir.lower():
         raise _fail(post_id, "post.json 的 platform/account 与账号归档目录不一致")
+
+    if require_verified_ui_constraints:
+        if schedule_window is None:
+            raise _fail(post_id, "严格发布缺少 G1 实测定时窗口")
+        probe_sources = [schedule_window.probe_dump]
+        verified_limits = None
+        if source_platform == "instagram":
+            if instagram_constraints is None or not instagram_constraints.complete():
+                raise _fail(post_id, "严格发布缺少 G1 的四类完整 IG 实测约束")
+            verified_limits = instagram_constraints
+            probe_sources.append(instagram_constraints.probe_dump)
+        probe_data = _validated_probe_dump(tuple(probe_sources))
+        _match_probe_measurements(probe_data, verified_limits, schedule_window)
 
     text_de = _load_current_translation(arc, source)
     warnings: list[str] = []
