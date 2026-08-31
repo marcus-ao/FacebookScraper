@@ -1209,3 +1209,424 @@ IG 的话题标签直接影响自然流量，而这条规则会作用在全部 1
 - 两份最新真实 capture 离线跑完整 `delta_once()`：Facebook 6 篇自家内容、
   Instagram 36 篇（原创 1 / 合作 35），均为 0 新增且无写盘；IG 的
   `--break-coauthors` 自检会被 `min_own_posts` 闸正确中止并点名 35 篇已知合作方。
+
+---
+
+## 15. 第三轮 · K 组与 G 组并行分支的同步审查（2026-08-31）
+
+> 审查日期：2026-08-31（第五轮交接之后）
+> 审查对象：`feat/image-de`（K 组）与 `feat/business-suite-publish`（G 组）
+> **两条线当天都在各自的 git worktree 里活跃写入**，因此本轮是**只读审查**：
+> 一行代码都没改，findings 全部落在本文件里等实施。理由是 `HANDOFF.md`
+> 「接手时遵守」第 7 条——别人正在写的文件不要碰，并发写会丢更新。
+
+### 15.1 审查边界与方法
+
+- 工作区拓扑（`git worktree list` 实测）：
+  `FacebookScraper` = `wip/parallel-2026-08-31`（干净）、
+  `FacebookScraper-image-de` = `feat/image-de`、
+  `FacebookScraper-publish` = `feat/business-suite-publish`。
+  **`git worktree` 这条路走通了**——两条线各自一个物理目录，
+  `PIPELINE_PLAN.md` 第 15 节说的 junction 共享 `archive/` 问题被绕开的方式是
+  **只复制 `manifest.jsonl` / `translated.jsonl` 做离线夹具**，不共享 `archive/`。
+- 两条分支的**全部** `tests/tests_*.py` 都跑过：**各 17 套，全绿**
+  （K 侧含 `tests_localize_images.py`、无 `tests_publish.py`；G 侧相反）。
+  交接文件记录的两处红（`run_images.bat` 裸 LF、`tests_translate.py` 缺 `import re`）
+  **都已被 K 组修掉**：`run_images.bat` 现在 13 个 CRLF / 0 裸 LF / 无 BOM / 纯 ASCII。
+- 断言口径改用真实数据复核，而不是读对方的自述：818 个归档图片文件、
+  1057 条有正文的帖子、`translated.jsonl` 的真实当前版本条目。
+
+### 15.2 跨组与集成（本轮价值最高的一组）
+
+#### CR-46 · P1 · 合并顺序决定冲突数：1 个文件 vs 13 个文件
+
+- **位置**：分支拓扑，不在代码里。
+- **事实**（`git merge-base` / `git merge-tree --write-tree` 实测，零副作用）：
+  两条 feature 分支都从 **`9ea342c`** 开出，而 `9ea342c` 早于
+  `main`（`3736303`）**也早于整条 `wip/parallel-2026-08-31`**。
+  所以 `main` **不是**两条分支的祖先，`PUBLISH_PLAN`/`IMAGE_PLAN` 写的
+  `git merge --ff-only` **在这里必然失败**——那不是"main 被人动过"，
+  是分支基点选早了。**下一个会话看到 ff 失败时不要 `-f`。**
+- **实测冲突集**：
+
+  | 合并 | 冲突文件数 | 冲突文件 |
+  |---|---:|---|
+  | `main ← feat/image-de` | **1** | `docs/IMPLEMENTATION_PLAN.md` |
+  | `main ← feat/business-suite-publish` | **1** | `docs/IMPLEMENTATION_PLAN.md` |
+  | `feat/image-de ← feat/business-suite-publish` | **2** | 两份共享文档；**`config.toml` 自动合干净** |
+  | `wip ← feat/image-de` | **6** | 含 `localize_images.py` / `prompts/image_de.md` / `tests_localize_images.py` 三个 **add/add** |
+  | `wip ← feat/business-suite-publish` | **10** | 含 `publish/business_suite.py` add/add，`core/chrome.py`、`config.toml`、`MANUAL_STEPS.md`、`PUBLISH_PLAN.md` 内容冲突 |
+
+- **为什么会这样**：`wip` 里的 `29784d2` / `ee43aca` 是两条线**更早的快照**
+  （`localize_images.py` 差 68+/42-、`publish/compose.py` 差 244+/15-，
+  同一血缘的旧版本）。`main` 一旦快进到 `wip`，那两份旧版就进了主干，
+  feature 分支再合就变成整文件 add/add 对撞。
+- **结论**：**不要先把 `main` 快进到 `wip`**（这恰恰是最自然的直觉）。
+  正确顺序是先落两条 feature 分支，再把 `wip` 上**只属于主干**的提交摘过去：
+  - `c35715d`（CR-41~45）只碰 `core/capture.py`、`core/store.py`、`routes/delta.py`
+    与其测试 + 本文件——**两条 feature 分支一个都没碰**，cherry-pick 干净；
+  - `3047c65` 的 `config.toml` 部分带来 **`[pipeline]` 整段配置与
+    `[publish]` 段末的子表警告注释**，见 CR-49。
+- **不做**：本轮没有执行任何合并，`main` 仍停在 `3736303`。
+
+#### CR-47 · P1 · K9 与 G8 卡在同一件事：`translate.py` 没有"选哪几篇"的作用域
+
+- **位置**：`translate.py::pending`（`out.sort(key=lambda r: r.get("created_at") or "")`，
+  升序）+ CLI 只有 `--limit` / `--account`。
+- **问题**：两份任务书点名的验收标的是**最新那三篇**
+  （IG `3975547640610092585`、IG `3973012230169803390`、FB `122123185335379375`）。
+  但 `pending()` 是**最老优先**，`--limit N` 永远从 2020 年那头开始翻，
+  **没有任何命令能只翻这三篇**。
+- **实测现状**：`translated.jsonl` 全档只有 6 条当前版本译文
+  （`PROMPT_VERSION=5`）——FB 3 条是 2026-06-29/30，IG 3 条是 2020-09-03/04，
+  **点名的三篇一条都没有**。因此：
+  - K 的 `--latest-posts 3`（专为 K9 加的作用域）当前必然算出 **0 张待处理**；
+  - G 的 `compose_post` 对这三篇全部按"译文缺失"正确拦下（`PUBLISH_PLAN` §5 已记录）。
+- **两条线各自都撞上了同一面墙**：K 组已在 `HANDOFF.md` 自己那一行写明
+  「现有 F `--limit 2/3` 实测会选最老帖子，不能精确补目标，须先获授权增加精确选帖」。
+  **这不是两个 bug，是一个卡点。**
+- **建议**：给 `translate.py` 加 `--post-id`（可重复）与/或 `--latest-posts N`，
+  形状照抄 K 已经实现的那一套（`localize_images.py::select_rows`）。
+  按当前 usage 外推，补这三篇（其中有图的两篇）约 **US$0.02–0.05**，
+  之后 K9 与 G8 同时解锁。
+- ⚠️ **归属问题需要用户拍板**：`translate.py` 的 CLI 作用域**不在** K 组的所有权
+  切片里（K 只拿 `run_review` / `sync_text_de`），也不属于 G 组。
+  它是主干改动，必须显式指派，否则又是一次 `translate.py` 混线（CR-45 与 K8 已经混过一次）。
+
+#### CR-48 · P2 · `media_de/` 同序号多候选：K 组当成设计特性，G 组当成硬错误
+
+- **位置**：`localize_images.py::manual_override_paths` / `review_image_pairs`
+  ↔ `publish/compose.py::_choose_images`。
+- **问题**：K 组**刻意支持**「程序图 `01.jpg` 与人工修订 `01.png` 并存、人工优先」，
+  代码注释写得很明确（"设计人员可能保留 01.jpg 程序图，另放 01.png 修订图"），
+  判定所有权用的是 `images_de.jsonl` 里的 `output_sha256`。
+  G 组的 `_choose_images` 用 `candidate.stem == original.stem` 收集候选，
+  **多于一个就直接 `ComposeError`**（"media_de 里第 N 张图有多个候选"）。
+  于是 **K 组专门为设计同事设计的那个场景，会让这篇帖子发不出去**。
+- **失败场景**：设计同事按 `MANUAL_STEPS` 往 `media_de/` 放 `01.png`，
+  K 组正确地跳过并保留人工版，G 组组装时该帖被拒。
+- **建议**：让 G 侧沿用 K 的优先级规则——读 `images_de.jsonl`，
+  程序所有权之外的那个文件优先（与 K 的 `_candidate_is_program_owned` 同源）。
+  失败闭合本身没错，但两组对同一目录的语义必须只有一套。
+  **改哪一侧需要用户定**（改 G 是加一次只读依赖；改 K 是砍掉人工并存能力）。
+
+#### CR-49 · P2 · `[pipeline]` 整段配置只存在于 `wip`，按当前合并路径会丢
+
+- **事实**：`grep -c '^\[pipeline\]'` 在 `main` / `9ea342c` / 两条 feature 分支
+  上都是 **0**，只有 `wip/parallel-2026-08-31` 是 1。
+  `[publish]` 段末那句「新标量键请加在这一行之前」的 TOML 子表警告同理。
+- **后果**：两条 feature 分支先落 main（CR-46 推荐路径）之后，
+  `PIPELINE_PLAN.md` 第 13/14 节引用的 `[pipeline].autonomy` /
+  `dead_man_days` / `monthly_budget_usd` 在 `config.toml` 里**不存在**，
+  L0b/L0c 一开工就会踩空；而那句警告丢了之后，G 组下次往 `[publish]`
+  加标量键就会静默掉进 `price_map` 子表。
+- **建议**：合并时把 `3047c65` 的 `config.toml` 部分一并摘过来（CR-46）。
+
+#### CR-50 · P3 · K 组的 `--estimate` / `--dry-run` 自称"零写盘"，但 `Archive()` 会建目录
+
+- **位置**：`localize_images.py::build_jobs`（`Archive(arc_base.parent, arc_base.name)`
+  → `core/store.py::Archive.__init__` 里 `self.posts_dir.mkdir(parents=True, exist_ok=True)`）。
+- **对照**：G 组在 `compose.py::_find_source` 里**显式先判后建**——
+  `if not account_dir.is_dir() or not posts_dir.is_dir(): raise ArchivePathError("…compose 只读不创建")`，
+  处理方式是对的。
+- **影响**：今天目录都存在，所以是措辞问题不是行为问题；
+  但"零写盘"这句话同时出现在 docstring 和 `--estimate` 的输出末尾，
+  不改就等于在文档里立了一条实现没有兑现的保证。
+
+### 15.3 K 组（`feat/image-de`）
+
+#### CR-51 · P1 · `[image.keep_verbatim].models` 在工作区里丢了 `"S1 Pro"`
+
+- **位置**：`config.toml` 第 316 行，**未提交的工作区改动**（`553fd79` 里还在）。
+- **事实**：这一轮往列表里加了 `P1 Pro`、`Riko`、`RIKO`、`NeakasaP1Pro`
+  （语料实测各 39 / 78 / 8 / 3 篇，**加得对**），
+  但同一次编辑把原有的 **`"S1 Pro"` 删掉了**。
+  语料实测 `S1 Pro` 出现在 **10 篇**帖子里；另有 `S1Pro`（10 篇）、
+  `P1Pro`（3 篇）两种连写形态从来不在列表里。
+- **为什么算 P1**：这张表就是 `IMAGE_PLAN` 第 3.1 节「译错 = 商业事故」那一类，
+  型号是标识符。K3 预扫描已取消之后，**这张表在提示词里的分量比原计划更重**
+  （`IMAGE_PLAN` §K4 原话），它漏一项没有任何机器能补。
+- **状态**：改动仍在 in-flight，K 组 Agent 可能自己会补回。
+  **合并前必须逐项核对这个列表，不要假定它只增不减。**
+
+#### CR-52 · P2 · 一张图坏掉会掀掉整个账号的批次，`--estimate` 直接抛 traceback
+
+- **位置**：`localize_images.py::build_jobs`（`_source_from_manifest` /
+  `Image.open` / `legal_size` 三处都 `raise ValueError`），
+  且 `run_estimate` / `run_show_prompt` 在 `main` 里**不在** try 之内（第 1543–1546 行）。
+- **复现**（K 组 worktree，零 API）：
+  `localize_images.py --estimate --all-history`
+  → `ValueError: 原图不存在：posts/2020-09-04_1027_2390713492816847396/01.jpg`
+  的**裸 traceback**。
+- **两个独立问题**：
+  1. `build_jobs` 在任何一张图上失败就整账号中止，一张都不处理——
+     与 F 组已验证的做法相反（`translate.py` 逐篇失败、继续、留断点）；
+  2. 决定"要不要花钱"的那条离线命令没有错误处理，用户看到的是 traceback。
+- **今天不触发**：CR-14.2 的真实归档审计确认无越界 `local_path`、无坏 JSON，
+  本轮独立复核 818 张图 **全部可解码、无一超过 3:1**。
+  但 `--estimate` 是花钱前的最后一道人类判断，它崩掉的代价是"看不见账单就跑"。
+- **建议**：per-image 失败计入 `RunStats.failed` 并列名继续；
+  两条离线命令套上与 `run_localize` 同一层的异常处理。
+
+#### CR-53 · P2 · `_is_fatal_api_error` 把整个 `openai.APIError` 当致命，一次抖动断掉整批
+
+- **位置**：`localize_images.py::_is_fatal_api_error`（`isinstance(exc, openai.APIError)`）。
+- **问题**：`openai.APIError` 是 `APIStatusError`（含 `RateLimitError` 429、
+  `BadRequestError` 400）与 `APIConnectionError` / `APITimeoutError` 的**共同基类**。
+  于是：SDK 重试用尽后的一次 429、一次网络超时、或**某一张图被内容审核拒掉**，
+  都会抛 `FatalBatchError` 掀掉剩余全部图片，而且没有跳过这张图继续的办法。
+- **权衡**：对付费批次"宁可停"是对的方向，鉴权/端点/模型不匹配必须立刻停。
+  但把**单图 400** 和**瞬时网络**也算进去，等于让一张有问题的图永久堵住队列。
+- **建议**：致命集合收窄到
+  `AuthenticationError` / `PermissionDeniedError` / `NotFoundError` /
+  `ModelMismatchError` / `ResponseContractError`；
+  其余按单图失败处理，并加一条**连续失败预算**（形状照抄 C7 的失败预算）。
+
+#### CR-54 · P3 · 没有"放大倍数"闸；顺带把 dHash / drift 的标定数据备好了
+
+- **位置**：`localize_images.py::legal_size` / `aspect_drift_percent`。
+- **先说好的**：用真实归档 818 张图逐张跑 `legal_size`，**0 失败**，
+  任务书那张分布表逐行对得上（1080×1080→1088×1088、1080×1350→1088×1360、
+  720×720→816×816、1440×1440 原样、1350×1687→1344×1680、1440×1080→1440×1088）。
+- **缺口**：合法化会**放大**小图，而 `aspect_drift_percent` 抓不到这件事。
+  线性缩放倍数实测分布：
+
+  ```
+  0.8× :   7      1.0× : 772      1.1× :  18      1.2× :   6
+  1.3× :   5      1.4× :   4      1.5× :   3      1.7× :   1
+  2.3× :   1      2.4× :   1
+  ```
+
+  最极端两张：`278×430 → 656×1008`（**2.35×**）、`320×400 → 720×912`（2.26×）。
+  前者的宽高比形变只有 **0.66%**，稳稳低于 `aspect_drift_warn_percent = 2.0`，
+  **会静默通过**——发出去的德语图是一张 2.35 倍放大的图。
+- **建议**：`images_de.jsonl` 记一个 `scale_factor`，超过约 1.25× 进人工清单
+  （13/818 会命中，量很小）。与 `IMAGE_PLAN` §3.1 那句
+  "在无法验证的介质上做不可逆的数值变换"同源。
+- **顺带交付两组标定数据（不用重新测）**：
+  - **宽高比形变**：median `0.0000%` / p95 `0.653%` / max `2.794%`，
+    全档只有 **3/818** 超过配置的 2.0%。
+    → **`aspect_drift_warn_percent = 2.0` 标得很准，不要动它。**
+  - **dHash 阈值**仍无真实样本（`dhash_max_distance = -1` 是对的）。
+    `--estimate` 已经会打印全部距离供人眼标定，K5 的做法照原样执行即可。
+
+#### CR-55 · P3 · `decode_image_payload` 只 `strip()` 就 `validate=True` 解码
+
+- **位置**：`localize_images.py::decode_image_payload`。
+- **问题**：`base64.b64decode(payload, validate=True)` 对**内部**空白字符（`\n`）
+  一律报错。中转网关按 76 列折行返回 base64 是常见形态；一旦如此，
+  **钱已经花掉了，产出全部被判"不是合法的裸 base64"丢弃**。
+- **建议**：解码前 `re.sub(r"\s+", "", payload)`，并容忍
+  `data:image/...;base64,` 前缀。两行代码换掉一整批付费结果的风险。
+- **状态**：未在真实网关上观察到（本轮没发任何付费请求）。属于便宜的加固，不是已知缺陷。
+
+#### CR-56 · P3 · `translate.py --review` 现在硬依赖 `[image]` 配置
+
+- **位置**：`translate.py::run_review`（K8 接入处）无条件 `image_de.Settings()`。
+- **问题**：`Settings.__init__` 会做 `[image]` 与 `[image.keep_verbatim]` 的
+  双向配置审计并 `SystemExit`。于是 `[image]` 任何一处不合法，
+  **F 组的审校清单整条命令就跑不出来**，即便这个账号一张德语图都没有。
+- **建议**：延后构造或只取所需的 `aspect_drift_warn_percent`；
+  它只在有 `pair.record` 时才被用到。
+
+#### CR-57 · P3 · 改 `output_format` 会留下两份产物，正好撞上 CR-48
+
+- **位置**：`localize_images.py::image_record_is_current` / `_target_for_job`。
+- **问题**：完成判据（按任务书）不含 `output_format`。把 `jpeg` 改成 `png` 之后，
+  旧 `01.jpg` 的记录仍然算"当前"，新 `01.png` 永远不会生成；
+  一旦 `--force`，`media_de/` 里就同时有 `01.jpg` 与 `01.png` ——
+  **而 G 组的 `_choose_images` 见到两个候选就拒发**（CR-48）。
+- **建议**：要么把 `output_format` 纳入失效条件，要么在检测到与现有当前记录
+  格式不同时显式拒绝运行并说清原因。
+
+### 15.4 G 组（`feat/business-suite-publish`）
+
+#### CR-58 · P2 · `compose_post` 没有任何用户入口，§5 的验收无法被复现
+
+- **位置**：`publish/compose.py` 的唯一调用方是 `tests/tests_publish.py`
+  （`publish/__init__.py` 只做 re-export）；`tools/` 下无 compose 入口，
+  `scripts/run_publish.bat` 不存在。
+- **问题**：`PUBLISH_PLAN` §5 的【验收】是"对最新 3 篇真实帖组装成功；
+  人为把译文改过期 / 删掉一张图各自被正确拒绝"。
+  这条验收目前**只能靠临时 `python -c` 做**，用户无法照 `MANUAL_STEPS` 复跑。
+  项目工作协议要求"需要用户操作的功能同步更新 `MANUAL_STEPS.md`"——
+  没有命令就没有可交接的验收。
+- **建议**：加一个只读入口（如 `tools/compose_publish.py --post-id … --at …`），
+  打印 `DePost.review_lines()` 与全部 warning，零浏览器操作。
+  它同时正好是 `require_confirmation = true` 那道人工闸需要看的那张清单。
+
+#### CR-59 · P3 · `cdp_ready(profile=…)` 每次都起一个 PowerShell，`launch()` 会起最多 16 次
+
+- **位置**：`core/chrome.py::_cdp_profile_matches` ← `cdp_ready` ← `launch` 轮询循环。
+- **问题**：`launch()` 在 15 秒窗口里每秒调一次 `cdp_ready(port, profile=…)`，
+  每次 fork 一个 `powershell.exe`（`Get-NetTCPConnection` + `Win32_Process`，
+  超时 5 秒）。功能是对的——`/json/version` 确实证明不了"是哪份 profile"，
+  这道归属校验是 G0 的核心价值——但代价是启动脚本明显变慢，
+  且在缺 `Get-NetTCPConnection` 的环境里每轮都白等。
+- **建议**：端口 CDP 就绪之后**只核对一次** profile 归属，
+  或按 `(port, profile)` 缓存结果；轮询阶段只用轻量的 `/json/version`。
+
+### 15.5 复核后确认无需改动的
+
+- **`publish/selectors.py` 是空的**（只有 TODO 注释）——**这是对的**，
+  红线 5 与 `PUBLISH_PLAN` §12.5 要的就是这个。不要"顺手补两个看起来合理的"。
+- **`publish/business_suite.py` 的五个函数在接触 `page` 前抛 `ProbeRequired`**——
+  设计如此，不是未完成。
+- **`browser.close()`**：CR-14.2 已经查过 Playwright 契约并判定对外部 CDP
+  浏览器是断开语义，`tools/probe_publish.py` 与 `routes/backfill.py` /
+  `routes/delta.py` 的写法一致。**本轮不再重提。**
+- **`.bat` 字节约定**：`run_images.bat`（13 CRLF / 0 裸 LF / 无 BOM / 纯 ASCII）
+  与 `start_chrome_publish.bat`（23 CRLF / 同上）都合规。
+- **`config.toml` 两段互不重叠**：K 只改 `[image]` / `[image.keep_verbatim]`，
+  G 只改 `[publish]`，`git merge-tree` 实测自动合干净。**所有权表起作用了。**
+- **`docs/HANDOFF.md`**：两条线都只改了「现在卡在哪」里自己那一行。
+  互相之间会冲突（同一张表相邻行），但内容都要保留，**不许二选一**。
+- **G 组的归属硬闸对真实数据成立**：抽查 FB `post.json` 确认
+  `owner` / `owner_name` / `coauthors` / `media_complete` 四个字段都在，
+  `_choose_images` 与合作帖归属校验不会把 FB 原创帖误拦。
+- **`probe_publish.py` 的隐私边界**：不记 class/CSS path、
+  密码/邮箱/OTP 类输入不产生事件且截图遮罩、URL 去掉 query/fragment。
+  与 `_PROBE_REQUIRED_OBSERVATIONS` 逐项对齐（`extra_notes` 正确地是可选项）。
+
+### 15.6 ✅ 处置结果（2026-08-31 晚，两条分支都已收工之后）
+
+> 上面 15.1–15.5 是**只读审查**时的记录，一行代码没改。
+> 两个 Agent 收工、工作区变干净之后，按用户的四个决定逐条实施。
+> **每条修复都带断言**，指向的是"这条不许被顺手改回去"，不只是防回归。
+
+| # | 处置 | 落在哪条分支 |
+|---|---|---|
+| CR-46 合并顺序 | ⬜ **未执行**（用户决定 `main` 先不动，等验收） | — |
+| CR-47 选帖作用域 | ✅ 已实施 **并真实翻译了那三篇** | `feat/image-de` |
+| CR-48 media_de 语义 | ✅ 按用户拍板**改 G 侧** | `feat/business-suite-publish` |
+| CR-49 `[pipeline]` 配置会丢 | ⬜ 记录在案，随 CR-46 一起处理 | — |
+| CR-50 只读命令建目录 | ✅ 新增 `readonly_archive()` | `feat/image-de` |
+| CR-51 `S1 Pro` 被删 | ✅ 补回 + 两种连写形态 + 六个断言 | `feat/image-de` |
+| CR-52 单图失败掀整批 | ✅ 逐图跳过并点名；离线命令套异常处理 | `feat/image-de` |
+| CR-53 `APIError` 全当致命 | ✅ 收窄 + `failure_budget` | `feat/image-de` |
+| CR-54 无放大闸 | ✅ `scale_factor` + `scale_warn_factor` | `feat/image-de` |
+| CR-55 base64 折行 | ✅ 先剥空白/前缀再严格解码 | `feat/image-de` |
+| CR-56 `--review` 硬依赖 `[image]` | ✅ 失败降级 | `feat/image-de` |
+| CR-57 `output_format` 留两份 | ✅ 判据加产出路径 | `feat/image-de` |
+| CR-58 compose 无入口 | ✅ `tools/compose_publish.py` + `.bat` | `feat/business-suite-publish` |
+| CR-59 每秒 fork PowerShell | ✅ 轮询轻量化，核对从 ≤16 次降到 2 次 | `feat/business-suite-publish` |
+| **CR-60（实施中新发现）** | ✅ 见下 | `feat/business-suite-publish` |
+
+#### CR-60 · P1 · `ZoneInfo("Europe/Berlin")` 在这台 Windows 上直接抛异常
+
+- **发现经过**：给 `tools/compose_publish.py`（CR-58）接排期时区时当场撞上。
+  **只读审查阶段没发现它**，因为在此之前**没有任何代码用过 `zoneinfo`**——
+  `[publish].timezone = "Europe/Berlin"` 只是一个还没人消费的配置值。
+- **事实**：实测 `zoneinfo.TZPATH` 是**空元组**，
+  `ZoneInfo("Europe/Berlin")` → `ZoneInfoNotFoundError`。
+  Windows 不自带 IANA 时区数据库，而 `zoneinfo` 只读系统数据库。
+- **为什么是 P1**：`PUBLISH_PLAN` 第 3.3 节把显式时区转换写成**硬要求**
+  （"代码里显式做时区转换，不依赖本地时区隐式生效"），
+  并要求**在夏令时切换日各测一次**。两件事都不可能靠写死 UTC 偏移做对。
+  **G5 一旦按计划实现就会当场失败**，而绕过它的那个"显然"的办法
+  （硬编码 +01:00/+02:00）会在每年两天把帖子发到错误的时刻，
+  **而且没人会立刻发现**——与 CR-19 的"静默丢弃 263 篇"同一类失效。
+- **处置**：`requirements.txt` 加 `tzdata>=2024.1`（纯数据包、无原生代码、
+  无传递依赖），理由按 Pillow 的先例写进注释。已装进 `.venv`（2026.3），
+  并验证 2026 年两个切换日的偏移：
+  `03-29 01:30 → +01:00`、`03-29 03:30 → +02:00`、
+  `10-25 01:30 → +02:00`、`10-25 03:30 → +01:00`。
+- ⚠️ **这是唯一一处越出所有权表的改动**（表里写着"`requirements.txt` 三组都不用改"）。
+  那句话的本意是避免 K/G 同时改这一个文件；K 组已收工且没碰它，实际零冲突。
+  偏差记在 `IMPLEMENTATION_PLAN` 的 G0c 里，不是默默改的。
+
+#### 两条真实数据结果（不是离线断言）
+
+1. **F 侧真实翻译**：计划点名的三篇全部译成，成功 3 / 失败 0，
+   **实际费用上界 US$0.1799**。
+   ⚠️ 离线外推给的是 US$0.038，**实际高 4.7 倍**，差在 44 327 reasoning tok。
+   **CR-40 那条教训又验证了一次：thinking 主导的账单，离线外推仍然会低估。**
+2. **G0b 真实验收通过**：`可组装 3 篇 / 被硬闸拦下 0 篇`。
+   金额硬闸在真实正文的 `$219.99` / `$100` 上通过；
+   11 张图全部按"缺德语图 → 回退原图"逐张点名（K 组还没跑，符合预期）；
+   `--strict` 在 G1 未完成时正确失败闭合。
+
+#### 合并态验证（用 `git merge-tree` + 一次性 worktree，**没有动任何分支**）
+
+把 `main ← feat/image-de ← feat/business-suite-publish` 的合并结果落进一个
+临时 detached worktree 跑了一遍：
+
+- **代码里零冲突标记**（`config.toml` / `requirements.txt` / `translate.py` 全部自动合）；
+- **18 套测试全绿**（K 的 17 + G 的 `tests_publish.py`）；
+- **K → G 交接契约双向成立**：K 实际写出的 `images_de.jsonl` 记录，
+  G 的 `_program_owned_media_de` / `_is_program_output` 能认；
+  把产出文件的字节改掉之后，**两边都判为人工版本**（同向保守）。
+- 仍然冲突的只有三份共享文档（`IMPLEMENTATION_PLAN` / `MANUAL_STEPS` / `HANDOFF`），
+  按项目约定**两段都保留，不许二选一**。
+
+临时 worktree 已删除，`main` 仍停在 `3736303`。
+
+### 15.7 本轮没做什么
+
+- **审查阶段没有改任何一行代码。** 两条 worktree 当时都在活跃写入
+  （`config.toml` / `compose.py` / 文档的 mtime 都在分钟级刷新），
+  按 `HANDOFF.md` 的协作纪律，findings 只落文档、不落别人的工作区。
+  **修复是在两个 Agent 收工、工作区干净之后才做的**（见 15.6）。
+- **没有执行任何合并、rebase、branch -f。** `main` 仍在 `3736303`。
+- **图片侧没有发出任何付费请求**（GPT-Image-2 一次都没调）。
+  翻译侧按用户授权发了 3 次真实请求，**费用上界 US$0.1799**，
+  这是本轮唯一的支出。
+- **没有真实社媒访问**（没跑 delta、没碰浏览器）。
+- **计划任务仍未安装**：`python -m tools.schedule status` 实测
+  `FBScraperDelta` 与 `FBScraperDeltaCatchup` 双双"未注册"。
+  `PIPELINE_PLAN.md` 第 16 节那句话仍然成立——**这个项目的自动化程度还是 0。**
+
+---
+
+## 16. 第四轮 · 合并前的收尾审查（2026-08-31，接手会话）
+
+> 审查对象与第 15 节相同的两条分支，但这次**两个工作区都已收工且干净**，
+> 所以发现即修复，不再只落文档。
+> 先读了 15.6 的处置结果表，**13 条已修的一条都没有重审**。
+
+### 16.1 复核结论：`HANDOFF.md` 点名的四处全部通过
+
+| # | 位置 | 结论 |
+|---|---|---|
+| 1 | `localize_images.py::_write_output` 的三次人工图复查窗口 | ✅ 逻辑正确。第三次检查发生在**所有权记录已 fsync 之后、`os.replace` 之前**，这个顺序是对的：此时 `owned_hashes` 已含新哈希，而磁盘上还是旧字节，于是"程序旧图"仍判为程序所有、"设计同事刚放进来的文件"仍判为人工。硬终止落在记录与 replace 之间时，`_record_output_exists` 的哈希比对会失败并重排该任务，不会把付费产物记成已完成 |
+| 2 | `compose.py::_pick_localized` / `_is_program_output` ↔ `localize_images.py::_candidate_is_program_owned` | ✅ 两套规则同源：都按 `images_de.jsonl` 的 `out_path` + `output_sha256` 认所有权，`None`（旧 schema 无哈希）都退化为按路径认，字节被改过都判为人工。**序号口径也一致**——K 的 `_target_for_job` 用 `media_index+1`，G 的 `_choose_images` 用 `local_path` 的 stem，而 `core/capture.py::download_media` 正是按**全 media 列表**下标命名 `01.jpg`，三者对得上 |
+| 3 | `translate.py::resolve_scope` / `pending` | ✅ **不是绕过数据契约的后门**。`pending` 里作用域过滤放在 `post_id` / `text` 两处 `SourceDataError` **之后**；`resolve_scope` 自己也对全部账号逐行校验。即使只翻一篇，整份 manifest 的形态问题仍在联网前失败闭合。`--latest-posts` 的排序键 `(created_at, 账号, post_id)` 与 `localize_images.py::select_rows`、`tools/compose_publish.py::_latest_post_ids` 三处完全一致 |
+| 4 | `core/chrome.py::launch` 的轮询 | ✅ profile 归属核对**还在**，只是移出了轮询循环：端口就绪后 `return cdp_ready(port, profile=…)`，超时后的兜底同样带 profile。`argv` 用的是解析后的 `port` / `profile`，不是 `[chrome]` 的值，没有"参数化了一半"的问题 |
+
+另外复核通过、无需改动的：两条分支 7 个 `.bat` 全部 0 裸 LF / 无 BOM / 纯 ASCII
+（含 15.5 之后才新增的 `run_publish.bat`）；`assert_publish_chrome_isolated()`
+在 `tools/start_chrome_publish.py` 与 `tools/probe_publish.py` 里都真的被调用了，
+不是死代码；`publish/selectors.py` 仍是空的、`business_suite.py` 五个
+`ProbeRequired` 仍在——**按红线 5，这是对的，本轮没有动它们**。
+
+### 16.2 CR-61 · P2 · 发布侧只再判金额，不判话题标签
+
+- **位置**：`publish/compose.py::_load_current_translation`。
+- **事实**：`translate.py::run_translate` 把 `money_preserved` 与
+  `hashtags_preserved` 的 violations **合成一个列表**，任一不过都不写盘——
+  在写入侧，这两条本来就是同一类「不可改内容规则」。
+  但 `PUBLISH_PLAN` 第 5 节的离线硬校验清单**只列了金额**
+  （"直接复用 `money_preserved`，不重写第二份"），于是 compose 也只再判金额。
+- **为什么"写盘时判过"不够**：`translated.jsonl` 是译文真相源，而**人工审校的
+  修正就是直接改它**——`review.md` 自己写着"直接修改本文件不会回写数据"，
+  `MANUAL_STEPS.md` 第 503 行同义。手工改动**不经过** `run_translate` 的写盘闸。
+  这正是金额那道闸要在发布环节再过一次的全部理由，标签适用同一条推理。
+- **失败场景**：审校同事在 `translated.jsonl` 里修一句德语措辞，顺手把
+  `#NeakasaRiko` 打成 `#NeakasaRiko ` / `#Neakasariko` / 少写一个 →
+  金额闸放行、`_validate_instagram` 的**数量**上限也放行（数量没变）→
+  带错标签的帖子发到德语主页。IG 那侧标签是触达路径，不是装饰。
+- **处置**：✅ 已修（`feat/business-suite-publish` @ `0377d1f`）。
+  复用 `hashtags_preserved`，不重写第二份；`PUBLISH_PLAN` 第 5 节补第 2b 条。
+- **上线前实测**：真实归档 9 条当前有效译文跑一遍新旧两道闸——
+  **金额违规 0 / 标签违规 0**，新闸不改变任何现有可组装帖，
+  G0b 已验收的"最新 3 篇可组装"不受影响。
+- **断言**：三条（改写标签 / 删掉一个 / 只调换顺序），指向"这道闸不许被顺手去掉"，
+  口径与 `translate.py` 写盘闸完全一致，不放宽。
+
+### 16.3 本轮的测试口径
+
+- `feat/image-de`：**17 套全绿**（`../FacebookScraper/.venv` 跑，`pwd` 已确认在
+  feature worktree 里，不是主目录的旧快照）。
+- `feat/business-suite-publish`：**17 套全绿**；`tests_publish.py` 从 89 项增至
+  **92 项**（CR-61 的三条）。
+- 两条分支 `compileall` 干净、`git diff --check` 干净。

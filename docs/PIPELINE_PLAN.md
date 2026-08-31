@@ -454,13 +454,187 @@ daily_budget_usd   = 5
   按 TOML 规则必须放在 `[publish]` 段的**最后**
   （`[translate.glossary]` 已经为这条规则写过一次警告）。
   ⚠️ **它们由 L 组添加**，G 组不要动；G 组只用 `[publish]` 的标量键。
+> ⚠️ **2026-08-31 补记：`[pipeline]` 整段配置目前只存在于 `wip/parallel-2026-08-31`。**
+> `main` 与两条 feature 分支的 `config.toml` 里**都没有它**（实测 `grep -c` 为 0）。
+> 合并时必须显式把它搬过去，否则 L0b / L0c 一开工就踩空 —— 见 `CODE_REVIEW.md` CR-49
+> 与 `HANDOFF.md`「下一个会话的三步」第 2 步（那里有验证过的取块命令）。
+
 - **L 组必须最后合。** 它依赖 K / G 的入口签名，
   在那两组合回 `main` 之前，`pipeline run` 里对应的阶段只能是占位。
   但 **L0 全段（装计划任务、status、死人开关、价格表）不依赖任何一组，现在就能做。**
 
 ---
 
-## 14. 如果只做一件事
+## 14. L0 实施细则（**下一个会话直接照做**）
+
+> 2026-08-31 补写。L0 四项**不依赖 K / G / 代码审查任何一条线**，
+> 现在就能开工。分支：`feat/pipeline`，从 `main` 开。
+>
+> ⚠️ **开工前先读第 15 节**：这个仓库当前是多 Agent 共享工作区，
+> 有一条必须遵守的协作纪律。
+
+### L0a · 装计划任务（用户操作，5 分钟）
+
+**这一项不是我做，是用户做**，但它是所有后续项的前提，所以放在最前面。
+
+```bash
+.venv\Scripts\python.exe -m tools.schedule install --dry-run   # 先看要装什么
+.venv\Scripts\python.exe -m tools.schedule install             # 真的装
+.venv\Scripts\python.exe -m tools.schedule status              # 验证
+```
+
+装完会有两个任务：`FBScraperDelta`（每天 09:30，程序内部再随机延迟 0–45 分钟）
+与 `FBScraperDeltaCatchup`（登录/解锁触发，补跑）。
+
+**【验收】** `tools.schedule status` 显示两个任务已注册；次日 `state\delta.log`
+出现新记录。
+
+> ⚠️ **装上那一刻起，每天真的会去访问一次 Facebook 和 Instagram**——
+> 方案 B 的"累积敞口"从这里开始计。这是需要用户知情同意的开关，
+> **不要替用户按**（`IMPLEMENTATION_PLAN.md` 的 E3 一直刻意留着它）。
+
+### L0b · `pipeline status`（**先做这个**，它零风险且立刻有用）
+
+新增 `pipeline.py`，第一个子命令就是只读对账：
+
+```
+pipeline status            # 零网络、零花钱、零写盘
+```
+
+**要读的四份产物**（都已存在，不要新建第五个真相源）：
+
+| 阶段 | 产物 | "做完了"的判据 |
+|---|---|---|
+| 归档 | `archive/<账号>/manifest.jsonl` | 有正文 **且** 至少 1 张已下载的图 = 可发 |
+| 翻译 | `archive/<账号>/translated.jsonl` | `post_id` + 正文 SHA-256 + `PROMPT_VERSION` 三者全等 |
+| 调图 | `archive/<账号>/images_de.jsonl` | `post_id` + `media_index` + 原图指纹 + 译文指纹 + `IMAGE_PROMPT_VERSION` |
+| 发布 | `state/published.jsonl` | `post_id` + 平台 |
+
+**输出应当长这样**（形态照抄 `routes.delta --status`，用户已经接受那个形态）：
+
+```
+账号                  可发  待译  待调图  待发布  人工队列
+fa_neakasaofficial     27     22      27       27        0
+in_neakasa.tech       443    437     443      443        0
+最近一次成功运行：2026-08-31T04:41Z（1 小时前）
+本月花费：US$0.00 / 60.00
+```
+
+⚠️ **"可发"要按发布口径算，不是翻译口径**：有正文 **且有已下载的图**。
+实测 470 篇（FB 27 / IG 443），而不是 1051 篇——585 篇纯视频帖没有可上传素材。
+这个口径差是这个项目里最容易被搞错的一处。
+
+**【验收】** 在当前归档上跑出与上表同量级的数字；用抓包或断言确认**一次网络请求都没发**。
+
+### L0c · 死人开关
+
+- `state/pipeline_state.json` 记 `last_successful_run`；
+  超过 `[pipeline].dead_man_days`（默认 3）→ 走 `core.notify` 告警。
+- ⚠️ **不能只写在 `pipeline run` 里**——它自己不跑的时候正是要它响的时候。
+  挂进 `FBScraperDeltaCatchup`（登录/解锁触发）那条链路，
+  或在 `tools/schedule.py` 里单加一个只读检查任务。
+- 复用 `core/notify.py` 的三级降级（toast → msg → `alerts.log`），不要新写通知。
+- **【验收】** 人为把 `last_successful_run` 改到 4 天前 → 下次触发时告警弹出；
+  改回当天 → 不响。
+
+### L0d · 价格表
+
+**原始数据已经抓好了，直接用，不用重新推导。**
+全部图文可发帖里出现的**全部 46 种**金额串（按出现频次降序）：
+
+```
+$100  $5  $20  $10  $1  $50  $179  $200,000  $219  $219.99  $299  $30
+$369  $399  $49  $799  $120  $79  $80  $129.99  $200  $250,000  $29
+$379.99  $399.99  $59.99  $75  $89.99  $1,000,000  $119  $149.99  $180
+$199  $199.99  $250  $26.99  $38.36  $39  $479.99  $499.99  $500
+$599.99  $69.99  $79.99  $90  5$
+```
+
+重新生成的命令（正则复用 `translate.py::_MONEY_TOKEN_RE`，不要另写一套）：
+
+```bash
+.venv\Scripts\python.exe -c "import json,sys,collections;from pathlib import Path;sys.path.insert(0,'.');from translate import _MONEY_TOKEN_RE;c=collections.Counter();[c.update(m.group(0) for r in {json.loads(l)['post_id']:json.loads(l) for l in (b/'manifest.jsonl').open(encoding='utf-8') if l.strip()}.values() if (r.get('text') or '').strip() and [x for x in (r.get('media') or []) if x.get('kind')=='image' and x.get('local_path')] for m in _MONEY_TOKEN_RE.finditer(r['text'])) for b in Path('archive').iterdir() if (b/'manifest.jsonl').exists()];print(len(c));print(' '.join(sorted(c,key=lambda t:(-c[t],t))))"
+```
+
+三件要注意的：
+
+1. **`5$` 是脏数据**（美元符号在后面）。别在代码里"顺手规范化"它——
+   映射表就按原文逐字符匹配，规范化会让"原文里到底是什么"这件事变得不可查。
+2. **大额是抽奖金额不是定价**（`$200,000` / `$250,000` / `$1,000,000`）。
+   它们**多半应当原样保留**，业务填表时要能区分"这是价格"和"这是奖池"。
+   建议表里允许写 `"$200,000" = "$200,000"`（显式声明不改），
+   **而不是留空**——留空和"还没填"分不开。
+3. **替换发生在发布前，不在翻译时。** 译文真相源
+   （`translated.jsonl`）不该混进商务决策，这条边界不动。
+
+**表的位置**：`config.toml` 的 `[publish.price_map]`。
+⚠️ 它是 `[publish]` 的**子表，必须放在该段最后**（TOML 规则），
+`[publish]` 段末尾已就地留了警告注释。**加子表时先确认 G 组已经不再往
+`[publish]` 加标量键**，否则它们会静默变成 `price_map` 的键。
+
+**硬闸**：正文出现表里没有的金额串 → 该篇进人工队列，提示补一行映射。
+**【验收】** 46 种全部有映射；构造一个新金额串 → 该篇被正确拦下并说清原因。
+
+---
+
+## 15. ⚠️ 多 Agent 共享工作区的协作纪律（2026-08-31 实战教训）
+
+**2026-08-31 当天，三个 Agent（代码审查 / K 组 / G 组）与本会话
+在同一个 `FacebookScraper` 目录里并行工作。** 这暴露了一件事：
+
+> **git 一个工作目录只能有一个 checked-out 分支。**
+> 三个 Agent 各自以为在自己的分支上，实际上全都在改同一个工作区、
+> 提交时会落到同一个分支。**谁先 `git add -A`，谁就把另外两条线一起提交进去。**
+
+当天的实际后果：`config.toml`、`translate.py`、`tests/tests_translate.py`
+各自混了两到三条线的内容，**按线拆分提交已不可能**，只能一次性收下并在
+提交说明里记归属（见 `3047c65`）。
+
+### 三条必须遵守的
+
+1. **一次只让一个 Agent 动手。** 这个项目的稳态量是 5.2 篇/周，
+   并行省下来的时间远不值这个复杂度。
+2. **如果一定要并行**：每个 Agent 开工前先 `git status --short`，
+   **只 `git add` 自己所有权表里的文件**，永远不要 `git add -A` / `git add .`。
+3. **不要 `git checkout` 切分支**（会把别人未提交的改动带走或卡住），
+   也不要 `git stash` / `git reset --hard`（项目既定禁令）。
+   需要让 `main` 前进时用 `git branch -f main <已验证的提交>`——
+   它**不碰工作区**，前提是 `main` 未被 checkout 且是目标提交的祖先。
+
+### ✅ 更正（2026-08-31 晚）：`git worktree` 实际走通了
+
+上面第 15 节写的三条纪律仍然成立，**但下面这条结论是错的，已被实践推翻**：
+
+> ~~`git worktree` + 给每个 Agent 一个独立目录 —— **不能靠 junction 共享 `archive/`**：~~
+> ~~`core/store.py::assert_physical_direct_path` 会**主动拒绝**~~
+> ~~symlink / junction / reparse point，`Archive()` 一构造就抛异常。~~
+
+**「不能靠 junction 共享 `archive/`」这半句仍然成立**（`assert_physical_direct_path`
+确实会拒绝 reparse point）。**但结论错了——不共享 `archive/` 就行。**
+
+2026-08-31 晚 K / G 两组的实际做法：
+
+```
+FacebookScraper            wip/parallel-2026-08-31      完整 archive/（主工作区）
+FacebookScraper-image-de   feat/image-de                只复制 manifest/translated 做夹具
+FacebookScraper-publish    feat/business-suite-publish  完全不需要 archive/
+```
+
+**离线测试全部用 `tempfile` 夹具，本来就不读真实 `archive/`。**
+两条分支各 17 套全绿，`config.toml` 也自动合干净了——
+**所有权表 + 独立 worktree 的组合是有效的**，上一轮的混线是
+「三个 Agent 一个工作目录」造成的，不是并行本身的问题。
+
+⚠️ **但真实数据验收仍然必须回主工作区做**：`--estimate` / `--dry-run` /
+K9 / G8 都要读完整 `archive/`，worktree 里的夹具会给出误导性的 0。
+⚠️ 还有一个真踩过的坑：**`cd` 到主目录之后再跑 `tests/...`，跑的是主目录的旧快照**，
+不是 feature 分支的代码。跑测试前先 `pwd`。
+
+详细的 worktree 现状见 `HANDOFF.md` 的「🧭 三个 worktree 的现状」一节。
+
+---
+
+## 16. 如果只做一件事
 
 **装计划任务（`tools.schedule install`，L0a）。**
 

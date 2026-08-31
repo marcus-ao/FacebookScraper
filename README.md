@@ -93,12 +93,14 @@ FacebookScraper/
   config.toml              全部可调参数，代码里零硬编码
   requirements.txt
   translate.py             德语翻译 + 审校清单（F 组）
-  localize_images.py       图内英文德语化（K 组，**待建**）
+  localize_images.py       图内英文德语化（K 组，GPT-Image-2）。
+                           ⚠️ 已实现，在 `feat/image-de` 上，尚未进 main
 
   scripts/                 双击入口，**纯 ASCII 壳**，逻辑在 tools/ 里
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
     run_delta.bat
-    start_chrome_publish.bat  发布用的专用 Chrome（**待建**，端口 9223）
+    start_chrome_publish.bat  发布用的专用 Chrome（端口 9223）。已实现，在 G 分支上
+    run_publish.bat           待发帖离线组装预演。零浏览器/零网络/零写盘
   tools/                   .bat 的真正实现（中文提示只能待在 Python 里）
     setup.py  start_chrome.py
     replay.py               用 _capture_*.json 离线重建归档，不重新下载媒体
@@ -106,7 +108,7 @@ FacebookScraper/
     dryrun_delta.py         用增量转储离线跑完 delta_once() 的**真实代码路径**，
                             零网络零写盘。改完解析器先跑它，别用真实露面去验
     schedule.py             Windows 计划任务：xml / install / status / remove
-    probe_publish.py        Business Suite 的 DOM 探查（**待建**）：你手工走一遍，
+    probe_publish.py        Business Suite 的 DOM 探查（已实现，在 G 分支上）：你手工走一遍，
                             程序在旁边记录控件的稳定属性。**它不驱动页面**
   docs/
     IMPLEMENTATION_PLAN.md  进度真相源
@@ -121,13 +123,15 @@ FacebookScraper/
   pipeline.py               流水线编排（**待建**，L 组）。对账器，不是队列
   prompts/
     translate_de.md         英译德提示词，可直接编辑，改它不用动 Python
-    image_de.md             图片德语化提示词（**待建**），同样可直接编辑
+    image_de.md             图片德语化提示词（已实现，在 K 分支上），同样可直接编辑
+                            IMAGE_PROMPT_VERSION 现在是 2，改模板必须 +1
   core/                    库层
     config.py  chrome.py  store.py  parse.py  session.py
     http.py  integrity.py  notify.py  console.py
   routes/                  抓取路径
     backfill.py  fb_graph.py  delta.py（登录态增量主流程已实现）
-  publish/                 发布路径（**待建**，G 组）
+  publish/                 发布路径（G 组）。⚠️ 已实现，在 `feat/business-suite-publish` 上
+                           selectors.py 现在**故意是空的**——G1 探查之后才填（红线 5）
     compose.py              组装并跑离线硬闸（不碰浏览器，不被 G1 阻塞）
     business_suite.py       UI 自动化
     selectors.py            ⛔ **G1 真实探查之后才填**
@@ -169,7 +173,9 @@ archive/<平台前缀>_<账号>/
                                     设计同事手工修的那张一定比模型那张对
     undated_<post_id>/              时间解析不出来的进这里，**不猜**
   translated.jsonl                  德语译文的真相源
-  images_de.jsonl                   德语图的真相源（K 组，**待建**）
+  images_de.jsonl                   德语图的真相源（K 组）。
+                                    ⚠️ 代码已就绪，但 GPT-Image-2 还一次都没调过，
+                                    所以这个文件目前还不存在
   review.md                         人工审校清单。K 组落地后它同时是
                                     **德语图唯一的验收关口**（预扫描已按用户决定取消，
                                     机器读不出"德语对不对"）
