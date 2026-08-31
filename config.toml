@@ -403,6 +403,12 @@ timezone = "Europe/Berlin"
 schedule_min_minutes_ahead = 10
 schedule_max_days_ahead = 75
 
+# 只有完成 G1、人工复核真实 dump 与四类 IG/UI 限制后才能改 true 并填路径。
+# 严格组装会解析这份 dump、核对 9223/profile/交互/截图/观察与注入数值；
+# 上面两个 API 占位值不会被拿来给 Business Suite 真实发布放行。
+ui_constraints_verified = false
+ui_probe_dump = ""
+
 # ⚠️ **自动发布到品牌主页是不可回滚的对外行为。**
 # 抓错了可以重抓、译错了可以重译，**发出去了只能删帖，而删帖在粉丝侧是可见的**。
 # true = 程序把待发清单（原作者 / 译文 / 图 / 排期时刻）打出来，人点头才提交。

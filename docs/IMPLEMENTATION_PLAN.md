@@ -1956,7 +1956,7 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
 > Business Suite 是 React SPA，class name 是构建期混淆的，
 > 任何"看起来合理"的选择器都是错的。
 
-- [ ] **G0**（2026-08-31 新增前置）发布走**独立的 Chrome profile**
+- [x] **G0**（2026-08-31 新增前置）发布走**独立的 Chrome profile**
 
   > **这是红线不是优化项。** `MANUAL_STEPS.md` 早写了发布账号要用另一个 profile，
   > 与抓取小号分开避免指纹关联。抓取小号被封是本项目唯一不可恢复的失败模式，
@@ -1975,7 +1975,15 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
   - 【验收】两个 profile 同时跑，`cdp_ready(9222)` 与 `cdp_ready(9223)` 都为 True，
     且**登录态互不可见**（发布 Chrome 里打开 instagram.com 不是抓取小号）
   - **G0 不依赖 G1，现在就能做**——它是整组唯一一件不需要真实 DOM 的事
-- [ ] **G0b** `publish/compose.py`：发布前的离线硬闸（同样不依赖 G1）
+
+  > 完成：2026-08-31 · `core.chrome.launch/attach` 支持显式 port/profile，
+  > `cdp_ready()` 支持显式 port/profile 且无参仍回退 `[chrome]`；Windows 上会只读
+  > 核对监听进程的 `--user-data-dir`，端口对但 profile 错也拒绝。配置把两侧端口
+  > 或 profile 误写成相同值时启动前失败闭合；backfill/delta 零改动。
+  > 新增发布专用 Python/.bat 入口并做字节级验收。实机 9222/9223 同时为 True；
+  > 抓取 profile 有 FB/IG 登录 cookie，新建发布 profile 两边 cookie 为 0
+  > （只比较登录 cookie 名、未读取或打印值），会话互不可见。
+- [x] **G0b** `publish/compose.py`：发布前的离线硬闸（同样不依赖 G1）
 
   > UI 自动化最贵的是时间、最险的是半成品。**能在离线阶段拦下的，绝不留到线上拦。**
 
@@ -1996,6 +2004,70 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
        `review.md` 与 `index.html` 已有同款提示，发布这最后一环不能反而没有
   - 【验收】最新 3 篇真实帖组装成功；人为把译文改过期 / 删掉一张图，
     各自被正确拒绝且说清原因
+
+  > 进展：2026-08-31 · 代码与离线测试已完成：复用
+  > `translate.money_preserved` / `translation_is_current`，逐图优先 `media_de`、
+  > 缺图告警回退原图，Pillow 完整像素解码、缺失完整性标记、残缺/混合/脏媒体、
+  > 合作方原作者、aware datetime 均有硬闸；IG/定时数字必须与 config 人工确认的
+  > 完整 G1 dump 逐项一致，严格发布会核对 9223/profile/交互/截图/观察，缺值即失败。
+  > 真实当前译文中 5 篇图文帖组装成功、1 篇纯视频被正确拒绝；但计划点名的
+  > 最新三篇均尚无译文，所以“最新 3 篇成功”未通过，本项按协议不勾选。
+  >
+  > **完成：2026-08-31（同步审查轮）· 验收条件到这里才齐，现已勾选。**
+  > 缺的那一半是 F 侧的选帖能力（CR-47）：用户授权后 `translate.py` 加了
+  > `--post-id`/`--latest-posts`，点名的三篇已真实翻译。随后用新增的
+  > `tools/compose_publish.py`（CR-58）在真实归档上跑出：
+  >
+  > ```
+  > 可组装 3 篇 / 被硬闸拦下 0 篇
+  >   facebook  / 122123185335379375   5 图
+  >   instagram / 3973012230169803390  5 图（合作帖，点名原作者 Neakasa Global）
+  >   instagram / 3975547640610092585  1 图
+  > ```
+  >
+  > 三篇的金额硬闸都通过（真实正文里的 `$219.99` / `$100` 逐字符保留），
+  > 每张图都按"缺德语图 → 回退原图并逐张点名"告警（K 组还没跑，符合预期）。
+  > `--strict` 在 G1 未完成时正确失败闭合（"严格发布缺少 G1 实测定时窗口"）。
+  > 「人为改过期 / 删图各自被拒」由 `tests_publish.py` 第 [3] 节的夹具覆盖。
+- [x] **G0c** 第三轮同步审查修复（CR-46 ~ CR-60 中属于 G 组的四条）
+  > 完成：2026-08-31 · 只改本组所有权内的文件（`requirements.txt` 见下方说明）。
+  >
+  > **CR-48**（用户拍板改 G 侧）· `media_de/` 同序号多候选的语义**与 K 组冲突**：
+  > K 组**刻意支持**「程序图 `01.jpg` 与设计同事的 `01.png` 并存、人工优先」，
+  > 而 `_choose_images` 原先见到多个候选就 `ComposeError` ——
+  > **K 专门为设计同事设计的那个场景会让这篇帖子发不出去**。
+  > 现在读 `images_de.jsonl` 判程序所有权（含 `output_sha256` 比对：
+  > 程序产出被人改过字节也算人工版本），非程序产出的那个优先，并显式告警
+  > 「这一篇被设计同事动过手」。仍然失败闭合的只有"多个都不是程序产出"。
+  > ⚠️ **故意不 import `localize_images`**（K 组独占文件），只读它的产物 jsonl ——
+  > 与 `PIPELINE_PLAN` 第 2 节「只读产物、不重写别人逻辑」同一条边界。
+  >
+  > **CR-58** · `compose_post()` 此前唯一的调用方是测试文件，于是本项的【验收】
+  > 「最新 3 篇组装成功」**没有任何命令能让用户自己复跑**。
+  > 新增 `tools/compose_publish.py` + `scripts/run_publish.bat`（纯 ASCII/CRLF/无 BOM）：
+  > 零浏览器、零网络、零写盘，打印译文/逐张图来源/合作帖原作者/全部告警，
+  > 支持 `--post-id`、`--latest N`、`--at`、`--strict`、`--json`。
+  > 它同时就是 `require_confirmation = true` 那道人工闸要看的那张清单。
+  >
+  > **CR-59** · `cdp_ready(profile=…)` 每次都 fork 一个 `powershell.exe`
+  > （`Get-NetTCPConnection` + `Win32_Process`，超时 5 秒），而 `launch()`
+  > 在 15 秒窗口里**每秒**调一次 —— 一次启动最多 16 个 PowerShell。
+  > 轮询改用不带 profile 的轻量 CDP 探测，端口起来之后再核对一次归属：
+  > **判据一个字没松**，只是从最多 16 次降到 2 次。有断言钉住这个比例。
+  >
+  > **CR-60（本轮新发现，原先没人知道）** · **`ZoneInfo("Europe/Berlin")`
+  > 在这台 Windows 上直接抛 `ZoneInfoNotFoundError`。**
+  > 实测 `zoneinfo.TZPATH` 是**空的**：Windows 不自带 IANA 时区数据库，
+  > 而 `zoneinfo` 只读系统数据库。这不是小毛病 ——
+  > `PUBLISH_PLAN` 第 3.3 节把显式时区转换写成硬要求，还要求**在夏令时切换日
+  > 各测一次**，两件事都不可能靠写死 UTC 偏移做对。
+  > **所以 G5 一旦按计划实现就会当场失败，而且是在最难发现的那一环。**
+  > 处置：`requirements.txt` 加 `tzdata>=2024.1`（纯数据包、无原生代码、
+  > 无传递依赖），理由按 Pillow 的先例写进注释；已装进 `.venv`（2026.3）并验证
+  > 2026 年两个切换日（03-29 / 10-25）的偏移都正确。
+  > ⚠️ 这是本轮唯一一处越出所有权表的改动（表里写着"`requirements.txt` 三组都不用改"）。
+  > 那句话的本意是避免 K/G 同时改这一个文件造成冲突；K 组已收工且没碰它，
+  > 因此实际零冲突。**这条偏差在这里显式记录，不是默默改的。**
 - [ ] **G1** 探查 Business Suite 的真实 DOM 与流程　**← 需要你操作，且它阻塞 G2–G7**
 
   - 用 **G0 建的发布 profile**（不是 A3 那个抓取 profile）登录**有 DE Page 发布权的账号**
@@ -2019,6 +2091,13 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
     每个注释写清「对应哪一步 / 来自哪份 probe dump / 什么信号说明它失效了」
   - 【记录】**定时窗口的 UI 上下限**（最早排多久之后、最晚排多远）与时区行为。
     Graph API 那边是 10 分钟–75 天，**但 UI 不一定一样，必须实测**
+
+  > 进展：2026-08-31 · `tools/probe_publish.py` 已交付并通过离线 recorder 测试：
+  > 只监听人工 click/input/change/submit，逐步截图、原子写 JSON，记录命中元素与
+  > 语义祖先的稳定属性；合成事件/敏感输入丢弃，Python 侧再做字段白名单、URL 去参、
+  > 登录输入截图遮罩，不记录 class/CSS path/cookie/输入值；结束时补记时区、窗口、
+  > 四类 IG 实测拒绝、slug 与成功信号。用户尚未实际运行，`selectors.py` 仍只有
+  > TODO，故不勾选。
 - [ ] **G2** 登录态与**目标 Page**检查
 
   - `publish/business_suite.py::ensure_logged_in(page) -> bool`
@@ -3503,3 +3582,29 @@ K9 明确用 `--latest-posts 3`，全历史还需 `--all-history` 与
   精确补目标。本 K 分支未越过文件所有权改 F 主流程，也未误跑约 1017 篇待译正文；
   需用户另行授权精确选帖或提供这两篇已审校译文，再经过图片费用确认与德语逐图确认，
   故这些任务保持未勾选。
+
+### 2026-08-31 · `feat/business-suite-publish` · G0/G0b/G1 阶段记录
+
+- **G0 已完成并真实验收。** 发布侧固定走 `.fbscraper-publish` / 9223，抓取侧
+  无参调用仍走 `.fbscraper-chrome` / 9222；Windows 还会核对监听 Chrome 的
+  `--user-data-dir`。两端实机同时可附着，且只核对 cookie 名得到抓取侧已登录、
+  新发布侧未登录，证明会话没有串用。
+- **G0b 只完成代码与离线验收，未完成任务书的真实验收。** `compose_post()` 已把
+  当前版译文、金额不变、媒体完整性与完整解码、混合/脏媒体、合作帖来源、aware 排期
+  以及与 config 审核 dump 逐项一致的 UI 约束做成失败闭合；当前库里 5 篇图文实帖
+  可组装、1 篇纯视频被拒绝，
+  但计划点名的最新三篇都没有当前版译文，故 G0b 保持未勾选。
+- **G1 只交付记录器。** `tools/probe_publish.py` 附着 9223 后仅监听人工交互、记录
+  白名单稳定语义属性并对敏感输入截图遮罩，不导航、不点击、不填表、不上传、不提交；
+  用户尚未手工
+  跑完流程，因此真实选择器、FB slug、定时窗口和 Page 时区仍为空，G1 保持未勾选，
+  `publish/selectors.py` 只有 TODO；G2–G6 只有失败闭合函数，G7 仍只有任务书契约。
+
+#### 独立代码审查修正（同分支）
+
+首轮审查无 Critical，发现 5 个 Important，已全部补反例后修正：截断 JPEG 必须
+完整加载像素；缺失 `media_complete=True`、混合视频或脏媒体行不得被静默过滤；
+严格模式不能用任意字符串冒充 probe；记录器过滤合成/敏感事件与任意 payload；
+无参 `launch/attach` 恢复旧 CDP-only 行为，只有显式 profile 才核对进程归属。
+修正后原 16 套加新增发布套件共 **17 套全绿**；`ruff`、`compileall -q .` 与
+`git diff --check` 均通过，发布 `.bat` 的 ASCII/CRLF/无 BOM 断言包含在全量测试中。

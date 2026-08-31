@@ -31,8 +31,9 @@
 | **第 9 步** | **装每日计划任务** | ⬅️ **轮到你，而且这是最该先做的一件事**：装之前，整个项目没有任何东西是自动跑的 |
 | ~~第 10 步~~ | 放图片 API 密钥 + 填 DE 发布账号 | ✅ **你已完成**（密钥已在 `.env`，两个账号已填进 `config.toml`） |
 | **第 10b 步** | **跑图片德语化（K9 验收）** | ⬅️ **轮到你**：代码与译文都就绪，只读预演排出 **11 张**；只差你按 **≈US$2.4** 点一次头 |
+| **第 10c 步** | **看一眼「要发出去的到底长什么样」** | 🟢 **随时可跑，零风险**（零浏览器/网络/写盘/费用）：`scripts\run_publish.bat --latest 3` |
 | K 组 | 图内英文换德语（GPT-Image-2） | ✅ 代码完成、17 套测试全绿、真实预演通过。**只差第 10b 步的费用确认与德语人工审校** |
-| G 组 | Business Suite 发布（FB DE + IG DE 同发） | 📝 计划已定。**卡在你做一次 DOM 探查（第 11 步）** |
+| G 组 | Business Suite 发布（FB DE + IG DE 同发） | ✅ G0/G0b 已完成并验收（最新 3 篇真实组装通过，可用 `scripts\run_publish.bat` 复跑）。**仍卡在你做一次 DOM 探查（第 11 步）** |
 | L 组 | 把上面这些串成一条不用人管的流水线 | 📝 规划已定（`docs/PIPELINE_PLAN.md`）。**第一步就是第 9 步** |
 
 ---
@@ -1058,29 +1059,96 @@ scripts\run_translate.bat --review
 
 ---
 
+## 第 10c 步 · 看一眼「要发出去的到底长什么样」（随时可跑，零风险）
+
+> 新增于 2026-08-31。**零浏览器、零网络、零写盘、零费用。**
+> 它把发布前的全部离线硬闸跑一遍，把结果按人能读的样子打出来。
+
+```bash
+scripts\run_publish.bat --latest 3
+```
+
+或者精确指定：
+
+```bash
+scripts\run_publish.bat --post-id 122123185335379375 --post-id 3973012230169803390 --post-id 3975547640610092585 --at 2026-09-05T10:00
+```
+
+会看到每一篇的：德语正文、**逐张图是德语图还是回退的原图**、
+合作帖原作者、以及所有告警（缺德语图 / 缺 G1 实测值 / 授权提示）。
+
+**这就是 `[publish].require_confirmation = true` 那道闸要你看的那张清单。**
+
+2026-08-31 实跑结果：计划点名的三篇**全部组装成功、零拦下**；
+真实正文里的 `$219.99` 和 `$100` 逐字符保留（金额硬闸通过）；
+因为 K 组还没跑，11 张图目前全部是"回退原图"并逐张点名告警。
+
+加 `--strict` 会按真实发布的严格模式组装 —— G1 没完成时它会**正确地失败**，
+提示"严格发布缺少 G1 实测定时窗口"。这是设计，不是故障。
+
+---
+
 ## 第 11 步 · Business Suite 探查（G1，发布环节的前置）
 
 > **这一步之前我一行选择器都不会写。** Business Suite 是 React SPA，
 > class name 是构建期混淆的，凭猜写的选择器**一定**是错的——
 > 这是项目的全局红线之一。
 
+> ⚠️ **做这一步之前先跑一次 `scripts\setup.bat`。**
+> 2026-08-31 发现本机缺 `tzdata`（Windows 不自带 IANA 时区数据库，
+> `ZoneInfo("Europe/Berlin")` 会直接抛异常）。它已经写进 `requirements.txt`，
+> setup 会装上。**没有它，G5 的排期时区根本没法做对**，
+> 而排期错了帖子会在错误的时刻发出去、没人会立刻发现。
+
 ### 你要做什么
 
-1. 我会先做完 G0（把发布 profile 的支持加进代码）并给你
-   `scripts\start_chrome_publish.bat`；
-2. 你双击它，在弹出的**新** Chrome 里登录 DE 发布账号；
-3. 跑 `tools.probe_publish`，然后**手工完整走一遍定时发帖流程**
-   （建帖 → 传图 → 写文案 → 勾选 FB 和 IG 两个渠道 → 开定时 → 选日期时间 → 提交）；
-4. 程序全程在旁边**记录**你点到的每个控件的稳定属性，并每步截图。
-   **它不驱动页面，驱动的是你**——和第 4 步的人工滚动是同一条设计。
+G0 已在 2026-08-31 完成并实机验收：9222 / 9223 能同时运行，新的发布
+profile 没有抓取小号的 FB/IG cookie。按下面顺序做：
 
-### 走的时候请特意留意这三样
+1. 双击 `scripts\start_chrome_publish.bat`。它只会使用
+   `.fbscraper-publish` / 9223，不会碰抓取侧 `.fbscraper-chrome` / 9222；
+2. 在弹出的**发布专用 Chrome** 里人工登录有 DE Page 发布权的账号。
+   不要把账号密码输入任何脚本；会话过期以后也仍然是你在这个窗口里重登；
+3. 另开一个终端，`cd` 到项目根目录后运行：
+
+   ```bat
+   .venv\Scripts\python.exe tools\probe_publish.py
+   ```
+
+4. 终端出现“G1 探查已开始”以后，在发布 Chrome 里按你平常的方式**手工**
+   进入 Business Suite 并完整走一次：建帖 → 传图 → 写文案 → 勾选 FB 和 IG →
+   开定时 → 选日期时间 → 提交；
+5. 每次 click / input / change / submit 都会记录命中元素及语义祖先的
+   `tag / role / aria-label / data-testid / name / placeholder / 可见文本 /
+   contenteditable`，并存一张当前视口截图。**工具不会打开网址、点击、填写、
+   上传或提交，驱动页面的始终是你**；
+6. 完成后回终端按 Enter。程序会请你原样抄下入口 URL、FB slug、UI 时区、
+   定时上下限（同时填整数秒）、IG 四类限制的接受边界与实际拒绝行为、成功信号；
+   不知道的项直接留空，绝不猜。FB slug 是可选留痕、留空不阻塞；真正的
+   时区/窗口/IG 边界/拒绝行为/成功信号若留空，该记录不能配置成“已验证”；
+7. 把终端打印的 JSON 路径和截图目录交回来。输出形态是：
+
+   ```text
+   state/publish_probe_<时间戳>.json
+   state/publish_probe_<时间戳>_screenshots/001_click.png
+   ```
+
+> ⚠️ 如果你为了取得“提交成功信号”排了一条测试帖，验证后要在 Business Suite
+> 里**人工取消**。探查工具不会删除帖子或草稿；异常退出时也先检查是否留下草稿。
+
+### 走的时候请覆盖七个流程点，并另记定时窗口上下限
 
 | 要留意 | 为什么 |
 |---|---|
+| **创建帖入口的最终 URL 与按钮** | SPA 可能不换 URL，两个信号都要留 |
+| **图片控件是 file input 还是拖拽区** | 决定后续能否用稳定的 `set_input_files()` |
+| **文案框是 textarea 还是 contenteditable** | contenteditable 的多段换行不能想当然用 `fill()` |
+| **FB 和 IG 两个渠道的勾选在哪** | 你要的是同时发，这一路是新增的 |
+| **定时开关在哪里** | 后续每一步都要回读确认 |
 | **日期时间选择器上显示的是哪个时区** | ⚠️ **这是整个发布环节最容易出错的一步。** Business Suite 跟 **Page 的时区设置**走，不一定是你电脑的时区，也不一定是德国时区 |
 | **最早能排多久之后、最晚能排多远** | 这两个数后面会被代码依赖 |
-| **FB 和 IG 两个渠道的勾选在哪** | 你要的是同时发，这一路是新增的 |
+| **IG 画幅/图片数/正文长度/标签数的边界与实际拒绝提示** | 代码只接受本次 probe 里逐项留下的实测值，不采用网上数字 |
+| **提交成功的明确信号** | 必须是 toast / 跳转 / 排期列表项之一，不能“点完就算成功” |
 
 ### 用来做端到端测试的两篇（我已经挑好）
 
@@ -1123,17 +1191,17 @@ Instagram  3973012230169803390  2026-08-27
 | `scripts\run_translate.bat --limit 3` | 试跑 3 篇 |
 | `scripts\run_translate.bat` | 翻译全部未翻译的 |
 | `scripts\run_translate.bat --review` | 生成人工审校清单 |
+| `scripts\start_chrome_publish.bat` | 起**发布用**的专用 Chrome（端口 9223，与抓取那个并存） |
+| `.venv\Scripts\python.exe tools\probe_publish.py` | **G1 探查**：你手工操作，程序只记录并截图 |
 
 **待实现**（K 组 / G 组，命令名以最终实现为准）：
 
 | 命令 | 作用 |
 |---|---|
-| `scripts\start_chrome_publish.bat` | 起**发布用**的专用 Chrome（端口 9223，与抓取那个并存） |
 | `scripts\run_images.bat --check` | 极小请求验证图片 API 与实际模型（**会花一点钱**） |
 | `scripts\run_images.bat --show-prompt` | 打印实际发给模型的图片提示词（不调 API） |
 | `scripts\run_images.bat --estimate` | 按已跑过的真实 usage 外推费用（不调 API） |
 | `scripts\run_images.bat --limit 3` | 给最新 3 篇的配图做德语化 |
-| `python -m tools.probe_publish` | **G1 探查**：你手工走一遍，程序在旁边记录（不驱动页面） |
 | `scripts\run_publish.bat --dry-run` | 组装待发清单并跑完全部离线硬闸，不碰浏览器 |
 | `scripts\run_publish.bat --post <id>` | 给指定的一篇排定时发布 |
 
@@ -1198,7 +1266,7 @@ FacebookScraper\
     task_FBScraper*.xml   计划任务的定义文件（装任务时生成）
     published.jsonl       **发过什么的唯一凭证**（G 组，待实现）。UI 自动化没有
                           事务性，出了事全靠它回答"到底发出去了什么、用的哪版文案"
-    publish_probe_*.json  G1 探查的记录（待实现）
+    publish_probe_*.json  G1 探查记录（工具已实现，尚待你真实跑一遍）
     publish_failures\     发布失败时的截图（待实现）
   .env                    你的 API 密钥（已 gitignore，不会进版本库）
                           DEEPSEEK_API_KEY（翻译）+ IMAGE_API_KEY（图片）

@@ -3,7 +3,19 @@
 > 直接把本文件内容粘贴进新会话即可。你也可以先让会话进入项目根目录，再说
 > "读 docs/HANDOFF.md 然后开始"，效果一样。
 >
-> **最后更新：2026-08-31（第四轮）· 全局复盘，新增 L 组（流水线编排）**
+> **最后更新：2026-08-31（第六轮）· K/G 两条分支的同步审查已实施完毕；
+> 两条分支都绿、合并态也绿；`main` 仍未动**
+>
+> 🎯 **如果你是被派来接着干的新会话，先看这三件**：
+> 1. **两条 feature 分支各自 17 套全绿，合并态 18 套全绿**（已用一次性 worktree 验过）。
+>    `wip/parallel-2026-08-31` 上那两处红是旧快照，会随合并消失，**不要去修它**。
+> 2. **动手前读 `CODE_REVIEW.md` 第 15 节**，特别是 **15.6 的处置结果表**
+>    与 **⛔ 合并顺序**那一节（先落 feature 分支，**不要**先把 `main` 快进到 `wip`）。
+> 3. **现在真正卡在用户身上的只有三件**：
+>    ① K9 的图片费用确认（11 张 × high ≈ **US$2.4**，`MANUAL_STEPS` 第 10b 步）；
+>    ② G1 的真实 DOM 探查（`MANUAL_STEPS` 第 11 步）；
+>    ③ **L0a 装计划任务**（`MANUAL_STEPS` 第 9 步）——投入产出比最高的一件。
+>    代码侧现在没有任何「等别人」的活；L0b/L0c/L0d 不依赖任何组，随时可开工。
 >
 > 📌 **一句话现状：这个项目目前没有任何东西在自动跑。**
 > 计划任务至今没有安装（实测查不到）。所有的幂等、断点、告警、降级都写好了
@@ -69,7 +81,12 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
    **新增任何需要用户操作的功能，都要同步更新它**，否则用户手上的
    指南会和实现漂移。
 4. **`core/parse.py` 和 `core/store.py`** —— 已实现的核心，你会频繁改动前者。
-5. **`docs/CODE_REVIEW.md`** —— 已实现代码的审查记录（当前至 CR-36）。
+5. **`docs/CODE_REVIEW.md`** —— 已实现代码的审查记录（当前至 **CR-60**）。
+   **动 K / G 两条分支之前先读第 15 节**——那是 2026-08-31 对
+   `feat/image-de` 与 `feat/business-suite-publish` 的同步只读审查，
+   里面有三条会直接影响你怎么动手的：**CR-46（合并顺序，仍未执行）**、
+   **CR-60（`ZoneInfo("Europe/Berlin")` 在本机直接抛异常，会当场卡住 G5）**、
+   以及 **15.6 的处置结果表**——CR-47 ~ CR-59 里除 CR-46/49 之外全部已修并带断言。
    **第 8 节的 CR-19（Instagram 合作帖）是目前最值得读的一节**，
    它一条推翻了三个曾被写进文档的"事实"；
    **接着读第 9 节（CR-20 ~ CR-24）**——那是同一个问题的另一半：
@@ -85,43 +102,472 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
    范围已按用户 2026-08-31 的决定收窄，**不要把批量补发做回来**。
 9. **`docs/PIPELINE_PLAN.md`** —— L 组：**唯一一份跨组文档**。
    A~K 每组回答"这一段怎么做对"，它回答"**这些段怎么连成一条不用人管的线**"。
-   **想改自动化程度、想砍掉某道确认闸之前，先读它的第 4 节和第 12 节**——
-   那里写着哪些人工是承重墙、哪些是可以消除的，以及把自动化推过头会踩哪几条红线。
+   - **第 14 节 = L0 实施细则**，命令、判据、46 种金额串全备好了，**照做即可**；
+   - **第 15 节 = 多 Agent 共享工作区的协作纪律**（2026-08-31 实战教训），
+     并行开工前必读；
+   - **想改自动化程度、想砍掉某道确认闸之前，先读第 4 节和第 12 节**——
+     那里写着哪些人工是承重墙、哪些是可以消除的，
+     以及把自动化推过头会踩哪几条红线。
 
 不要跳过第 1 步。计划里有大量"看起来可以优化、实际是保命设计"的地方，
 不读会被你顺手改掉。
 
 ---
 
-## 🔴 先读：这是共享且尚未提交的工作区
+## 📜 历史：三个 Agent 曾在同一个工作目录里并行（已归位）
 
-2026-08-30 曾把抓取与翻译拆给多个 Agent 并行处理；本轮已把两条线重新合并审查。
-当前 `git status` 中的改动同时包含用户此前的合作帖加固、本轮 DeepSeek 实现与主干修复，
-都属于应保留的工作，不要按文件名猜归属后回退。
+> **想知道现在是什么状态，看上面的「🧭 三个 worktree 的现状」**，那一节是当前事实。
+> 本节保留是因为它解释了 `wip/parallel-2026-08-31` 为什么长成这样、
+> 以及那两处红是哪来的。
 
-接手时遵守：
+**2026-08-31，四条线同时在这一个 `FacebookScraper` 目录里工作**：
+代码审查（已结束）、K 组、G 组、本会话（L 组规划）。
 
-1. 先运行 `git status --short` 和 `git diff --check`，确认当前状态。
-2. 不要 `git checkout`、`git reset --hard`、stash 或覆盖整份文件来“清理”工作区。
-3. 修改与目标重叠的文件前先看完整 diff；只处理明确问题，不扩到尚未实现的 G 组。
-4. 收尾必须跑全部 `tests/tests_*.py`，不能只跑自己改的套件。
-5. Windows `.bat` 必须保持纯 ASCII、CRLF、无 BOM；已有 schedule 测试会检查。
+> ⚠️ **git 一个工作目录只能有一个 checked-out 分支。**
+> 三个 Agent 各自以为在自己的分支上，实际上全都在改同一个工作区——
+> **谁先 `git add -A`，谁就把另外两条线一起提交进去。**
+
+**已经归位了，工作区当时是干净的。** 四条线被拆成四次带归属的提交：
+
+| 提交 | 内容 | 状态 |
+|---|---|---|
+| `c35715d` | **代码审查 CR-41 ~ CR-45** | ✅ 该轮已结束（用户确认） |
+| `ee43aca` | **G 组**：G0 完成 · G0b 落地 · G1 recorder 交付 | 🔄 进行中的快照 |
+| `29784d2` | **K 组**：`localize_images.py` 主干 + K8 审校接入 | 🔄 进行中的快照 |
+| `3047c65` | **三条线共同改到的文件**（`config.toml` / 三份共享文档） | — 无法按线拆分，归属记在提交说明里 |
+
+分支：`wip/parallel-2026-08-31`（**当前 checked-out**）。
+`main` 停在 `3736303`（纯文档，绿的），**WIP 没有进 main**——
+项目规则「main 永远是最后一个已验收的可用状态，半成品不进 main」。
+
+### ⛔ 当前有两处红，都在 K 那条线上（K 组 Agent 尚未修完）
+
+```
+tests_schedule.py   FAIL  scripts/run_images.bat 有裸 LF
+tests_translate.py  FAIL  tests_translate.py:676 NameError: name 're' is not defined
+```
+
+1. **`scripts/run_images.bat` 是纯 LF（0 个 CRLF）** —— 踩全局红线 7。
+   ⚠️ **`.gitattributes` 的 `*.bat text eol=crlf` 只在下次 checkout 时纠正工作副本，
+   而测试查的是当前工作副本**，所以必须由写文件的一方直接写 CRLF 字节。
+2. `tests/tests_translate.py:676` 少一个 `import re`（K8 的图片并排断言）。
+
+**我没有替它修**：那两个文件 K 组 Agent 正在写，并发改同一文件会丢更新。
+
+#### ✅ 已核实（2026-08-31 晚）：**两处红都已在 `feat/image-de` 上修好，但 `wip` 上仍然红**
+
+不用再猜"很可能已经被修好了"，实测结论是：
+
+| | `wip/parallel-2026-08-31` | `feat/image-de` |
+|---|---|---|
+| `scripts/run_images.bat` | ⛔ 0 CRLF / 13 裸 LF | ✅ 13 CRLF / 0 裸 LF / 无 BOM / 纯 ASCII |
+| `tests_translate.py:676` | ⛔ `NameError: 're'` | ✅ 通过 |
+| 全套测试 | 2 红 | ✅ **17 套全绿** |
+
+`feat/business-suite-publish` 同样 **17 套全绿**。
+
+**所以不要去修 `wip` 上这两处**——它们会随 `feat/image-de` 合进来时一起消失。
+这也是 ⛔ 那一节说"不要先把 `main` 快进到 `wip`"的又一个理由：
+**`wip` 是红的，`main` 永远只收绿的。**
+
+### 接手时遵守（在原有五条基础上加了两条）
+
+1. 先跑 `git status --short`、`git log --oneline -8`、`git diff --check`。
+2. ❌ 不要 `git checkout` 切分支、不要 `git reset --hard` / `stash` /
+   整份覆盖文件来"清理"工作区。
+   需要让 `main` 前进时用 **`git branch -f main <已验证的提交>`**——
+   它**不碰工作区**，前提是 `main` 未被 checkout 且是目标提交的祖先。
+3. **只 `git add` 自己所有权表里的文件，永远不要 `git add -A` / `git add .`。**
+4. 修改与目标重叠的文件前先看完整 diff；只处理明确问题。
+5. 收尾必须跑**全部** `tests/tests_*.py`，不能只跑自己改的套件。
+6. Windows `.bat` 必须纯 ASCII、CRLF、无 BOM；`tests_schedule.py` 有字节级断言。
+7. ⚠️ **别人正在写的文件不要碰**，哪怕只是修一个 import——并发写会丢更新。
+   看到它坏了，**记进本文件，不要顺手改**。
+
+### ✅ 更正：`git worktree` 这条路实际走通了（2026-08-31 晚）
+
+上一版这里写的是"走不通"，**理由只对了一半**。原话是：
+
+> `git worktree` + 每个 Agent 一个独立目录 —— **不能靠 junction 共享 `archive/`**：
+> `core/store.py::assert_physical_direct_path` 会**主动拒绝**
+> symlink / junction / reparse point，`Archive()` 一构造就抛异常。
+
+**"不能靠 junction 共享 `archive/`"这半句仍然成立。**
+但结论错了——**不共享 `archive/` 就行**。当天两条线实际的做法是：
+
+```
+FacebookScraper           wip/parallel-2026-08-31   （完整 archive/，主工作区）
+FacebookScraper-image-de  feat/image-de             （只复制 manifest/translated 做夹具）
+FacebookScraper-publish   feat/business-suite-publish（不需要 archive/）
+```
+
+离线测试全部用 `tempfile` 夹具，**本来就不读真实 `archive/`**：
+两条分支各自 17 套测试全绿，`config.toml` 也自动合干净了。
+**所有权表 + 独立 worktree 的组合是有效的**，
+上一轮的混线是"三个 Agent 一个工作目录"造成的，不是并行本身的问题。
+
+⚠️ **但真实数据验收仍然必须回主工作区做**：`--estimate`、`--dry-run`、
+K9/G8 都要读完整 `archive/`，worktree 里的夹具会给出误导性的 0。
+
+### ⛔ 合并顺序：先落 feature 分支，**不要**先把 `main` 快进到 `wip`
+
+**这一条不看会多出十二个冲突文件。** 详细实测见 `CODE_REVIEW.md` **CR-46**。
+
+两条 feature 分支都从 **`9ea342c`** 开出——那比 `main`（`3736303`）**还早**，
+所以下面这两件事都是**预期的，不是"main 被人动过"**：
+
+1. `git merge --ff-only <分支>` **必然失败**。两份任务书里写的 `--ff-only`
+   在这里做不到。**不要 `-f`，改用普通 merge。**
+2. `wip/parallel-2026-08-31` 里的 `29784d2` / `ee43aca` 是这两条线**更早的快照**
+   （同血缘旧版本）。`main` 一旦先快进到 `wip`，那两份旧版就进了主干，
+   feature 分支再合就变成整文件 **add/add** 对撞。
+
+`git merge-tree` 实测的冲突数：
+
+`git merge-tree` 实测（**2026-08-31 晚，两条分支修完之后重测**）：
+
+| 合并 | 冲突 |
+|---|---|
+| `main ← feat/image-de` | **1**（`IMPLEMENTATION_PLAN.md`） |
+| `main ← feat/business-suite-publish` | **2**（+ `MANUAL_STEPS.md`） |
+| `feat/image-de ← feat/business-suite-publish` | **3**（三份共享文档） |
+| `wip ← feat/image-de` | **6**（含 `localize_images.py` add/add） |
+| `wip ← feat/business-suite-publish` | **10**（含 `core/chrome.py`、`config.toml`） |
+
+⚠️ **冲突全部是共享文档，代码零冲突**（`config.toml` / `requirements.txt` /
+`translate.py` 都自动合干净）。三份文档按项目约定**两段都保留，不许二选一**。
+合并态已用一次性 detached worktree 实跑验证：**18 套测试全绿、代码里零冲突标记、
+K→G 的 `images_de.jsonl` 交接契约双向成立**。
+
+**推荐路径**：两条 feature 分支先合进 `main`（各只需解一个文档冲突），
+然后从 `wip` 上把**只属于主干**的两笔摘过去：
+
+- `c35715d`（CR-41~45）—— 只碰 `core/capture.py` / `core/store.py` /
+  `routes/delta.py` 及其测试，**两条 feature 分支一个都没碰**，cherry-pick 干净；
+- `3047c65` 的 `config.toml` 部分 —— 它带着 **`[pipeline]` 整段配置**
+  与 `[publish]` 段末的 TOML 子表警告注释。
+  ⚠️ **实测这两样只存在于 `wip`**，不摘过来 L0b/L0c 一开工就踩空（CR-49）。
+
+### 📋 文件所有权表漏了第四条线，已补
+
+两份任务书里那张表当时只设想 K / G 两条线，把
+`routes/delta.py` / `core/store.py` / `core/capture.py` 标为「三组都不许动」。
+**但代码审查线的职责恰恰就是修主干**，CR-41~45 改的正是这三个文件。
+
+**这不是越界，是所有权表的疏漏。** 正确的划法是四条线：
+
+| 线 | 分支 | 可以动 |
+|---|---|---|
+| **主干修复 / 代码审查** | `fix/*` 或直接 `main` | **主干任何文件**（`core/**`、`routes/**`、`translate.py`），但**不碰 `publish/**`、`localize_images.py`** |
+| K 组 | `feat/image-de` | `localize_images.py`、`prompts/image_de.md`、`scripts/run_images.bat`、`tests/tests_localize_images.py`、`translate.py` 的 `run_review`、`config.toml` 的 `[image]` |
+| G 组 | `feat/business-suite-publish` | `publish/**`、`tools/*publish*`、`scripts/*publish*`、`core/chrome.py`、`core/config.py`、`tests/tests_chrome.py`、`tests/tests_publish.py`、`config.toml` 的 `[publish]` 标量键 |
+| L 组 | `feat/pipeline` | `pipeline.py`、`config.toml` 的 `[pipeline]` 与 `[publish]` 的三个子表、`docs/PIPELINE_PLAN.md` |
+
+⚠️ **主干修复线与 K / G 会在 `translate.py`、`config.toml` 上撞车**——
+2026-08-31 就撞了（CR-45 与 K8 混在 `translate.py` 里，拆不开）。
+**所以更要串行。**
+
+---
+
+## 🧭 三个 worktree 的现状（2026-08-31 第六轮实测；三个工作区全部干净）
+
+**这个仓库现在是三个物理目录共用同一个 `.git`（`git worktree`）。**
+
+| 物理目录 | 分支 | HEAD | 工作区 | 测试（当天实测） |
+|---|---|---|---|---|
+| `FacebookScraper`（主） | `wip/parallel-2026-08-31` | `123e632` | 干净 | ⛔ **2 红**——是旧快照带的，**不要去修**，见下 |
+| `FacebookScraper-image-de` | `feat/image-de` | `67612ae` | 干净 | ✅ **17 套 / 972 项** |
+| `FacebookScraper-publish` | `feat/business-suite-publish` | `a620d4f` | 干净 | ✅ **17 套 / 946 项** |
+
+**合并态**（`main ← feat/image-de ← feat/business-suite-publish`，
+用一次性 detached worktree 实跑验证过）：
+**18 套 / 1093 项全绿，代码里零冲突标记，K→G 的 `images_de.jsonl` 交接契约双向成立。**
+
+### ⚠️ 三个目录**不共享**的东西（各踩过一次，写在这里）
+
+| 东西 | 情况 |
+|---|---|
+| `.venv` | **只有主目录有。** 两个 feature worktree 里跑测试必须用 `../FacebookScraper/.venv/Scripts/python.exe` |
+| `archive/` | 不共享（gitignore）。`-image-de` 里只有 `manifest.jsonl` + `translated.jsonl` 两个夹具、`posts/` 是**空的**；`-publish` 里**完全没有** |
+| `state/` · `.env` | 不共享（gitignore） |
+
+⚠️ **所以在 feature worktree 里跑 `--estimate` / `--dry-run` 会给出误导性的 0。**
+真实数据验收要么回主目录，要么临时把 `[paths].archive` 指成主目录的**绝对路径**——
+**跑完必须改回来并 `git status --short` 确认**（本轮两次都是这么做的，都改回去了）。
+
+⚠️ 另一个坑，2026-08-31 真的踩了：**`cd` 到主目录之后再跑 `tests/...`，
+跑的是主目录（`wip`）的旧快照，不是 feature 分支的代码。**
+当时因此误判了一次「全部通过」。跑测试前先 `pwd`。
+
+### K 组 `feat/image-de` @ `67612ae`（相对 `9ea342c` 两笔提交）
+
+```
+67612ae fix(image,translate): 第三轮同步审查修复 CR-47 / CR-50~57；K9 的译文卡点已解除
+38057bc feat(image): add GPT-Image-2 German localization
+```
+
+- **新增**：`localize_images.py`（1739 行）、`prompts/image_de.md`、
+  `scripts/run_images.bat`、`tests/tests_localize_images.py`（904 行）。
+- **改动**：`config.toml` 的 `[image]` / `[image.keep_verbatim]`、
+  `translate.py`（K8 审校接入 + **CR-47 的 `--post-id` / `--latest-posts` 作用域**）。
+- **已验收**：K0 / K2 / K4 / K5 / K6 / K10。
+- **未验收**：**K1（`--check`）、K7、K8、K9 都卡在同一件事——图片费用确认**。
+  GPT-Image-2 **一次都没调过**，`images_de.jsonl` 还不存在。
+- **可以直接跑的下一步**：`MANUAL_STEPS.md` **第 10b 步**，11 张 × high ≈ **US$2.4**。
+- ⚠️ 它**没有碰** `README.md`——`git diff main..feat/image-de -- README.md` 显示的
+  三行删除是 `main` 那边的新增（K 的基点比 `main` 早），三方合并会保留 `main` 的版本，
+  **不是回退，不要手工"修"它**。
+
+### G 组 `feat/business-suite-publish` @ `a620d4f`（相对 `9ea342c` 五笔提交）
+
+```
+a620d4f fix(publish): 第三轮同步审查修复 CR-48/58/59/60；G0b 验收通过
+540cde6 fix(publish): keep optional page slug nonblocking
+79402a2 fix(publish): harden probe provenance and media gates
+a2f76c6 docs(publish): record G0 acceptance and G1 handoff
+bb1ba78 feat(publish): G 组进行中快照 —— G0 完成、G0b 落地、G1 recorder 交付
+```
+
+- **新增**：`publish/{__init__,compose,business_suite,selectors}.py`、
+  `tools/{probe_publish,start_chrome_publish,compose_publish}.py`、
+  `scripts/{start_chrome_publish,run_publish}.bat`、`tests/tests_publish.py`（903 行）。
+- **改动**：`core/chrome.py`（G0 的 port/profile 参数化 + CR-59）、`core/config.py`、
+  `config.toml` 的 `[publish]`、`.gitignore`、
+  **`requirements.txt`（加 `tzdata`，CR-60，唯一一处越出所有权表的改动，已在 G0c 里记录）**。
+- **已验收**：G0 / G0b / G0c。
+- **未验收**：**G1 ~ G9 全部卡在 G1 的真实 DOM 探查**（需要用户操作）。
+- ⛔ **`publish/selectors.py` 现在是空的（只有 TODO），这是对的。**
+  `publish/business_suite.py` 的五个函数在接触 `page` 前抛 `ProbeRequired`，也是设计。
+  **审查时不要把它们当"没写完"补上去**——那是全局红线 5。
+- **可以直接跑的下一步**：`MANUAL_STEPS.md` **第 10c 步**（零风险预演）与**第 11 步**（G1）。
+
+### 主目录 `wip/parallel-2026-08-31` @ `123e632`：只有**三样**东西还需要抢救
+
+`wip` 相对 `main` 多 7 笔提交，但其中**只有三样是唯一且必要的**：
+
+| # | 东西 | 在哪 | 怎么搬 |
+|---|---|---|---|
+| 1 | **主干修复 CR-41~45** | 提交 `c35715d` | `git cherry-pick c35715d`。**实测与两条 feature 分支的文件集交集为空，零冲突** |
+| 2 | **`config.toml` 的 `[pipeline]` 整段** | 提交 `3047c65` | ⚠️ **不要 cherry-pick 整笔**（它还夹着 K/G 的旧改动，会冲突）。只取 `[pipeline]` 段，命令见下一节 |
+| 3 | **`docs/CODE_REVIEW.md` + 本文件** | `8172aec` / `123e632` | `git checkout wip/parallel-2026-08-31 -- docs/CODE_REVIEW.md docs/HANDOFF.md`（`wip` 上这两份是**严格超集**） |
+
+**其余四笔全部可以丢弃**：
+
+- `29784d2`（K 旧快照）与 `ee43aca`（G 旧快照）——**是两条 feature 分支同血缘的更早版本**，
+  已被完全取代（`localize_images.py` 差 68+/42−，`publish/compose.py` 差 244+/15−）。
+- `3047c65` 对三份共享文档的改动——**内容全是 G 组的旧进展行**，
+  已被 `feat/business-suite-publish` 上更新的版本取代。
+- `cb9e01f`（上一版 HANDOFF）——已被 `123e632` 取代。
+
+### ⛔ `wip` 上那两处红：**不要修，会随合并消失**
+
+```
+tests_schedule.py   FAIL  scripts/run_images.bat 有裸 LF
+tests_translate.py  FAIL  tests_translate.py:676 NameError: name 're' is not defined
+```
+
+两处都**已在 `feat/image-de` 上修好**（`run_images.bat` 现在 13 CRLF / 0 裸 LF /
+无 BOM / 纯 ASCII；`tests_translate.py` 通过）。`wip` 红是因为它带着 K 的旧快照。
+**`main` 永远只收绿的，所以也别把 `main` 快进到 `wip`。**
+
+---
+
+## 🎯 下一个会话的三步（审查 → 合并推送 → 清分支）
+
+> 顺序不能换。**第 2 步之前不要动 `main`**，第 3 步之前不要删任何分支。
+
+### 第 1 步 · 代码审查（两条分支各自审，在各自的 worktree 里）
+
+**审查基线已经有了**：`docs/CODE_REVIEW.md` **第 15 节**是 2026-08-31 对这两条分支的
+同步审查（CR-46 ~ CR-60），**15.6 是处置结果表**。
+**先读它再审**——里面 13 条已修、2 条待办，重复审一遍已修的项是浪费。
+
+```bash
+cd D:\VSCodeWorkspace\Facebook\FacebookScraper-image-de
+git log --oneline 9ea342c..HEAD
+..\FacebookScraper\.venv\Scripts\python.exe -c "import glob,subprocess,sys;fails=[t for t in sorted(glob.glob('tests/tests_*.py')) if subprocess.run([sys.executable,t]).returncode];print('FAIL:',fails) if fails else print('all green')"
+```
+
+```bash
+cd D:\VSCodeWorkspace\Facebook\FacebookScraper-publish
+git log --oneline 9ea342c..HEAD
+..\FacebookScraper\.venv\Scripts\python.exe -c "import glob,subprocess,sys;fails=[t for t in sorted(glob.glob('tests/tests_*.py')) if subprocess.run([sys.executable,t]).returncode];print('FAIL:',fails) if fails else print('all green')"
+```
+
+**审查时最值得看的四处**（其余已被第 15 节覆盖）：
+
+1. `localize_images.py::_write_output` 的三次人工图复查窗口——它保护的是
+   「不得覆盖设计同事手工修的图」这条红线，逻辑绕，值得再读一遍；
+2. `publish/compose.py::_pick_localized` + `_is_program_output`——CR-48 的新语义，
+   它**跨组**（要与 `localize_images.py::_candidate_is_program_owned` 保持同一套规则）；
+3. `translate.py::resolve_scope` / `pending`——CR-47 新加的作用域，
+   确认它**没有**变成绕过 `SourceDataError` 数据契约校验的后门；
+4. `core/chrome.py::launch` 的轮询——CR-59 改过，确认 profile 归属核对**还在**
+   （只是从每秒一次降到 2 次），没有被"顺手优化"掉。
+
+⛔ **审查时不要做的两件**：把 `publish/selectors.py` 补上选择器（红线 5）；
+把 `business_suite.py` 里那五个 `ProbeRequired` 换成"先写个大概"的实现。
+
+### 第 2 步 · 合并 + 推送
+
+⚠️ **`git merge --ff-only` 在这里必然失败**，因为两条 feature 分支都从 `9ea342c` 开出，
+**那比 `main`（`3736303`）还早**。这不是「main 被人动过」，**不要 `-f`**，用普通 merge。
+
+```bash
+cd D:\VSCodeWorkspace\Facebook\FacebookScraper
+git branch backup/pre-merge-2026-08-31 wip/parallel-2026-08-31
+```
+
+> 先打一个不动工作区的备份 ref。`main` 当前**已被 `wip` checkout**，
+> 所以要让 `main` 前进只能用 `git branch -f` 或在别处 checkout——
+> ⛔ **不要在主目录 `git checkout main`**，那会把 `wip` 的工作区换掉。
+> 推荐做法：**再开一个临时 worktree 专门做合并**：
+>
+> ```bash
+> git worktree add D:\VSCodeWorkspace\Facebook\_merge main
+> cd D:\VSCodeWorkspace\Facebook\_merge
+> ```
+
+在那个临时 worktree 里按顺序做：
+
+```bash
+git cherry-pick c35715d
+git merge feat/image-de
+git merge feat/business-suite-publish
+git checkout wip/parallel-2026-08-31 -- docs/CODE_REVIEW.md docs/HANDOFF.md docs/PIPELINE_PLAN.md README.md
+```
+
+> **为什么这四份可以整份取而不用解冲突**：`main` 是 `wip` 的**祖先**（实测 `git merge-base --is-ancestor main wip` 为真），
+> 而这四份文件**两条 feature 分支一个都没改**（K 只改 `IMAGE_PLAN` / `IMPLEMENTATION_PLAN` / `MANUAL_STEPS` / `HANDOFF`，
+> G 只改 `PUBLISH_PLAN` / `IMPLEMENTATION_PLAN` / `MANUAL_STEPS` / `HANDOFF`）。
+> `HANDOFF.md` 虽然三方都改了，但**`wip` 上的版本已经把 K/G 两组的最终行折进去了**，
+> 是功能上的严格超集，所以整份取是对的。
+
+> **只有这两份必须手工解，两段都保留**：
+> - `docs/IMPLEMENTATION_PLAN.md` —— K 组一节 / G 组一节 / 附录 D 三段各自追加，
+>   **三段都要留**（那是历史记录，不许二选一）；
+> - `docs/MANUAL_STEPS.md` —— K 加了第 10b 步、G 加了第 10c 步与第 11 步的 tzdata 提醒，
+>   摘要表那几行也各改了自己那一行。
+
+- `cherry-pick c35715d` **实测零冲突**（它只碰 `core/capture.py`、`core/store.py`、
+  `routes/delta.py` 与其测试 + `CODE_REVIEW.md`，两条 feature 分支一个都没碰）。
+- 两次 `merge` 的冲突**全部在共享文档里**，代码零冲突
+  （`config.toml` / `requirements.txt` / `translate.py` 都自动合干净）：
+
+  | 合并 | 冲突文件 |
+  |---|---|
+  | `← feat/image-de` | `docs/IMPLEMENTATION_PLAN.md` |
+  | `← feat/business-suite-publish` | `docs/IMPLEMENTATION_PLAN.md`、`docs/MANUAL_STEPS.md` |
+
+  **解法：两段都保留，不许二选一**（K 组一节 / G 组一节、附录 D 各自一段）——
+  这是项目既定约定，那是历史记录。
+
+然后把 `[pipeline]` 段补回 `config.toml`（`main` 与两条 feature 分支都没有它）：
+
+```bash
+git show wip/parallel-2026-08-31:config.toml | awk "/^\[pipeline\]/,/^\[paths\]/" | sed "$d"
+```
+
+把输出插到 `config.toml` 的 `[paths]` **之前**。
+**实测：插完之后 TOML 解析通过、18 套测试仍然全绿。**
+顺手把 `[publish]` 段末那条「新标量键请加在这一行之前」的子表警告注释也补回去
+（`git show 3047c65 -- config.toml` 里能看到原文）——L 组要往那里加三个子表。
+
+收尾验证（**一条都不能省**）：
+
+```bash
+..\FacebookScraper\.venv\Scripts\python.exe -c "import glob,subprocess,sys;fails=[t for t in sorted(glob.glob('tests/tests_*.py')) if subprocess.run([sys.executable,t]).returncode];print('FAIL:',fails) if fails else print('all green')"
+.venv\Scripts\python.exe -m compileall -q .
+git diff --check
+grep -rn "^<<<<<<< " --include=*.py --include=*.toml --include=*.bat .
+```
+
+**期望：18 套全绿、编译干净、无空白问题、代码里零冲突标记。**
+
+推送：
+
+```bash
+git push origin main
+```
+
+> `origin/main` 当前在 `3736303`，与本地 `main` 一致，所以这一推是**快进**。
+> 仓库是**私有**的（2026-08-29 经匿名访问返回 404 确认过）。
+> 两条 feature 分支要不要也推：**可推可不推**。想在远端留一份审查轨迹就推；
+> 不想留就跳过——它们的内容已经在 `main` 里了。
+
+### 第 3 步 · 清分支（**只在第 2 步验证全绿之后**）
+
+先重新确认一遍哪些是真冗余：
+
+```bash
+for /f %b in ('git for-each-ref --format^=%%(refname:short) refs/heads/') do @git merge-base --is-ancestor %b main && echo %b MERGED || echo %b NOT-MERGED
+```
+
+**已确认可删（实测都是 `main` 的祖先，删掉零损失）**：
+
+| 分支 | HEAD | 为什么可删 |
+|---|---|---|
+| `docs/pipeline-plan` | `3736303` | 与 `main` **完全同一个提交** |
+| `docs/plan-image-publish` | `9ea342c` | `main` 的祖先，两条 feature 分支的基点 |
+| `feat/delta-logged-in` | `0af14d5` | 已并入 `main`（2026-08-31 核实过） |
+| `feat/integrity-alerts` | `a259582` | 已并入 `main` |
+| **远端** `origin/fix/parser-ownership-and-archive-layout` | `76fc1d4` | **实测已是 `main` 的祖先** |
+
+```bash
+git branch -d docs/pipeline-plan docs/plan-image-publish feat/delta-logged-in feat/integrity-alerts
+git push origin --delete fix/parser-ownership-and-archive-layout
+```
+
+> 用 `-d` 不用 `-D`：`-d` 会在分支没并入时拒绝，那正是我们要的安全网。
+
+**第 2 步做完之后才可删的**：
+
+```bash
+git branch -d feat/image-de feat/business-suite-publish
+git branch -D wip/parallel-2026-08-31
+git push origin --delete wip/parallel-2026-08-31
+```
+
+- 删两条 feature 分支之前**必须先删它们的 worktree**，否则 git 会拒绝：
+
+  ```bash
+  git worktree remove D:\VSCodeWorkspace\Facebook\FacebookScraper-image-de
+  git worktree remove D:\VSCodeWorkspace\Facebook\FacebookScraper-publish
+  git worktree remove D:\VSCodeWorkspace\Facebook\_merge
+  git worktree prune
+  ```
+
+  ⚠️ Windows 上 `worktree remove` 常因为 `__pycache__` 被占用而 `Permission denied`；
+  先 `find ... -name __pycache__ -type d -exec rm -rf {} +` 再删（本轮踩过两次）。
+
+- ⚠️ **`wip` 只能用 `-D`**（它不是 `main` 的祖先，`-d` 会拒绝）。
+  **删它之前先确认第 2 步那三样东西都已进 `main`**：
+  `c35715d` 的代码、`config.toml` 的 `[pipeline]` 段、
+  `docs/CODE_REVIEW.md` 的第 14 + 15 节。留了 `backup/pre-merge-2026-08-31` 就更稳。
+
+- 主目录 `FacebookScraper` 的分支会随 `wip` 一起消失，
+  **记得先把它切到 `main`**（或者干脆让 `_merge` 那个 worktree 变成新的主目录）。
+
+**清完之后应该只剩**：`main`（+ 可选的 `backup/pre-merge-2026-08-31`），
+远端只剩 `origin/main`。
 
 ---
 
 ## 现在卡在哪（读完这段就知道该干什么）
 
-**A / B / J / C / D / E 六组已落地并合回 main（`main` 现在在 `a259582`，
-工作区干净，两个 feature 分支都已快进合并——上一版交接文件里那条"合回 main"的
-收尾清单已经做完了，别再照着做一遍）。**
+**A / B / J / C / D / E 六组已落地并合回 `main`。**
+`main` 当前在 **`3736303`**（纯文档，绿的），
+⚠️ **`feat/image-de` 与 `feat/business-suite-publish` 都还没进 `main`**——
+它们的基点 `9ea342c` 比 `main` 还早，合并方式见上面「下一个会话的三步」第 2 步。
 
-**抓取侧已经没有不依赖真实访问的活了。现在有业务价值的是 F → K → G 这条线，
-三段都卡在用户：F 卡德语审校与预算，K 卡图片 API 密钥，G 卡 G1 的真实 DOM 探查。**
+**抓取侧已经没有不依赖真实访问的活了。有业务价值的是 F → K → G 这条线。**
+F 已经不再是瓶颈（作用域参数补上之后，要发的帖按需翻即可）；
+**K 和 G 的代码都写完了、测试都绿了，剩下的两个卡点都在用户手上**：
+K 卡**图片费用确认**，G 卡 **G1 的真实 DOM 探查**。
 
-⚠️ **K 组和 G 组当前是"计划完备、代码为零"。** 两份任务书分别是
-`docs/IMAGE_PLAN.md` 与 `docs/PUBLISH_PLAN.md`，任务项在
-`IMPLEMENTATION_PLAN.md` 的 K 组 / G 组。**动手前先读任务书**，
-里面记着若干条"照直觉写就会错"的事实。
+两份任务书分别是 `docs/IMAGE_PLAN.md` 与 `docs/PUBLISH_PLAN.md`，
+任务项在 `IMPLEMENTATION_PLAN.md` 的 K 组 / G 组。
+**动手前先读任务书**，里面记着若干条「照直觉写就会错」的事实。
 
 | 卡点         | 状态                                                                     | 阻塞了谁            |
 | ------------ | ------------------------------------------------------------------------ | ------------------- |
@@ -132,11 +578,11 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 | ~~C2 / C4 / C5~~ | **完成并已实机验收**（2026-08-31）：真实增量各新增 1 篇，**媒体下载第一次被真正触发**（FB 5 图 / IG 1 图，全部非空）| —                  |
 | ~~用户复测~~ | **已完成**：`MANUAL_STEPS.md` 第 8 步全部跑通，含离线四步与真实一次 | — |
 | **E3 注册**（= L0a） | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问。⚠️ **实测确认至今仍未安装：整个项目现在没有任何东西在自动跑** | **全部自动化** |
-| **L 组**（新） | 流水线编排。**L0 四项不依赖任何组，现在就能做**：装计划任务 / `pipeline status` / **死人开关** / 价格表。见 `docs/PIPELINE_PLAN.md` | 自动化程度 |
-| **F 组**     | 新接口已跑通：`--check` 通过、FB 3 + IG 3 篇试译成功。卡在**懂德语的人审校**与**全量预算拍板**（实测约 US$24） | K 组、G8 |
-| **K 组**（`feat/image-de`） | **代码完成、17 套测试全绿、真实预演通过；唯一剩下的是费用确认与德语人工审校**。原先卡住的「F 没法精确选帖」已解除：`translate.py` 加了 `--post-id`/`--latest-posts`（CR-47），点名的三篇**已真实翻译**（实际费用上界 US$0.1799）。K 队列现在排出 **11 张**（FB 5 + IG 5 + IG 1）。⚠️ **必须用 `--post-id`，`--latest-posts 3` 会漏掉 FB**（第 3 新的帖子是纯视频，占掉名额把 FB 挤到第 4，两篇只差 4 秒）。下一步见 `MANUAL_STEPS.md` **第 10b 步**：11 张 × high ≈ **US$2.4** 需你点头，跑完才有真实 dHash 分布可标定（当前 `-1`） | 用户确认图片费用 → K1/K7/K8/K9 → G8 |
-| **G0 / G0b** | **不依赖任何人，现在就能写**：发布用独立 Chrome profile 的参数化 + `publish/compose.py` 的离线硬闸 | G2–G7 |
-| **G1**       | 需用户用**另一个 profile**（`.fbscraper-publish`，端口 9223）登录有 DE 发布权的账号，手工走一遍定时发帖 | G2–G7 全部 |
+| **L 组**（`feat/pipeline`） | 流水线编排。**L0 四项不依赖任何组，实施细则已写好、数据已备好，可以直接开工**：L0a 装计划任务（用户）· L0b `pipeline status`（只读对账，先做这个）· L0c **死人开关** · L0d 价格表（46 种金额串已抓好列在计划里）。见 `docs/PIPELINE_PLAN.md` **第 14 节** | 自动化程度 |
+| **F 组**     | 新接口已跑通。**2026-08-31 补了作用域参数**（`--post-id` / `--latest-posts`，CR-47）——待译队列是最老优先的，此前 `--limit` 根本够不到最新几篇，K9 与 G8 都因此卡死。已用它真实翻译点名的三篇（成功 3 / 失败 0，**实际费用上界 US$0.1799**；⚠️ 离线外推给的是 US$0.038，**实际高 4.7 倍**，差在 44 327 reasoning tok——CR-40 那条教训又验证了一次）。仍待**懂德语的人审校**；全量预算已不在关键路径（不补发历史，按需翻即可） | — |
+| **K 组**（`feat/image-de` @ `67612ae`） | **代码完成、17 套 972 项全绿、真实预演通过；GPT-Image-2 一次都没调过。** K0/K2/K4/K5/K6/K10 已验收；K1/K7/K8/K9 全卡在同一件事——**图片费用确认**。K 队列现在排出 **11 张**（FB 5 + IG 5 + IG 1）。⚠️ **必须用 `--post-id`，`--latest-posts 3` 会漏掉 FB**（第 3 新的帖子是纯视频，占掉名额把 FB 挤到第 4，两篇只差 4 秒）。下一步：`MANUAL_STEPS.md` **第 10b 步**，11 张 × high ≈ **US$2.4** | 用户确认图片费用 → K1/K7/K8/K9 → G8 |
+| **G0 / G0b / G0c** | **三项全部完成并验收**。G0 实机验过 9222/9223 并存且会话隔离；**G0b 的「最新 3 篇组装成功」现已通过**——三篇全部组装、零拦下，金额硬闸在真实正文的 `$219.99` / `$100` 上通过。新增 `tools/compose_publish.py` + `scripts\run_publish.bat`（CR-58），这条验收终于有命令可以复跑 | — |
+| **G1**       | `tools/probe_publish.py` 已交付（只记录/逐步截图，不驱动）；仍需用户在发布 profile 登录 DE 发布账号并手工走一遍。`selectors.py` 只有 TODO（**这是对的，红线 5**）。⚠️ **顺带发现 G5 的一个隐藏阻塞（CR-60）**：`ZoneInfo("Europe/Berlin")` 在本机**直接抛异常**（`TZPATH` 为空，Windows 不自带 IANA 时区库），已加 `tzdata` 到 `requirements.txt` 并验证两个夏令时切换日的偏移。**别写死 UTC 偏移绕过去** | G2–G7 全部 |
 | ~~DE 账号~~  | **已提供**：`facebook_page_name = "Neakasa Deutschland"`（⚠️ **显示名，不是 URL 段**）、`instagram_account = "neakasa.de"`。`facebook_page_slug` 留空不阻塞 | — |
 
 ### ✅ Instagram 合作帖：2026-08-31 真实验收通过，这一条已经结束
@@ -325,13 +771,16 @@ archive/in_neakasa.tech/
 **别为了"有产出"去做依赖图下游的事。** 计划的依赖图是真的。
 现在真正有业务价值的是 **F（翻译）→ K（调图）→ G（发布）** 这条线，三段都卡在用户：
 
-- **F**：管道已完全跑通（`--check` + FB 3 + IG 3 全成功），只差**懂德语的人审校**
-  和**全量预算拍板**（按真实 usage 外推约 **US$24**，见下）。
-- **K**：计划完备、代码为零，**但已无外部卡点**（密钥到位、待拍板项结清、Pillow 预置）。
-  **K 硬依赖 F**——图内德语要用该帖已有的 `text_de` 做参照，没有当前版本译文就不处理。
-  ⚠️ 也就是说：**F 的德语审校不通过，K 跑出来的图也是错的**。
-  开工可以，但 K9 的验收要等 F 那边有可信译文。
-- **G**：卡在 **G1 的真实 DOM 探查**。但 **G0 / G0b 不依赖 G1，现在就能写**。
+- **F**：管道已完全跑通，2026-08-31 又补了作用域参数（`--post-id` /
+  `--latest-posts`，CR-47）并真实翻译了要发的三篇。只差**懂德语的人审校**；
+  **全量预算已不在关键路径**（不补发历史，按需翻即可）。
+- **K**：**代码已完成、17 套 972 项全绿**（`feat/image-de` @ `67612ae`）。
+  **K 硬依赖 F**——图内德语要用该帖已有的 `text_de` 做参照，没有当前版本译文就不处理；
+  那三篇的译文现在有了，队列排出 **11 张**。
+  ⚠️ 仍然成立的一条：**F 的德语审校不通过，K 跑出来的图也是错的**，
+  所以 K9 的验收要等 F 那边有可信译文。当前唯一卡点是**图片费用确认**。
+- **G**：**G0 / G0b / G0c 已完成并验收**（`feat/business-suite-publish` @ `a620d4f`，
+  17 套 946 项全绿）。**G1 ~ G9 全部卡在 G1 的真实 DOM 探查**。
 
 - **L（新）**：把上面三段连起来。**L0 四项不依赖任何组，现在就能做**，
   其中 **L0a（装计划任务）是整个项目投入产出比最高的一件事**——
@@ -406,9 +855,12 @@ high 的德语排版细节确实更好（„…" 引号成对、句中不误大�
 FacebookScraper/
   README.md                架构 + 怎么跑
   config.toml              全部可调参数，代码里零硬编码
-  requirements.txt         playwright / httpx / openai / **Pillow**（12.3.0 已装）
+  requirements.txt         playwright / httpx / openai / **Pillow** / **tzdata**
+                           ⚠️ tzdata 是 G 组 2026-08-31 加的（CR-60）：Windows 不自带
+                           IANA 时区库，没有它 ZoneInfo('Europe/Berlin') 直接抛异常
   translate.py             DeepSeek 德语翻译 + 审校清单（含 --check/--estimate）
-  localize_images.py       ← 待建（K 组）：图内英文德语化，与 translate.py 平级
+  localize_images.py       图内英文德语化（K 组，GPT-Image-2）。与 translate.py 平级
+                           ⚠️ 在 `feat/image-de` 上，尚未进 main
 
   scripts/                 双击入口。**纯 ASCII + CRLF，不得有中文**
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
@@ -425,13 +877,15 @@ FacebookScraper/
     IMPLEMENTATION_PLAN.md ← 进度真相源，你要持续更新它
     MANUAL_STEPS.md        ← 人工操作指南，需要用户操作时同步更新
     HANDOFF.md             ← 本文件（抓取侧的任务书）
-    CODE_REVIEW.md         ← 审查记录 CR-01~CR-40。**CR-19 是最值得读的一节**
+    CODE_REVIEW.md         ← 审查记录 CR-01~**CR-60**。**CR-19 是最值得读的一节**；
+                           **第 15 节是 K/G 两条分支的同步审查 + 处置结果表**
     TRANSLATION_PLAN.md    ← DeepSeek 实现、操作与验收真相（F 组）
     IMAGE_PLAN.md          ← **K 组任务书。动 GPT-Image-2 前必读第 2 节**
     PUBLISH_PLAN.md        ← **G 组任务书。范围已收窄，别把批量补发做回来**
   prompts/
     translate_de.md        英译德提示词，可直接编辑，改它不用动 Python
-    image_de.md            ← 待建（K 组）：图片德语化提示词，同样可直接编辑
+    image_de.md            图片德语化提示词（K 组），同样可直接编辑
+                           IMAGE_PROMPT_VERSION 现在是 2，改模板必须 +1
   core/
     config.py              配置读取 + Chrome 路径探测
     chrome.py              CDP 附着 + launch()（增量与 start_chrome 共用）
@@ -447,12 +901,19 @@ FacebookScraper/
     backfill.py            登录态回填
     delta.py               每日增量。上半＝登出实现（保留备用）；下半＝登录态（C2–C7）
     fb_graph.py            API 只读通道，保留但未接入（缺 Token）
-  publish/                 ← 待建（G 组）
+  publish/                 G 组。⚠️ 在 `feat/business-suite-publish` 上，尚未进 main
     compose.py             组装「译文 + 德语图 + 排期时刻」并跑完离线硬闸。
-                           **不碰浏览器，因此不被 G1 阻塞，现在就能写**
-    business_suite.py      UI 自动化发布（G2–G7，被 G1 阻塞）
-    selectors.py           ⛔ **G1 探查之后才填。凭猜写的选择器一定是错的**
-  tests/                   15 套检查，全绿（重定向输出下也全绿）。断言数随并行工作增长
+                           **不碰浏览器**。G0b 已验收（最新 3 篇真实组装通过）
+    business_suite.py      UI 自动化发布（G2–G7）。**五个函数在碰 page 前抛
+                           ProbeRequired，这是设计不是没写完**
+    selectors.py           ⛔ **现在是空的（只有 TODO），这是对的。**
+                           G1 探查之后才填；凭猜写的选择器一定是错的（红线 5）
+  tools/（G 组新增）
+    probe_publish.py       G1 探查：只记录人工交互 + 逐步截图，**不驱动页面**
+    start_chrome_publish.py  起发布专用 Chrome（9223 / .fbscraper-publish）
+    compose_publish.py     ← 组装预演入口（CR-58）。零浏览器/零网络/零写盘
+  tests/                   **18 套**（合并态实测 1093 项全绿）。
+                           ⚠️ 别把断言数当契约，以 setup.bat 实际跑出来的为准
   _deprecated/             已否决路线的存档
 
   archive/  state/  .env   产物与密钥（全部 gitignore）
@@ -516,11 +977,18 @@ High thinking、无 `max_tokens` 请求体、提示词/术语表、正文与提�
 
 ### 尚未实现 / 尚未完成外部验收
 
-**K 组（图片德语化）与 G 组（UI 自动发布）都是"计划完备、代码为零"**——
-2026-08-31 只写了两份任务书（`IMAGE_PLAN.md` / `PUBLISH_PLAN.md`）与配置骨架，
-**没有写任何代码，也没有发过任何付费请求**。
-H 组官方 API 验证缺 Token、不阻塞主路径。
-E 组代码已实现并通过离线测试，但计划任务**刻意没有注册**。
+⚠️ **本节说的「尚未实现」是相对 `main` 而言的。**
+**K 组与 G 组的代码都已经写完并通过全套离线测试**，只是还在各自的 feature
+分支上、没有合进 `main` —— 详见上面「🧭 三个 worktree 的现状」。
+
+- **K 组**：K0/K2/K4/K5/K6/K10 已验收；**K1/K7/K8/K9 全卡在图片费用确认**
+  （GPT-Image-2 一次都没调过，`images_de.jsonl` 还不存在）。
+- **G 组**：G0/G0b/G0c 已验收；**G1~G9 全卡在 G1 的真实 DOM 探查**。
+  `publish/selectors.py` **故意是空的**，`business_suite.py` 的五个函数
+  在碰 `page` 前抛 `ProbeRequired` —— **这是设计，不是没写完**（红线 5）。
+- **H 组**官方 API 验证缺 Token、不阻塞主路径。
+- **E 组**代码已实现并通过离线测试，但计划任务**刻意没有注册**（= L0a，仍未装）。
+- **L 组**一行代码都还没写；L0 四项不依赖任何组，随时可开工。
 
 ⚠️ **C7 的七条缓解措施已经落地并被测试钉住，不许"顺手优化掉"。**
 参数全在 `config.toml` 的 `[delta]`（已从注释改成真值，代码真的在读）。
@@ -687,13 +1155,24 @@ CDN URL 带签名且有时效，必须在拿到响应的**同一次运行内**�
 
 **一个任务组一个分支**，命名 `<type>/<简短描述>`：
 
-| 任务组 | 分支名 | 从哪开 | 何时合回 main |
+**当前分支清单（2026-08-31 第六轮实测）**：
+
+| 分支 | HEAD | 是否已并入 main | 处置 |
 |---|---|---|---|
-| ~~C2–C7（登录态增量）~~ | `feat/delta-logged-in` | — | ✅ **已合**（2026-08-31 核实是 main 的祖先） |
-| ~~D3~~ | `feat/integrity-alerts` | — | ✅ **已合** |
+| `main` | `3736303` | — | 与 `origin/main` 同步 |
+| **`feat/image-de`** | `67612ae` | ❌ 否 | **待合**（基点比 main 早，ff-only 会失败） |
+| **`feat/business-suite-publish`** | `a620d4f` | ❌ 否 | **待合**（同上） |
+| `wip/parallel-2026-08-31` | `123e632` | ❌ 否 | **抢救三样东西后删**，见「下一个会话的三步」 |
+| `docs/pipeline-plan` | `3736303` | ✅ 是（= main 同一提交） | **可删** |
+| `docs/plan-image-publish` | `9ea342c` | ✅ 是 | **可删** |
+| `feat/delta-logged-in` | `0af14d5` | ✅ 是 | **可删** |
+| `feat/integrity-alerts` | `a259582` | ✅ 是 | **可删** |
+| `origin/fix/parser-ownership-and-archive-layout` | `76fc1d4` | ✅ 是 | **远端可删** |
+| `origin/wip/parallel-2026-08-31` | `cb9e01f` | ❌ 否 | 随本地 `wip` 一起删 |
+
+| 尚未开工的任务组 | 分支名 | 从哪开 | 何时合回 main |
+|---|---|---|---|
 | E 组 | `feat/scheduler` | `main` | E3 验收通过时 |
-| **K 组**（图片德语化） | **`feat/image-de`** | `main` | **K9 真实验收通过时**（懂德语的人确认过图） |
-| **G 组**（Business Suite 发布） | **`feat/business-suite-publish`** | `main` | **G8 验收通过时** |
 | **L 组**（流水线编排） | **`feat/pipeline`** | `main` | 分阶段：L0 各项验收后即可合 |
 
 **K / G / L 三组 2026-08-31 起并行开发，可分别委托给不同 Agent。**
@@ -733,11 +1212,16 @@ G 组能立刻做的是 G0（独立 profile 参数化）与 G0b（`compose.py` �
 **规则**：
 
 1. **`main` 永远是"最后一个已验收的可用状态"。** 半成品不进 main。
-2. **合回 main 用 `--ff-only`**，保持历史线性：
+2. **合回 main 优先用 `--ff-only`**，保持历史线性：
    ```
    git checkout main && git merge --ff-only <分支名>
    ```
-   合不上（非快进）说明 main 在你之外动过，**先查清楚再动手**，不要 `-f`。
+   合不上（非快进）**先查清楚原因再动手，永远不要 `-f`**。
+   ⚠️ **2026-08-31 补正：这条规则对当前的 `feat/image-de` /
+   `feat/business-suite-publish` 不适用。** 它们的基点 `9ea342c` 比 `main`
+   （`3736303`）**还早**，所以 `--ff-only` **必然失败，而那不是「main 被人动过」**。
+   这两条要用普通 merge，步骤见上面「🎯 下一个会话的三步」第 2 步。
+   **以后新开分支记得从当前 `main` 开**，这条规则才继续成立。
 3. **该组的【验收】没过就不要合。** 这与工作协议里"未通过验收不得勾选"是同一条：
    计划里打了 `[x]`、代码进了 main，两件事应当同时发生。
 4. **提交信息用 Conventional Commits**（`feat:` / `fix:` / `docs:` / `refactor:`），

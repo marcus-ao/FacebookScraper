@@ -78,6 +78,29 @@ class Config:
         return int(self.get("chrome", "debug_port", 9222))
 
     @property
+    def publish_profile_dir(self) -> Path:
+        """发布账号专用 profile；绝不能与抓取小号的 profile 混用。"""
+        raw = self.get("publish", "profile_dir", "~/.fbscraper-publish")
+        return Path(os.path.expandvars(raw)).expanduser()
+
+    @property
+    def publish_debug_port(self) -> int:
+        """发布 Chrome 的 CDP 端口，与抓取侧 9222 并存。"""
+        return int(self.get("publish", "debug_port", 9223))
+
+    def assert_publish_chrome_isolated(self) -> None:
+        """误配成抓取目标时失败闭合，不能只靠默认配置碰巧写对。"""
+        if self.publish_debug_port == self.debug_port:
+            raise SystemExit(
+                "[publish].debug_port 与 [chrome].debug_port 相同；"
+                "发布与抓取必须使用两个独立端口。")
+        if (self.publish_profile_dir.resolve(strict=False)
+                == self.profile_dir.resolve(strict=False)):
+            raise SystemExit(
+                "[publish].profile_dir 与 [chrome].profile_dir 指向同一路径；"
+                "禁止让 DE 发布账号与抓取小号共用浏览器 profile。")
+
+    @property
     def chrome_exe(self) -> str:
         configured = (self.get("chrome", "exe", "") or "").strip()
         if configured:
