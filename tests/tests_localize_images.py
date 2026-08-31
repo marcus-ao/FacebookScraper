@@ -755,6 +755,149 @@ with tempfile.TemporaryDirectory() as scope_tmp:
         L.cfg = real_cfg
 
 
+print("\n[CR-50 ~ CR-57] 第三轮审查修复项（这些断言防的是“顺手优化掉”）")
+
+# --- CR-54 放大倍数：等比放大的形变是 0，只有 scale_factor 抓得到 -------------
+check(abs(L.scale_factor(816, 816, 816, 816) - 1.0) < 1e-12,
+      "不缩放时 scale_factor 恰好是 1.0")
+check(L.legal_size(278, 430) == (656, 1008)
+      and abs(L.scale_factor(278, 430, 656, 1008) - 2.3519) < 1e-3,
+      "真实归档里最极端的 278x430 合法化成 656x1008，记为放大 2.35 倍")
+check(L.aspect_drift_percent(278, 430, 656, 1008) < 1.0
+      and L.scale_factor(278, 430, 656, 1008) > 2.0,
+      "同一张图形变 <1% 但放大 >2 倍 —— 正是形变告警抓不到、"
+      "必须靠 scale_factor 的那种情况（CR-54）")
+check(L.scale_factor(3075, 4096, 2496, 3312) < 1.0,
+      "超过像素上限被缩小的图 scale_factor < 1，不会误报放大")
+check(settings.scale_warn_factor >= 1.0 and settings.failure_budget >= 1,
+      "两个新配置键进入 Settings（配置项双向审计已覆盖它们）")
+
+bad_scale_failed = False
+try:
+    L.Settings({**raw, "scale_warn_factor": 0.5}, glossary=settings.glossary)
+except SystemExit as exc:
+    bad_scale_failed = "scale_warn_factor" in str(exc)
+check(bad_scale_failed, "scale_warn_factor < 1.0 在联网前被拒绝（它是放大线，不是缩小线）")
+
+bad_budget_failed = False
+try:
+    L.Settings({**raw, "failure_budget": 0}, glossary=settings.glossary)
+except SystemExit as exc:
+    bad_budget_failed = "failure_budget" in str(exc)
+check(bad_budget_failed, "failure_budget < 1 被拒绝（0 会让第一张失败就停）")
+
+# --- CR-55 base64：折行与 data URL 前缀是传输格式，不该让付费产出被丢弃 -------
+plain = png_b64((816, 816))
+wrapped = "\n".join(plain[i:i + 76] for i in range(0, len(plain), 76))
+check(L.decode_image_payload(wrapped) == L.decode_image_payload(plain),
+      "按 76 列折行的 base64 能解码 —— 否则钱已花掉、整批产出被判非法（CR-55）")
+check(L.decode_image_payload("data:image/png;base64," + plain)
+      == L.decode_image_payload(plain),
+      "带 data:image/png;base64, 前缀的响应也能解码")
+still_strict = False
+try:
+    L.decode_image_payload(plain[:40] + "!!!!" + plain[44:])
+except ValueError:
+    still_strict = True
+check(still_strict, "剥空白没有放松校验：非 base64 字母表的字符仍然被拒绝")
+
+# --- CR-53 致命集合收窄：单图 400 / 429 / 超时不再掀整批 ---------------------
+import openai as _openai  # noqa: E402
+
+fake_response = SimpleNamespace(
+    status_code=429, headers={}, request=None,
+    json=lambda: {}, text="")
+transient = [
+    _openai.APITimeoutError(request=None),
+    _openai.APIConnectionError(message="boom", request=None),
+]
+check(all(not L._is_fatal_api_error(exc) for exc in transient),
+      "超时/连接错误不再算致命 —— 一次网络抖动不该断掉剩余全部付费图片（CR-53）")
+check(not L._is_fatal_api_error(ValueError("dHash 距离过大")),
+      "单张硬闸失败不算致命")
+check(L._is_fatal_api_error(L.ModelMismatchError("free")),
+      "模型被静默降级仍然立刻停批")
+check(L._is_fatal_api_error(L.ResponseContractError("no b64")),
+      "响应契约破裂仍然立刻停批")
+check(issubclass(_openai.RateLimitError, _openai.APIError)
+      and issubclass(_openai.BadRequestError, _openai.APIError),
+      "429 与 400 确实都是 openai.APIError 的子类 —— "
+      "所以不能再用 APIError 当致命判据（这条断言是给下一个人看的）")
+check(_openai.AuthenticationError.__name__ in (
+          "AuthenticationError",) and all(
+          isinstance(getattr(_openai, name, None), type)
+          for name in ("AuthenticationError", "PermissionDeniedError",
+                       "NotFoundError")),
+      "收窄后依赖的三个 SDK 异常类都存在，不会因改名而静默变成“永不致命”")
+
+# --- CR-57 产出路径进入完成判据 --------------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "archive"
+    root.mkdir()
+    make_image_archive(root)
+    arc_base = root / "in_acme"
+    jobs, state, stats = L.build_jobs(settings, arc_base, L.readonly_archive(
+        arc_base).rows())
+    check(len(jobs) == 1, "夹具展开出一张待处理图片")
+    job = jobs[0]
+    good = {
+        "post_id": job.post_id, "media_index": job.media_index,
+        "source_sha256": job.source_sha256,
+        "text_de_sha256": job.text_de_sha256,
+        "prompt_version": L.IMAGE_PROMPT_VERSION,
+        "out_path": job.out_rel,
+    }
+    check(L.image_record_is_current(job, good), "五项指纹加正确路径 = 已完成")
+    check(not L.image_record_is_current(job, {**good, "out_path":
+                                              job.out_rel.replace(".jpg", ".png")}),
+          "换 output_format 后旧 01.jpg 记录不再算当前 —— "
+          "否则新格式永不生成、--force 又会留下两个文件撞上 compose 的多候选闸（CR-57）")
+
+# --- CR-52 单张素材问题只跳过这一张 -----------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "archive"
+    root.mkdir()
+    make_image_archive(root)
+    arc_base = root / "in_acme"
+    rows = L.readonly_archive(arc_base).rows()
+    post_name = L.post_dirname("p100", "2026-08-31T12:00:00Z")
+    # 第二张图指向一个不存在的文件，第三张指向一个坏字节文件。
+    broken = arc_base / "posts" / post_name / "03.jpg"
+    broken.write_bytes(b"not an image at all")
+    rows[0]["media"] = list(rows[0]["media"]) + [
+        {"kind": "image", "local_path": f"posts/{post_name}/02.jpg"},
+        {"kind": "image", "local_path": f"posts/{post_name}/03.jpg"},
+    ]
+    reported = []
+    jobs, _state, stats = L.build_jobs(
+        settings, arc_base, rows, report=reported.append)
+    check(len(jobs) == 1 and stats.skipped_bad_source == 2,
+          "缺文件与坏字节各跳过一张，同账号里好的那张仍然入队（CR-52）")
+    check(len(reported) == 2 and all("跳过（素材问题）" in line for line in reported),
+          "每张被跳过的图都点名报出，不静默")
+    check(all(job.media_index == 0 for job in jobs),
+          "入队的仍然是能用的那一张")
+
+# --- CR-50 只读命令不新建目录 ------------------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "archive"
+    (root / "in_empty").mkdir(parents=True)
+    (root / "in_empty" / "manifest.jsonl").write_text("", encoding="utf-8")
+    readonly_failed = False
+    try:
+        L.readonly_archive(root / "in_empty")
+    except ValueError as exc:
+        readonly_failed = "只读不创建" in str(exc)
+    check(readonly_failed, "posts/ 不存在时 readonly_archive 明确失败")
+    check(not (root / "in_empty" / "posts").exists(),
+          "失败之后 posts/ 仍然不存在 —— 离线命令那句“零写盘”是真的（CR-50）")
+
+# --- CR-51 keep_verbatim 只能加不能减 ---------------------------------------
+models = settings.keep_verbatim["models"]
+for token in ("S1 Pro", "S1Pro", "P1 Pro", "P1Pro", "Riko", "RIKO"):
+    check(token in models,
+          f"型号清单含 {token!r}（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）")
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 if not fails:
     print("\n真实 API 验收需用户确认费用后运行：scripts\\run_images.bat --check")

@@ -70,6 +70,8 @@ IMAGE_CONFIG_KEYS = frozenset({
     "cost_rates_usd_per_million",
     "dhash_max_distance",
     "aspect_drift_warn_percent",
+    "scale_warn_factor",
+    "failure_budget",
 })
 KEEP_VERBATIM_KEYS = frozenset({"promo_codes", "brands", "models", "events", "marks"})
 IMAGE_RATE_KEYS = frozenset({"text_input", "image_input", "image_output"})
@@ -142,6 +144,8 @@ class Settings:
         self.incremental_since = self._string(raw, "incremental_since")
         self.dhash_max_distance = self._integer(raw, "dhash_max_distance")
         self.aspect_drift_warn_percent = self._number(raw, "aspect_drift_warn_percent")
+        self.scale_warn_factor = self._number(raw, "scale_warn_factor")
+        self.failure_budget = self._integer(raw, "failure_budget")
 
         rates = raw["cost_rates_usd_per_million"]
         if not isinstance(rates, Mapping):
@@ -211,6 +215,12 @@ class Settings:
             raise SystemExit("[image].dhash_max_distance 必须是 -1（关闭）或 0..64")
         if self.aspect_drift_warn_percent < 0:
             raise SystemExit("[image].aspect_drift_warn_percent 不能为负数")
+        if self.scale_warn_factor < 1.0:
+            raise SystemExit(
+                "[image].scale_warn_factor 必须 >= 1.0（它是放大倍数的告警线，"
+                "不是缩小线）")
+        if self.failure_budget < 1:
+            raise SystemExit("[image].failure_budget 必须 >= 1")
         if set(self.cost_rates) != IMAGE_RATE_KEYS:
             raise SystemExit("[image].cost_rates_usd_per_million 必须且只能包含 "
                              "text_input/image_input/image_output")
@@ -410,14 +420,28 @@ class ImageEditor:
         return EditResult(payload.strip(), self.last_model, self.last_usage)
 
 
+_DATA_URL_PREFIX_RE = re.compile(r"^data:image/[A-Za-z0-9.+-]+;base64,")
+
+
 def decode_image_payload(payload: str) -> bytes:
-    """严格解码网关返回的裸 base64，并确认 Pillow 可识别。"""
+    """严格解码网关返回的 base64，并确认 Pillow 可识别。
+
+    ``validate=True`` 保留（不接受任何非 base64 字母表的字符），但先把**空白**
+    和可选的 ``data:image/...;base64,`` 前缀剥掉再解码（CR-55）：
+    中转网关按 76 列折行返回 base64、或补上 data URL 前缀都是常见形态，
+    而这一步失败时**钱已经花掉了**，整批产出会被判"不是合法的裸 base64"丢弃。
+    剥空白不会放松校验 —— 折行是编码传输格式，不是数据内容。
+    """
     if not isinstance(payload, str) or not payload.strip():
         raise ValueError("b64_json 为空")
+    cleaned = _DATA_URL_PREFIX_RE.sub("", payload.strip())
+    cleaned = re.sub(r"\s+", "", cleaned)
+    if not cleaned:
+        raise ValueError("b64_json 去掉空白后是空串")
     try:
-        data = base64.b64decode(payload, validate=True)
+        data = base64.b64decode(cleaned, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise ValueError("b64_json 不是合法的裸 base64") from exc
+        raise ValueError("b64_json 不是合法的 base64") from exc
     if not data:
         raise ValueError("b64_json 解码后是空字节")
     try:
@@ -510,6 +534,22 @@ def aspect_drift_percent(source_width: int, source_height: int,
     source_ratio = source_width / source_height
     output_ratio = output_width / output_height
     return abs(output_ratio / source_ratio - 1.0) * 100.0
+
+
+def scale_factor(source_width: int, source_height: int,
+                 output_width: int, output_height: int) -> float:
+    """线性缩放倍数（按面积开方）；>1 表示为了过像素下限把原图放大了。
+
+    **为什么单独记这一项**（CR-54）：`aspect_drift_percent` 只看宽高比，
+    等比放大的形变是 0，所以它抓不到"小图被放大"这件事。
+    真实归档实测（818 张）：772 张不缩放，但 13 张放大超过 1.3 倍，
+    最极端的 278x430 -> 656x1008 放大了 **2.35 倍**，而它的宽高比形变只有
+    0.66%，稳稳低于 2% 的告警线，会静默通过。发出去的德语图就是一张
+    2.35 倍放大的图 —— 与 IMAGE_PLAN 第 3.1 节
+    「在无法验证的介质上做不可逆的变换」是同一类问题。
+    """
+    return math.sqrt((output_width * output_height)
+                     / (source_width * source_height))
 
 
 def legal_size(width: int, height: int) -> tuple[int, int]:
@@ -766,6 +806,7 @@ class ImageJob:
     text_de_sha256: str
     requested_size: tuple[int, int]
     aspect_drift_percent: float
+    scale_factor: float
     out_path: Path
     out_rel: str
 
@@ -782,6 +823,7 @@ class RunStats:
     skipped_current: int = 0
     skipped_manual: int = 0
     skipped_no_translation: int = 0
+    skipped_bad_source: int = 0
 
 
 @dataclass(frozen=True)
@@ -949,14 +991,23 @@ def _extension(output_format: str) -> str:
 
 
 def image_record_is_current(job: ImageJob, record: Mapping[str, Any] | None) -> bool:
-    """计划规定的完成判据；model/quality/format 不擅自扩进失效条件。"""
+    """完成判据：任务书那五项，**外加产出路径必须就是这次要写的那个**。
+
+    ⚠️ 与 IMAGE_PLAN 第 4 节的偏差，理由记在这里（CR-57）：
+    路径由 ``output_format`` 与帖子目录名共同决定。只认那五项时，
+    把 ``output_format`` 从 jpeg 改成 png 之后旧的 ``01.jpg`` 记录仍算"当前"，
+    新的 ``01.png`` 永远不会生成；一旦 ``--force``，``media_de/`` 里会同时
+    出现两个文件，而 ``publish/compose.py`` 见到同序号多候选就拒发（CR-48）。
+    加这一项只会让判定**更保守**（更容易重做），不会漏掉本该重做的图。
+    """
     if not isinstance(record, Mapping):
         return False
     return (record.get("post_id") == job.post_id
             and record.get("media_index") == job.media_index
             and record.get("source_sha256") == job.source_sha256
             and record.get("text_de_sha256") == job.text_de_sha256
-            and record.get("prompt_version") == IMAGE_PROMPT_VERSION)
+            and record.get("prompt_version") == IMAGE_PROMPT_VERSION
+            and record.get("out_path") == job.out_rel)
 
 
 def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
@@ -1034,12 +1085,37 @@ def manual_override_paths(job: ImageJob, state: ImageState) -> list[Path]:
     return manual
 
 
+def readonly_archive(arc_base: Path) -> Archive:
+    """构造 Archive，但先确认目录已存在，绝不靠 mkdir 兜底。
+
+    ``Archive.__init__`` 里有一句 ``posts_dir.mkdir(parents=True, exist_ok=True)``，
+    所以直接构造它的 ``--estimate`` / ``--dry-run`` 并不是真的"零写盘"（CR-50）。
+    先判后构造之后，目录已存在时 mkdir 是空操作，缺目录时给出可操作的错误
+    而不是悄悄建一个空壳。做法与 ``publish/compose.py::_find_source`` 一致。
+    """
+    posts_dir = arc_base / "posts"
+    assert_physical_direct_path(
+        arc_base.parent, arc_base, kind="directory", label="账号归档目录")
+    assert_physical_direct_path(
+        arc_base, posts_dir, kind="directory", label="posts 根目录")
+    if not arc_base.is_dir() or not posts_dir.is_dir():
+        raise ValueError(
+            f"账号归档与 posts/ 必须已存在，本模块只读不创建：{arc_base}")
+    return Archive(arc_base.parent, arc_base.name)
+
+
 def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
-               force: bool = False) -> tuple[list[ImageJob], ImageState, RunStats]:
-    """把帖子展开成图片任务；没有当前译文、人工覆盖或已完成项均不入队。"""
-    arc = Archive(arc_base.parent, arc_base.name)
-    # 使用调用方选定的 rows，但先构造 Archive 完成账号/目录物理边界校验。
-    del arc
+               force: bool = False,
+               report: Any = None) -> tuple[list[ImageJob], ImageState, RunStats]:
+    """把帖子展开成图片任务；没有当前译文、人工覆盖或已完成项均不入队。
+
+    **单张图的问题只跳过这一张**（CR-52）：原图缺失、无法解码、宽高比越界
+    都记进 ``stats.skipped_bad_source`` 并继续，不再掀掉整个账号的批次。
+    manifest 本身的形态错误仍然是致命的 —— 那是数据完整性问题，
+    与 ``translate.py::SourceDataError`` 同一条纪律。
+    """
+    # 只读边界校验；不新建任何目录（CR-50）。
+    readonly_archive(arc_base)
     translated = translation.load_translated(arc_base / "translated.jsonl")
     state = load_image_state(arc_base / "images_de.jsonl")
     stats = RunStats()
@@ -1065,14 +1141,27 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
         for media_index, media in enumerate(media_list):
             if not isinstance(media, dict) or media.get("kind") != "image":
                 continue
-            source_path, source_rel = _source_from_manifest(arc_base, row, media)
+            # 这一段的任何失败都只影响这一张图：缺文件、坏字节、超过 3:1
+            # 都是**单张素材**的问题，不该让同账号其它图片一张都跑不了（CR-52）。
             try:
-                with Image.open(source_path) as source_image:
-                    source_image.load()
-                    source_size = source_image.size
-            except Exception as exc:
-                raise ValueError(f"原图无法解码：{source_rel}") from exc
-            requested = legal_size(*source_size)
+                source_path, source_rel = _source_from_manifest(
+                    arc_base, row, media)
+                try:
+                    with Image.open(source_path) as source_image:
+                        source_image.load()
+                        source_size = source_image.size
+                except Exception as exc:
+                    raise ValueError(f"原图无法解码：{source_rel}") from exc
+                requested = legal_size(*source_size)
+            except (ValueError, ArchivePathError) as exc:
+                stats.skipped_bad_source += 1
+                message = (f"  ! {post_id}[{media_index}] 跳过（素材问题）："
+                           f"{type(exc).__name__}: {exc}")
+                if report is None:
+                    print(message)
+                else:
+                    report(message)
+                continue
             out_path, out_rel = _target_for_job(
                 arc_base, row, media_index, settings.output_format)
             job = ImageJob(
@@ -1089,6 +1178,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 requested_size=requested,
                 aspect_drift_percent=aspect_drift_percent(
                     *source_size, *requested),
+                scale_factor=scale_factor(*source_size, *requested),
                 out_path=out_path,
                 out_rel=out_rel,
             )
@@ -1164,13 +1254,42 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
+    """只有"整批都会重复犯"的错误才算致命（CR-53）。
+
+    旧实现用 ``isinstance(exc, openai.APIError)``，而那是
+    ``RateLimitError``(429)、``APITimeoutError`` / ``APIConnectionError``
+    和 ``BadRequestError``(400，含内容审核拒绝) 的**共同基类**。
+    结果是：SDK 重试用尽后的一次 429、一次网络抖动、或某一张图被审核拒掉，
+    都会掀掉剩余全部图片，而且没有跳过这张继续的办法 —— 一张有问题的图
+    可以永久堵住队列。
+
+    现在只有鉴权 / 权限 / 端点不存在 / 模型不匹配 / 响应契约破裂算致命：
+    这几类**每一张都会同样失败**，继续跑只是重复花钱。
+    瞬时错误与单图 400 计为单张失败，由 ``failure_budget``
+    的连续失败计数兜住（形状照抄 ``[delta].failure_budget``）。
+    """
     if isinstance(exc, (ModelMismatchError, ResponseContractError)):
         return True
     try:
         import openai
-        return isinstance(exc, openai.APIError)
-    except (ImportError, AttributeError):
+    except ImportError:
         return False
+    fatal = tuple(
+        candidate for candidate in (
+            getattr(openai, "AuthenticationError", None),
+            getattr(openai, "PermissionDeniedError", None),
+            getattr(openai, "NotFoundError", None),
+        ) if isinstance(candidate, type))
+    return bool(fatal) and isinstance(exc, fatal)
+
+
+def _scale_mark(job: ImageJob, settings: Settings) -> str:
+    """放大倍数超线时的行内标记；只提示，不拦截（阈值未在真实产出上标定）。"""
+    if job.scale_factor <= settings.scale_warn_factor:
+        return ""
+    return (f"  !放大 {job.scale_factor:.2f}x"
+            f"（超过 scale_warn_factor={settings.scale_warn_factor:g}，"
+            "德语图是放大件，请人眼确认清晰度）")
 
 
 def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
@@ -1184,19 +1303,22 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
     print(f"\n=== {arc_base.name} ===")
     print(f"  选中 {len(rows)} 篇 / 待处理 {len(jobs)} 张 / "
           f"当前跳过 {stats.skipped_current} / 人工优先 {stats.skipped_manual} / "
-          f"缺当前译文 {stats.skipped_no_translation}")
+          f"缺当前译文 {stats.skipped_no_translation} / "
+          f"素材问题 {stats.skipped_bad_source}")
     prompt_cache: dict[str, str] = {}
     editor = editor if editor is not None else (None if dry_run else ImageEditor(settings))
+    consecutive_failures = 0
     for index, job in enumerate(jobs, 1):
         prompt = prompt_cache.get(job.post_id)
         if prompt is None:
             prompt = build_image_prompt(settings, job.text_de)
             prompt_cache[job.post_id] = prompt
         size_string = f"{job.requested_size[0]}x{job.requested_size[1]}"
+        scale_mark = _scale_mark(job, settings)
         if dry_run:
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
                   f"{job.source_size[0]}x{job.source_size[1]} -> {size_string} "
-                  "(dry-run，零 API / 零写盘)")
+                  f"(dry-run，零 API / 零写盘){scale_mark}")
             continue
 
         try:
@@ -1228,6 +1350,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 "out_path": job.out_rel,
                 "output_sha256": hashlib.sha256(validated.data).hexdigest(),
                 "aspect_drift_percent": round(job.aspect_drift_percent, 6),
+                "scale_factor": round(job.scale_factor, 6),
                 "dhash_distance": validated.dhash_distance,
                 "elapsed_seconds": round(elapsed, 3),
                 "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1235,18 +1358,28 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             }
             _write_output(job, validated, record, state)
             stats.succeeded += 1
+            consecutive_failures = 0
             drift_mark = ("  !形变告警" if job.aspect_drift_percent
                           > settings.aspect_drift_warn_percent else "")
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] OK  "
-                  f"dHash={validated.dhash_distance} / {elapsed:.1f}s{drift_mark}")
+                  f"dHash={validated.dhash_distance} / {elapsed:.1f}s"
+                  f"{drift_mark}{scale_mark}")
         except Exception as exc:
             stats.failed += 1
+            consecutive_failures += 1
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
                   f"失败：{type(exc).__name__}: {exc}")
             if _is_fatal_api_error(exc):
                 raise FatalBatchError(
                     "API 鉴权/端点/模型或共享请求错误，已停止剩余图片，"
                     "避免逐张重复无意义付费") from exc
+            if consecutive_failures >= settings.failure_budget:
+                raise FatalBatchError(
+                    f"连续 {consecutive_failures} 张失败，已达 "
+                    f"[image].failure_budget={settings.failure_budget}，停止本批。"
+                    "\n    单张失败不再掀掉整批（CR-53），但连续失败说明问题不是"
+                    "单张素材 —— 先看上面每条的原因，修掉后重跑即可"
+                    "（已成功的不会重复付费）。") from exc
     return stats
 
 
@@ -1327,7 +1460,7 @@ def select_rows(settings: Settings, dirs: list[Path], *,
     rows_by_dir: dict[Path, list[dict]] = {}
     flat: list[tuple[Path, dict]] = []
     for arc_base in dirs:
-        arc = Archive(arc_base.parent, arc_base.name)
+        arc = readonly_archive(arc_base)          # 只读；不新建目录（CR-50）
         rows = arc.rows()
         rows_by_dir[arc_base] = rows
         flat.extend((arc_base, row) for row in rows)
@@ -1419,7 +1552,17 @@ def run_estimate(settings: Settings, scoped_rows: Mapping[Path, list[dict]], *,
             if isinstance(record.get("dhash_distance"), int)
         )
         print(f"  {arc_base.name}: 选中 {len(rows)} 篇 / 待处理 {len(jobs)} 张 / "
-              f"当前版本真实样本 {len(current_records)} 张 / 人工跳过 {stats.skipped_manual}")
+              f"当前版本真实样本 {len(current_records)} 张 / "
+              f"人工跳过 {stats.skipped_manual} / 素材问题 {stats.skipped_bad_source}")
+        upscaled = [job for job in jobs
+                    if job.scale_factor > settings.scale_warn_factor]
+        if upscaled:
+            print(f"    ! 其中 {len(upscaled)} 张需要放大超过 "
+                  f"{settings.scale_warn_factor:g} 倍才能过像素下限，最大 "
+                  f"{max(job.scale_factor for job in upscaled):.2f}x："
+                  + "、".join(f"{job.post_id}[{job.media_index}]"
+                              for job in upscaled[:5])
+                  + ("…" if len(upscaled) > 5 else ""))
 
     print(f"\n待处理合计：{total_pending} 张")
     if not measured:
@@ -1540,10 +1683,17 @@ def main(argv=None) -> int:
         print(f"[!] {exc}")
         return 1
 
-    if args.show_prompt:
-        return run_show_prompt(settings, scoped)
-    if args.estimate:
-        return run_estimate(settings, scoped, force=args.force, limit=args.limit)
+    # 离线命令也要失败闭合成可读的一行，而不是抛 traceback（CR-52）：
+    # --estimate 是"要不要花这笔钱"的最后一道人类判断，它崩掉的代价是
+    # 看不见预算就直接跑。
+    try:
+        if args.show_prompt:
+            return run_show_prompt(settings, scoped)
+        if args.estimate:
+            return run_estimate(settings, scoped, force=args.force, limit=args.limit)
+    except (ValueError, ArchivePathError, OSError) as exc:
+        print(f"[!] {type(exc).__name__}: {exc}")
+        return 1
     if args.all_history and not args.dry_run and not args.confirm_all_history_cost:
         print("[!] 全历史真实运行被安全闸拒绝。818 张 high 约 US$179，且用户已决定不补历史。")
         print("    离线查看可加 --dry-run/--estimate；未来业务重新拍板后才可再加 "
@@ -1566,7 +1716,7 @@ def main(argv=None) -> int:
                     setattr(total, field, getattr(total, field) + getattr(stats, field))
                 if remaining is not None:
                     remaining -= stats.queued
-    except (FatalBatchError, ValueError, ArchivePathError) as exc:
+    except (FatalBatchError, ValueError, ArchivePathError, OSError) as exc:
         print(f"\n[!] {exc}")
         return 1
 
@@ -1575,10 +1725,14 @@ def main(argv=None) -> int:
     else:
         print(f"\n完成：成功 {total.succeeded} 张 / 失败 {total.failed} 张 / "
               f"当前跳过 {total.skipped_current} / 人工优先 {total.skipped_manual} / "
-              f"缺当前译文 {total.skipped_no_translation}。")
+              f"缺当前译文 {total.skipped_no_translation} / "
+              f"素材问题 {total.skipped_bad_source}。")
         if total.succeeded:
             print("下一步：运行 translate.py --review 生成含原图/德语图的 K8 审校清单。")
-    return 1 if total.failed else 0
+    if total.skipped_bad_source:
+        print(f"[!] 有 {total.skipped_bad_source} 张图因素材问题被跳过（原因见上），"
+              "它们不会被静默当成已完成；修好素材后重跑即可。")
+    return 1 if (total.failed or total.skipped_bad_source) else 0
 
 
 if __name__ == "__main__":

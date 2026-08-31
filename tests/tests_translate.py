@@ -848,8 +848,9 @@ with tempfile.TemporaryDirectory() as tmp:
     try:
         T.cfg = lambda: FakeConfig()
 
-        def fake_run(_s, _translator, arc_base, limit, _force, _dry_run):
-            calls.append((arc_base.name, limit))
+        def fake_run(_s, _translator, arc_base, limit, _force, _dry_run,
+                     scope=None):
+            calls.append((arc_base.name, limit, scope))
             return 1, 0
 
         T.run_translate = fake_run
@@ -859,6 +860,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rc == 0, "跨账号小批量试跑正常结束")
     check(len(calls) == 1 and calls[0][1] == 1,
           "--limit 1 只处理一个账号中的一篇，不会每个账号各处理一篇")
+    check(calls[0][2] is None,
+          "不传作用域参数时 scope 是 None —— 既有行为（全账号待译队列）完全不变")
 
 negative_limit = False
 try:
@@ -866,6 +869,89 @@ try:
 except SystemExit as e:
     negative_limit = e.code == 2
 check(negative_limit, "--limit 为负数时 argparse 明确拒绝")
+
+
+print("\n[CR-47] 作用域：--post-id / --latest-posts")
+# 待译队列是**最老优先**的，所以 --limit 到不了最新那几篇；
+# 而 K9 与 G8 的验收标的恰恰是最新几篇。这一节钉住那个缺口已经被补上。
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "archive"
+    rows_by_account = {
+        "in_acme": [
+            ("old-ig", "2020-01-02T00:00:00Z", "Oldest Instagram copy"),
+            ("new-ig", "2026-08-31T02:10:58Z", "Newest Instagram copy"),
+        ],
+        "fa_acme": [
+            ("mid-fb", "2026-06-30T03:29:46Z", "Middle Facebook copy"),
+            ("new-fb", "2026-08-27T14:13:03Z", "Newer Facebook copy"),
+        ],
+    }
+    for account, entries in rows_by_account.items():
+        base = root / account
+        (base / "posts").mkdir(parents=True)
+        with (base / "manifest.jsonl").open("w", encoding="utf-8") as fh:
+            for pid, created, text in entries:
+                fh.write(json.dumps({
+                    "post_id": pid, "platform": "instagram",
+                    "account": account.split("_", 1)[1],
+                    "text": text, "created_at": created,
+                    "media": [], "media_complete": True,
+                }, ensure_ascii=False) + "\n")
+    dirs = T.account_dirs(root)
+
+    check(T.resolve_scope(dirs) is None,
+          "两个参数都不传时返回 None，既有行为不受影响")
+
+    exact = T.resolve_scope(dirs, post_ids=["new-ig", "new-fb"])
+    check(exact == frozenset({"new-ig", "new-fb"}),
+          "--post-id 跨账号精确命中（K9/G8 就靠这个补最新几篇的译文）")
+
+    missing_msg = ""
+    try:
+        T.resolve_scope(dirs, post_ids=["new-ig", "does-not-exist"])
+    except T.SourceDataError as exc:
+        missing_msg = str(exc)
+    check("does-not-exist" in missing_msg,
+          "不存在的 post_id 被点名拒绝，不静默翻成空集")
+
+    latest2 = T.resolve_scope(dirs, latest_posts=2)
+    check(latest2 == frozenset({"new-ig", "new-fb"}),
+          "--latest-posts 2 是跨账号全局最新两篇，不是每账号各两篇")
+    check("old-ig" not in T.resolve_scope(dirs, latest_posts=3),
+          "最新 3 篇里不含 2020 年那篇 —— 这正是 --limit 到不了的那一头")
+
+    bad_latest = ""
+    try:
+        T.resolve_scope(dirs, latest_posts=0)
+    except T.SourceDataError as exc:
+        bad_latest = str(exc)
+    check("正整数" in bad_latest, "--latest-posts 0 被拒绝")
+
+    # 作用域不得绕过 manifest 数据契约校验
+    scoped_rows = [
+        {"post_id": "new-ig", "text": "ok", "created_at": "2026-08-31T00:00:00Z"},
+        {"post_id": "other", "text": 123},
+    ]
+    contract_held = False
+    try:
+        T.pending(scoped_rows, {}, False, frozenset({"new-ig"}))
+    except T.SourceDataError:
+        contract_held = True
+    check(contract_held,
+          "即使只翻一篇，整份 manifest 的形态问题仍然在联网前失败闭合"
+          "——作用域不是绕过数据契约的后门")
+
+    todo = T.pending(
+        [{"post_id": "a", "text": "x", "created_at": "2026-01-01T00:00:00Z"},
+         {"post_id": "b", "text": "y", "created_at": "2026-01-02T00:00:00Z"}],
+        {}, False, frozenset({"b"}))
+    check([r["post_id"] for r in todo] == ["b"], "pending 只保留作用域内的帖子")
+
+    no_text = T.pending(
+        [{"post_id": "v", "text": "   ", "created_at": "2026-01-01T00:00:00Z"}],
+        {}, False, frozenset({"v"}))
+    check(no_text == [],
+          "作用域里的纯视频/无正文帖被自然跳过，不会被替换成别的帖子")
 
 print("\n[DeepSeek 官方 OpenAI 请求契约]")
 

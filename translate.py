@@ -807,8 +807,14 @@ def append_jsonl(path: Path, row: dict) -> None:
         os.fsync(f.fileno())
 
 
-def pending(rows: list[dict], done: dict[str, dict], force: bool) -> list[dict]:
-    """待翻译：正文非空，且没有与当前正文指纹、提示词版本一致的译文。"""
+def pending(rows: list[dict], done: dict[str, dict], force: bool,
+            scope: frozenset[str] | None = None) -> list[dict]:
+    """待翻译：正文非空，且没有与当前正文指纹、提示词版本一致的译文。
+
+    ``scope`` 是可选的 post_id 白名单（见 :func:`resolve_scope`）。
+    **作用域过滤放在数据契约校验之后**：即使只翻一篇，整份 manifest 的
+    形态问题仍然要在联网前失败闭合，不能被作用域悄悄绕过去。
+    """
     out = []
     for r in rows:
         if not isinstance(r, dict):
@@ -820,6 +826,8 @@ def pending(rows: list[dict], done: dict[str, dict], force: bool) -> list[dict]:
         if not isinstance(text, str):
             raise SourceDataError(
                 f"manifest 帖子 {pid!r} 的 text 不是字符串；已停止，未调用 API")
+        if scope is not None and pid.strip() not in scope:
+            continue
         if not text.strip():
             continue
         if not force and translation_is_current(r, done.get(pid)):
@@ -830,14 +838,69 @@ def pending(rows: list[dict], done: dict[str, dict], force: bool) -> list[dict]:
     return out
 
 
+def resolve_scope(dirs: list[Path], *, post_ids: list[str] | None = None,
+                  latest_posts: int | None = None) -> frozenset[str] | None:
+    """把 ``--post-id`` / ``--latest-posts`` 解析成一个 post_id 白名单。
+
+    返回 ``None`` 表示不限定作用域，保持既有行为（全账号待译队列、最老优先）。
+
+    **为什么需要它**（CR-47）：:func:`pending` 按 ``created_at`` **正序**排，
+    所以 ``--limit N`` 永远从最老那一头开始翻。而 K9 与 G8 的验收标的都是
+    **最新那几篇**，两组因此卡在同一件事上：K 的 ``--latest-posts 3``
+    算出 0 张待处理，G 的 ``compose_post`` 把点名的三篇全按"译文缺失"拦下。
+
+    参数形状**照抄** ``localize_images.py::select_rows``（同样是
+    ``--post-id`` 可重复 + ``--latest-posts N`` 跨账号取最新），
+    两边保持一致，免得下一个人要记两套语义。
+
+    ``--latest-posts`` 与 K 组一样**不按正文过滤**：选的是最新 N 篇帖子本身。
+    其中若有纯视频/无正文帖，:func:`pending` 会自然跳过，调用方负责把
+    "选了 N 篇、实际待译 M 篇"如实打出来，而不是偷偷替换成别的帖子。
+    """
+    if post_ids is None and latest_posts is None:
+        return None
+
+    entries: list[tuple[str, str, str]] = []      # (created_at, 账号目录, post_id)
+    for arc_base in dirs:
+        arc = Archive(arc_base.parent, arc_base.name)
+        for row in arc.rows():
+            if not isinstance(row, dict):
+                raise SourceDataError("manifest 含非对象记录；已停止，未调用 API")
+            pid = row.get("post_id")
+            if not isinstance(pid, str) or not pid.strip():
+                raise SourceDataError(
+                    "manifest 的 post_id 必须是非空字符串；已停止，未调用 API")
+            created = row.get("created_at")
+            entries.append((created if isinstance(created, str) else "",
+                            arc_base.name, pid.strip()))
+
+    if post_ids is not None:
+        wanted = {pid.strip() for pid in post_ids if pid.strip()}
+        if not wanted:
+            raise SourceDataError("--post-id 不能是空字符串")
+        found = {pid for _, _, pid in entries}
+        missing = sorted(wanted - found)
+        if missing:
+            raise SourceDataError(
+                "指定的 post_id 在所选账号归档里不存在：" + "、".join(missing)
+                + "\n    （加了 --account 时只在那一个账号里找；去掉它再试）")
+        return frozenset(wanted)
+
+    if latest_posts is None or latest_posts <= 0:
+        raise SourceDataError("--latest-posts 必须是正整数")
+    ordered = sorted(entries, reverse=True)       # created_at → 账号 → post_id
+    return frozenset(pid for _, _, pid in ordered[:latest_posts])
+
+
 def run_translate(s: Settings, translator: Translator, arc_base: Path,
-                  limit: int | None, force: bool, dry_run: bool) -> tuple[int, int]:
+                  limit: int | None, force: bool, dry_run: bool,
+                  scope: frozenset[str] | None = None) -> tuple[int, int]:
     """翻译一个账号目录。返回 (成功数, 失败数)。"""
     arc = Archive(arc_base.parent, arc_base.name)
     rows = arc.rows()
     out_path = arc_base / "translated.jsonl"
     done = load_translated(out_path)
-    todo = pending(rows, done, force)
+    todo = pending(rows, done, force, scope)
     current_done = sum(
         1 for r in rows
         if isinstance(r, dict) and isinstance(r.get("post_id"), str)
@@ -846,7 +909,12 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         todo = todo[:limit]
 
     print(f"\n=== {arc_base.name} ===")
-    print(f"  归档 {len(rows)} 篇 / 当前有效译文 {current_done} 篇 / "
+    scope_note = ""
+    if scope is not None:
+        in_scope = sum(1 for r in rows
+                       if isinstance(r, dict) and r.get("post_id") in scope)
+        scope_note = f" / 作用域内 {in_scope} 篇"
+    print(f"  归档 {len(rows)} 篇{scope_note} / 当前有效译文 {current_done} 篇 / "
           f"本次待译 {len(todo)} 篇")
     if not todo:
         print("  没有需要翻译的帖子。")
@@ -956,7 +1024,15 @@ def run_review(arc_base: Path) -> int:
     # images_de.jsonl / media_de，不触发客户端构造、密钥读取或 API 调用。
     import localize_images as image_de
     image_state = image_de.load_image_state(arc_base / "images_de.jsonl")
-    image_settings = image_de.Settings()
+    # [image] 配置只用来打一行形变/放大告警。**不能因为它不合法就让 F 组的
+    # 审校清单整条命令跑不出来**（CR-56）：Settings() 会做双向配置审计并
+    # SystemExit，而这个账号可能一张德语图都没有。
+    try:
+        image_settings = image_de.Settings()
+    except SystemExit as exc:
+        image_settings = None
+        print(f"  ! [image] 配置当前不可用（{exc}）；"
+              "K8 并排与逐类清单照常生成，只是不打印形变/放大告警")
 
     eligible = {pid for pid, r in rows.items() if (r.get("text") or "").strip()}
     orphan_ids = sorted(set(trans) - set(rows))
@@ -1110,15 +1186,23 @@ def run_review(arc_base: Path) -> int:
                 if pair.record:
                     distance = pair.record.get("dhash_distance", "?")
                     drift = pair.record.get("aspect_drift_percent", "?")
+                    scale = pair.record.get("scale_factor")
                     lines.append(
                         f"> 程序记录：size {pair.record.get('size_requested', '?')} → "
                         f"{pair.record.get('size_returned', '?')}；dHash 距离 {distance}；"
-                        f"宽高比形变 {drift} %。")
-                    if (isinstance(drift, (int, float))
+                        f"宽高比形变 {drift} %"
+                        + (f"；放大 {scale}x" if scale is not None else "") + "。")
+                    if (image_settings is not None and isinstance(drift, (int, float))
                             and drift > image_settings.aspect_drift_warn_percent):
                         lines.append(
                             f"> ⚠️ 宽高比形变超过配置阈值 "
                             f"{image_settings.aspect_drift_warn_percent:g} %，重点检查构图。")
+                    if (image_settings is not None and isinstance(scale, (int, float))
+                            and scale > image_settings.scale_warn_factor):
+                        lines.append(
+                            f"> ⚠️ 原图被放大 {scale}x（超过 "
+                            f"{image_settings.scale_warn_factor:g}x）——"
+                            "德语图是放大件，请确认清晰度可接受再勾选。")
                     lines.append("")
                 elif pair.manual:
                     lines += ["> ℹ️ 当前德语图是人工覆盖版本，仍需逐类验收。", ""]
@@ -1310,7 +1394,7 @@ def run_check(s: Settings) -> int:
 # --------------------------------------------------------------------------
 
 def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
-                 force: bool) -> int:
+                 force: bool, scope: frozenset[str] | None = None) -> int:
     """不联网，按真实待译正文与当前 prompt 给出保守 token/费用区间。
 
     ⚠️ **thinking 开着时，字符换算出来的数字会严重低估。**
@@ -1332,7 +1416,7 @@ def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
         arc = Archive(arc_base.parent, arc_base.name)
         rows = arc.rows()
         done = load_translated(arc_base / "translated.jsonl")
-        todo = pending(rows, done, force)
+        todo = pending(rows, done, force, scope)
         if remaining is not None:
             todo = todo[:remaining]
         # 只收**当前提示词版本**的 usage：换了提示词，思考量不可比
@@ -1440,9 +1524,20 @@ def main(argv=None) -> int:
                     help="即使正文与提示词版本都有效也强制重翻（同版本重试时用）")
     ap.add_argument("--dry-run", action="store_true",
                     help="只列出将要翻译哪些帖子，不调用 API")
+    # 作用域（CR-47）。待译队列是**最老优先**的，所以 --limit 到不了最新那几篇；
+    # K9 / G8 的验收标的恰恰是最新几篇。形状与 localize_images.py 保持一致。
+    scope_group = ap.add_mutually_exclusive_group()
+    scope_group.add_argument(
+        "--post-id", action="append", default=None,
+        help="只翻指定 post_id（可重复传入）；K9/G8 验收就用这个精确补译文")
+    scope_group.add_argument(
+        "--latest-posts", type=int, default=None,
+        help="全账号合计只选最新 N 篇（与 localize_images.py 的同名参数同义）")
     a = ap.parse_args(argv)
     if a.limit is not None and a.limit < 0:
         ap.error("--limit 不能为负数")
+    if a.latest_posts is not None and a.latest_posts < 1:
+        ap.error("--latest-posts 必须是正整数")
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
@@ -1485,10 +1580,21 @@ def main(argv=None) -> int:
         print("    先跑回填（scripts\\run_backfill.bat facebook）把内容抓下来。")
         return 1
 
+    try:
+        scope = resolve_scope(dirs, post_ids=a.post_id,
+                              latest_posts=a.latest_posts)
+    except SourceDataError as e:
+        print(f"[!] {e}")
+        return 1
+    if scope is not None:
+        print(f"作用域：只处理 {len(scope)} 个 post_id —— "
+              + "、".join(sorted(scope)))
+        print("（纯视频/无正文帖会被自然跳过，不会替换成别的帖子）")
+
     if a.estimate:
         print("=== DeepSeek 翻译费用离线预算 ===")
         try:
-            return run_estimate(s, dirs, a.limit, a.force)
+            return run_estimate(s, dirs, a.limit, a.force, scope)
         except SourceDataError as e:
             print(f"[!] {e}")
             return 1
@@ -1508,7 +1614,8 @@ def main(argv=None) -> int:
             for d in dirs:
                 if remaining == 0:
                     break
-                o, b = run_translate(s, translator, d, remaining, a.force, a.dry_run)
+                o, b = run_translate(s, translator, d, remaining, a.force,
+                                     a.dry_run, scope)
                 ok, bad = ok + o, bad + b
                 if remaining is not None:
                     remaining -= o + b
