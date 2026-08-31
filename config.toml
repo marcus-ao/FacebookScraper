@@ -273,6 +273,11 @@ timeout_seconds = 180              # 图像生成比文本慢得多，120 秒偏
 max_retries = 2                    # SDK 自带指数退避
 request_gap_seconds = 2.0          # 相邻两次调用的最小间隔
 
+# 默认只处理自动图片德语化立项之后的新帖，避免首次运行把 818 张历史图全送去付费。
+# K9 验收用 `--latest-posts 3` 显式选最新三篇；未来若业务重新决定补历史，
+# 还必须同时传 `--all-history --confirm-all-history-cost`，不能靠误双击触发。
+incremental_since = "2026-08-31T00:00:00Z"
+
 # 费率（核对日期 2026-08-31，OpenAI 上游价；**中转网关通常有加价**，
 # 真实账单以 inferera 控制台为准）。这张表只用来算量级和"要不要跑"。
 cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }
@@ -289,7 +294,29 @@ dhash_max_distance = -1
 # 形变告警：legal_size() 换算后与原图宽高比的偏差超过这个百分比就进人工清单。
 # 不是失败——1080×1350→1088×1360 是零形变，1440×1080→1440×1088 有 0.7%，
 # 都可接受；这道线是为了让真正离谱的那种被看见。
+#
+# ✅ **已在真实归档上标定过，不要凭感觉改**（CR-54，2026-08-31）：
+#    对全部 818 张归档图片跑 legal_size() 实测形变分布 ——
+#    中位 0.0000% / p95 0.653% / 最大 2.794%，**全档只有 3 张超过 2.0**。
+#    也就是说这道线每 270 张才响一次：既不吵，也不是死旋钮。
 aspect_drift_warn_percent = 2.0
+
+# 放大倍数告警（线性倍数，按面积开方）。超过它只提示、不拦截。
+#
+# ⚠️ **为什么形变告警不够**：等比放大的宽高比形变是 0，所以上面那道线
+#    抓不到"小图被放大"。而 legal_size() 为了过 655,360 像素下限**会放大小图**。
+#    实测（818 张）：772 张不缩放，13 张放大超过 1.3 倍，最极端的
+#    278×430 → 656×1008 放大了 **2.35 倍**，而它的形变只有 0.66%，
+#    在上面那道线下静默通过 —— 发出去的德语图就是一张 2.35 倍放大件。
+#    1.25 这个值命中 13/818（约 1.6%），量小到可以逐张人眼看。
+scale_warn_factor = 1.25
+
+# 连续失败多少张就停止本批（形状照抄 [delta].failure_budget）。
+# ⚠️ 单张失败**不再**掀掉整批（CR-53：旧实现把整个 openai.APIError 当致命，
+#    一次 429/超时、或某一张图被内容审核拒掉都会断掉剩余全部图片）。
+#    但连续失败说明问题不在单张素材上，继续跑只是重复烧钱。
+#    3 与 [delta].failure_budget 取同一个数，没有第二套心智模型。
+failure_budget = 3
 
 # ⚠️ TOML 语法要求：下面的子表必须放在 [image] 的**最后**，
 #    它下面的键都属于 keep_verbatim，不再属于 [image]。
@@ -302,17 +329,24 @@ aspect_drift_warn_percent = 2.0
 
 # ⚠️ 最危险的一类，放在最前面：优惠码是**任意字符串却长得像单词**，
 #    模型最容易顺手"翻译"掉。码错了 = 用户结账失败 = 直接的商业事故。
-promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11"]
+promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11", "PH5RIKO"]
 
 # 品牌名与商标。Neabot 是旧品牌名，语料里仍然出现。
 brands = ["Neakasa", "NEAKASA", "Neabot"]
 
 # 产品型号，含 Neakasa 与型号连写的形态（语料里两种写法都有）。
-models = ["M1", "P1", "P2", "S1", "F1", "N3", "Magic1", "S1 Pro",
-          "NeakasaM1", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
+# ⚠️ **这张表只能加，不能在"顺手整理"时减。** CR-51 就是这么丢的：
+#    2026-08-31 加 P1 Pro / Riko / RIKO 那一次，同一行把原有的 "S1 Pro" 删掉了，
+#    而它在语料里出现 10 篇。型号是标识符，漏一项没有任何机器能补
+#    （K3 预扫描已取消，机器不知道图上原本有哪些英文）。
+# 括号里是 1057 条真实正文的出现次数，改这一行前先重新统计，别凭印象。
+models = ["M1", "P1", "P1 Pro", "P1Pro", "P2", "S1", "S1 Pro", "S1Pro",
+          "F1", "N3", "Magic1", "Riko", "RIKO",
+          "NeakasaM1", "NeakasaP1Pro", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
+# 语料实测：P1 Pro(39) Riko(78) S1 Pro(10) S1Pro(10) RIKO(8) P1Pro(3)
 
 # 展会 / 活动名。
-events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025"]
+events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025", "IFA2026"]
 
 # 认证、合规与法律标记。
 marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]

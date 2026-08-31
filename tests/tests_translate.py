@@ -534,7 +534,8 @@ with tempfile.TemporaryDirectory() as tmp:
           "外部正文自带三反引号时使用更长围栏，不破坏审校清单结构")
     check("![a1](media/a1_0.jpg)" in md, "图片用相对路径引用，预览器能直接显示")
     check("(1440×1800)" in md.replace("（", "(").replace("）", ")"), "标了分辨率")
-    check(md.count("- [ ] 图内含英文文字，需人工替换") == 3, "每篇都有图内文字待确认框")
+    check(md.count("- [ ] 图内德语图已逐张完成 K8 审校（见上方逐类清单）") == 3,
+          "每篇都有 K8 图内德语图审校总确认框")
     check(md.count("- [ ] 译文已审校") == 3, "每篇都有审校勾选框")
     check("媒体不全" in md, "media_complete=False 的帖子有警示")
     check("https://www.instagram.com/p/a1/" in md, "带原帖链接便于比对")
@@ -593,6 +594,121 @@ with tempfile.TemporaryDirectory() as tmp:
               "并写明发布前要确认二次使用授权 —— 这是用户决定全量处理时的配套条件")
         check("合作帖" not in c1_sec,
               "自己原创的帖子不加这条提示，否则 1019 篇篇篇都有 = 等于没有")
+
+    print("\n[19b-3] K8 原图/德语图并排 + 逐风险类别人工清单")
+    import hashlib as _hashlib
+    import re as _re
+    from PIL import Image as _Image
+    import localize_images as _images
+
+    with tempfile.TemporaryDirectory() as kbase:
+        kb = Path(kbase)
+        k_posts = []
+        for index in range(1, 4):
+            pid = f"k{index}"
+            item = post(pid, f"Free shipping {index}", day=index)
+            post_name = T.post_dirname(pid, item["created_at"])
+            item["media"] = [{
+                "kind": "image",
+                "local_path": f"posts/{post_name}/01.jpg",
+                "width": 816,
+                "height": 816,
+            }]
+            k_posts.append(item)
+        karc = make_archive(kb, k_posts)
+        translations = {}
+        image_rows = []
+        with (karc / "translated.jsonl").open("w", encoding="utf-8") as tf:
+            for item in k_posts:
+                pid = item["post_id"]
+                text_de = f"Kostenloser Versand {pid}"
+                trans_row = {
+                    "post_id": pid,
+                    "text_de": text_de,
+                    "translated_at": "2026-08-31T12:00:00Z",
+                    "model": "deepseek-v4-pro",
+                    "source_text_sha256": T.source_text_sha256(item["text"]),
+                    "prompt_version": T.PROMPT_VERSION,
+                }
+                translations[pid] = trans_row
+                tf.write(json.dumps(trans_row, ensure_ascii=False) + "\n")
+
+                post_name = T.post_dirname(pid, item["created_at"])
+                post_dir = karc / "posts" / post_name
+                media_de = post_dir / "media_de"
+                media_de.mkdir(parents=True)
+                source = post_dir / "01.jpg"
+                localized = media_de / "01.jpg"
+                _Image.new("RGB", (816, 816), (40 * int(pid[1]), 100, 180)).save(
+                    source, format="JPEG")
+                _Image.new("RGB", (816, 816), (40 * int(pid[1]), 100, 180)).save(
+                    localized, format="JPEG")
+                image_rows.append({
+                    "post_id": pid,
+                    "media_index": 0,
+                    "source_sha256": _images.sha256_file(source),
+                    "text_de_sha256": _images.text_de_sha256(text_de),
+                    "prompt_version": _images.IMAGE_PROMPT_VERSION,
+                    "model": "gpt-image-2",
+                    "size_requested": "816x816",
+                    "size_returned": "816x816",
+                    "quality": "high",
+                    "output_format": "jpeg",
+                    "out_path": f"posts/{post_name}/media_de/01.jpg",
+                    "output_sha256": _hashlib.sha256(localized.read_bytes()).hexdigest(),
+                    "aspect_drift_percent": 0.0,
+                    "dhash_distance": int(pid[1]),
+                    "created_at": "2026-08-31T12:00:00Z",
+                    "usage": {
+                        "input_tokens": 12,
+                        "input_tokens_details": {"image_tokens": 9, "text_tokens": 3},
+                        "output_tokens": 7,
+                        "output_tokens_details": {"image_tokens": 7},
+                    },
+                })
+        with (karc / "images_de.jsonl").open("w", encoding="utf-8") as image_file:
+            for image_row in image_rows:
+                image_file.write(json.dumps(image_row, ensure_ascii=False) + "\n")
+        loaded_k_state = _images.load_image_state(karc / "images_de.jsonl")
+        check(len(loaded_k_state.latest) == 3,
+              "三条 K8 程序所有权记录均通过严格 schema/路径校验")
+        loaded_pairs = [
+            pair
+            for item in k_posts
+            for pair in _images.review_image_pairs(
+                karc, item, translations[item["post_id"]], loaded_k_state)
+        ]
+        check(len(loaded_pairs) == 3 and all(pair.record for pair in loaded_pairs),
+              "三张输出文件的哈希与原图/译文/提示词版本记录一致")
+
+        first_post_name = T.post_dirname("k1", k_posts[0]["created_at"])
+        manual_override = karc / "posts" / first_post_name / "media_de" / "01.png"
+        _Image.new("RGB", (816, 816), (250, 120, 20)).save(
+            manual_override, format="PNG")
+
+        k_count = T.run_review(karc)
+        kmd = (karc / "review.md").read_text(encoding="utf-8")
+        check(k_count == 3 and kmd.count("原图 / 德语图并排审校（K8）") == 3,
+              "三篇帖子都生成原图/德语图并排表")
+        linked = _re.findall(r"\]\(<([^>]+)>\)", kmd)
+        check(len(linked) == 6 and all((karc / path).is_file() for path in linked),
+              "六个并排 Markdown 图片引用均为可显示的真实相对文件")
+        check("media_de/01.png" in kmd and "人工覆盖" in kmd,
+              "程序 01.jpg 与人工 01.png 并存时，K8 优先展示人工版本")
+        for label in (
+                "优惠码 / 折扣码逐字符未变",
+                "品牌名 / Logo / 商标逐字符未变",
+                "产品型号逐字符未变",
+                "合作方水印 / 署名 / 作者账号逐字符未变",
+                "金额 / 货币符号 / 小数点 / 符号位置逐字符未变",
+                "数值与单位逐字符未变，且没有换算",
+                "认证、合规与法律标记逐字符未变"):
+            check(kmd.count(label) == 3, f"每张图各有独立勾选框：{label}")
+        check(kmd.count("产品外观、人物、背景、构图、配色与非文字元素未变") == 3,
+              "每张图都有产品外观未变的人工验收框")
+        check("dHash 距离 2" in kmd and "dHash 距离 3" in kmd
+              and "dHash 距离 1" not in kmd,
+              "非人工覆盖图片的真实 dHash/形变信息进入审校清单")
 
     print("\n[19c] 重建 review 前备份上一版，人工批注不静默消失")
     (arc / "review.md").write_text(md + "\nHUMAN_REVIEW_NOTE\n", encoding="utf-8")
@@ -732,8 +848,9 @@ with tempfile.TemporaryDirectory() as tmp:
     try:
         T.cfg = lambda: FakeConfig()
 
-        def fake_run(_s, _translator, arc_base, limit, _force, _dry_run):
-            calls.append((arc_base.name, limit))
+        def fake_run(_s, _translator, arc_base, limit, _force, _dry_run,
+                     scope=None):
+            calls.append((arc_base.name, limit, scope))
             return 1, 0
 
         T.run_translate = fake_run
@@ -743,6 +860,8 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rc == 0, "跨账号小批量试跑正常结束")
     check(len(calls) == 1 and calls[0][1] == 1,
           "--limit 1 只处理一个账号中的一篇，不会每个账号各处理一篇")
+    check(calls[0][2] is None,
+          "不传作用域参数时 scope 是 None —— 既有行为（全账号待译队列）完全不变")
 
 negative_limit = False
 try:
@@ -750,6 +869,89 @@ try:
 except SystemExit as e:
     negative_limit = e.code == 2
 check(negative_limit, "--limit 为负数时 argparse 明确拒绝")
+
+
+print("\n[CR-47] 作用域：--post-id / --latest-posts")
+# 待译队列是**最老优先**的，所以 --limit 到不了最新那几篇；
+# 而 K9 与 G8 的验收标的恰恰是最新几篇。这一节钉住那个缺口已经被补上。
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp) / "archive"
+    rows_by_account = {
+        "in_acme": [
+            ("old-ig", "2020-01-02T00:00:00Z", "Oldest Instagram copy"),
+            ("new-ig", "2026-08-31T02:10:58Z", "Newest Instagram copy"),
+        ],
+        "fa_acme": [
+            ("mid-fb", "2026-06-30T03:29:46Z", "Middle Facebook copy"),
+            ("new-fb", "2026-08-27T14:13:03Z", "Newer Facebook copy"),
+        ],
+    }
+    for account, entries in rows_by_account.items():
+        base = root / account
+        (base / "posts").mkdir(parents=True)
+        with (base / "manifest.jsonl").open("w", encoding="utf-8") as fh:
+            for pid, created, text in entries:
+                fh.write(json.dumps({
+                    "post_id": pid, "platform": "instagram",
+                    "account": account.split("_", 1)[1],
+                    "text": text, "created_at": created,
+                    "media": [], "media_complete": True,
+                }, ensure_ascii=False) + "\n")
+    dirs = T.account_dirs(root)
+
+    check(T.resolve_scope(dirs) is None,
+          "两个参数都不传时返回 None，既有行为不受影响")
+
+    exact = T.resolve_scope(dirs, post_ids=["new-ig", "new-fb"])
+    check(exact == frozenset({"new-ig", "new-fb"}),
+          "--post-id 跨账号精确命中（K9/G8 就靠这个补最新几篇的译文）")
+
+    missing_msg = ""
+    try:
+        T.resolve_scope(dirs, post_ids=["new-ig", "does-not-exist"])
+    except T.SourceDataError as exc:
+        missing_msg = str(exc)
+    check("does-not-exist" in missing_msg,
+          "不存在的 post_id 被点名拒绝，不静默翻成空集")
+
+    latest2 = T.resolve_scope(dirs, latest_posts=2)
+    check(latest2 == frozenset({"new-ig", "new-fb"}),
+          "--latest-posts 2 是跨账号全局最新两篇，不是每账号各两篇")
+    check("old-ig" not in T.resolve_scope(dirs, latest_posts=3),
+          "最新 3 篇里不含 2020 年那篇 —— 这正是 --limit 到不了的那一头")
+
+    bad_latest = ""
+    try:
+        T.resolve_scope(dirs, latest_posts=0)
+    except T.SourceDataError as exc:
+        bad_latest = str(exc)
+    check("正整数" in bad_latest, "--latest-posts 0 被拒绝")
+
+    # 作用域不得绕过 manifest 数据契约校验
+    scoped_rows = [
+        {"post_id": "new-ig", "text": "ok", "created_at": "2026-08-31T00:00:00Z"},
+        {"post_id": "other", "text": 123},
+    ]
+    contract_held = False
+    try:
+        T.pending(scoped_rows, {}, False, frozenset({"new-ig"}))
+    except T.SourceDataError:
+        contract_held = True
+    check(contract_held,
+          "即使只翻一篇，整份 manifest 的形态问题仍然在联网前失败闭合"
+          "——作用域不是绕过数据契约的后门")
+
+    todo = T.pending(
+        [{"post_id": "a", "text": "x", "created_at": "2026-01-01T00:00:00Z"},
+         {"post_id": "b", "text": "y", "created_at": "2026-01-02T00:00:00Z"}],
+        {}, False, frozenset({"b"}))
+    check([r["post_id"] for r in todo] == ["b"], "pending 只保留作用域内的帖子")
+
+    no_text = T.pending(
+        [{"post_id": "v", "text": "   ", "created_at": "2026-01-01T00:00:00Z"}],
+        {}, False, frozenset({"v"}))
+    check(no_text == [],
+          "作用域里的纯视频/无正文帖被自然跳过，不会被替换成别的帖子")
 
 print("\n[DeepSeek 官方 OpenAI 请求契约]")
 
