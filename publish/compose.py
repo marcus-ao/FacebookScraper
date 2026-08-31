@@ -23,7 +23,7 @@ from core.config import cfg
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)
 from translate import (PROMPT_VERSION, account_dirs, extract_hashtags,
-                       load_translated, money_preserved,
+                       hashtags_preserved, load_translated, money_preserved,
                        translation_is_current)
 
 Platform = Literal["facebook", "instagram"]
@@ -472,6 +472,19 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     violations = money_preserved(text, text_de)
     if violations:
         raise _fail(post_id, "金额硬闸未通过：%s" % "；".join(violations))
+    # 标签与金额是 translate.py 里**同一类**「不可改内容规则」，写盘时一起判
+    # （``run_translate`` 把两者的 violations 合成一个列表，任一不过都不写）。
+    # 发布环节必须把两条都再过一次，理由与金额那条完全相同（PUBLISH_PLAN §5.2）：
+    # ``translated.jsonl`` 是译文真相源，而人工审校的修正就是直接改它
+    # （``review.md`` 明确写着"直接修改本文件不会回写数据"）。手工改动不经过
+    # ``run_translate`` 的写盘闸，所以只在写入侧判等于对手工修正不设防。
+    # 改错标签 = 发出去的德语帖挂错话题/漏掉品牌标签，和改错价格同属对外事故，
+    # 而且 IG 侧的标签是触达路径，不是装饰。
+    # ⚠️ 这与 ``_validate_instagram`` 的标签**数量**上限不是一回事：那道闸问的是
+    # "会不会被 UI 拒绝"，这道闸问的是"还是不是原帖那几个标签"。
+    violations = hashtags_preserved(text, text_de)
+    if violations:
+        raise _fail(post_id, "话题标签硬闸未通过：%s" % "；".join(violations))
     return text_de
 
 

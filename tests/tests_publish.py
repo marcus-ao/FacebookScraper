@@ -529,6 +529,40 @@ with tempfile.TemporaryDirectory() as d:
                  "$10"),
           "发布前再次复用 money_preserved，金额被改动会点名原金额")
 
+# 标签与金额在 translate.py 里是同一类「不可改内容规则」，写盘时一起判；
+# 发布侧此前只再判金额，于是**手工改过的 translated.jsonl** 里被改坏的标签
+# 能一路进到真实发布（CR-61）。这三条断言指向"这道闸不许被顺手去掉"。
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Eins #Two")
+    check(raises(ComposeError,
+                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
+                                      warning_sink=None),
+                 "话题标签"),
+          "发布前再次复用 hashtags_preserved：标签被改写会被拦下，"
+          "而不是把改错的标签发到德语主页")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#One")
+    check(raises(ComposeError,
+                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
+                                      warning_sink=None),
+                 "话题标签"),
+          "标签被删掉一个也算违规——数量、内容、大小写、顺序都必须与原帖一致")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Two #One")
+    check(raises(ComposeError,
+                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
+                                      warning_sink=None),
+                 "话题标签"),
+          "只调换顺序同样被拦下：口径与 translate.py 写盘闸完全一致，不放宽")
+
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
