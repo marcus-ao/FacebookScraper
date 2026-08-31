@@ -220,6 +220,162 @@ anglicism_policy = "moderate"
 "waste bag"                 = "Müllbeutel"
 "wet food"                  = "Nassfutter"
 
+[image]
+# ---- K 组：图内英文德语化（GPT-Image-2）。任务书见 docs/IMAGE_PLAN.md ----
+# ⚠️ 2026-08-31 用户拍板新增。这一项**推翻了**实施计划第 0 节原本
+#    「图内英文文字的德语替换（一期走人工处理）」那条排除，不是新增功能。
+
+# 第三方网关（用户指定）。实测 `GET /v1/models` 返回 200 且为 OpenAI 形态，
+# 列表里有 gpt-image-2 与 gpt-image-2-free，所以客户端复用 openai SDK。
+provider = "inferera"
+base_url = "https://api.inferera.com/v1"
+
+# 同 [translate]：这里填的是**环境变量的名字**，不是密钥本身。
+# 密钥走 .env（已 gitignore）。本文件进版本库，密钥永远不能进。
+api_key_env = "IMAGE_API_KEY"
+model = "gpt-image-2"
+
+# ⛔ 三条会让请求直接失败的约定，改之前先读 docs/IMAGE_PLAN.md 第 2 节：
+#
+# 1. **代码不得发送 input_fidelity。** gpt-image-2 强制高保真处理参考图，
+#    已取消这个参数，传了返回 400。
+#    ⚠️ 本机 openai 3.6.0 的 images.edit() 签名里**有**它，docstring 还写着
+#    "supported for gpt-image-1.5 and later models" —— 那句话对 gpt-image-2 是错的。
+#    看到签名就想加回去是很自然的反应，**加回去的那一刻整组请求全部 400**。
+#
+# 2. **quality 必须显式给 low/medium/high，不要 auto。** auto 会让计费不可预测。
+#    ⚠️ **用户 2026-08-31 拍板选 high**，我原本建议 medium（便宜 4 倍）。
+#    这是业务取舍，代码不替用户改 —— 与 [translate].reasoning_effort 那条同源。
+#    单张 1024² 输出：high ≈ $0.211、medium ≈ $0.053，输入另加 ≈ $0.008。
+#    按当前范围（不补发历史、只跟增量）实际支出很小，见下：
+#      · 最新 3 篇验收 ≈ 10 张 ≈ US$2.2
+#      · 上线后每天 ≈ 5 张 ≈ US$1.1/天 ≈ US$33/月
+#      · 全量 818 张 ≈ US$179（**用户已定不补发，不要跑这个**）
+#
+# 3. **不得把原图宽高直接当 size。** 边长必须是 16 的倍数、宽高比 ≤3:1、
+#    总像素 655,360–8,294,400、边 ≤3840。而归档实测（818 个图片文件）：
+#    1080×1080（318 张）与 1080×1350（100 张）都不是 16 的倍数，
+#    720×720（12 张）总像素低于下限。**一半以上的图会 400。**
+#    一律走 legal_size()（K2），它有自己的单元测试。
+quality = "high"
+output_format = "jpeg"
+
+# ⚠️ **用户 2026-08-31 决定不做预扫描**（原计划 K3：先用便宜视觉模型读一遍
+# "这张图里有哪些英文"），改为直接靠 gpt-image-2 自带的视觉能力。
+# **这个决定有两个后果，写在这里免得以后当成 bug 去查：**
+#   1. **没有"这张图有没有文字"的闸**，所有配图一律送进 edits。
+#      无文字的产品图也会被付费处理一次（当前范围下总额很小，可接受）。
+#   2. **"德语文字正确"这条验收完全落到人工**：机器不再知道原图上有哪些英文，
+#      也就无法自动回答"有没有漏改"。K8 的审校清单因此是唯一的验收关口。
+# 要恢复预扫描的话，K3 的设计仍在 docs/IMAGE_PLAN.md 里（标为已取消，未删除）。
+
+timeout_seconds = 180              # 图像生成比文本慢得多，120 秒偏紧
+max_retries = 2                    # SDK 自带指数退避
+request_gap_seconds = 2.0          # 相邻两次调用的最小间隔
+
+# 费率（核对日期 2026-08-31，OpenAI 上游价；**中转网关通常有加价**，
+# 真实账单以 inferera 控制台为准）。这张表只用来算量级和"要不要跑"。
+cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }
+
+# 结构相似度闸（K5）：原图与产出图的 dHash 汉明距离超过它就判"模型整张重画了"。
+# 用户那条验收标准「产品外观未被改动」在机器侧就落在这一项上。
+#
+# ⚠️ **-1 = 关闭，只记录不拦截。现在必须是 -1。**
+# 项目已经立过规矩：阈值在真实数据上标定，不许拍脑袋（[integrity] 那几个值
+# 因为拍脑袋改过两次）。做法：第一批 20 张跑完后把 20 对 (原图,产出图) 的
+# 距离分布打出来，人眼判定哪些是"只改了字"、哪些是"重画了"，再定这个数。
+dhash_max_distance = -1
+
+# 形变告警：legal_size() 换算后与原图宽高比的偏差超过这个百分比就进人工清单。
+# 不是失败——1080×1350→1088×1360 是零形变，1440×1080→1440×1088 有 0.7%，
+# 都可接受；这道线是为了让真正离谱的那种被看见。
+aspect_drift_warn_percent = 2.0
+
+# ⚠️ TOML 语法要求：下面的子表必须放在 [image] 的**最后**，
+#    它下面的键都属于 keep_verbatim，不再属于 [image]。
+#    （[translate.glossary] 已经为这条规则写过一次警告。）
+
+[image.keep_verbatim]
+# 图里出现这些字符串时**逐字符原样保留**，不得翻译、改写或重排版式。
+# 分类依据见 docs/IMAGE_PLAN.md 第 3.1 节；条目来自对 1057 条真实正文的词频统计，
+# **不是凭空想的**。括号里是语料出现次数。
+
+# ⚠️ 最危险的一类，放在最前面：优惠码是**任意字符串却长得像单词**，
+#    模型最容易顺手"翻译"掉。码错了 = 用户结账失败 = 直接的商业事故。
+promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11"]
+
+# 品牌名与商标。Neabot 是旧品牌名，语料里仍然出现。
+brands = ["Neakasa", "NEAKASA", "Neabot"]
+
+# 产品型号，含 Neakasa 与型号连写的形态（语料里两种写法都有）。
+models = ["M1", "P1", "P2", "S1", "F1", "N3", "Magic1", "S1 Pro",
+          "NeakasaM1", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
+
+# 展会 / 活动名。
+events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025"]
+
+# 认证、合规与法律标记。
+marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
+
+# 下面几类没法穷举成词表，靠提示词按**规则**处理（见 prompts/image_de.md）：
+#   · 货币金额 —— 逐字符原样。与 prompts/translate_de.md 第 3 节同源同理由：
+#     德国站定价是商务决策，模型无从知道。图里出现 € 一律是错的。
+#   · 数值 + 单位 —— **图内一律不换算**（正文允许 inch→cm，图片不允许）。
+#     理由是可验证性不同：正文换算错了 review.md 两栏一对就看出来，
+#     图片是像素，错了只能靠人眼逐张看，而**没有人会逐张看 818 张图**。
+#   · **合作方水印 / 署名** —— 263 篇合作帖里 229 篇原作者是第三方创作者。
+#     改掉别人的水印比翻错严重得多，那是署名权。
+#   · @提及 / #标签 / URL / 二维码 / 条码 / 人名地名。
+
+[publish]
+# ---- G 组：Business Suite 定时发布。任务书见 docs/PUBLISH_PLAN.md ----
+# 范围（用户 2026-08-31 拍板）：FB DE Page + IG DE 同时发；**不补发历史**；
+# 只用最新几篇做端到端验证；上线后跟每日增量走。
+
+# DE 站的发布目标（用户 2026-08-31 提供）。
+#
+# ⚠️ **下面两个值的形态不一样，别混用。** 这个项目已经因为
+# "显示名 ≠ URL 账号名段"踩过一次坑（CR-12：FB 的 actors[0].name 是显示名
+# "Neakasa Official"，而 URL 里是 neakasaofficial，两者不相等）。
+#
+# FB 给的是**主页显示名**——Business Suite 的主页切换器里显示的就是它，
+# G2「确认选中的是不是对的 Page」要用的也是它。它**不能拼进 URL**
+# （中间有空格，facebook.com/Neakasa Deutschland 不是合法地址）。
+facebook_page_name = "Neakasa Deutschland"
+
+# FB 主页 URL 里的账号名段。**当前留空不阻塞发布**：G2 用显示名在
+# Business Suite 里认 Page，整条发布链路不需要拼 URL。
+# G1 探查时顺手从地址栏抄下来填上即可（只填账号名那一段，不带 https:// 和斜杠）。
+facebook_page_slug = ""
+
+# IG 这边用户给的就是 handle 形态，可直接拼 URL：instagram.com/<这里>
+instagram_account = "neakasa.de"
+
+# ⚠️ **发布必须用独立的 Chrome profile，这是红线不是优化项。**
+# 抓取小号被封是本项目唯一不可恢复的失败模式（回填与增量会同时断掉）。
+# 把持有 DE 发布权的账号和抓取小号放进同一个浏览器指纹里，等于把两件事绑成一件。
+# 这两项与 [chrome] 的对应项是**并列**关系，不是覆盖：两个 Chrome 同时开着。
+profile_dir = "~/.fbscraper-publish"
+debug_port = 9223
+
+# 排期时区。Business Suite 显示的时间跟 **Page 的时区设置**走，
+# 不一定是本机时区，也不一定是这里填的值 —— 三者可能各不相同。
+# 代码必须显式转换并**回读 UI 上显示的时间比对**（G5），不依赖本地时区隐式生效。
+# ⚠️ 每年两次夏令时切换日是最容易出错的，G5 的验收专门要测那两天。
+timezone = "Europe/Berlin"
+
+# 定时窗口。Graph API 那边是 10 分钟–75 天，**但 UI 的限制不一定一样**，
+# 下面两个数**必须由 G1 实测后改成真值**，现在填的是 API 侧的已知值作为占位。
+schedule_min_minutes_ahead = 10
+schedule_max_days_ahead = 75
+
+# ⚠️ **自动发布到品牌主页是不可回滚的对外行为。**
+# 抓错了可以重抓、译错了可以重译，**发出去了只能删帖，而删帖在粉丝侧是可见的**。
+# true = 程序把待发清单（原作者 / 译文 / 图 / 排期时刻）打出来，人点头才提交。
+# 想全自动改成 false 即可。建议至少前几周保留 —— 理由和 C7 那七条一样：
+# 这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
+require_confirmation = true
+
 [paths]
 archive = "archive"
 state = "state"

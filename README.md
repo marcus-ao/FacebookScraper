@@ -93,9 +93,12 @@ FacebookScraper/
   config.toml              全部可调参数，代码里零硬编码
   requirements.txt
   translate.py             德语翻译 + 审校清单（F 组）
+  localize_images.py       图内英文德语化（K 组，**待建**）
 
   scripts/                 双击入口，**纯 ASCII 壳**，逻辑在 tools/ 里
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
+    run_delta.bat
+    start_chrome_publish.bat  发布用的专用 Chrome（**待建**，端口 9223）
   tools/                   .bat 的真正实现（中文提示只能待在 Python 里）
     setup.py  start_chrome.py
     replay.py               用 _capture_*.json 离线重建归档，不重新下载媒体
@@ -103,18 +106,28 @@ FacebookScraper/
     dryrun_delta.py         用增量转储离线跑完 delta_once() 的**真实代码路径**，
                             零网络零写盘。改完解析器先跑它，别用真实露面去验
     schedule.py             Windows 计划任务：xml / install / status / remove
+    probe_publish.py        Business Suite 的 DOM 探查（**待建**）：你手工走一遍，
+                            程序在旁边记录控件的稳定属性。**它不驱动页面**
   docs/
     IMPLEMENTATION_PLAN.md  进度真相源
     MANUAL_STEPS.md         人工操作指南
     HANDOFF.md              会话交接
     CODE_REVIEW.md          已实现代码二次审查记录
+    TRANSLATION_PLAN.md     F 组任务书（DeepSeek 德语翻译）
+    IMAGE_PLAN.md           K 组任务书（GPT-Image-2 图内英文德语化）
+    PUBLISH_PLAN.md         G 组任务书（Business Suite 定时发布）
   prompts/
     translate_de.md         英译德提示词，可直接编辑，改它不用动 Python
+    image_de.md             图片德语化提示词（**待建**），同样可直接编辑
   core/                    库层
     config.py  chrome.py  store.py  parse.py  session.py
     http.py  integrity.py  notify.py  console.py
   routes/                  抓取路径
     backfill.py  fb_graph.py  delta.py（登录态增量主流程已实现）
+  publish/                 发布路径（**待建**，G 组）
+    compose.py              组装并跑离线硬闸（不碰浏览器，不被 G1 阻塞）
+    business_suite.py       UI 自动化
+    selectors.py            ⛔ **G1 真实探查之后才填**
   tests/                   离线测试，setup.bat 用 glob 全跑
   _deprecated/             已否决路线的存档，不要引用、不要复活
 
@@ -147,13 +160,23 @@ archive/<平台前缀>_<账号>/
       post.json                     **真相源**
       text.txt                      正文纯文本（派生）
       text_de.txt                   德语译文副本（派生）
-      01.jpg  02.jpg                原图，编号跟的是帖内位置
-      media_de/                     设计同事回填的德文版图
+      01.jpg  02.jpg                原图，编号跟的是帖内位置。**只读，从不修改**
+      media_de/                     德语版图。**程序产出 + 人工可覆盖**（K 组）
+                                    ⚠️ 人工放进去的文件程序不得覆盖 ——
+                                    设计同事手工修的那张一定比模型那张对
     undated_<post_id>/              时间解析不出来的进这里，**不猜**
   translated.jsonl                  德语译文的真相源
-  review.md                         人工审校清单
+  images_de.jsonl                   德语图的真相源（K 组，**待建**）
+  review.md                         人工审校清单。K 组落地后它同时是
+                                    **德语图唯一的验收关口**（预扫描已按用户决定取消，
+                                    机器读不出"德语对不对"）
   _capture_*.json                   原始响应转储，离线重放的唯一输入
 ```
+
+**`media_de/` 的语义在 2026-08-31 改过。** 它原本是「设计同事回填」——
+计划第 0 节把"图内英文德语替换"排除在本期之外、走人工。
+用户当天拍板改为程序用 `gpt-image-2` 自动完成（K 组），
+所以现在是**程序产出、人工可覆盖**。优先级是人工 > 程序，不能反过来。
 
 **文件夹名 `<日期>_<时分>_<post_id>`**：日期在前，按名称排序即按时间排序；
 post_id 在后，幂等查找不用打开文件。

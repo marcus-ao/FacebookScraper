@@ -3,11 +3,34 @@
 > 直接把本文件内容粘贴进新会话即可。你也可以先让会话进入项目根目录，再说
 > "读 docs/HANDOFF.md 然后开始"，效果一样。
 >
-> **最后更新：2026-08-31（真实验收通过）**（Instagram 合作帖修复**已用真实抓取
-> 端到端验证**：当天新抓到的那篇 IG 帖恰好就是合作帖（`owner=neakasa.global`、
-> `coauthors=[neakasa.tech]`），并成功下载配图 —— **C2/C4/C5 的验收条件到此齐了**。
-> 翻译已切到 DeepSeek 官方 OpenAI 兼容接口并跑通新版 `--check` 与 3+3。
-> 剩余外部卡点：德语质量人工审校、全量翻译的预算拍板、G1 DOM 探查）
+> **最后更新：2026-08-31（第三轮）· 用户答复到齐，K/G 两组划成并行分支**
+>
+> 🔀 **如果你是被派来做 K 组或 G 组的 Agent，只需要读三样**：
+> 1. 你那份任务书（`docs/IMAGE_PLAN.md` 或 `docs/PUBLISH_PLAN.md`）**读完**；
+> 2. 本文件的「八条→十一条禁止事项」与「三个最可能踩的坑」；
+> 3. `IMPLEMENTATION_PLAN.md` 里**你那一组**的任务项。
+>
+> **两条分支都从 `docs/plan-image-publish` 开**：
+> - K 组（图片德语化）→ **`feat/image-de`**
+> - G 组（Business Suite 发布）→ **`feat/business-suite-publish`**
+>
+> **文件所有权表**在两份任务书里各有一份（`IMAGE_PLAN.md` 第 10 节 /
+> `PUBLISH_PLAN.md` 第 12 节），内容相同。**动别人的文件之前先看那张表。**
+>
+> ---
+>
+> **上一轮：新增 K 组（图片德语化）并按新范围重写 G 组**
+>
+> 上一轮：Instagram 合作帖修复已用真实抓取端到端验证（当天新抓到的那篇 IG 帖
+> 恰好就是合作帖，`owner=neakasa.global` / `coauthors=[neakasa.tech]`，配图也下成功），
+> **C2/C4/C5 验收条件齐了并已合回 main**。
+>
+> **本轮：只写计划，没写代码，没发过任何付费请求。** 用户拍板了四件事，
+> 其中一件推翻了第 0 节的既有决定（图内英文改为程序自动处理）。
+> 新增两份任务书：**`docs/IMAGE_PLAN.md`（K 组）**、**`docs/PUBLISH_PLAN.md`（G 组）**。
+>
+> 剩余外部卡点：德语质量人工审校、全量翻译预算拍板、**G1 DOM 探查**、
+> **图片 API 密钥与 DE 发布账号**（MANUAL_STEPS 第 10 步）。
 
 ---
 
@@ -44,6 +67,12 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
    翻译侧先读 CR-37/38（原 CR-25/26），再读末尾 CR-32~36：前者解释旧 Anthropic 事故，
    后者是当前官方 API / High thinking / 标签规则。**动 `translate.py` 之前必读。**
 6. **`docs/TRANSLATION_PLAN.md`** —— DeepSeek 翻译的当前实现、业务操作和验收真相。
+7. **`docs/IMAGE_PLAN.md`** —— K 组任务书（图内英文德语化）。
+   **动 GPT-Image-2 之前必读第 2 节**：那里有三条会让请求直接 400 的事实，
+   其中一条（`input_fidelity`）**与 openai SDK 的签名和 docstring 直接冲突**——
+   照着 SDK 写就是错的。
+8. **`docs/PUBLISH_PLAN.md`** —— G 组任务书（Business Suite 定时发布）。
+   范围已按用户 2026-08-31 的决定收窄，**不要把批量补发做回来**。
 
 不要跳过第 1 步。计划里有大量"看起来可以优化、实际是保命设计"的地方，
 不读会被你顺手改掉。
@@ -68,8 +97,17 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 
 ## 现在卡在哪（读完这段就知道该干什么）
 
-**A / B / J / C / D / E 六组基本落地。当前外部卡点是一次 Instagram 媒体下载复测、
-新版 DeepSeek 官方接口的 `--check` 与分账号试译，以及 G1 的真实 DOM 探查。**
+**A / B / J / C / D / E 六组已落地并合回 main（`main` 现在在 `a259582`，
+工作区干净，两个 feature 分支都已快进合并——上一版交接文件里那条"合回 main"的
+收尾清单已经做完了，别再照着做一遍）。**
+
+**抓取侧已经没有不依赖真实访问的活了。现在有业务价值的是 F → K → G 这条线，
+三段都卡在用户：F 卡德语审校与预算，K 卡图片 API 密钥，G 卡 G1 的真实 DOM 探查。**
+
+⚠️ **K 组和 G 组当前是"计划完备、代码为零"。** 两份任务书分别是
+`docs/IMAGE_PLAN.md` 与 `docs/PUBLISH_PLAN.md`，任务项在
+`IMPLEMENTATION_PLAN.md` 的 K 组 / G 组。**动手前先读任务书**，
+里面记着若干条"照直觉写就会错"的事实。
 
 | 卡点         | 状态                                                                     | 阻塞了谁            |
 | ------------ | ------------------------------------------------------------------------ | ------------------- |
@@ -80,8 +118,11 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 | ~~C2 / C4 / C5~~ | **完成并已实机验收**（2026-08-31）：真实增量各新增 1 篇，**媒体下载第一次被真正触发**（FB 5 图 / IG 1 图，全部非空）| —                  |
 | ~~用户复测~~ | **已完成**：`MANUAL_STEPS.md` 第 8 步全部跑通，含离线四步与真实一次 | — |
 | **E3 注册**  | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问             | 现在可以装了 |
-| **F 组**     | 新接口已跑通：`--check` 通过、FB 3 + IG 3 篇试译成功。卡在**懂德语的人审校**与**全量预算拍板**（实测约 US$24） | DE 站有内容可发 |
-| **G1**       | 需用户用**另一个 profile** 登录有 DE 发布权的账号，手工走一遍定时发帖    | G 组全部            |
+| **F 组**     | 新接口已跑通：`--check` 通过、FB 3 + IG 3 篇试译成功。卡在**懂德语的人审校**与**全量预算拍板**（实测约 US$24） | K 组、G8 |
+| **K 组**（`feat/image-de`） | **计划完备、代码为零，但已无任何外部卡点**：密钥到位、两个待拍板项已结清（不做预扫描 / `quality=high`）、Pillow 已预置。**可以直接开工** | G8（发布要德语图） |
+| **G0 / G0b** | **不依赖任何人，现在就能写**：发布用独立 Chrome profile 的参数化 + `publish/compose.py` 的离线硬闸 | G2–G7 |
+| **G1**       | 需用户用**另一个 profile**（`.fbscraper-publish`，端口 9223）登录有 DE 发布权的账号，手工走一遍定时发帖 | G2–G7 全部 |
+| ~~DE 账号~~  | **已提供**：`facebook_page_name = "Neakasa Deutschland"`（⚠️ **显示名，不是 URL 段**）、`instagram_account = "neakasa.de"`。`facebook_page_slug` 留空不阻塞 | — |
 
 ### ✅ Instagram 合作帖：2026-08-31 真实验收通过，这一条已经结束
 
@@ -144,24 +185,16 @@ Facebook 同一次新增 1 篇、下了 5 张图。
 都转储在 `_capture_delta_*.json` 里，**一次跑够，剩下的离线查**——
 这是 B 组那次血的教训（用户滚了 40 分钟，靠转储才没白滚）。
 
-#### 复测通过后的收尾清单
+#### 复测通过后的收尾清单　✅ **1 和 2 已完成，别再做一遍**
 
-1. `IMPLEMENTATION_PLAN.md` 里 **C2 / C4 / C5** 勾上，完成行写实际数字
-   （尤其 C4：这是媒体下载第一次被真正触发——前几次都是 0 新增，没下过图）
-2. 合回 main（两个分支是线性的，依次快进）：
-   ```
-   git checkout main
-   git merge --ff-only feat/delta-logged-in
-   git merge --ff-only feat/integrity-alerts
-   ```
-   ⚠️ 切分支前先确认另一个 Agent 不在工作，或等它提交完
-3. 让用户走 `MANUAL_STEPS.md` **第 9 步**装计划任务（`tools.schedule install`）
-4. E3 勾上，写下实际的触发器行为
+1. ~~`IMPLEMENTATION_PLAN.md` 里 C2 / C4 / C5 勾上~~ ✅ **已勾**
+2. ~~合回 main~~ ✅ **已合。** 2026-08-31 核实：`feat/delta-logged-in` 与
+   `feat/integrity-alerts` 都是 `main` 的祖先，`main` 在 `a259582`，
+   工作区干净。**不需要再跑那三条 git 命令。**
+3. ⬜ 让用户走 `MANUAL_STEPS.md` **第 9 步**装计划任务（`tools.schedule install`）
+4. ⬜ E3 勾上，写下实际的触发器行为
 
-#### 用户还没跑的话
-
-别催，也别自己跑。抓取侧已经没有不依赖真实抓取的活了。
-可以做的是：**主动提醒用户 F 和 G 才是业务价值所在**（见本节末尾）。
+（3 和 4 仍然待办——那是一个需要用户知情同意的开关，装上就开始每天真实访问。）
 
 ### ⚠️ 两条被推翻的"事实"，别再照旧文引用
 
@@ -275,9 +308,20 @@ archive/in_neakasa.tech/
    **这条设计不许优化掉。**
 
 **别为了"有产出"去做依赖图下游的事。** 计划的依赖图是真的。
-现在真正有业务价值的是 **F（翻译 1051 条待译正文）和 G（发布）**，两条都卡在用户：
-F 的管道已完全跑通（`--check` + FB 3 + IG 3 全成功），只差**懂德语的人审校**
-和**全量预算拍板**（按真实 usage 外推约 **US$24**，见下）；G 要做一次 G1 DOM 探查。
+现在真正有业务价值的是 **F（翻译）→ K（调图）→ G（发布）** 这条线，三段都卡在用户：
+
+- **F**：管道已完全跑通（`--check` + FB 3 + IG 3 全成功），只差**懂德语的人审校**
+  和**全量预算拍板**（按真实 usage 外推约 **US$24**，见下）。
+- **K**：计划完备、代码为零，**但已无外部卡点**（密钥到位、待拍板项结清、Pillow 预置）。
+  **K 硬依赖 F**——图内德语要用该帖已有的 `text_de` 做参照，没有当前版本译文就不处理。
+  ⚠️ 也就是说：**F 的德语审校不通过，K 跑出来的图也是错的**。
+  开工可以，但 K9 的验收要等 F 那边有可信译文。
+- **G**：卡在 **G1 的真实 DOM 探查**。但 **G0 / G0b 不依赖 G1，现在就能写**。
+
+⚠️ **一个会误导工期估算的数**：`1051 条待译正文` 是**翻译**口径。
+**发布**口径是 **470 篇**（FB 27 / IG 443）——项目约定"视频只记元数据不下载"，
+**585 篇纯视频帖没有可上传素材**。用户已定不补发历史，所以暂时不影响进度，
+但别拿 1051 去估发布侧的工作量。
 
 ⚠️ **翻译账单的主导项是 thinking，不是译文。** 实测同一篇帖子：
 `reasoning_effort=high` 时 reasoning 9899 tok / 可见译文 420 tok；
@@ -332,8 +376,9 @@ high 的德语排版细节确实更好（„…" 引号成对、句中不误大�
 FacebookScraper/
   README.md                架构 + 怎么跑
   config.toml              全部可调参数，代码里零硬编码
-  requirements.txt         playwright / httpx / openai
+  requirements.txt         playwright / httpx / openai / **Pillow**（12.3.0 已装）
   translate.py             DeepSeek 德语翻译 + 审校清单（含 --check/--estimate）
+  localize_images.py       ← 待建（K 组）：图内英文德语化，与 translate.py 平级
 
   scripts/                 双击入口。**纯 ASCII + CRLF，不得有中文**
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
@@ -350,10 +395,13 @@ FacebookScraper/
     IMPLEMENTATION_PLAN.md ← 进度真相源，你要持续更新它
     MANUAL_STEPS.md        ← 人工操作指南，需要用户操作时同步更新
     HANDOFF.md             ← 本文件（抓取侧的任务书）
-    CODE_REVIEW.md         ← 审查记录 CR-01~CR-19。**CR-19 是最值得读的一节**
-    TRANSLATION_PLAN.md    ← DeepSeek 实现、操作与验收真相
+    CODE_REVIEW.md         ← 审查记录 CR-01~CR-40。**CR-19 是最值得读的一节**
+    TRANSLATION_PLAN.md    ← DeepSeek 实现、操作与验收真相（F 组）
+    IMAGE_PLAN.md          ← **K 组任务书。动 GPT-Image-2 前必读第 2 节**
+    PUBLISH_PLAN.md        ← **G 组任务书。范围已收窄，别把批量补发做回来**
   prompts/
     translate_de.md        英译德提示词，可直接编辑，改它不用动 Python
+    image_de.md            ← 待建（K 组）：图片德语化提示词，同样可直接编辑
   core/
     config.py              配置读取 + Chrome 路径探测
     chrome.py              CDP 附着 + launch()（增量与 start_chrome 共用）
@@ -370,6 +418,10 @@ FacebookScraper/
     delta.py               每日增量。上半＝登出实现（保留备用）；下半＝登录态（C2–C7）
     fb_graph.py            API 只读通道，保留但未接入（缺 Token）
   publish/                 ← 待建（G 组）
+    compose.py             组装「译文 + 德语图 + 排期时刻」并跑完离线硬闸。
+                           **不碰浏览器，因此不被 G1 阻塞，现在就能写**
+    business_suite.py      UI 自动化发布（G2–G7，被 G1 阻塞）
+    selectors.py           ⛔ **G1 探查之后才填。凭猜写的选择器一定是错的**
   tests/                   15 套检查，全绿（重定向输出下也全绿）。断言数随并行工作增长
   _deprecated/             已否决路线的存档
 
@@ -434,9 +486,11 @@ High thinking、无 `max_tokens` 请求体、提示词/术语表、正文与提�
 
 ### 尚未实现 / 尚未完成外部验收
 
-G 组（UI 自动发布）仍未实现；H 组官方 API 验证缺 Token、不阻塞主路径。
-D3 与 E 组代码已经实现并通过离线测试，但计划任务**刻意没有注册**；登录态增量的
-真实媒体下载还需等账号出现新帖时自然触发验证。
+**K 组（图片德语化）与 G 组（UI 自动发布）都是"计划完备、代码为零"**——
+2026-08-31 只写了两份任务书（`IMAGE_PLAN.md` / `PUBLISH_PLAN.md`）与配置骨架，
+**没有写任何代码，也没有发过任何付费请求**。
+H 组官方 API 验证缺 Token、不阻塞主路径。
+E 组代码已实现并通过离线测试，但计划任务**刻意没有注册**。
 
 ⚠️ **C7 的七条缓解措施已经落地并被测试钉住，不许"顺手优化掉"。**
 参数全在 `config.toml` 的 `[delta]`（已从注释改成真值，代码真的在读）。
@@ -504,7 +558,7 @@ if not arc.should_append(post):
 
 ---
 
-## 八条禁止事项（违反会导致封号或大面积返工）
+## 十一条禁止事项（违反会导致封号、烧钱或大面积返工）
 
 1. ❌ **不得实现自动登录。** 全项目只允许一条登录路径：人工在
    `scripts\start_chrome.bat` 起的专用 Chrome 里登录一次，会话留在该 profile
@@ -523,7 +577,20 @@ if not arc.should_append(post):
    实测 cmd.exe 会把含中文的行从中间劈开、后半段当命令执行，
    加不加 `chcp 65001` 都会犯，加 BOM 更糟。中文提示一律放 Python。
 8. ❌ **不得把 API 密钥写进 `config.toml`。** 那个文件进版本库。
-   密钥走环境变量或项目内 `.env`（已 gitignore）。
+   密钥走环境变量或项目内 `.env`（已 gitignore）。现在有两个：
+   `DEEPSEEK_API_KEY`（翻译）与 `IMAGE_API_KEY`（图片）。
+9. ❌ **调 gpt-image-2 时不得发送 `input_fidelity`。** 该模型强制高保真，
+   已取消这个参数，**传了直接 400**。
+   ⚠️ **本机 `openai` 3.6.0 的 `images.edit()` 签名里有它，docstring 还写着
+   "1.5 及之后的模型支持"——那句话对 gpt-image-2 是错的。**
+   写这条是因为：看到签名会觉得"保真度这么关键怎么能不传"，
+   **加回去的那一刻整组请求全灭**。详见 `IMAGE_PLAN.md` 第 2 节。
+10. ❌ **不得拿原图宽高直接当 `size`。** 边长必须是 16 的倍数，
+    而归档里最常见的两档（1080×1080 共 318 张、1080×1350 共 100 张）都不是，
+    720×720 那档总像素还低于下限。**一半以上的图会 400。** 一律走 `legal_size()`。
+11. ❌ **不得覆盖 `media_de/` 里人工放置的文件，也不得修改原图。**
+    人工放的是设计同事手工修的版本，**比模型那张对**；
+    `01.jpg` 是抓取产物，只读。
 
 ---
 
@@ -590,12 +657,39 @@ CDN URL 带签名且有时效，必须在拿到响应的**同一次运行内**�
 
 **一个任务组一个分支**，命名 `<type>/<简短描述>`：
 
-| 任务组 | 分支名 | 何时合回 main |
-|---|---|---|
-| C2–C7（登录态增量） | `feat/delta-logged-in` | **C2–C6 真实验收通过时**（C7 已过，但它单独过不算） |
-| D3 | `feat/integrity-alerts` | D3 验收通过时 |
-| E 组 | `feat/scheduler` | E3 验收通过时 |
-| G 组 | `feat/business-suite-publish` | G8 验收通过时 |
+| 任务组 | 分支名 | 从哪开 | 何时合回 main |
+|---|---|---|---|
+| ~~C2–C7（登录态增量）~~ | `feat/delta-logged-in` | — | ✅ **已合**（2026-08-31 核实是 main 的祖先） |
+| ~~D3~~ | `feat/integrity-alerts` | — | ✅ **已合** |
+| E 组 | `feat/scheduler` | `main` | E3 验收通过时 |
+| **K 组**（图片德语化） | **`feat/image-de`** | **`docs/plan-image-publish`** | **K9 真实验收通过时**（懂德语的人确认过图） |
+| **G 组**（Business Suite 发布） | **`feat/business-suite-publish`** | **`docs/plan-image-publish`** | **G8 验收通过时** |
+
+**K / G 两组 2026-08-31 起并行开发，分别委托给不同 Agent。**
+两条分支**必须从 `docs/plan-image-publish` 开**——那里有两份任务书、
+`config.toml` 的 `[image]`/`[publish]` 段和已预置的 Pillow；
+从 `main` 开会拿不到这些。（若用户已把它快进进 `main`，从 `main` 开等价。）
+
+```bash
+git checkout -b feat/image-de docs/plan-image-publish
+git checkout -b feat/business-suite-publish docs/plan-image-publish
+```
+
+**文件所有权表**在 `IMAGE_PLAN.md` 第 10 节与 `PUBLISH_PLAN.md` 第 12 节，
+内容相同、两边各留一份（并行开发时没人会去读另一组的任务书）。
+要点：
+
+- `core/chrome.py`、`core/config.py`、`publish/**`、`tools/*publish*` 归 G 组；
+- `localize_images.py`、`prompts/image_de.md`、`translate.py` 的 `run_review` 归 K 组；
+- **`core/store.py` / `core/parse.py` / `core/capture.py` / `routes/**` 两组都不许动**；
+- `requirements.txt` **两组都不用改**（Pillow 已预置，就是为了避开这个冲突点）；
+- 共享文档**只改自己那一节**，附录 D 各自追加、标题带分支名，
+  **合并冲突时两段都保留，不许二选一**。
+
+⚠️ **K 组现在没有任何外部卡点，可以直接开工。**
+G 组能立刻做的是 G0（独立 profile 参数化）与 G0b（`compose.py` 的离线硬闸），
+**但 `publish/selectors.py` 在 G1 之前必须是空的**——
+提交一个"看起来合理"的选择器，比不提交更糟：下一个人会以为它验证过。
 
 **规则**：
 
