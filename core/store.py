@@ -10,6 +10,7 @@ r"""统一归档层。
       manifest.jsonl                    **派生索引**，可从 posts/ 重建
       _rejected.jsonl                   被丢弃的节点及原因
       _orphan_media/                    重建后无主的媒体文件
+      _orphan_posts/                    被升级/replay 隔离的旧帖子目录（可恢复）
       posts/
         2026-08-25_1423_<post_id>/
           post.json                     **真相源**
@@ -45,6 +46,11 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import os
+import re
+import shutil
+import stat
+import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -97,6 +103,161 @@ class Post:
         return d
 
 
+_SAFE_POST_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,199}\Z")
+_WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+_IMAGE_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/avif": ".avif",
+}
+
+
+def _safe_post_id_component(post_id: str) -> str:
+    """把外部 ``post_id`` 变成单个、跨平台安全的目录名组件。
+
+    Facebook/Instagram 的正常 ID 只含 ASCII 字母、数字、点、横线或下划线，
+    这类值原样保留，兼容已有归档。其余值（路径分隔符、控制字符、Windows
+    保留名、过长 ID 等）使用原值的 SHA-256 摘要；同一个异常 ID 永远得到
+    同一个目录名。这里只改变磁盘路径，``post.json`` / manifest 仍保存原 ID。
+    """
+    raw = str(post_id)
+    reserved_stem = raw.split(".", 1)[0].upper()
+    if (_SAFE_POST_ID.fullmatch(raw)
+            and not raw.endswith(".")
+            and reserved_stem not in _WINDOWS_RESERVED):
+        return raw
+    digest = hashlib.sha256(raw.encode("utf-8", errors="surrogatepass")).hexdigest()[:24]
+    # "~" 不在正常 ID 白名单内，因此生成名不可能与一个原样保留的正常 ID
+    # 撞名；若远端真的给出同形字符串，它本身会再次走哈希分支。
+    return f"~id_{digest}"
+
+
+def _post_quality_rank(post: "Post | dict") -> tuple[int, int]:
+    """与增量升级规则共用的质量等级。
+
+    完整记录永远胜过残缺记录；两条都残缺时，媒体项更多的胜出。两条都完整
+    时视为同等级，因为 :meth:`Archive._is_upgrade` 本来就不允许完整记录之间
+    互相覆盖。把这条规则集中在一处，避免 append 与 reindex 各自发明胜负。
+    """
+    if isinstance(post, Post):
+        complete = post.media_complete
+        media = post.media
+    else:
+        complete = post.get("media_complete", True)
+        media = post.get("media") or []
+    media_count = len(media) if isinstance(media, (list, tuple)) else 0
+    return (1, 0) if complete else (0, media_count)
+
+
+class ArchivePathError(ValueError):
+    """归档路径不是预期的真实直属目录/普通文件。"""
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """拒绝符号链接、Windows junction 及其它 reparse point。"""
+    try:
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        if path.exists():
+            attrs = getattr(path.lstat(), "st_file_attributes", 0)
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if reparse_flag and attrs & reparse_flag:
+                return True
+        return False
+    except OSError as exc:
+        raise ArchivePathError(f"无法确认路径是否为链接/reparse point：{path}") from exc
+
+
+def assert_physical_direct_path(parent: Path, path: Path, *,
+                                kind: str, label: str) -> Path:
+    """确认 ``path`` 是 ``parent`` 下真实的直属目录或普通文件。
+
+    不存在的目标可以通过（供安全创建）；存在时拒绝 symlink、junction、其它
+    reparse point，以及文件 hardlink。resolve 后必须精确等于物理父目录加当前
+    文件名，不能只比较 ``resolved.parent``，否则链接到同一父目录的兄弟项仍会
+    被误放行。
+    """
+    parent = Path(parent)
+    path = Path(path)
+    if kind not in {"directory", "file"}:
+        raise ValueError("kind 必须是 directory 或 file")
+    if path.parent != parent:
+        raise ArchivePathError(f"{label} 不是预期父目录的直属子项：{path}")
+    if _is_link_or_reparse(path):
+        raise ArchivePathError(f"{label} 不得是 symlink/junction/reparse point：{path}")
+
+    expected = parent.resolve(strict=False) / path.name
+    try:
+        resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ArchivePathError(f"无法解析 {label} 的物理路径：{path}") from exc
+    if resolved != expected:
+        raise ArchivePathError(
+            f"{label} 的物理路径不是父目录下同名直属子项：{path} -> {resolved}")
+
+    if path.exists():
+        if kind == "directory" and not path.is_dir():
+            raise ArchivePathError(f"{label} 应为目录，实为其它类型：{path}")
+        if kind == "file":
+            if not path.is_file():
+                raise ArchivePathError(f"{label} 应为普通文件，实为其它类型：{path}")
+            try:
+                if path.stat(follow_symlinks=False).st_nlink > 1:
+                    raise ArchivePathError(f"{label} 不得是 hardlink：{path}")
+            except OSError as exc:
+                raise ArchivePathError(f"无法确认 {label} 的文件属性：{path}") from exc
+    return path
+
+
+def _archive_row_error(row: object) -> str | None:
+    """manifest/post.json 行的最小 schema 错误；``None`` 表示可接受。"""
+    if not isinstance(row, dict):
+        return "JSON 顶层不是对象"
+    if not isinstance(row.get("post_id"), str) or not row["post_id"]:
+        return "post_id 不是非空字符串"
+    # Post.text 是必填字符串；无正文用空串表达，缺失/None 不是另一种空值。
+    if not isinstance(row.get("text"), str):
+        return "text 缺失或不是字符串"
+    return None
+
+
+def _atomic_write_text(path: Path, text: str, *, label: str) -> None:
+    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。"""
+    path = assert_physical_direct_path(
+        path.parent, path, kind="file", label=label)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False) as fh:
+            temporary = Path(fh.name)
+            assert_physical_direct_path(
+                path.parent, temporary, kind="file", label=f"{label} 临时文件")
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # 规划与替换前各验一次，避免目标在写临时文件期间被换成链接。
+        assert_physical_direct_path(
+            path.parent, path, kind="file", label=label)
+        os.replace(temporary, path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def post_dirname(post_id: str, created_at: str | None) -> str:
     """每帖文件夹的名字：`<YYYY-MM-DD>_<HHMM>_<post_id>`。
 
@@ -109,26 +270,41 @@ def post_dirname(post_id: str, created_at: str | None) -> str:
     真实数据里确实有这种帖子（FB 有一条 `created_at` 为空）。
     """
     ts = created_at or ""
+    safe_id = _safe_post_id_component(post_id)
     # 只认 core.parse.iso() 产出的 "%Y-%m-%dT%H:%M:%SZ"。宽松匹配会把
     # from_fb_story 原样透传的怪字符串也放进来，那才是真正难查的问题。
-    if (len(ts) >= 16 and ts[4] == "-" and ts[7] == "-" and ts[10] == "T"
-            and ts[13] == ":" and ts[:4].isdigit()):
-        return f"{ts[:10]}_{ts[11:13]}{ts[14:16]}_{post_id}"
-    return f"undated_{post_id}"
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", ts):
+        return f"{ts[:10]}_{ts[11:13]}{ts[14:16]}_{safe_id}"
+    return f"undated_{safe_id}"
 
 
 class Archive:
     def __init__(self, root: Path | str, account: str):
-        self.base = Path(root) / account
+        self.root = Path(root)
+        assert_physical_direct_path(
+            self.root.parent, self.root, kind="directory", label="archive 根目录")
+        self.base = self.root / account
+        assert_physical_direct_path(
+            self.root, self.base, kind="directory", label="账号归档目录")
         self.posts_dir = self.base / "posts"
+        assert_physical_direct_path(
+            self.base, self.posts_dir, kind="directory", label="posts 根目录")
         self.posts_dir.mkdir(parents=True, exist_ok=True)
+        assert_physical_direct_path(
+            self.root.parent, self.root, kind="directory", label="archive 根目录")
+        assert_physical_direct_path(
+            self.root, self.base, kind="directory", label="账号归档目录")
+        assert_physical_direct_path(
+            self.base, self.posts_dir, kind="directory", label="posts 根目录")
         self.manifest = self.base / "manifest.jsonl"
         self._rows = self._load_rows()
 
     # ---- 每帖文件夹 ----
 
     def post_dir(self, post: "Post") -> Path:
-        return self.posts_dir / post_dirname(post.post_id, post.created_at)
+        candidate = self.posts_dir / post_dirname(post.post_id, post.created_at)
+        return assert_physical_direct_path(
+            self.posts_dir, candidate, kind="directory", label="帖子目录")
 
     def _write_post_files(self, post: "Post") -> None:
         """写 `post.json`（真相源）与 `text.txt`（给人看的派生副本）。
@@ -139,9 +315,18 @@ class Archive:
         """
         d = self.post_dir(post)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "post.json").write_text(
-            json.dumps(post.to_row(), ensure_ascii=False, indent=2), encoding="utf-8")
-        (d / "text.txt").write_text(post.text or "", encoding="utf-8")
+        assert_physical_direct_path(
+            self.posts_dir, d, kind="directory", label="帖子目录")
+        post_json = assert_physical_direct_path(
+            d, d / "post.json", kind="file", label="post.json")
+        text_file = assert_physical_direct_path(
+            d, d / "text.txt", kind="file", label="text.txt")
+        # 两个叶子必须先全部通过，再写任何一个，避免 text.txt 有链接时
+        # post.json 已经被部分更新。
+        _atomic_write_text(
+            post_json, json.dumps(post.to_row(), ensure_ascii=False, indent=2),
+            label="post.json")
+        text_file.write_text(post.text or "", encoding="utf-8")
 
     def _load_rows(self) -> dict[str, dict]:
         """读取 manifest，同一 post_id 后写胜出。
@@ -150,19 +335,25 @@ class Archive:
         只有封面的轮播帖，回填后又写了完整版）。读取时取最后一条。
         """
         rows: dict[str, dict] = {}
+        assert_physical_direct_path(
+            self.base, self.manifest, kind="file", label="manifest.jsonl")
         if not self.manifest.exists():
             return rows
         with self.manifest.open(encoding="utf-8") as f:
-            for line in f:
+            for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     r = json.loads(line)
-                    rows[r["post_id"]] = r
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    # TypeError：整行是合法 JSON 但不是对象（如数组），下标取不到
+                except json.JSONDecodeError:
+                    print(f"    ! manifest 第 {line_no} 行不是合法 JSON，跳过")
                     continue
+                error = _archive_row_error(r)
+                if error:
+                    print(f"    ! manifest 第 {line_no} 行 schema 无效（{error}），跳过")
+                    continue
+                rows[r["post_id"]] = r
         return rows
 
     def has(self, post_id: str) -> bool:
@@ -189,6 +380,8 @@ class Archive:
         if not rows:
             return 0
         path = self.base / "_rejected.jsonl"
+        assert_physical_direct_path(
+            self.base, path, kind="file", label="_rejected.jsonl")
         seen: set[str] = set()
         if path.exists():
             with path.open(encoding="utf-8") as f:
@@ -201,6 +394,8 @@ class Archive:
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
         added = 0
+        assert_physical_direct_path(
+            self.base, path, kind="file", label="_rejected.jsonl")
         with path.open("a", encoding="utf-8") as f:
             for row in rows:
                 pid = row.get("post_id")
@@ -221,12 +416,76 @@ class Archive:
         """
         ext = ".jpg"
         if content_type:
-            guessed = mimetypes.guess_extension(content_type.split(";")[0].strip())
+            mime = content_type.split(";")[0].strip().lower()
+            guessed = _IMAGE_EXTENSIONS.get(mime) or mimetypes.guess_extension(mime)
             if guessed:
                 ext = ".jpg" if guessed == ".jpe" else guessed
         d = self.post_dir(post)
         d.mkdir(parents=True, exist_ok=True)
-        return d / f"{idx + 1:02d}{ext}"
+        assert_physical_direct_path(
+            self.posts_dir, d, kind="directory", label="帖子目录")
+        media = d / f"{idx + 1:02d}{ext}"
+        return assert_physical_direct_path(
+            d, media, kind="file", label=f"媒体文件 {media.name}")
+
+    @staticmethod
+    def _available_recovery_path(root: Path, name: str) -> Path:
+        """在恢复区生成不覆盖既有数据的目标路径。"""
+        candidate = root / name
+        suffix = 1
+        while candidate.exists() or _is_link_or_reparse(candidate):
+            candidate = root / f"{name}.{suffix}"
+            suffix += 1
+        return candidate
+
+    def _isolate_other_truth_dirs(self, post: Post, keep: Path) -> list[Path]:
+        """把同 ID 的其它 truth dir 移入 ``_orphan_posts/``，从不删除。
+
+        created_at 被补出或纠正时，同一 post_id 的目标目录名会改变。若旧目录
+        仍留在 ``posts/``，它就和新目录同时成为真相源，后续 reindex 可能选回
+        旧的残缺记录。调用方必须先成功写完 ``keep/post.json`` 再调用这里。
+        """
+        orphan_root = self.base / "_orphan_posts"
+        assert_physical_direct_path(
+            self.base, orphan_root, kind="directory", label="_orphan_posts 恢复区")
+
+        isolated: list[Path] = []
+        target_id = str(post.post_id)
+        for directory in sorted(self.posts_dir.iterdir(), key=lambda p: p.name):
+            if directory == keep:
+                continue
+            try:
+                assert_physical_direct_path(
+                    self.posts_dir, directory, kind="directory", label="旧帖子目录")
+            except ArchivePathError as exc:
+                print(f"    ! {directory.name} 不是安全的真实帖子目录，跳过隔离：{exc}")
+                continue
+            truth = directory / "post.json"
+            if not truth.exists():
+                continue
+            try:
+                assert_physical_direct_path(
+                    directory, truth, kind="file", label="旧 post.json")
+                row = json.loads(truth.read_text(encoding="utf-8"))
+            except (ArchivePathError, OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            stored_id = row.get("post_id") if isinstance(row, dict) else None
+            if stored_id is None or str(stored_id) != target_id:
+                continue
+
+            destination = self._available_recovery_path(orphan_root, directory.name)
+            assert_physical_direct_path(
+                orphan_root, destination, kind="directory", label="旧帖子隔离目标")
+            orphan_root.mkdir(parents=True, exist_ok=True)
+            assert_physical_direct_path(
+                self.base, orphan_root, kind="directory", label="_orphan_posts 恢复区")
+            shutil.move(str(directory), str(destination))
+            assert_physical_direct_path(
+                orphan_root, destination, kind="directory", label="旧帖子隔离目标")
+            isolated.append(destination)
+            print("    ! 同 post_id 的旧 truth dir 已隔离：%s -> _orphan_posts/%s"
+                  % (directory.name, destination.name))
+        return isolated
 
     def reindex(self) -> int:
         """从 `posts/*/post.json` 重建 `manifest.jsonl`，返回条数。
@@ -235,27 +494,74 @@ class Archive:
         人删了一个文件夹、或者哪次运行崩在中途，索引就会和现实脱节；
         重建的方向永远是 posts/ → manifest，绝不反过来。
 
+        同一 post_id 若意外存在多个 truth dir，按与 append 升级相同的质量等级
+        只选一个写入索引并显式告警；目录本身不在 reindex 中删除或移动。
         顺带把 `text.txt` 也重新生成一遍（它是派生的）。
         """
-        rows: list[dict] = []
+        assert_physical_direct_path(
+            self.base, self.manifest, kind="file", label="manifest.jsonl")
+        selected: dict[str, tuple[tuple[int, int], dict, Path]] = {}
+        duplicate_dirs: dict[str, list[Path]] = {}
         for d in sorted(self.posts_dir.iterdir()):
+            try:
+                assert_physical_direct_path(
+                    self.posts_dir, d, kind="directory", label="reindex 帖子目录")
+            except ArchivePathError as exc:
+                print(f"    ! {d.name} 不是安全的真实直属目录，跳过：{exc}")
+                continue
             f = d / "post.json"
-            if not d.is_dir() or not f.exists():
+            try:
+                assert_physical_direct_path(
+                    d, f, kind="file", label="reindex post.json")
+            except ArchivePathError as exc:
+                print(f"    ! {d.name}/post.json 不是普通直属文件，跳过：{exc}")
+                continue
+            if not f.exists():
                 continue
             try:
                 row = json.loads(f.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 print(f"    ! {d.name}/post.json 不是合法 JSON，跳过")
                 continue
-            if not isinstance(row, dict) or not row.get("post_id"):
-                print(f"    ! {d.name}/post.json 缺 post_id，跳过")
+            error = _archive_row_error(row)
+            if error:
+                print(f"    ! {d.name}/post.json schema 无效（{error}），跳过")
                 continue
-            rows.append(row)
-            (d / "text.txt").write_text(row.get("text") or "", encoding="utf-8")
+            text_file = d / "text.txt"
+            try:
+                assert_physical_direct_path(
+                    d, text_file, kind="file", label="reindex text.txt")
+            except ArchivePathError as exc:
+                print(f"    ! {d.name}/text.txt 不是普通直属文件，不写派生副本：{exc}")
+            else:
+                text_file.write_text(row.get("text") or "", encoding="utf-8")
+
+            pid = row["post_id"]
+            rank = _post_quality_rank(row)
+            previous = selected.get(pid)
+            if previous is None:
+                selected[pid] = (rank, row, d)
+                continue
+
+            duplicate_dirs.setdefault(pid, [previous[2]]).append(d)
+            if rank > previous[0]:
+                selected[pid] = (rank, row, d)
+
+        for pid, directories in duplicate_dirs.items():
+            rank, _row, winner = selected[pid]
+            quality = "完整" if rank[0] else "残缺/%d 个媒体项" % rank[1]
+            losers = ", ".join(d.name for d in directories if d != winner)
+            print("    ! post_id %s 有 %d 个 truth dirs；"
+                  "按质量等级选择 %s [%s]。其余目录未删除，仍在 posts/：%s"
+                  % (pid, len(directories), winner.name, quality, losers))
+
+        rows = [entry[1] for entry in selected.values()]
 
         # 按时间正序落盘：manifest 本来不保证顺序，但重建时顺手排一下，
         # 人 `tail` 它的时候看到的就是最新的几条。
         rows.sort(key=lambda r: (r.get("created_at") or "", r.get("post_id") or ""))
+        assert_physical_direct_path(
+            self.base, self.manifest, kind="file", label="manifest.jsonl")
         with self.manifest.open("w", encoding="utf-8") as fh:
             for row in rows:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -270,13 +576,22 @@ class Archive:
         而新记录更全 —— 这时追加一条新的，读取时后写胜出。
         没有这个例外，media_complete 标记就没有意义，补全永远写不进去。
         """
+        previous = self._rows.get(post.post_id)
         if not self.should_append(post):
             return False
         row = post.to_row()
+        assert_physical_direct_path(
+            self.base, self.manifest, kind="file", label="manifest.jsonl")
         # 顺序要紧：**先写文件夹，再写索引**。反过来的话，中途崩溃会留下
         # 一条指向不存在文件夹的索引记录 —— 而规则是"以文件夹为准"，
         # 那条记录会在下次 reindex 时凭空消失，且没人知道发生过什么。
         self._write_post_files(post)
+        # created_at 被补出/纠正会改变目录名。新 truth dir 已完整写成后，
+        # 可恢复地隔离同 ID 的旧目录，保证 posts/ 内仍只有一个真相源。
+        if previous is not None:
+            self._isolate_other_truth_dirs(post, self.post_dir(post))
+        assert_physical_direct_path(
+            self.base, self.manifest, kind="file", label="manifest.jsonl")
         with self.manifest.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._rows[post.post_id] = row
@@ -294,8 +609,7 @@ class Archive:
     @staticmethod
     def _is_upgrade(old: dict, new: Post) -> bool:
         was_incomplete = not old.get("media_complete", True)
-        more_media = len(new.media) > len(old.get("media", []))
-        return was_incomplete and (new.media_complete or more_media)
+        return was_incomplete and _post_quality_rank(new) > _post_quality_rank(old)
 
     @staticmethod
     def fingerprint(data: bytes) -> str:

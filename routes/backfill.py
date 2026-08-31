@@ -16,15 +16,15 @@ r"""Day 1 · 一次性历史回填（登录态 + 人工滚动 + 响应拦截）
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 import threading
 import time
 
 from core.capture import INTEREST, Collector  # noqa: F401  （INTEREST 供外部引用）
-from core.capture import download_media as _download
+from core.capture import atomic_write_json, download_media as _download
 from core.chrome import attach
 from core.config import cfg
+from core import integrity
 from core.parse import extract, partition_by_owner
 from core.store import Archive
 
@@ -151,7 +151,7 @@ async def run(platform: str) -> int:
         # 没有这份转储，你滚了 20 分钟的成果会全部丢失，且无从排查。
         arc = Archive(c.archive_dir, f"{platform[:2]}_{account}")
         dump = arc.base / f"_capture_{int(time.time())}.json"
-        dump.write_text(json.dumps(col.payloads, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(dump, col.payloads)
         print(f"原始响应已转储 → {dump}  ({dump.stat().st_size // 1024} KB)")
 
         posts = extract(col.payloads, platform, account, route="backfill")
@@ -171,7 +171,27 @@ async def run(platform: str) -> int:
             print(f"  - 丢弃 {len(rejected)} 个不属于 {account} 的节点"
                   f"（来自 {len(others)} 个其它账号），已记入 _rejected.jsonl"
                   f"（新增 {n_rej} 条）")
-        print(f"本账号帖子 {len(posts)} 篇")
+
+        # 原创 / 合作分开报。Instagram 实测 1019 篇里 263 篇是合作帖
+        # （别人发布、本账号是 coauthor，同样在本账号主页上），
+        # 而且**最近一年的主要内容形式就是合作帖**——只报一个总数的话，
+        # 合作帖判定哪天失效了，这里会安静地少掉几百篇而看不出来。
+        target = (account or "").strip().lower()
+        n_authored = sum(1 for p in posts if p.owner == target)
+        print(f"本账号帖子 {len(posts)} 篇"
+              f"（原创 {n_authored} · 合作 {len(posts) - n_authored}）")
+
+        # 丢弃的里面有没有已知合作方？有就是"归属判定漏判"的强提示。
+        # 名单同时取自归档与本次留下的这批：第一次回填时归档是空的。
+        suspect = integrity.check_dropped_partners(
+            rejected,
+            integrity.known_partners(
+                arc.rows() + [p.to_row() for p in posts], account))
+        if suspect:
+            who = sorted({(s.get("owner") or "?") for s in suspect})
+            print(f"[!] 丢弃的里面有 {len(suspect)} 篇来自**已知合作方**"
+                  f"（{'、'.join(who[:4])}）—— 合作帖判定可能漏判了。"
+                  f"原始响应在 {dump.name} 里，可离线查，不用重滚。")
 
         n = 0
         for post in posts:

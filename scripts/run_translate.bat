@@ -3,13 +3,14 @@ REM ---------------------------------------------------------------------
 REM German translation entry point. Implementation plan group F.
 REM
 REM Usage:
-REM     run_translate.bat --check          verify the API gateway config
+REM     run_translate.bat --check          verify DeepSeek (uses a few tokens)
+REM     run_translate.bat --estimate       estimate tokens/cost, no API call
 REM     run_translate.bat --limit 3        translate 3 posts (trial run)
 REM     run_translate.bat                  translate everything untranslated
 REM     run_translate.bat --review         build the human review checklist
 REM
-REM Prerequisite: setup.bat has been run, and the API key environment
-REM variable named in config.toml [translate].api_key_env is set.
+REM Prerequisite: setup.bat has been run. Copy .env.example to .env and
+REM put the DeepSeek API key there; never put the key in config.toml.
 REM
 REM Pure ASCII on purpose -- see the comment block in setup.bat.
 REM All logic and all Chinese output live in translate.py.

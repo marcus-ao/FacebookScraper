@@ -5,10 +5,11 @@
 本模块的目的不是修复什么，而是**让静默失败变成可见失败**——
 它只负责把可疑之处找出来，处理交给人。
 
-三项检查各自盯一种失败模式：
-  check_continuity  时间序列里的洞      → 某段历史根本没被抓到
-  check_quiet       长期零新增          → 增量路径已经被登录墙拦住了
-  check_incomplete  媒体不全的帖子      → 源响应只给了封面，或图片没下全
+四项检查各自盯一种失败模式：
+  check_continuity        时间序列里的洞  → 某段历史根本没被抓到
+  check_quiet             长期零新增      → 增量路径已经被登录墙拦住了
+  check_incomplete        媒体不全的帖子  → 源响应只给了封面，或图片没下全
+  check_dropped_partners  丢弃了合作方的帖子 → 归属判定又开始漏判自家内容了
 """
 from __future__ import annotations
 
@@ -106,6 +107,69 @@ def check_incomplete(arc: "Archive") -> list[dict]:
     return arc.needs_media()
 
 
+# --------------------------------------------------------------------------
+# 第四项：归属判定漏判（CR-19 那一类失败的"下次能被发现"版本）
+# --------------------------------------------------------------------------
+
+def known_partners(rows: list[dict], account: str) -> set[str]:
+    """从归档里推出"本账号合作过的账号"名单。
+
+    两个来源，都要：
+
+    1. 合作帖的 `owner` —— 别人发布、本账号是 coauthor；
+    2. 任何一篇帖子的 `coauthors` —— 本账号发布、别人是 coauthor。
+
+    实测 Instagram 归档里有 **210 个**这样的账号
+    （neakasa.global 40 篇、neakasa.de 18 篇、aria_neakasa 14 篇……）。
+    """
+    who = (account or "").strip().lower()
+    out: set[str] = set()
+    for r in rows:
+        owner = (r.get("owner") or "").strip().lower()
+        if owner and owner != who:
+            out.add(owner)
+        for c in r.get("coauthors") or []:
+            name = (c or "").strip().lower() if isinstance(c, str) else ""
+            if name and name != who:
+                out.add(name)
+    return out
+
+
+def check_dropped_partners(rejected: list[dict],
+                           partners: set[str]) -> list[dict]:
+    """被丢弃的节点里，作者是**已知合作方**的那些。
+
+    ### 这一项为什么存在
+
+    2026-08-30 之前，Instagram 有 **263 篇自己主页上的帖子**被归属判定当成
+    他人帖丢掉，持续到用户自己问"会不会我们抓的这个只是转发角色"才被发现。
+    根因（`coauthor_producers` 没被看）已经修了；**但让它一直没被发现的
+    那个原因没修**——丢弃是完全静默的：`_rejected.jsonl` 只写不读，
+    没有任何东西会说一句"你刚丢掉的这批里，有一半来自你的合作方"。
+
+    合作机制会变（IG 换字段名、换形态、出新的联合发布方式），
+    修好的是这一次，这一项盯的是下一次。
+
+    ### 为什么用"作者是已知合作方"作信号
+
+    它在现有全部真实数据上**零误报**：Instagram 归档里有 210 个合作方账号，
+    四份 capture 一共丢弃过 6 个账号的帖子
+    （chicagofire / shaq / cars_luxury_accessories / erykatravel /
+    diycraftsofficial1 / craftypanda），**与合作方名单交集为空**。
+    推荐位来自完全陌生的账号，而合作方的帖子本来就该留下——
+    两者天然不重叠，所以这个信号既灵敏又安静。
+
+    ⚠️ 它**不是判定**，是提示。真出现交集时正确的动作是去
+    `_rejected.jsonl` 和 `_capture_*.json` 里离线查那一篇为什么没带上
+    coauthor 信息，**不是**把它无条件收进来——"宁可漏一篇自家的，
+    不可混进一篇别人的"这条没有变。
+    """
+    if not partners:
+        return []
+    return [r for r in rejected
+            if (r.get("owner") or "").strip().lower() in partners]
+
+
 def params(platform: str | None = None) -> tuple[int, int]:
     """从 config.toml 的 [integrity] 读阈值，返回 (gap_flag_days, alert_after_quiet_days)。
 
@@ -194,14 +258,30 @@ def run_checks(rows: list[dict], incomplete: list[dict], entry: dict,
                         % (platform, int(quiet), alert_after)),
         })
 
-    # 只看窗口内的记录：几年前的缺口不可行动，天天重报只会淹掉今天的问题
+    # 只看最近这些天：几年前的缺口不可行动，天天重报只会淹掉今天的问题。
+    #
+    # ⚠️ **按"缺口的结束时间"筛，不是按"帖子的时间"筛。**
+    # 旧写法先把窗口外的帖子整条剔掉再算相邻间隔，于是**跨越窗口边界的缺口
+    # 会整个消失**：起点在窗口外的那一篇被删掉后，窗口内最早的一篇就没有
+    # 前邻居了，缺口无从产生。2026-08-31 实测撞上这一条——Instagram
+    # 2026-07-01 → 07-09 那个 8.4 天的缺口（阈值 6 天）**一次都没报过**，
+    # 只因为起点比 60 天前早了一天。
+    #
+    # 这个盲区正好落在本模块要消灭的那类失败上：一段"根本没抓到"的历史，
+    # 它的起点必然在更早的时间，越是大洞越容易被这样剔掉。
+    # 改成先算全量相邻间隔、再按**较晚那篇**是否落在窗口内来筛，
+    # "不重报陈年缺口"的初衷不变，盲区没了。
     cutoff = now - timedelta(days=window_days)
-    recent = [r for r in rows
-              if (_parse_ts(r.get("created_at")) or datetime.min.replace(
-                  tzinfo=timezone.utc)) >= cutoff]
     seen = [g for g in (marks.get("gaps") or []) if isinstance(g, str)]
+    by_id = {r.get("post_id"): r for r in rows if isinstance(r, dict)}
+
+    def ends_in_window(gap: dict) -> bool:
+        later = by_id.get(gap.get("before")) or {}
+        ts = _parse_ts(later.get("created_at"))
+        return ts is not None and ts >= cutoff
+
     fresh_gaps = []
-    for gap in check_continuity(recent, gap_days):
+    for gap in (g for g in check_continuity(rows, gap_days) if ends_in_window(g)):
         key = "%s->%s" % (gap.get("after"), gap.get("before"))
         if key in seen:
             continue

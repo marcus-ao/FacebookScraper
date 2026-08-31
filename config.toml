@@ -95,6 +95,12 @@ harvest_embedded = false
 # ⚠️ 这道闸是 2026-08-30 首次实测补的：当时 IG 只打了一句"新增 0 篇"，
 # 而真相是它根本没看到时间线，两者在输出里完全一样。
 # 用篇数判而不是用"最新日期倒退"判：后者在账号删掉最新一帖时会天天误报。
+#
+# ⚠️ **"本账号的帖子"= 原创 + 合作帖**（`core.parse.on_timeline_of`）。
+# 这一点对 IG 是决定性的：实测增量看到的 36 篇里 **35 篇是合作帖、
+# 自己发的只有 1 篇**。所以合作帖判定一旦失效，这道闸会立刻拦下来
+# （1 < 3）——这是有意的，它比"安静地少抓几百篇"好得多。
+# 摘要行会把两者拆开报（`原创 N · 合作 M`），部分漂移也看得见。
 min_own_posts = 3
 
 [integrity]
@@ -121,45 +127,46 @@ alert_after_quiet_days = { facebook = 7, instagram = 10 }
 gap_flag_days = { facebook = 5, instagram = 6 }
 
 [translate]
-# ---- 连接（对接公司内部兼容 Anthropic Messages 的第三方端点）----
-# 网关地址。留空则走 Anthropic 官方 api.anthropic.com。
-# 填到 /v1 的**上一级**：SDK 会自己拼 /v1/messages。
-# 例：网关是 https://llm.corp.example.com/v1/messages，这里就填
-#     https://llm.corp.example.com
-base_url = ""
+# ---- 连接（DeepSeek 官方 OpenAI 兼容接口）----
+# "deepseek" 会对官方 URL / 模型名做严格校验，防止错配后静默回退。
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
 
 # API Key 从**环境变量**读，绝不写进本文件（本文件进版本库，密钥不能进）。
 # 下面填的是环境变量的**名字**，不是密钥本身。
-api_key_env = "ANTHROPIC_API_KEY"
+api_key_env = "DEEPSEEK_API_KEY"
 
-# 网关的鉴权头风格：
-#   "x-api-key" = Anthropic 官方风格，发 x-api-key: <key>
-#   "bearer"    = 发 Authorization: Bearer <key>（不少内部网关用这个）
-# 不确定就先用 x-api-key，跑 --check 试；401/403 再换成 bearer。
-auth_style = "x-api-key"
-
-# 模型名以**你们网关暴露的名字**为准，不一定是 Anthropic 官方 ID。
-model = "claude-opus-5"
-
-# 额外请求头，网关若要求路由标识/租户 ID 之类可填这里。例：
-# extra_headers = { "X-Corp-Route" = "translation" }
-extra_headers = {}
+# 2026-08-30 官方最新高质量文本模型。若更看重速度/费用，可显式改成
+# deepseek-v4-flash；不要再用已于 2026-07-24 停用的 deepseek-chat/reasoner。
+model = "deepseek-v4-flash"
 
 # ---- 请求参数 ----
-max_tokens = 4096                  # 一条社媒文案远用不满；截断会被显式报错而非静默
 timeout_seconds = 120
 max_retries = 2                    # SDK 自带指数退避，重试 429/5xx/连接错误
-request_gap_seconds = 1.0          # 相邻两次调用的最小间隔，避免打爆内部网关
+request_gap_seconds = 1.0          # 相邻两次调用的最小间隔，避免短时间请求过密
 
-# 下面两项默认**不发送**，因为第三方兼容网关未必认。
-# 仅在你确认网关支持时才打开（官方 Opus 5 上不发 thinking 即为自适应思考，
-# 所以留空反而是官方端点上的最佳状态）。
-# effort = "high"                  # low | medium | high | xhigh | max
-# temperature = 0.3                # ⚠️ Opus 5 / Sonnet 5 已移除该参数，发了会 400
-
-# 提示词缓存。官方 API 上能省掉大量重复的输入 token（system prompt 每篇都一样）；
-# 但兼容网关未必支持 cache_control，默认关闭。确认网关支持后再开。
-prompt_cache = false
+# thinking 始终显式开启；默认用模型官方的 high 档位。
+reasoning_effort = "high"          # low | high | max
+# 不配置、也不发送 max_tokens / max_completion_tokens 等输出限制；
+# temperature / top_p 在 thinking 模式下会被 DeepSeek 忽略，同样不发送。
+#
+# ⚠️ **这一项是全量翻译账单的主导因素，不是微调项。**
+# 2026-08-31 实测（同一篇 1261 字符的帖子，其余条件完全相同）：
+#
+#            reasoning tok   可见译文 tok   单篇费用上界
+#   low            373            419        US$0.0101
+#   high         9 899            420        US$0.0412
+#
+# **可见译文一样长，思考量差 26 倍。** 按已译帖子的真实 usage 外推，
+# 全量 1051 篇在 high 下约 **US$24**，在 low 下约 US$6–7。
+# 但 high 的德语排版细节确实更好（„…“ 引号成对、句中不误大写），
+# low 那一版实测出现过 "Schluss mit Schlechtem Gewissen"（Schlechtem 误大写）。
+# **这是业务取舍，代码不替你定。** 改完跑 `--estimate` 会用真实 usage 重新外推。
+cost_rates_usd_per_million = { input = 1.32, cache_read = 0.044, output = 3.96 }
+# ⚠️ 上面这张费率表是 **V4 Pro 的峰时最高价**（核对日期 2026-08-30），
+# 而当前 model 是 flash。**故意不换成 flash 的价**：这个数只用来算
+# "最坏情况的上界"，用更贵的费率去估更便宜的模型，方向是安全的。
+# 真实账单以 DeepSeek 控制台为准。换 model 时不需要动这张表。
 
 # ---- 翻译行为 ----
 # 目标语言不做成配置项：提示词模板 prompts/translate_de.md 是德语专用的
@@ -168,10 +175,11 @@ prompt_cache = false
 # 风格来源：从该账号已抓到的 US 文案里取 N 篇作为提示词示例
 style_examples = 6
 # 额外的语气指令，营销同事可直接改这一行
-tone = "品牌口吻保持简洁直接，避免夸张营销词；控制长度，话题标签不超过 3 个。"
+tone = "品牌口吻保持简洁直接，避免夸张营销词；控制长度。"
 
 # ---- 品牌语域决策 ----
-# ⚠️ 这三项决定每一篇译文的基调，改动后需要 --force 重译全量才会生效。
+# ⚠️ 这三项决定每一篇译文的基调；改动后同时把 translate.py 的 PROMPT_VERSION +1，
+# 普通运行就会把旧版译文自动列回待译队列。
 # 它们是**模型无法自行知道的品牌决策**，必须在这里定死，
 # 否则模型会篇篇自己挑，整个 feed 读起来是散的。
 
@@ -194,13 +202,23 @@ anglicism_policy = "moderate"
 
 # 术语表：强制统一的译法。左边写英文（大小写不敏感），右边写德文。
 # 没有它，第 1 篇写 Kapuzenpullover、第 12 篇写 Hoodie —— 品牌内容不能这样。
-# 抓到真实文案后，把反复出现的产品名 / 卖点词填进来。
+# 以下译法来自真实 1055 条语料的高频词，并按 Neakasa 德国官网现有用语收敛。
 # ⚠️ TOML 语法要求：本小节必须放在 [translate] 的**最后**，
 #    它下面的键都属于 glossary，不再属于 [translate]。
 [translate.glossary]
-# "hoodie"        = "Hoodie"
-# "free shipping" = "kostenloser Versand"
-# "sold out"      = "ausverkauft"
+"free shipping"             = "kostenloser Versand"
+"grooming kit"              = "Haustierpflege-Set"
+"litter box"                = "Katzentoilette"
+"litter mat"                = "Streumatte"
+"odor control"              = "Geruchskontrolle"
+"open-top litter box"       = "Katzentoilette mit offenem Design"
+"pet grooming"              = "Fellpflege"
+"pet grooming kit"          = "Haustierpflege-Set"
+"self-cleaning litter box"  = "selbstreinigende Katzentoilette"
+"suction power"             = "Saugleistung"
+"vacuum steamer"            = "Dampfglätter mit Saugfunktion"
+"waste bag"                 = "Müllbeutel"
+"wet food"                  = "Nassfutter"
 
 [paths]
 archive = "archive"

@@ -16,6 +16,7 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 import core.notify as N
+import core.config as C
 
 fails = []
 
@@ -32,6 +33,16 @@ def read_log(d):
 
 
 with tempfile.TemporaryDirectory() as d:
+    print("[0] config.toml 致命错误也会退回默认 state 目录")
+    orig_cfg, orig_root, real_state_dir = C.cfg, N.ROOT, N._state_dir
+    C.cfg = lambda: (_ for _ in ()).throw(SystemExit("模拟配置错误"))
+    N.ROOT = Path(d)
+    try:
+        check(real_state_dir() == Path(d) / "state",
+              "配置加载的 SystemExit 被通知层隔离并创建回退目录")
+    finally:
+        C.cfg, N.ROOT = orig_cfg, orig_root
+
     N._state_dir = lambda: Path(d)          # 把日志引到临时目录，别污染真实 state/
 
     print("[1] 必定留下记录")

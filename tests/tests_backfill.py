@@ -13,6 +13,7 @@ force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 
 
 from core.store import Archive, Media, Post
 import routes.backfill as backfill
+import core.capture as capture
 from routes.backfill import (
     STALL_HINT_SECONDS, Collector, ScrollProgress, _download, _stdin_waiter)
 
@@ -86,7 +87,21 @@ class Request:
     async def get(self, url, headers=None):
         self.urls.append((url, headers))
         if url.endswith("good.jpg"):
-            return Response(b"image-bytes")
+            return Response(b"\xff\xd8\xff\xe0jpeg")
+        if url.endswith("good.png"):
+            return Response(b"\x89PNG\r\n\x1a\npng", content_type="image/png")
+        if url.endswith("good.webp"):
+            return Response(b"RIFF\x04\x00\x00\x00WEBP", content_type="image/webp")
+        if url.endswith("good.gif"):
+            return Response(b"GIF89a", content_type="image/gif")
+        if url.endswith("spoof.jpg"):
+            return Response(b"<html>login required</html>", content_type="image/jpeg")
+        if url.endswith("vector.svg"):
+            return Response(b"<svg></svg>", content_type="image/svg+xml")
+        if url.endswith("mismatch.jpg"):
+            return Response(b"\x89PNG\r\n\x1a\n", content_type="image/jpeg")
+        if url.endswith("login.jpg"):
+            return Response(b"<html>login required</html>", content_type="text/html")
         return Response(b"")
 
 
@@ -101,6 +116,13 @@ async def download_case(base):
         post_id="p2", platform="instagram", account="acct", text="caption",
         created_at="2026-08-29T00:00:00Z", media_complete=True,
         media=[Media(url="https://cdn/good.jpg", kind="image"),
+               Media(url="https://cdn/good.png", kind="image"),
+               Media(url="https://cdn/good.webp", kind="image"),
+               Media(url="https://cdn/good.gif", kind="image"),
+               Media(url="https://cdn/spoof.jpg", kind="image"),
+               Media(url="https://cdn/vector.svg", kind="image"),
+               Media(url="https://cdn/mismatch.jpg", kind="image"),
+               Media(url="https://cdn/login.jpg", kind="image"),
                Media(url="https://cdn/empty.jpg", kind="image"),
                Media(url="https://cdn/video.mp4", kind="video")],
     )
@@ -113,15 +135,55 @@ with tempfile.TemporaryDirectory() as d:
     arc, post, ctx = asyncio.run(download_case(d))
     check(post.media[0].local_path is not None, "成功图片写入本地并记录相对路径")
     saved = arc.base / post.media[0].local_path
-    check(saved.read_bytes() == b"image-bytes", "落盘内容与响应体一致且非零字节")
-    check(post.media[1].local_path is None, "空响应没有被伪装成已下载媒体")
+    check(saved.read_bytes() == b"\xff\xd8\xff\xe0jpeg",
+          "落盘内容与响应体一致且非零字节")
+    check(all(post.media[i].local_path for i in range(4)),
+          "JPEG/PNG/WebP/GIF 四种允许的静态图片均可落盘")
+    check(post.media[4].local_path is None,
+          "伪造 image/jpeg 的 HTML 没有被写入归档")
+    check(post.media[5].local_path is None, "SVG 主动格式不进入人工审校链路")
+    check(post.media[6].local_path is None, "MIME 与文件签名不一致时拒绝")
+    check(post.media[7].local_path is None, "HTTP 200 登录页没有被伪装成图片")
+    check(post.media[8].local_path is None, "空响应没有被伪装成已下载媒体")
     check(post.media_complete is False, "任一已知图片失败都会标记媒体不完整")
     check([u for u, _ in ctx.request.urls] ==
-          ["https://cdn/good.jpg", "https://cdn/empty.jpg"],
+          ["https://cdn/good.jpg", "https://cdn/good.png",
+           "https://cdn/good.webp", "https://cdn/good.gif",
+           "https://cdn/spoof.jpg", "https://cdn/vector.svg",
+           "https://cdn/mismatch.jpg", "https://cdn/login.jpg",
+           "https://cdn/empty.jpg"],
           "视频只留元数据，没有被下载")
 
 
-print("\n[4] 回填主流程不会用 has(post_id) 跳过残缺帖的补全")
+print("\n[4] capture 原始响应先完整落盘，再原子替换")
+with tempfile.TemporaryDirectory() as d:
+    target = Path(d) / "_capture_1.json"
+    target.write_text('{"old":true}', encoding="utf-8")
+    capture.atomic_write_json(target, [{"new": True}])
+    check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
+          "成功写入得到完整合法 JSON")
+
+    original_dump = capture.json.dump
+
+    def interrupted_dump(_value, handle, **_kwargs):
+        handle.write('{"partial":')
+        raise OSError("simulated interruption")
+
+    try:
+        capture.json.dump = interrupted_dump
+        try:
+            capture.atomic_write_json(target, [{"lost": True}])
+        except OSError:
+            pass
+    finally:
+        capture.json.dump = original_dump
+    check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
+          "中断不会截断上一份可用 capture")
+    check(not list(Path(d).glob("._capture_1.json.*.tmp")),
+          "中断留下的同目录临时文件已清理")
+
+
+print("\n[5] 回填主流程不会用 has(post_id) 跳过残缺帖的补全")
 
 
 class Page:

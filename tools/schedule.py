@@ -8,7 +8,7 @@ r"""注册 / 查看 / 删除每日增量的 Windows 计划任务。对应实施�
 **为什么是两个任务而不是一个**：Task Scheduler 的一个任务只能有一个 Action，
 而三个触发器需要两种参数：
 
-  FBScraperDelta         每天固定时刻 → run_delta.bat（**不带 --if-stale**）
+  FBScraperDelta         每天固定时刻 → run_delta.bat --platform all
   FBScraperDeltaCatchup  登录时 / 解锁时 → run_delta.bat --if-stale
 
 ⚠️ **每天那个不能带 `--if-stale`。** `stale_after_hours = 26`，而每天同一时刻
@@ -103,7 +103,7 @@ def _actions(bat: Path, root: Path, arguments: str) -> str:
 
 
 def daily_xml(bat: Path, root: Path, at: str) -> str:
-    """每天固定时刻。**不带 --if-stale** —— 理由见模块头。"""
+    """每天固定时刻。显式传 all，但**不带 --if-stale** —— 理由见模块头。"""
     return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="%s">
   <RegistrationInfo>
@@ -123,7 +123,8 @@ def daily_xml(bat: Path, root: Path, at: str) -> str:
 %s
 %s
 </Task>
-""" % (NS, DAILY_TASK, at, _principal(), _settings(), _actions(bat, root, ""))
+""" % (NS, DAILY_TASK, at, _principal(), _settings(),
+       _actions(bat, root, "--platform all"))
 
 
 def catchup_xml(bat: Path, root: Path) -> str:

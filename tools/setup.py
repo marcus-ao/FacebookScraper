@@ -116,7 +116,7 @@ def install_playwright():
 
 def self_check():
     rc = run([str(VENV_PY), "-c",
-              "import playwright, httpx, tomllib; print('    依赖导入 OK')"])
+              "import playwright, httpx, openai, tomllib; print('    依赖导入 OK')"])
     if rc != 0:
         die("依赖导入失败")
     rc = run([str(VENV_PY), "-c",

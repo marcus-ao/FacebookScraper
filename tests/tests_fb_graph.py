@@ -32,12 +32,41 @@ class Client:
         request = httpx.Request("GET", url)
         if url.endswith("good.jpg"):
             return httpx.Response(
-                200, content=b"image-data", headers={"content-type": "image/jpeg"},
+                200, content=b"\xff\xd8\xff\xe0jpeg",
+                headers={"content-type": "image/jpeg"},
                 request=request)
+        if url.endswith("good.png"):
+            return httpx.Response(
+                200, content=b"\x89PNG\r\n\x1a\npng",
+                headers={"content-type": "image/png"}, request=request)
+        if url.endswith("good.webp"):
+            return httpx.Response(
+                200, content=b"RIFF\x04\x00\x00\x00WEBP",
+                headers={"content-type": "image/webp"}, request=request)
+        if url.endswith("good.gif"):
+            return httpx.Response(
+                200, content=b"GIF87a", headers={"content-type": "image/gif"},
+                request=request)
+        if url.endswith("spoof.jpg"):
+            return httpx.Response(
+                200, content=b"<html>login required</html>",
+                headers={"content-type": "image/jpeg"}, request=request)
+        if url.endswith("vector.svg"):
+            return httpx.Response(
+                200, content=b"<svg></svg>",
+                headers={"content-type": "image/svg+xml"}, request=request)
+        if url.endswith("mismatch.jpg"):
+            return httpx.Response(
+                200, content=b"\x89PNG\r\n\x1a\n",
+                headers={"content-type": "image/jpeg"}, request=request)
         if url.endswith("empty.jpg"):
             return httpx.Response(
                 200, content=b"", headers={"content-type": "image/jpeg"},
                 request=request)
+        if url.endswith("login.jpg"):
+            return httpx.Response(
+                200, content=b"<html>login required</html>",
+                headers={"content-type": "text/html"}, request=request)
         return httpx.Response(403, content=b"forbidden", request=request)
 
 
@@ -49,6 +78,13 @@ with tempfile.TemporaryDirectory() as d:
         created_at="2026-08-29T00:00:00Z", media_complete=True,
         media=[
             Media(url="https://cdn/good.jpg", kind="image"),
+            Media(url="https://cdn/good.png", kind="image"),
+            Media(url="https://cdn/good.webp", kind="image"),
+            Media(url="https://cdn/good.gif", kind="image"),
+            Media(url="https://cdn/spoof.jpg", kind="image"),
+            Media(url="https://cdn/vector.svg", kind="image"),
+            Media(url="https://cdn/mismatch.jpg", kind="image"),
+            Media(url="https://cdn/login.jpg", kind="image"),
             Media(url="https://cdn/empty.jpg", kind="image"),
             Media(url="https://cdn/forbidden.jpg", kind="image"),
             Media(url="https://cdn/video.mp4", kind="video"),
@@ -58,12 +94,19 @@ with tempfile.TemporaryDirectory() as d:
     _download_images(client, archive, post)
 
     check("https://cdn/video.mp4" not in client.urls, "视频 URL 没有发起下载请求")
-    check(post.media[3].local_path is None, "视频只保留 URL 与 kind 元数据")
+    check(post.media[10].local_path is None, "视频只保留 URL 与 kind 元数据")
     check(post.media[0].local_path is not None, "成功图片记录本地相对路径")
-    check((archive.base / post.media[0].local_path).read_bytes() == b"image-data",
+    check((archive.base / post.media[0].local_path).read_bytes()
+          == b"\xff\xd8\xff\xe0jpeg",
           "成功图片非空落盘")
-    check(post.media[1].local_path is None, "空响应不写 0 字节文件")
-    check(post.media[2].local_path is None, "HTTP 失败不伪装成已下载")
+    check(all(post.media[i].local_path for i in range(4)),
+          "JPEG/PNG/WebP/GIF 四种允许的静态图片均可落盘")
+    check(post.media[4].local_path is None, "伪造 JPEG 的 HTML 不写入归档")
+    check(post.media[5].local_path is None, "SVG 主动格式不进入人工审校链路")
+    check(post.media[6].local_path is None, "MIME 与文件签名不一致时拒绝")
+    check(post.media[7].local_path is None, "HTTP 200 登录页不写成图片")
+    check(post.media[8].local_path is None, "空响应不写 0 字节文件")
+    check(post.media[9].local_path is None, "HTTP 失败不伪装成已下载")
     check(post.media_complete is False, "任一图片失败会留下可重试的不完整状态")
 
 

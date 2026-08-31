@@ -2,7 +2,8 @@
 
 这套测试盯两件事，都是"错了要几天后才发现"的那类：
 
-  1. **两个任务的参数不能搞反。** 每日触发器**不带** `--if-stale`
+  1. **两个任务的参数不能搞反。** 每日触发器显式带 `--platform all`、
+     但**不带** `--if-stale`
      （stale_after_hours = 26 > 24，带上就变成跑一天跳一天），
      补跑触发器**必须带**（否则每次解锁都抓一遍）。
   2. **`.bat` 必须纯 ASCII + CRLF。** 计划里写着"`.gitattributes` 只保证换行，
@@ -69,7 +70,9 @@ print("\n[2] 参数不能搞反（搞反了要几天后才看出来）")
 daily, catchup = trees[DAILY_TASK], trees[CATCHUP_TASK]
 daily_args = text(daily, "Actions", "Exec", "Arguments")
 catchup_args = text(catchup, "Actions", "Exec", "Arguments")
-check(daily_args is None,
+check(daily_args == "--platform all",
+      "每日任务显式传 --platform all（语义仍是两个平台），避免无参数调用 bat 后 pause")
+check("--if-stale" not in daily_args,
       "每日任务**不带 --if-stale** —— stale 阈值 26 小时 > 24，"
       "带上会变成跑一天、跳一天")
 check(catchup_args == "--if-stale",

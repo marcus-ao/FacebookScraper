@@ -72,13 +72,23 @@ def ig_coauthors(node: dict) -> list[str]:
 
     ⚠️ **只取 `coauthor_producers`，不取 `invited_coauthor_producers`。**
     后者是"邀请了但对方还没接受"，那种帖子不会出现在被邀请方的主页上。
-    两个字段在真实响应里都存在（1022 个节点全有），很容易顺手一起收。
+    两个**键**在真实响应里都存在（1022 个节点全有），很容易顺手一起收。
+    ⚠️ 补一个诚实的限定：实测这 1022 个节点里 `invited_coauthor_producers`
+    的**值全是空数组**，所以"不收它"这条选择至今没有真实反例可验证。
+    它是保守方向上的选择（宁可漏一篇，不可混进一篇别人的），保持不变。
+
+    条目形态兼容 `{"username": ...}` 与裸字符串两种：真实响应给的是前者，
+    但**认不出条目 = 整篇帖子被判成他人帖丢掉**，而这正是 CR-19 那 263 篇
+    的丢法。这一类判定上多兼容一种形态的成本是两行，代价不对称。
     """
     out: list[str] = []
     for c in node.get("coauthor_producers") or []:
-        if not isinstance(c, dict):
+        if isinstance(c, dict):
+            name = (c.get("username") or "").strip().lower()
+        elif isinstance(c, str):
+            name = c.strip().lower()
+        else:
             continue
-        name = (c.get("username") or "").strip().lower()
         if name and name not in out:
             out.append(name)
     return out
@@ -96,28 +106,50 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
     def best_image(node: dict) -> dict | None:
         cands = (node.get("image_versions2") or {}).get("candidates") or []
         # candidates 按尺寸降序，取第 0 个即最大尺寸
-        return cands[0] if cands else None
+        if not isinstance(cands, list):
+            return None
+        return next((c for c in cands
+                     if isinstance(c, dict) and c.get("url")), None)
 
     media: list[Media] = []
     children = item.get("carousel_media") or [item]
+    media_complete = True
+    if not isinstance(children, list):
+        children = [item]
+        media_complete = False
     for child in children:
-        if child.get("video_versions"):
-            # 视频不下载，但记录存在，否则连续性检查会误报缺口
-            v = child["video_versions"][0]
-            media.append(Media(url=v["url"], kind="video",
-                               width=v.get("width"), height=v.get("height")))
+        if not isinstance(child, dict):
+            media_complete = False
+            continue
+        versions = child.get("video_versions") or []
+        has_video = bool(versions)
+        video = (next((v for v in versions
+                       if isinstance(v, dict) and v.get("url")), None)
+                 if isinstance(versions, list) else None)
+        if has_video:
+            if video:
+                # 视频不下载，但记录存在，否则连续性检查会误报缺口
+                media.append(Media(url=video["url"], kind="video",
+                                   width=video.get("width"), height=video.get("height")))
+            else:
+                # 已明确是视频却缺视频 URL，不能退回缩略图并伪装成完整图片项。
+                media_complete = False
+            continue
+        img = best_image(child)
+        if img:
+            media.append(Media(url=img["url"], kind="image",
+                               width=img.get("width"), height=img.get("height")))
         else:
-            img = best_image(child)
-            if img:
-                media.append(Media(url=img["url"], kind="image",
-                                   width=img.get("width"), height=img.get("height")))
+            # 一项结构漂移不应让 extract() 丢掉整篇父帖；保留已解析媒体并
+            # 明确标残缺，下一次登录态回填才会继续尝试补齐。
+            media_complete = False
 
     return Post(
         post_id=str(item.get("pk") or item.get("id") or code),
         platform="instagram", account=account,
         text=caption, created_at=iso(item.get("taken_at")),
         permalink=f"{IG}/p/{code}/" if code else None,
-        media=media, source_route=route, media_complete=True,
+        media=media, source_route=route, media_complete=media_complete,
         owner=owner, owner_name=owner_name, coauthors=ig_coauthors(item),
     )
 
@@ -322,11 +354,18 @@ def _merge_post(current: Post, candidate: Post) -> Post:
     winner, other = ((candidate, current)
                      if rank(candidate) > rank(current)
                      else (current, candidate))
-    # owner 与 coauthors 也要补：同一帖的多份响应里，往往只有一份带
-    # actors/user/coauthor_producers，漏补的话这篇会因为"归属未知"被
-    # partition_by_owner 丢掉 —— 丢的是真帖子。
-    for attr in ("text", "created_at", "permalink", "owner", "owner_name",
-                 "coauthors"):
+    # coauthors 取**并集**，不是"空了才补"。两份响应给出不同子集时
+    # （合作方超过一个的帖子实测有 21 篇，最多 4 个），"空了才补"会让
+    # 先到的那份把目标账号挡在外面 —— 结果又是一篇自家帖子被判成他人帖。
+    # 并集在语义上也更对：coauthor 关系是这篇帖子的属性，不是某次响应的属性。
+    merged = list(winner.coauthors or [])
+    for name in (other.coauthors or []):
+        if name not in merged:
+            merged.append(name)
+    winner.coauthors = merged
+    # owner 也要补：同一帖的多份响应里，往往只有一份带 actors/user，
+    # 漏补的话这篇会因为"归属未知"被 partition_by_owner 丢掉 —— 丢的是真帖子。
+    for attr in ("text", "created_at", "permalink", "owner", "owner_name"):
         if not getattr(winner, attr) and getattr(other, attr):
             setattr(winner, attr, getattr(other, attr))
     if len(winner.media) == len(other.media):
@@ -369,9 +408,16 @@ def on_timeline_of(post: Post, target: str) -> bool:
 
     只判第一种的话，实测 neakasa.tech 会丢掉 **263 篇自己主页上的帖子**，
     而且丢的正是最近这一年的主要内容形式——账号看起来"一个多月没发帖"，
-    实际上一直在更。
+    实际上一直在更。增量看到的那一屏更极端：**36 篇里 35 篇是合作帖，
+    本账号自己发的只有 1 篇**。
+
+    ⚠️ `target` 在这里**自己归一化**，不假设调用方已经 lower 过。
+    `partition_by_owner` 是这么传的，但这个函数是公开的判定入口，
+    而"传了个带大写的账号名"的失败形态恰好就是静默丢掉全部帖子 ——
+    这个项目已经为同一种静默丢弃付过一次代价了。
     """
-    return post.owner == target or target in (post.coauthors or [])
+    who = (target or "").strip().lower()
+    return post.owner == who or who in (post.coauthors or [])
 
 
 def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], list[dict]]:

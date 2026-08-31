@@ -128,7 +128,7 @@ class FakePage:
 
 
 class FakeRequest:
-    def __init__(self, payload=b"\xff\xd8jpegbytes"):
+    def __init__(self, payload=b"\xff\xd8\xffjpegbytes"):
         self.payload = payload
         self.gets = []
 
@@ -156,10 +156,15 @@ class FakeCtx:
 
 
 def ig_payload(pk="111", code="abc", ts=1755000000, owner="acme_us",
-               text="hello world", n_media=1):
+               text="hello world", n_media=1, coauthors=()):
     node = {"pk": pk, "code": code, "taken_at": ts,
             "user": {"username": owner, "full_name": "Acme US"},
             "caption": {"text": text},
+            # 真实响应里这两个键在**每个**节点上都有，绝大多数为空数组。
+            # 构造样本时也带上，免得测试用例的形态比真实数据更干净（CR-19）
+            "coauthor_producers": [{"pk": "9%d" % i, "username": u}
+                                   for i, u in enumerate(coauthors)],
+            "invited_coauthor_producers": [],
             "image_versions2": {"candidates": [
                 {"url": "https://cdn.example.com/%s.jpg" % pk,
                  "width": 1080, "height": 1080}]}}
@@ -366,6 +371,63 @@ check(not delta.ScanResult(new=0, own=6, newest_seen="2026-08-25T00:00:00Z",
                            newest_known="2026-08-25T00:00:00Z").stale_view(),
       "看到的和归档一样新 → 不报警（这就是 FB 那次『真的没新帖』）")
 
+# 缺陷三：own 这一个数字看不出它是怎么来的。IG 实测那 36 篇里 35 篇是合作帖、
+# 自己发的只有 1 篇 —— 合作判定一漂移，own 就从 36 掉到 1，而那和
+# "今天真的只发了一篇"在旧摘要里长得一模一样。
+split = delta.ScanResult(new=2, own=36, authored=1, collab=35, rejected=3,
+                         newest_seen="2026-08-27T00:00:00Z",
+                         oldest_seen="2026-06-06T00:00:00Z",
+                         newest_known="2026-08-27T00:00:00Z")
+check("原创 1" in split.summary() and "合作 35" in split.summary(),
+      "摘要把『本账号 N 篇』拆成原创/合作两半 —— 合作判定失效时一眼可见")
+
+
+print("\n[3c] 丢弃的里面有已知合作方 → 归属判定漏判的哨兵（CR-19 那一类）")
+
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    # 归档里有一篇合作帖：brand.x 发布、本账号是 coauthor。
+    # 于是 brand.x 从此是"已知合作方"。
+    arc.append(Post(post_id="c1", platform="instagram", account="acme_us",
+                    text="collab", owner="brand.x", coauthors=["acme_us"],
+                    created_at="2026-07-01T00:00:00Z"))
+    for i in range(3):
+        arc.append(Post(post_id="o%d" % i, platform="instagram", account="acme_us",
+                        text="own", owner="acme_us",
+                        created_at="2026-07-%02dT00:00:00Z" % (10 + i)))
+    # 本次扫描：3 篇自家的（够过 min_own_posts），外加一篇 brand.x 发的、
+    # 但**没带 coauthor 信息** —— 正是"合作判定漏了"该长的样子。
+    items = [ig_payload(str(700 + i))["data"]["items"][0] for i in range(3)]
+    items.append(ig_payload("777", owner="brand.x")["data"]["items"][0])
+    items.append(ig_payload("778", owner="chicagofire")["data"]["items"][0])
+    page = FakePage([resp({"data": {"items": items}})])
+    res = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc,
+                                 test_cfg(), dry_run=True))
+    check([s["post_id"] for s in res.suspect] == ["777"],
+          "被丢弃的 brand.x 帖子被挑出来 —— 它是已知合作方，很可能就在本账号主页上")
+    check(res.rejected == 2 and len(res.suspect) == 1,
+          "陌生账号的推荐位照常丢弃、不进哨兵（否则这条告警会天天响、然后被无视）")
+
+with tempfile.TemporaryDirectory() as d:
+    # 全面退化：合作判定完全失效时，min_own_posts 那道闸先响，
+    # **中止理由里要带上"来自已知合作方"** —— 否则下一个会话又会先去猜"是不是被拦了"。
+    arc = Archive(Path(d), "in_acme_us")
+    for i in range(4):
+        arc.append(Post(post_id="c%d" % i, platform="instagram", account="acme_us",
+                        text="collab", owner="brand.x", coauthors=["acme_us"],
+                        created_at="2026-07-%02dT00:00:00Z" % (10 + i)))
+    items = [ig_payload(str(800 + i), owner="brand.x")["data"]["items"][0]
+             for i in range(5)]
+    items.append(ig_payload("888")["data"]["items"][0])
+    page = FakePage([resp({"data": {"items": items}})])
+    try:
+        asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc,
+                               test_cfg(), dry_run=True))
+        check(False, "只看到 1 篇自家帖子必须中止")
+    except DeltaBlocked as e:
+        check("已知合作方" in str(e) and "brand.x" in str(e),
+              "中止理由直接指向合作帖判定，而不是让人先去怀疑被拦了")
+
 
 print("\n[4] 异常即停：这四种都必须当次中止并说清原因")
 
@@ -515,6 +577,85 @@ with tempfile.TemporaryDirectory() as tmp:
     check(len(fb_rows) == 1 and fb_rows[0]["owner"] == "acme_page",
           "Facebook 侧的归属取自 actors[0].url 的账号名段，不是展示名")
 
+with tempfile.TemporaryDirectory() as tmp:
+    # 非 DeltaBlocked 的异常以前会穿透 _run_due：既不落状态也不通知，
+    # 无人值守时只剩 Task Scheduler 的一个退出码，失败预算永远攒不起来。
+    state = {}
+    saved_once = delta.delta_once
+
+    async def unexpected(*_a, **_kw):
+        raise RuntimeError("parser exploded")
+
+    try:
+        delta.delta_once = unexpected
+        rc, notices = run_due([], state, tmp, platforms=("instagram",))
+    finally:
+        delta.delta_once = saved_once
+    persisted = json.loads((Path(tmp) / "s.json").read_text(encoding="utf-8"))
+    check(rc == 1 and state["instagram"]["consecutive_failures"] == 1,
+          "非预期异常返回失败并累计平台失败预算")
+    check("RuntimeError" in state["instagram"]["last_error"]
+          and persisted == state,
+          "非预期异常的类型/详情写入 delta_state，而不是只打到控制台")
+    check(notices and "抓取异常" in notices[0][0],
+          "非预期异常也会通知，不会在计划任务里静默消失")
+
+with tempfile.TemporaryDirectory() as tmp:
+    # Archive 构造发生在 delta_once 之前，也必须属于当前平台的异常闭环。
+    # 这是我们本地的目录/权限问题，不应像登录墙那样硬停另一个平台。
+    state = {}
+    ig_page = FakePage([resp(ig_payload())])
+    saved_archive = delta.Archive
+
+    def archive_with_denied_facebook(base, name):
+        if name.startswith("fa_"):
+            raise PermissionError("archive root denied")
+        return saved_archive(base, name)
+
+    try:
+        delta.Archive = archive_with_denied_facebook
+        rc, notices = run_due([ig_page], state, tmp)
+    finally:
+        delta.Archive = saved_archive
+    persisted = json.loads((Path(tmp) / "s.json").read_text(encoding="utf-8"))
+    check(rc == 1 and state["facebook"]["consecutive_failures"] == 1,
+          "Archive 构造抛 PermissionError 时返回失败并累计对应平台预算")
+    check("PermissionError" in state["facebook"]["last_error"]
+          and persisted == state,
+          "Archive 构造失败的类型/详情原子写入 delta_state")
+    check(notices and "抓取异常 · facebook" in notices[0][0],
+          "Archive 构造失败会通知并点名对应平台")
+    check(ig_page.goto_calls and state["instagram"]["last_success"],
+          "一个平台的 Archive 构造失败属于本地问题，另一个平台继续并成功")
+
+with tempfile.TemporaryDirectory() as tmp:
+    # attach 在平台循环之前；这条也必须把所有到期平台记失败。
+    path = Path(tmp) / "attach_state.json"
+    state = {}
+    notices = []
+    saved_attach, saved_notify = delta.attach, delta.notify
+
+    async def broken_attach():
+        # core.chrome.attach() 的端口竞态/无 context 失败契约是 SystemExit，
+        # 它不属于 Exception；这条防止兜底看似存在、真实失败却仍穿透。
+        raise SystemExit("CDP context missing")
+
+    try:
+        delta.attach = broken_attach
+        delta.notify = lambda t, m, **k: notices.append((t, m))
+        rc = asyncio.run(delta._run_due(
+            ["facebook", "instagram"], test_cfg(), state, path, False))
+    finally:
+        delta.attach, delta.notify = saved_attach, saved_notify
+    check(rc == 1 and all(state[p]["consecutive_failures"] == 1
+                          for p in ("facebook", "instagram")),
+          "CDP attach 的 SystemExit 给所有到期平台各记一次失败")
+    check(all("SystemExit" in state[p]["last_error"]
+              for p in ("facebook", "instagram")),
+          "SystemExit 类型与详情写进状态，未被宽泛 BaseException 吞掉")
+    check(path.exists() and notices and "没能启动" in notices[0][0],
+          "CDP 附着异常保存状态并通知")
+
 
 print("\n[4c] 完整性检查接进增量收尾（D3）")
 
@@ -570,6 +711,44 @@ with tempfile.TemporaryDirectory() as tmp:
 
 
 print("\n[5] 运行状态：失败也要写，且不能刷新 last_success（C5）")
+
+with tempfile.TemporaryDirectory() as tmp:
+    dirty = Path(tmp) / "delta_state.json"
+    dirty.write_text(json.dumps({"facebook": None, "instagram": "broken",
+                                 "future_field": {"keep": True}}),
+                     encoding="utf-8")
+    cleaned = delta.load_state(dirty)
+    check(all(isinstance(cleaned[p], dict) and
+              cleaned[p]["consecutive_failures"] == 0
+              for p in ("facebook", "instagram")),
+          "平台状态为 null/非对象时在读取边界重建，不让 main() 调 .get() 崩溃")
+    check(cleaned["future_field"] == {"keep": True},
+          "修复已知平台坏值时保留未知顶层字段，兼容未来状态版本")
+
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "delta_state.json"
+    old_state = {"facebook": {**blank_entry(), "consecutive_failures": 2}}
+    path.write_text(json.dumps(old_state, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    old_bytes = path.read_bytes()
+    saved_replace = delta.Path.replace
+
+    def fail_before_commit(self, target):
+        raise OSError("simulated replace failure")
+
+    replace_failed = False
+    try:
+        delta.Path.replace = fail_before_commit
+        try:
+            delta.save_state(path, {"facebook": blank_entry()})
+        except OSError:
+            replace_failed = True
+    finally:
+        delta.Path.replace = saved_replace
+    check(replace_failed and path.read_bytes() == old_bytes,
+          "replace 前失败不截断旧 state，失败预算/last_success 仍可完整读回")
+    check(not list(path.parent.glob(".%s.*.tmp" % path.name)),
+          "原子提交失败后 finally 清理同目录临时文件")
 
 entry = blank_entry()
 record_success(entry, NOW, 2)
@@ -637,7 +816,7 @@ class Recorder:
         self.sleeps, self.notices, self.launched = [], [], []
 
 
-def run_main(argv, state, rec, cdp=True, tmp=None):
+def run_main(argv, state, rec, cdp=True, tmp=None, launch_error=None):
     """跑 main()，但把睡眠、通知、Chrome、真实抓取全部换成记账。"""
     path = Path(tmp) / "delta_state.json"
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
@@ -648,7 +827,13 @@ def run_main(argv, state, rec, cdp=True, tmp=None):
         delta.time.sleep = lambda s: rec.sleeps.append(s)
         delta.notify = lambda t, m, **k: rec.notices.append((t, m))
         delta.cdp_ready = lambda _p: cdp
-        delta.launch = lambda *a, **k: rec.launched.append(True) or True
+        def fake_launch(*_a, **_kw):
+            rec.launched.append(True)
+            if launch_error is not None:
+                raise launch_error
+            return True
+
+        delta.launch = fake_launch
         delta.asyncio.run = lambda coro: (coro.close(), 0)[1]
         return delta.main(argv)
     finally:
@@ -701,6 +886,16 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rec.notices and "停止自动运行" in rec.notices[0][0],
           "预算用尽会告警（这是唯一能让人知道该去重新登录的通道）")
 
+    rec = Recorder()
+    mixed = {"facebook": {**blank_entry(), "consecutive_failures": 3,
+                           "last_error": "登录墙"},
+             "instagram": blank_entry()}
+    rc = run_main(["--no-jitter"], mixed, rec, tmp=tmp)
+    check(rc == 2,
+          "一边预算耗尽、另一边成功时仍返回 2，不把部分停摆记成整体成功")
+    check(rec.notices and "停止自动运行" in rec.notices[0][0],
+          "混合平台运行仍明确通知已停摆的平台")
+
     rc = run_main(["--reset-failures"], burnt, rec, tmp=tmp)
     saved_state = json.loads((Path(tmp) / "delta_state.json").read_text(encoding="utf-8"))
     check(rc == 0 and saved_state["facebook"]["consecutive_failures"] == 0,
@@ -710,6 +905,46 @@ with tempfile.TemporaryDirectory() as tmp:
     rec = Recorder()
     run_main([], dict(state), rec, cdp=False, tmp=tmp)
     check(rec.launched, "Chrome 没在跑时会自动拉起（用户 2026-08-30 拍板）")
+
+    # 明确关闭自动拉起时也必须进入失败状态闭环；旧实现只打印/通知，
+    # last_error 与失败预算完全不动。
+    saved_load = DeltaConfig.__dict__["load"]
+    try:
+        DeltaConfig.load = classmethod(
+            lambda cls: test_cfg(autostart_chrome=False))
+        rec = Recorder()
+        rc = run_main([], dict(state), rec, cdp=False, tmp=tmp)
+    finally:
+        DeltaConfig.load = saved_load
+    saved_state = json.loads(
+        (Path(tmp) / "delta_state.json").read_text(encoding="utf-8"))
+    check(rc == 1 and not rec.launched,
+          "autostart_chrome=false 且端口未就绪时失败退出、不擅自拉起 Chrome")
+    check(all(saved_state[p]["consecutive_failures"] == 1
+              and "端口" in saved_state[p]["last_error"]
+              for p in ("facebook", "instagram")),
+          "禁止自动拉起的启动失败仍保存到两个到期平台的失败状态")
+    check(rec.notices and "没能启动" in rec.notices[0][0],
+          "禁止自动拉起的启动失败也会通知")
+
+    # launch() 既可能返回 False，也可能在建 profile / 读配置 / Popen 时抛异常；
+    # 尤其 core.chrome 的部分配置错误用 SystemExit 表达，Exception 捕不到。
+    for launch_error in (PermissionError("profile denied"),
+                         SystemExit("chrome exe missing")):
+        rec = Recorder()
+        rc = run_main([], dict(state), rec, cdp=False, tmp=tmp,
+                      launch_error=launch_error)
+        saved_state = json.loads(
+            (Path(tmp) / "delta_state.json").read_text(encoding="utf-8"))
+        error_type = type(launch_error).__name__
+        check(rc == 1 and len(rec.launched) == 1,
+              "launch 抛 %s 时进入失败闭环、不会直穿 main" % error_type)
+        check(all(saved_state[p]["consecutive_failures"] == 1
+                  and error_type in saved_state[p]["last_error"]
+                  for p in ("facebook", "instagram")),
+              "launch 的 %s 给所有到期平台记录失败详情" % error_type)
+        check(rec.notices and "没能启动" in rec.notices[0][0],
+              "launch 的 %s 保存状态后发出启动失败通知" % error_type)
 
 
 # ==========================================================================

@@ -54,7 +54,7 @@ def _state_dir() -> Path:
     try:
         from core.config import cfg
         return cfg().state_dir
-    except Exception:
+    except (Exception, SystemExit):
         d = ROOT / "state"
         d.mkdir(parents=True, exist_ok=True)
         return d

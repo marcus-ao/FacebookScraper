@@ -17,6 +17,7 @@ from pathlib import Path
 
 import httpx
 
+from core.capture import validated_image_content_type
 from core.store import Archive, Media, Post
 
 GRAPH = "https://graph.facebook.com/v21.0"
@@ -58,7 +59,14 @@ def _download_images(client, arc: Archive, post: Post) -> None:
             print(f"    ! 媒体为空 {post.post_id}[{i}]")
             downloads_complete = False
             continue
-        path = arc.media_path(post, i, response.headers.get("content-type"))
+        content_type = validated_image_content_type(
+            response.headers.get("content-type"), response.content)
+        if not content_type:
+            print(f"    ! 媒体类型或文件签名异常 {post.post_id}[{i}]: "
+                  f"{response.headers.get('content-type') or '缺少 Content-Type'}")
+            downloads_complete = False
+            continue
+        path = arc.media_path(post, i, content_type)
         path.write_bytes(response.content)
         media.local_path = str(path.relative_to(arc.base))
     post.media_complete = post.media_complete and downloads_complete

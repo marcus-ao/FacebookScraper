@@ -112,6 +112,24 @@ check(p.media[0].url.endswith("bbb_1.jpg"), "取 candidates[0] 即最大尺寸�
 check(p.media[2].kind == "video", "轮播里的视频子项识别为 video")
 check(p.media_complete is True, "回填形态 media_complete=True")
 
+iphone_partial_carousel = {
+    "pk": "3004", "code": "BADCHILD", "taken_at": 1756100100,
+    "caption": {"text": "Keep the parent even if one child drifts"},
+    "carousel_media": [
+        {"image_versions2": {"candidates": [
+            {"url": "https://cdn/valid.jpg", "width": 1080, "height": 1080}]}},
+        {"video_versions": [{}], "image_versions2": {"candidates": [
+            {"url": "https://cdn/video-thumbnail.jpg", "width": 1080, "height": 1080}]}},
+    ],
+}
+partial = extract([iphone_partial_carousel], "instagram", "acme", "backfill")
+check(len(partial) == 1 and partial[0].post_id == "3004",
+      "一个轮播子项字段漂移时保留父帖，不让 extract 静默丢整篇")
+check(len(partial[0].media) == 1 and partial[0].media[0].url.endswith("valid.jpg"),
+      "字段正常的兄弟子项保留，缺 URL 的视频不被缩略图伪装成图片")
+check(partial[0].media_complete is False,
+      "无法解析的子项把父帖标为媒体残缺，供下次回填重试")
+
 print("\n[3] 同一帖跨形态合并（增量先见封面，回填后见全量）")
 merged = {x.post_id: x for x in extract(
     [web_profile_info, feed_resp], "instagram", "acme", "mixed")}
@@ -150,7 +168,7 @@ except Exception as e:
 # 不是真实的形态。这一段就是为了把真实形态钉住。
 # 详见 docs/CODE_REVIEW.md 第 7 节 CR-12 ~ CR-15。
 # ==========================================================================
-from core.parse import _fb_slug, partition_by_owner   # noqa: E402
+from core.parse import _fb_slug, on_timeline_of, partition_by_owner   # noqa: E402
 
 print("\n[真实结构 1] 轮播子项不得成为独立帖子（CR-13）")
 # 真实形态：子项里 `code` 这个键**在**，值是 None；pk / taken_at 都在；
@@ -339,6 +357,30 @@ half = extract([{"items": [ig_node("7", "brand.a", coauthors=["neakasa.tech"])]}
                "instagram", "neakasa.tech", route="backfill")
 check(len(half) == 1 and half[0].coauthors == ["neakasa.tech"],
       "跨响应合并时 coauthors 会被补齐 —— 漏补就会把真帖子丢掉")
+
+# 两份响应各带一部分 coauthor：必须取**并集**。
+# "空了才补"在这里会让先到的那份把目标账号挡在外面 —— 又是一篇自家帖子
+# 被判成他人帖。真实数据里合作方超过一个的帖子有 21 篇（最多 4 个）。
+subsets = extract([{"items": [ig_node("8", "brand.b", coauthors=["other.brand"])]},
+                   {"items": [ig_node("8", "brand.b",
+                                      coauthors=["neakasa.tech"])]}],
+                  "instagram", "neakasa.tech", route="backfill")
+check(len(subsets) == 1
+      and sorted(subsets[0].coauthors) == ["neakasa.tech", "other.brand"],
+      "两份响应各带一部分 coauthor 时取并集，不是『空了才补』")
+check(partition_by_owner(subsets, "neakasa.tech")[0],
+      "并集之后这篇留得下来 —— 只补空的话它会被丢掉")
+
+# 条目形态：真实响应给的是 {"username": ...}，裸字符串也认。
+# 认不出条目 = 整篇帖子被判成他人帖，代价不对称。
+strs = extract([{"items": [dict(ig_node("9", "brand.c"),
+                                coauthor_producers=["Neakasa.Tech", "", None])]}],
+               "instagram", "neakasa.tech", route="backfill")
+check(strs[0].coauthors == ["neakasa.tech"],
+      "coauthor 条目是裸字符串也能认出来，空值/None 跳过")
+
+check(on_timeline_of(strs[0], "NeakasaOfficial".replace("Official", ".Tech")),
+      "on_timeline_of 自己归一化 target —— 调用方传了带大写的账号名也不会静默丢光")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

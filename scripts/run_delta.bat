@@ -2,7 +2,8 @@
 REM ---------------------------------------------------------------------
 REM Daily delta entry point. Usage:
 REM     run_delta.bat                  (double click; runs now, then pauses)
-REM     run_delta.bat --if-stale       (what the scheduled task calls)
+REM     run_delta.bat --platform all   (daily scheduled task)
+REM     run_delta.bat --if-stale       (logon/unlock catch-up task)
 REM     run_delta.bat --status         (no network, just prints state)
 REM     run_delta.bat --reset-failures (after you fixed whatever broke)
 REM
@@ -37,7 +38,7 @@ set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\delta.log"
 
 REM No arguments means somebody double clicked it: show the tail and wait.
-REM The scheduled task always passes --if-stale, so it never pauses here.
+REM Scheduled tasks always pass an argument, so they never pause here.
 if "%~1"=="" (
   powershell -NoProfile -Command "Get-Content -Encoding UTF8 -Tail 40 'state\delta.log'"
   echo.

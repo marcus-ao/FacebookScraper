@@ -1,491 +1,206 @@
-# F 组实施计划 · 接入 LLM API 完成德语翻译
+# F 组实施与操作计划 · DeepSeek 德语翻译
 
-> **给实施 Agent 的任务书。写这份文件时假设你看不到任何历史对话。**
-> 需要的背景全在这里，不需要去翻聊天记录。
->
-> 撰写：2026-08-30 · 对应 `docs/IMPLEMENTATION_PLAN.md` 的 **F1 / F2 / F3**
->
-> ⚠️ **同一时间还有另一个 Agent 在这个仓库里工作**（在修 Instagram 增量抓取）。
-> 第 2 节「文件所有权」是硬约束，**先读它再动手**。
+> 状态核对：2026-08-30。对应 `IMPLEMENTATION_PLAN.md` 的 F1 / F2 / F3。
 
----
+## 1. 当前结论
 
-## 0. 一句话任务
+翻译主干已经实现并通过离线回归，直接接入 DeepSeek 官方 OpenAI 兼容接口。
+真实归档共有 **1055 条有正文的帖子**：
 
-`translate.py` 的代码**已经写完了**（166 项离线断言全绿，零 API 调用）。
-你要做的不是从头实现，而是：**把它接上真实的 LLM 网关，用真实文案跑通，
-把 1010 篇英文社媒文案翻成可用的德语，并产出人工审校清单。**
+| 归档 | 帖子 | 有正文、可翻译 |
+|---|---:|---:|
+| `archive/fa_neakasaofficial/` | 46 | 45 |
+| `archive/in_neakasa.tech/` | 1019 | 1010 |
 
-代码完成 ≠ 验收通过。F1/F2/F3 三项的验收分别是「对 3 篇试跑」
-「人工检查 3 篇输出」「预览器里图片能显示」——**三条都要真实网关 + 真实文案**，
-而写代码的时候两样都还没有。现在文案有了（见第 3 节），网关要你去接。
+当前机器已有真实 `.env`。旧版 Anthropic 路径曾完成 `--check` 与每账号 3 条试译，
+但这 6 条使用的是“关闭 thinking + 标签最多 3 个”的旧契约。当前已按用户决定切换到
+官方 OpenAI 接口、High thinking、标签全部照搬，并把 `PROMPT_VERSION` 升至 5；旧结果
+会自动判为过期，不能冒充新版验收。新版真实连通、每账号 3 条重试译和德语人工确认
+仍待执行；本轮没有擅自发起新的付费请求。
 
----
+## 2. 已实现的业务流程
 
-## 1. 你的任务边界
+`translate.py` 现在提供以下入口：
 
-### 要做
-
-| # | 事情 | 对应 |
-|---|---|---|
-| T1 | 接通网关（`--check` 通过） | F1 前置 |
-| T2 | 审提示词（`--show-prompt`），填术语表 | F2 |
-| T3 | 试跑 3 篇，人工看质量，调到满意 | F1/F2 验收 |
-| T4 | 跑全量 1010 篇 | F1 验收 |
-| T5 | 生成 `review.md`，交给德语审校人 | F3 验收 |
-| T6 | 更新计划文档、勾选、提交 | 工作协议 |
-
-### ❌ 不要做
-
-- **不要重写 `translate.py` 的架构。** 它已经过一轮代码审查（CR-01/02/09/10），
-  修掉的问题都有回归测试钉着。看着可以简化的地方，先看第 6 节。
-- **不要动抓取侧的任何东西**（见下）。
-- **不要为了"更好"去改提示词的既定决策**（`du`/`neutral`/金额规则）——
-  那些是用户拍板的品牌决策，不是可优化项。要改先问用户。
-- **不要引入新依赖。** `anthropic` SDK 已在 `requirements.txt` 里。
-
----
-
-## 2. ⚠️ 文件所有权（两个 Agent 并行，这条是硬约束）
-
-另一个 Agent 正在修 Instagram 增量抓取，会改 `routes/`、`core/` 下的文件。
-**你们在同一个工作目录、同一个 git 分支上。**
-
-### 你可以改
-
-```
-translate.py                 你的主战场
-prompts/translate_de.md      提示词本体（可直接编辑，不用动 Python）
-config.toml                  **只改 [translate] 段和 [translate.glossary]**
-tests/tests_translate.py     你的测试
-docs/TRANSLATION_PLAN.md     本文件（记录进展）
-docs/IMPLEMENTATION_PLAN.md  **只改 F1/F2/F3 三项**和附录 D 里你自己的记录
-docs/MANUAL_STEPS.md         只改第 6–7 步（翻译相关）
-.env                         你的密钥（已 gitignore）
-archive/*/translated.jsonl   你的产出
-archive/*/review.md          你的产出
+```powershell
+scripts\run_translate.bat --check
+scripts\run_translate.bat --show-prompt
+scripts\run_translate.bat --estimate
+scripts\run_translate.bat --dry-run
+scripts\run_translate.bat --account in_neakasa.tech --limit 3
+scripts\run_translate.bat
+scripts\run_translate.bat --review
 ```
 
-### ❌ 绝对不要碰
+主干行为：
 
-```
-routes/          delta.py / backfill.py / fb_graph.py —— 另一个 Agent 在改
-core/            parse.py / capture.py / chrome.py / store.py / integrity.py
-tools/           replay.py / layout.py / schedule.py / setup.py / start_chrome.py
-scripts/*.bat    纯 ASCII + CRLF 约定，改坏了 cmd 会把行劈开当命令执行
-config.toml      的 [delta] / [integrity] / [chrome] / [targets] 段
-```
+- 读取各账号 `manifest.jsonl`，只处理非空正文；不修改抓取真相源。
+- 译文追加到账号级 `translated.jsonl`，每条同时保存实际送入模型的英文正文 SHA-256；
+  只有 `post_id + 正文指纹 + 当前提示词版本` 都一致才算完成，可安全断点续跑。
+- 正文被解析修复或人工纠正后，旧译文自动标为过期，普通重跑只补这一篇；
+  `--review` 不会把旧德文配给新英文，也会移除帖子目录中的旧 `text_de.txt` 派生副本。
+- 已成功项默认跳过；金额校验失败或调用失败的项不记完成，下次直接补跑。
+- 标签必须保持相同数量、内容、大小写与顺序；翻译、删减、新增或调序都会拒绝写盘。
+- 一个付费批次持有单实例锁，重复双击不会让同一帖子重复付费。
+- 鉴权、端点、模型回退等整批错误在第一条即熔断，不会对 1055 条重复失败。
+- 保存实际响应模型、提示词版本与可识别的 token usage，终端汇总费用上界。
+- `--review` 生成 `review.md`，并把译文派生为各帖目录的 `text_de.txt`；
+  再次生成前把旧清单保存为 `review.previous.md`，避免人工批注静默消失。
+- 合作帖进入翻译流程，但只用目标账号自己的正文构造风格参照；审校清单标明原作者。
+- 外部社媒正文按不可信数据封装进提示词与 Markdown，不能闭合标签或代码围栏。
 
-### git 纪律
+## 3. DeepSeek 默认契约
 
-1. **不要 `git checkout` 切分支**，会把另一个 Agent 的工作区带走。
-   在当前分支上干活。开工前先 `git branch --show-current` 记下来。
-2. **不要 `git add -A` 或 `git add .`**。只加你自己的文件：
-   ```bash
-   git add translate.py prompts/translate_de.md config.toml tests/tests_translate.py docs/
-   ```
-3. 提交信息用 Conventional Commits（`feat:` / `fix:` / `docs:`）。
-4. 遇到不是你改的文件出现在 `git status` 里，**不要碰它，也不要 stash**。
-
----
-
-## 3. 你要翻译的数据长什么样
-
-抓取已经完成。产物在 `archive/`（**已 gitignore，只在本机**）：
-
-| 归档目录 | 帖子数 | 有正文（＝待译） | 时间跨度 |
-|---|---:|---:|---|
-| `archive/in_neakasa.tech/` | 1019 | **1010** | 2020-09 ~ 2026-08 |
-| `archive/fa_neakasaofficial/` | 46 | **45** | 2026-06 ~ 2026-08 |
-
-**合计约 1055 篇待译。**
-
-### 单篇长什么样
-
-```
-archive/in_neakasa.tech/posts/2026-08-27_0912_<post_id>/
-    post.json      ← 真相源：post_id / owner / coauthors / created_at /
-                     permalink / text / media[] / media_complete
-    text.txt       ← 英文原文（派生，给人看）
-    text_de.txt    ← 德语译文（**翻译之后由 --review 生成**）
-    01.jpg 02.jpg  ← 配图
-    media_de/      ← 设计同事回填德文版图的地方（本期人工处理）
-```
-
-`translate.py` 读的是账号级的 `manifest.jsonl`（`Archive.rows()`），
-不是逐个文件夹扫。索引是派生的，与 `post.json` 一致。
-
-### ⚠️ 关于 263 篇「合作帖」（必读，涉及法务）
-
-Instagram 有**合作帖**：由一方发布、双方主页同时显示。这 1019 篇里有
-**263 篇的原作者不是 `neakasa.tech`**（`post.json` 里 `owner` 字段是别人，
-`coauthors` 里含 `neakasa.tech`）。拆开看：
-
-- 34 篇原作者是自家品牌账号（`neakasa.global` 30、`neakasa.de` 4）
-- **229 篇原作者是第三方创作者**（190 个宠物 UGC 账号）
-
-> **用户 2026-08-30 明确拍板：全部进翻译与发布流水线。**
-> 提示过"第三方内容的著作权在创作者手里，二次发布到 DE Page 有授权问题"，
-> 用户确认合作协议已覆盖。**这是用户的决定，不要再重新讨论、不要自作主张过滤。**
-
-`review.md` 会在每篇合作帖上标一行「原作者是 @xxx，发布前确认二次使用授权」，
-这个提示**保留**，但它是给审校人看的信息，不是让你去劝阻的理由。
-
-### 内容特征（影响你怎么审质量）
-
-- 品牌：**Neakasa**，宠物用品（猫砂盆、宠物吹风机、除毛器等消费品）
-- 文案是**美国站英文**，社媒口吻，带 emoji、话题标签、偶尔有价格
-- ⚠️ **FB 有 1 篇（2026-08-24 那篇 IFA 展会）正文里混着德语**
-  （英文正文 + 一句德语 P.S.）。提示词是按"英译德"写的，
-  遇到已经是德语的段落会怎么处理**没有验证过**。只有 1 篇，试跑时留意它。
-
----
-
-## 4. 现有实现：它已经能做什么
-
-### 命令（都在项目根目录，venv 已激活；或双击 `scripts\run_translate.bat`）
-
-```bash
-.venv\Scripts\python.exe translate.py --check          # 网关自检，一次十几 token
-.venv\Scripts\python.exe translate.py --show-prompt    # 打印渲染后的 system prompt，不调 API
-.venv\Scripts\python.exe translate.py --dry-run        # 列出待译清单，不调 API
-.venv\Scripts\python.exe translate.py --limit 3        # 试跑 3 篇
-.venv\Scripts\python.exe translate.py                  # 翻全部未翻译的
-.venv\Scripts\python.exe translate.py --force          # 重译已翻译过的
-.venv\Scripts\python.exe translate.py --account in_neakasa.tech   # 只翻一个账号
-.venv\Scripts\python.exe translate.py --review         # 生成 review.md + text_de.txt
-```
-
-### 已经实现并有测试保护的行为
-
-| 能力 | 说明 |
-|---|---|
-| **幂等** | 已译的自动跳过。中途失败直接重跑补齐，不会重复花钱 |
-| **单条失败不中断整批** | 失败的带 `post_id` 打出来，继续下一篇 |
-| **`manifest.jsonl` 字节级不变** | 抓取产物不可变。译文写独立的 `translated.jsonl` |
-| **金额强制保留** | 见下，这是本项目最重要的一道机器检查 |
-| **截断/拒绝显式报错** | `stop_reason == max_tokens` 抛错，不返回半句德语 |
-| **占位符校验** | 提示词模板里未知的 `{{XXX}}` 直接报错，不会原样发给模型 |
-| **`--limit` 是全局额度** | 不是"每个账号 N 篇"（CR-09 修过） |
-| **提示词每账号只构建一次** | 保证语域基准一致，也让缓存能命中 |
-| **围栏剥离** | 模型若返回 ```` ```de ```` 包裹，会被剥掉（四种写法都有测试） |
-
-### 产出文件
-
-| 文件 | 是什么 |
-|---|---|
-| `archive/<账号>/translated.jsonl` | **译文的唯一真相源**。每行 `{post_id, text_de, translated_at, model, prompt_version}` |
-| `archive/<账号>/posts/<帖>/text_de.txt` | 派生副本，`--review` 时同步，删了跑一次 `--review` 就回来 |
-| `archive/<账号>/review.md` | 人工审校清单，与 `posts/` 同级，图片用相对路径引用 |
-
-> ⚠️ **`translated.jsonl` 是真相源，不是 `text_de.txt`。**
-> 这是刻意的：重跑抓取不得冲掉花钱买来的译文。别把方向反过来。
-
----
-
-## 5. 🔴 三条不许碰的红线
-
-### 5.1 金额一律原样保留
-
-**源文案是美国站的，价格是美元。德国站卖多少钱是商务决策，模型无从知道。**
-
-| 原文 | ✅ 必须是 | ❌ 全是错的 |
-|---|---|---|
-| `$49.99` | `$49.99` | `49,99 €`（换币种）、`49,99 $`（写法与符号位置全变）、`$49,99`（改了小数点） |
-
-这条**已经做成机器检查**（`money_preserved()`）：逐 token 精确多重集比对，
-只忽略空白。违规会在三处 surface：翻译时打 `❗金额被改动` 并点名、
-跑完打汇总、`review.md` 里加警示块和必查勾选框。
-
-**看到 ❗ 的处理顺序**：先 `--force` 重译一次（模型偶发不听话）；
-仍然出现再考虑加强提示词。**不要去放宽这个检查**——
-金额被悄悄换算是本项目最贵的一类错误：格式看着完全正确，
-人工审几十篇时极易滑过去，而错的是价格。
-
-⚠️ 提示词的第 4 节「德语排版」里**不得**再出现"货币符号写成 `19,99 €`"
-这类规则——它与第 3 节的"金额原样复制"直接打架，模型可以"合规地"改错。
-这个矛盾 2026-08-29 已经修掉，`tests_translate.py` 里有断言防它回来。
-
-### 5.2 三项品牌语域决策是用户拍板的，不是默认值
-
-`config.toml` 的 `[translate]`：
-
-| 配置 | 值 | 谁定的 |
-|---|---|---|
-| `address_form` | `du` | **用户 2026-08-29 确认**（消费品牌在德语社媒的主流） |
-| `gender_style` | `neutral` | **用户 2026-08-29 确认**（改写避开人称名词，不站队） |
-| `anglicism_policy` | `moderate` | 已通用的英语词保留，其余译出 |
-
-**要改需要用户重新确认，且改完必须 `--force` 重译全量**——
-否则新旧两种语域会混在同一个 feed 里。
-
-### 5.3 密钥不进 `config.toml`
-
-`config.toml` **进版本库**。密钥走项目根目录的 `.env`（已 gitignore）
-或环境变量。`--check` 的输出已做打码，可以放心贴给用户看。
-
----
-
-## 6. 已经踩过的坑（别重踩）
-
-这些都是真实发生过的，写在这里省你一轮排查。
-
-| # | 坑 | 结论 |
-|---|---|---|
-| 1 | `base_url` 填成 `https://xxx/v1/messages` | **要填到 `/v1` 的上一级**，SDK 自己拼。症状是 404 |
-| 2 | Bearer 模式同时传 `api_key` | 会发出两个鉴权头，严格网关拒绝。CR-01 已修，别改回去 |
-| 3 | `temperature` | **Opus 5 / Sonnet 5 已移除该参数，发了直接 400**。默认注释掉的 |
-| 4 | `effort` / `thinking` | 较新参数，兼容网关未必认。默认不发；官方端点上不发 thinking 即自适应思考 |
-| 5 | `cache_control` 当成顶层参数发 | **2026-08-30 刚修**。它是**内容块上的字段**。见下 |
-| 6 | 提示词里举了 Sie 形式的"正确示范" | 在 `du` 配置下会直接干扰模型。**示范性内容也必须跟着配置走** |
-| 7 | 按每篇重算风格示例 | 导致 system prompt 篇篇不同，缓存全失效 + 语域漂移。已改为每账号一次 |
-| 8 | 输出重定向后崩在 `UnicodeEncodeError` | 本机代码页 936，`⚠ ❗ ß` 编不出来。入口已调 `force_utf8()`，`.bat` 已设 `PYTHONIOENCODING` |
-| 9 | ```` ```de ```` 与 ```` ```deutsch ```` 的剥离顺序 | 短的排前面会只切 5 字符，译文变成 `utsch\n...`。已修，有测试 |
-
-### 关于第 5 条（提示词缓存）——你多半会用到
-
-`prompt_cache` 默认 `false`。**1010 篇 × 约 2400 token 的 system prompt
-是纯重复输入**，开缓存省的是大头。正确形态已经修好了：
-
-```python
-kw["system"] = [{"type": "text", "text": system,
-                 "cache_control": {"type": "ephemeral"}}]
-```
-
-**打开之前先用 `--limit 3` 验证网关认这个形态**，不认就关掉——
-兼容网关支持 `cache_control` 的比例并不高。`tests_translate.py` 里
-有两条断言钉住请求形态，别把它们删了。
-
----
-
-## 7. 分阶段任务清单
-
-> 每完成一项：在 `docs/IMPLEMENTATION_PLAN.md` 对应项下追加
-> `> 完成：<日期> · <实际做法与偏差>`，**验收没过不许勾 `[x]`**。
-
-### T1 · 接通网关
-
-**需要用户提供四样**（`MANUAL_STEPS.md` 第 6 步已经写好了问法，可直接转给用户）：
-
-1. **网关地址** —— 填到 `/v1` 的上一级
-2. **模型名** —— 以网关暴露的名字为准，不一定是 Anthropic 官方 ID
-3. **鉴权头风格** —— `x-api-key` 还是 `Authorization: Bearer`
-4. **额外请求头** —— 有些网关要租户 ID / 路由标识
-
-填进 `config.toml` 的 `[translate]`，密钥放 `.env`，然后：
-
-```bash
-.venv\Scripts\python.exe translate.py --check
-```
-
-- 【验收】打印 `[ok] 网关连通。模型回了：'OK'` 并报出用量
-- 失败时程序会把 401/403/404/400 分别解释清楚，照着改即可
-- 【记录】写下最终的 `base_url` 形态、模型名、鉴权风格（**不要写密钥**）
-
-⚠️ 拿不到网关信息时**不要伪造、不要改用别的 provider**。停下来告诉用户缺什么。
-
-### T2 · 审提示词 + 填术语表
-
-```bash
-.venv\Scripts\python.exe translate.py --show-prompt
-```
-
-打印渲染后的完整 system prompt（约 4800 字符）。提示词本体是
-**`prompts/translate_de.md`，一个可直接编辑的 Markdown 文件，改它不用动 Python**。
-
-**术语表现在是空的，这一项是 T2 的主要工作量。**
-`config.toml` 末尾的 `[translate.glossary]`：
+`config.toml` 已给出可直接使用的默认值：
 
 ```toml
-[translate.glossary]
-"litter box"    = "Katzenklo"
-"self-cleaning" = "selbstreinigend"
-"free shipping" = "kostenloser Versand"
+[translate]
+provider = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+model = "deepseek-v4-pro"
+reasoning_effort = "high"
 ```
 
-**没有它，第 1 篇写 `Kapuzenpullover`、第 12 篇写 `Hoodie`。**
-做法：把 1010 篇英文原文过一遍词频，把反复出现的**产品型号、品类词、
-卖点词**挑出来定死译法。产品型号（如 `Neakasa M1`）应当**原样保留不译**。
+核对日期为 2026-08-30：官方最新高质量文本模型为 `deepseek-v4-pro`，更快、更省的
+显式备选是 `deepseek-v4-flash`。请求由 OpenAI SDK 发往 `/chat/completions`，使用
+`Authorization: Bearer`；显式发送 `thinking={type="enabled"}` 与
+`reasoning_effort="high"`。代码不配置、不发送 `max_tokens`、
+`max_completion_tokens`、`temperature` 或 `top_p`，由模型按自身能力完成翻译。
 
-⚠️ TOML 语法：`[translate.glossary]` 必须放在 `[translate]` 段的**最后**，
-它下面的键都算 glossary 的。别插到中间去。
+官方参考：
 
-- 【验收】`--show-prompt` 输出里能看到术语表条目和三项语域决策的具体指令
-- 【建议】把 `--show-prompt` 的输出发给懂德语的同事过一遍。
-  花几分钟看提示词，比事后审几十篇译文便宜得多
+- [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+- [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/)
+- [上下文缓存](https://api-docs.deepseek.com/guides/kv_cache/)
+- [模型与价格](https://api-docs.deepseek.com/quick_start/pricing/)
+- [错误码](https://api-docs.deepseek.com/quick_start/error_codes/)
 
-### T3 · 试跑并调优（F1/F2 的验收）
+翻译主干不再保留 `custom_anthropic` 分支，避免当前业务同时维护两套协议、鉴权和
+响应解析。`provider=deepseek` 会严格校验官方 base URL 与受支持模型。
 
-```bash
-.venv\Scripts\python.exe translate.py --dry-run     # 先确认待译篇数是 1055 左右
-.venv\Scripts\python.exe translate.py --limit 3
+## 4. 品牌与安全决策
+
+以下不是模型自行选择的默认值，已经固化在配置和提示词里：
+
+- 称呼：`du`。
+- 性别表达：`neutral`，优先中性改写。
+- 英语借词：`moderate`。
+- 语气：简洁直接，不加码情绪。
+- 话题标签：原帖有几个就逐个照搬几个，内容、大小写和顺序全部不变，不设数量上限。
+- 13 条高频术语按 Neakasa 德国站现有用语统一；上线前仍由德语业务人员确认。
+- 金额逐字符原样保留。`$49.99` 不得变成 `49,99 €`、`49,99 $` 或 `$49,99`。
+  程序会把任何遗漏、新增、换算或格式改写作为硬失败，拒绝写盘。
+- 数字尺码不自动换算；英制物理量可以换算，但会进入人工核对清单。
+- 图内英文不在本期自动处理，由审校清单交给设计人员确认。
+
+第三方创作者的 Instagram 合作帖已按用户确认全部进入下游；`owner` 仍保留真实作者，
+审校清单继续提示发布前确认二次使用授权。
+
+## 5. 业务人员只需按此执行
+
+### 5.1 放置密钥
+
+在项目根目录执行：
+
+```powershell
+Copy-Item .env.example .env
 ```
 
-打开 `archive/in_neakasa.tech/translated.jsonl` 看这 3 条。**重点检查七件事**：
+然后只在 `.env` 中把占位值替换为真实 Key：
 
-1. **称呼形式全篇一致**（`du`），**尤其是 CTA 那一句**——最容易漏
-2. 德语是否通顺、有没有英语句法直译的痕迹（Denglisch）
-3. 语气与英文原文一致（没有变得更浮夸、没有多出感叹号）
-4. **换行和空行结构与原文逐行对齐**（下游要直接贴进 Business Suite）
-5. **话题标签不超过 3 个**（Meta 对冗长文案与标签堆砌有分发降权）
-6. 排版德式：`19,99`（逗号小数）、`20 %`（有空格）、`24.12.2026`、`„引号“`
-7. **金额原样保留**（程序会自动查，看有没有 ❗）
-
-不满意的两个调节位：**小调**改 `config.toml` 的 `tone` 那一行；
-**大调**改 `prompts/translate_de.md`。改完：
-
-```bash
-.venv\Scripts\python.exe translate.py --limit 3 --force
+```text
+DEEPSEEK_API_KEY=你的真实密钥
 ```
 
-- 【验收 F1】产出结构正确的 `translated.jsonl`（3 条，字段齐全）
-- 【验收 F2】**人工检查 3 篇输出，德语通顺且风格与原文一致**
-  —— 这条需要懂德语的人看，你自己判断不了就明确说出来，别替用户下结论
-- ⚠️ 改了 `prompts/translate_de.md` 之后，**把 `translate.py` 顶部的
-  `PROMPT_VERSION` 加 1**。译文行里记着这个版本号，
-  将来才分得清哪批译文是哪版提示词产出的
+`.env` 已被 Git 忽略。不要把密钥写进 `config.toml`、提交到版本库或粘贴到聊天。
 
-### T4 · 跑全量
+### 5.2 连通与预算
 
-```bash
-.venv\Scripts\python.exe translate.py
+```powershell
+scripts\run_translate.bat --check
+scripts\run_translate.bat --estimate
 ```
 
-约 1055 篇。注意事项：
+`--check` 会发一个极小请求并产生少量 token；自检与正式翻译使用同一请求形态，
+同时校验实际响应模型与 reasoning 证据，防止端点忽略 thinking 或把错误模型名静默
+回退为 Flash。
+`--estimate` 完全离线，不调用 API。
 
-- **先估成本**：`--dry-run` 给出篇数，乘以单篇 token 量（system ≈ 2400 +
-  正文 ≈ 100–400 输入，输出 ≈ 100–400）。**跑之前把估算告诉用户**
-- 考虑打开 `prompt_cache`（见第 6 节第 5 条），但**先 `--limit 3` 验证网关认**
-- `request_gap_seconds` 默认 1.0 秒，避免打爆内部网关。跑 1055 篇约 20–40 分钟
-- 中途失败可以直接重跑补齐，已译的自动跳过，不会重复花钱
-- 跑完看汇总行里的 **❗金额被改动** 篇数，不为 0 就按第 5.1 节处理
+基于当前 1055 条真实正文和当前两个账号的实际提示词，离线估算为：
 
-- 【验收】`translated.jsonl` 行数 ≈ 待译篇数；失败的都带 `post_id` 打出来了
+- 全未命中输入约 3,573,968 token；
+- 缓存场景约 161,093 未命中 + 3,412,875 命中；
+- 输出约 182,254 token；
+- 不含 reasoning 的基础费用参考约 **US$1.08–5.44**。
 
-### T5 · 生成审校清单（F3 的验收）
+High thinking 的 reasoning token 由模型按内容决定，无法离线可靠估计，因此上述数字
+不是总费用上界。必须以新版接口真实 3 条试跑返回的 usage 外推后再决定全量。
 
-```bash
-.venv\Scripts\python.exe translate.py --review
+### 5.3 每个账号分别试译 3 条
+
+不要只运行全局 `--limit 3`：目录排序会先命中 Facebook，无法验证 Instagram 语料。
+
+```powershell
+scripts\run_translate.bat --account fa_neakasaofficial --limit 3
+scripts\run_translate.bat --account in_neakasa.tech --limit 3
 ```
 
-产出 `archive/<账号>/review.md`，并把译文同步一份 `text_de.txt` 到每帖文件夹。
+懂德语的业务人员至少检查：称呼一致、语气自然、换行结构、品牌型号、标签与原帖的
+数量/内容/大小写/顺序完全一致、
+金额原样、数字/尺码/单位、已经是德语的原文片段。如果需要调整，可修改
+`config.toml` 的语气/术语表或 `prompts/translate_de.md`；修改提示词时把
+`PROMPT_VERSION` 加 1，普通运行就会自动把旧版本列为待译；同版本强制重试才使用
+`--force --limit 3`。
 
-- 【验收 F3】**在 VS Code 里打开 `review.md`，按 `Ctrl+Shift+V` 预览，
-  配图能正常显示**（图片用相对路径，`review.md` 与 `posts/` 同级）
-- 清单里每篇含：原文、译文、配图、原帖链接、勾选框，
-  合作帖额外一行原作者与授权提示，含金额/尺码的额外一块警示
+### 5.4 全量与审校
 
-⚠️ **一个已知的单向缺口**：审校人在 `review.md` 里改的译文**不会回写**
-`translated.jsonl`。当前定位是"给人看的清单"而非"可编辑的数据源"。
-若发布环节要吃审校后的结果，**需要再加一个回写命令**——
-这一项**先问用户要不要做**，不要自作主张实现。
+试译被业务人员确认后：
 
-### T6 · 收尾
-
-1. `docs/IMPLEMENTATION_PLAN.md` 里 F1/F2/F3 按实际情况勾选 + 写完成行
-2. 附录 D 追加一条同步记录：**实际做法、与本计划的偏差、真实的成本数字**
-3. `docs/MANUAL_STEPS.md` 第 6–7 步按实际流程校正
-4. 本文件末尾追加「实施记录」
-5. 跑一遍全部离线测试，确认仍全绿（见第 8 节）
-6. 按第 2 节的 git 纪律提交
-
----
-
-## 8. 每次改完都要过的关
-
-```bash
-# 全部离线测试（当前基线：12 套 582 项，全绿）
-.venv\Scripts\python.exe tests/tests_translate.py
-
-# 或者全跑（新增测试会被 glob 自动纳入）
-for %f in (tests\tests_*.py) do .venv\Scripts\python.exe %f
+```powershell
+scripts\run_translate.bat
+scripts\run_translate.bat --review
 ```
 
-⚠️ **有一条容易忽略的验证条件**：全套测试在 **stdout 被管道重定向**的
-情况下也必须全绿。本机代码页是 936，修复前 `tests_translate.py` 在这个条件下
-必崩（`UnicodeEncodeError: 'gbk' codec can't encode character '\xdf'`）。
-双击 `.bat` 时永远看不到这个故障，只在写日志、计划任务这些场合发作。
+全量中断可直接重跑，成功项会跳过。打开两个账号目录下的 `review.md` 做 Markdown
+预览，确认配图可见，然后逐篇勾选译文、数字和图内文字。`translated.jsonl` 是译文
+真相源；`review.md` 与 `text_de.txt` 是派生的人工作业视图。
 
-```bash
-.venv\Scripts\python.exe tests/tests_translate.py > nul 2>&1 && echo OK
-```
+审校人员直接改 `review.md` 不会回写 `translated.jsonl`。当前已实现边界没有审校回写
+或发布模块，若后续需要，必须作为发布链路的独立需求处理，不能在本轮暗中扩展。
 
-另外：`python -W error::SyntaxWarning -m compileall -q translate.py` 应通过。
+## 6. 验收状态
 
----
-
-## 9. 需要用户配合的事（早点提，别憋到最后）
-
-| 什么时候 | 需要用户做什么 |
-|---|---|
-| **T1 之前** | 提供网关地址 / 模型名 / 鉴权风格 / 额外头，并把密钥放进 `.env` |
-| **T2** | 最好让懂德语的同事看一遍 `--show-prompt` 的输出 |
-| **T3** | **必须有人懂德语来判断译文质量**——这是 F2 验收的硬要求 |
-| **T4 之前** | 把成本估算告诉用户，让他确认再跑全量 |
-| **T5 之后** | 把 `review.md` 交给德语审校人；确认要不要做"审校结果回写"功能 |
-
-⚠️ **不要因为用户暂时给不了就跳过或伪造验收。**
-本项目的工作协议明写：验收要真实数据而暂时拿不到的，
-写 `> 进行中：...` 并说明缺什么，**不勾选**。
-
----
-
-## 10. 汇报时请包含
-
-- `--check` 的完整输出（密钥已自动打码，可直接贴）
-- 试跑 3 篇的原文/译文对照
-- 全量跑完的统计：成功 / 失败 / ❗金额被改动 / ⚠需人工确认 各多少篇
-- **实际 token 用量与成本**（这是下次估算的唯一依据）
-- 与本计划的所有偏差
-
----
-
-## 附录 A · `[translate]` 全部配置项速查
-
-| 键 | 默认 | 说明 |
+| 项目 | 状态 | 证据 / 下一步 |
 |---|---|---|
-| `base_url` | `""` | 空则走官方 `api.anthropic.com`。填到 `/v1` 上一级 |
-| `api_key_env` | `ANTHROPIC_API_KEY` | **环境变量的名字**，不是密钥本身 |
-| `auth_style` | `x-api-key` | 或 `bearer` |
-| `model` | `claude-opus-5` | 以网关暴露的名字为准 |
-| `extra_headers` | `{}` | 网关要租户 ID / 路由标识时填 |
-| `max_tokens` | 4096 | 截断会显式报错而非静默 |
-| `timeout_seconds` | 120 | |
-| `max_retries` | 2 | SDK 自带指数退避 |
-| `request_gap_seconds` | 1.0 | 相邻调用最小间隔 |
-| `effort` | 注释掉 | 较新参数，兼容性未知 |
-| `temperature` | 注释掉 | **Opus 5 / Sonnet 5 发了会 400** |
-| `prompt_cache` | `false` | 见第 6 节第 5 条 |
-| `style_examples` | 6 | 取长度中位数附近的英文原文做语气参照 |
-| `tone` | 一行中文 | 营销同事可直接改 |
-| `address_form` | `du` | **用户拍板** |
-| `gender_style` | `neutral` | **用户拍板** |
-| `anglicism_policy` | `moderate` | |
-| `[translate.glossary]` | 空 | **T2 要填**。必须放在 `[translate]` 最后 |
+| DeepSeek 官方 API、High thinking、无输出上限 | ✅ 离线完成 | SDK 线级契约通过 |
+| 真实归档发现、双账号 prompt、基础预算 | ✅ 完成 | 45 + 1010 条；本轮零 API 调用 |
+| T1：新版真实 `--check` | ⏳ 待执行 | `.env` 已有；会产生少量 token |
+| T2：提示词与术语表初版 | ✅ 完成 | 德语业务人员仍需确认措辞 |
+| T3：每账号 3 条新版试译与人工质量确认 | ⏳ 待执行 | 旧版 6 条已自动过期 |
+| T4：1055 条全量翻译 | ⏳ 待 T3 通过 | 不可在未确认质量时直接全跑 |
+| T5：真实 `review.md` 带图预览 | ⏳ 待译文 | 代码路径已用合成数据验证 |
 
-## 附录 B · 风格示例的定位（容易理解错）
+因此 F1/F2/F3 的代码可以标为已实现，但真实业务验收仍不能勾成完成。
 
-`style_examples` 取的是**英文原文单语示例**，不是英德翻译对照——
-归档里本来就没有德语对照。它们在提示词里的定位是
-**"这个品牌平时怎么说话"，不是"这句该怎么译"**，
-提示词里显式写了「它们是语气参照，不是翻译对照，不要去翻译它们」。
+## 7. 故障处理
 
-选篇规则：按长度排序取**中位数附近**。最短的往往是 "New drop 🔥" 这种
-没信息量的，最长的会把模型带向啰嗦，两头都不代表品牌常态口吻。
+- 缺 Key：程序给出复制 `.env.example` 的完整命令，不会联网。
+- 401/403/404/400/422/429/402/5xx：`--check` 分类别给出处理建议。
+- 模型回退：立即停止，不混用 Pro / Flash 结果。
+- 金额被改：该条不写盘，修正提示词或模型后直接重跑，无需全量 `--force`。
+- 标签少贴、多贴、翻译或调序：该条不写盘；原帖多少个就必须照搬多少个。
+- 单条内容输出为空、截断或拒绝：记失败并保留断点；共享 API 错误则整批熔断。
+- `translated.jsonl` 坏尾：新结果会先补换行边界并 `flush + fsync`；读取时逐行独立
+  解码，截断的 UTF-8 坏行不会遮住后面已经付费且已落盘的有效结果。
+- 英文正文后来变化或提示词版本升级：旧译文在审校清单中标为过期，普通重跑只处理
+  受影响帖子。
+- 重复双击：第二个付费进程会被 `state/translate.lock` 拒绝。
 
-## 附录 C · 这个项目的两条通用纪律
+每次修改翻译实现后至少执行：
 
-1. **偏差必须记录，不要默默改代码。** 计划与现实冲突时以现实为准并写进文档。
-   后续任务依赖这些事实。
-2. **"离线测试全绿"和"能处理真实数据"是两件事。** 这个项目已经因此翻车三次
-   （解析器跨账号污染、轮播子项、Instagram 合作帖）。
-   三次的共同点都是：**测试构造的输入里没有那个字段**。
-   你新增的断言，尽量用真实数据构造。
-
----
-
-## 实施记录
-
-> 实施 Agent 在这里追加。格式：`### <日期> · <做了什么>`
-
-（待填）
+```powershell
+.venv\Scripts\python.exe tests\tests_translate.py
+.venv\Scripts\python.exe -m compileall -q .
+git diff --check
+```

@@ -540,3 +540,546 @@ Facebook 是对的（"新增 0 篇"是真的没新帖）。Instagram 那 38 条�
 ⚠️ 新增了一条以前没有的验证条件：**全套测试在 stdout 被管道重定向的情况下也必须全绿**。
 本机代码页是 936，修复前 `tests_translate.py` 在这个条件下必崩
 （`UnicodeEncodeError: 'gbk' codec can't encode character '\xdf'`）。
+
+---
+
+## 9. 合作帖判定的复核与加固（2026-08-30 晚）
+
+> **起点是用户的一句要求**："合理解决当前 Instagram 上存在爬取的当前账号
+> 不是原帖发帖者而是合作转发发布者这种情况导致逻辑误判漏掉这种帖子的问题。"
+>
+> CR-19 已经修掉了根因。本节做的是**另一半**：把"这次修对了"变成
+> "下次坏了能被发现"，并把三个残留缺口补上。**全程零真实访问**，
+> 用的是已有的四份 capture（回填 IG / FB 各一份，增量 IG 两份、FB 三份）。
+
+### 9.1 先复核：修复在真实数据上到底成不成立
+
+| capture | 候选 | 保留 | 原创 | **合作** | 丢弃 | 丢弃的是谁 |
+|---|---:|---:|---:|---:|---:|---|
+| IG 回填 `_capture_1788073013` | 1022 | 1019 | 756 | **263** | 3 | chicagofire / shaq / cars_luxury_accessories |
+| IG 增量 `_capture_delta_1788086330` | 39 | 36 | **1** | **35** | 3 | erykatravel / diycraftsofficial1 / craftypanda |
+| FB 回填 `_capture_1788072462` | 47 | 46 | 46 | 0 | 1 | thegardenstatecatclub |
+
+**判定成立，且增量那份比回填更极端**：增量看到的那一屏里
+**36 篇有 35 篇是合作帖，本账号自己发的只有 1 篇**。
+这也顺带说明 CR-19 之前 IG 增量为什么会退化成"只看到 1 篇"。
+
+同时排掉了三种"还有没有别的漏网形态"的可能，都用真实数据查的：
+
+- **`usertags` / 其它字段里提到本账号**：被丢弃的节点里
+  **一个都没有**（`mentions_target_somewhere = 0`）。被丢的确实是陌生账号。
+- **`invited_coauthor_producers`**：键在 1022 个节点上全有，
+  **值全是空数组**。所以"只收已接受、不收被邀请"这条选择至今**没有真实反例
+  可验证**——CR-19 原文写"两个字段在真实响应里都存在"，准确说是**键**存在。
+  选择保持不变（保守方向），但注释里补了这个限定。
+- **Facebook 有没有同类形态**：`actors` 数组**长度全是 1**（139 个 story 节点），
+  没有第二作者；`attached_story` 只在 1 篇上出现且其 actor 为空。
+  **FB 上不存在这个问题**，不需要对称实现。
+
+### CR-20 · P2 · `_merge_post` 用"空了才补"合并 coauthors，可能丢掉真帖子
+
+- **位置**：`core/parse.py::_merge_post`
+- **问题**：同一帖出现在多份响应里时，`coauthors` 走的是"winner 为空才从
+  other 补"。两份响应各给出**不同子集**时（合作方超过一个的帖子实测有 21 篇，
+  最多 4 个），winner 的非空短列表会挡住 other 里的目标账号 ——
+  结果又是一篇自家帖子被判成他人帖。
+- **实测**：当前四份 capture 里**同一 post_id 从未出现过两次**，
+  所以这条在现有数据上不会触发。**它是按形态推的，不是观测到的**，
+  记 P2 而不是 P0。
+- **修复**：改成取**并集**。语义上也更对——coauthor 关系是帖子的属性，
+  不是某次响应的属性。
+
+### CR-21 · P2 · 认不出 coauthor 条目形态 = 整篇帖子被丢
+
+- **位置**：`core/parse.py::ig_coauthors`
+- **问题**：只认 `{"username": ...}`，非 dict 条目直接 `continue`。
+  IG 若把该字段改成裸字符串数组，**全部合作帖会一次性退回 CR-19 的状态**，
+  而失败形态是静默的。
+- **修复**：dict 与裸字符串两种条目都认，空值/None 跳过。
+  代价两行，而认错的代价是几百篇。
+
+### CR-22 · P2 · `on_timeline_of` 依赖调用方先把账号名转小写
+
+- **位置**：`core/parse.py::on_timeline_of`
+- **问题**：函数是公开判定入口，但 `target` 的归一化在调用方
+  （`partition_by_owner`）里做。将来任何一处直接调用它并传入
+  `config.toml` 里带大写的账号名，结果是**静默丢光全部帖子**。
+- **修复**：函数自己 `strip().lower()`。
+
+### CR-23 · P1 · 丢弃是完全静默的 —— 这才是 CR-19 拖了那么久的原因
+
+- **位置**：`core/integrity.py`（新增第四项检查）、`routes/delta.py`、
+  `routes/backfill.py`、`tools/replay.py`
+- **问题**：CR-19 的根因修了，但**让它一直没被发现的那个原因没修**。
+  程序丢掉 263 篇，`_rejected.jsonl` 只写不读，输出里一个字都没有。
+  合作机制会变（换字段名、换形态、出新的联合发布方式），
+  修好的是这一次，没有任何东西盯着下一次。
+- **修复**：新增 `known_partners(rows, account)` 与
+  `check_dropped_partners(rejected, partners)` ——
+  **被丢弃的节点里，作者是已知合作方的那些**。合作方名单同时取自
+  "合作帖的 owner"和"自家帖的 coauthors"，实测 IG 有 **210 个**。
+- **为什么这个信号可用**：它在全部真实数据上**零误报**。
+  210 个合作方 vs 历史上被丢弃过的 6 个账号，**交集为空**——
+  推荐位来自完全陌生的账号，而合作方的帖子本来就该留下，两者天然不重叠。
+- **灵敏度实测**（把 `on_timeline_of` 退回只比 owner 的旧实现）：
+
+  | 场景 | 正常 | 退回旧实现 |
+  |---|---:|---:|
+  | IG 回填（归档已建） | 0 | **263 命中，闸响** |
+  | IG 增量（归档已建） | 0 | **35 命中，闸响** |
+  | IG 回填（**归档为空的冷启动**） | 0 | **34 命中，闸响** |
+  | IG 增量（**冷启动**） | 0 | **29 命中，闸响** |
+
+  冷启动也能响，是因为名单同时取自**本次留下的那批**：
+  本账号自己发的帖子里就记着合作方。
+- **接线**：增量把它写进 `ScanResult.suspect`，`--dry-run` 也打；
+  正式跑时并进 D3 的那条平台级通知。**这一项不做去重节流**——
+  其它检查会天天成立（账号真停更时"零新增"每天都真），
+  而这一条在全部真实数据上从未成立过，漏报的代价远大于重复提醒。
+- **⚠️ 它是提示不是判定**：真响了，正确动作是去 `_rejected.jsonl` 和
+  `_capture_*.json` 里离线查那几篇为什么没带上 coauthor 信息，
+  **不是把它们无条件收进来**。"宁可漏一篇自家的，不可混进一篇别人的"没有变。
+
+### CR-24 · P1 · "本账号 N 篇"这一个数字看不出它是怎么来的
+
+- **位置**：`routes/delta.py::ScanResult.summary`、`routes/backfill.py`
+- **问题**：CR-18 把"新增 0 篇"的二义性修掉了，但换成 `own` 之后又埋了一层：
+  实测 IG 那 36 篇里 **35 篇靠合作帖判定撑着**。判定一旦部分漂移，
+  `own` 会从 36 掉到 1，而那和"今天真的只发了一篇"在输出里完全一样。
+  这是同一类缺陷换了个位置。
+- **修复**：摘要改成
+  `新增 0 篇 · 本账号 36 篇（原创 1 · 合作 35，2026-06-06 ~ 2026-08-27）· 丢弃 3 · 归档最新 2026-08-27`。
+  回填同样拆开报。`min_own_posts` 那道闸触发时，中止理由里会直接写
+  "其中 N 篇来自**已知合作方** —— 优先怀疑合作帖判定失效，而不是被拦"。
+- **为什么这句话重要**：2026-08-30 那次，正是因为"只看到 1 篇"没有指向性，
+  才先去猜了"是不是没拿到时间线"并写了一整条新代码路径（CR-16）。
+
+### 9.2 本轮之后的测试基线
+
+**全绿；2026-08-30 晚测得 15 套 788 项（三条线并行加测试，数字仍在涨，以实际跑出来的为准）**（stdout 被重定向的条件下同样全绿）。
+本轮新增 28 项：`tests_parse.py` +4（并集合并、裸字符串条目、target 归一化）、
+`tests_integrity.py` +10（第四项检查的名单构建与命中/不命中）、
+`tests_delta_logged_in.py` +14（摘要拆分、哨兵、中止理由指向合作帖判定）。
+
+⚠️ 新增断言全部**按真实形态构造**：`ig_payload()` 现在无条件带上
+`coauthor_producers` 与 `invited_coauthor_producers` 两个键——
+CR-19 的教训是"测试构造的输入里没有那个字段"，
+让测试样本比真实数据更干净，就是在给下一次留同样的坑。
+
+---
+
+## 10. 已实现主干的第二轮全量审查与修复（2026-08-30）
+
+### 10.1 范围与边界
+
+- 审查基线：提交 `92e7018` 到当前工作树的全部已实现改动，包括未跟踪的新测试。
+- 覆盖：回填、登录态增量、只读 Graph 路线、归档/replay/layout、完整性通知、
+  Windows 调度、DeepSeek 翻译与人工审校清单。
+- 明确未扩展：G 组自动发布、审校回写、自动登录、视频下载和新的抓取路线。
+- 没有真实 `.env` 或 `DEEPSEEK_API_KEY`，因此本轮**没有发起付费请求**，也没有
+  生成或伪造真实德语译文。
+
+### 10.2 项目目录改名专项核对
+
+项目根目录已从旧名称改为 `FacebookScraper`。核对结果是**活动配置没有因改名失效**：
+
+- `git rev-parse --show-toplevel` 为
+  `D:/VSCodeWorkspace/Facebook/FacebookScraper`；`cfg().archive_dir/state_dir` 均落在新根目录。
+- Python 入口基于 `Path(__file__)`，批处理基于 `%~dp0..`，没有依赖旧项目绝对路径。
+- `tools.schedule xml` 生成的 `Command`、`WorkingDirectory` 均是新目录；每日任务参数为
+  `--platform all`，补跑任务为 `--if-stale`。
+- 活动仓库中旧 `.../Facebook/scraper` 引用为 0；系统中
+  `FBScraperDelta` / `FBScraperDeltaCatchup` 均未注册，所以不存在需要迁移的旧 Action。
+- `%USERPROFILE%\.fbscraper-chrome` 是刻意放在仓库外的浏览器 profile，不随项目改名。
+
+因此本项不需要硬编码新绝对路径；保留相对定位才是对后续再次移动目录也有效的修复。
+
+### CR-25 · P1 · 归档/replay 可覆盖、复活或越界写入真相源
+
+- **位置**：`core/store.py`、`tools/replay.py`、`tools/layout.py`
+- **问题**：外部 `post_id` 可构造路径/Windows 保留名；同 ID 的 dated/undated truth dir
+  可同时存在并被 reindex 选回旧记录；空/错形 capture 仍可能开始重建；目录或叶子
+  symlink/junction/reparse/hardlink 可把写入导向账号外；`post.json` 升级时直接截断写，
+  中断会损坏唯一真相源；replay 的 kept `post.json/text.txt` 叶原先直到备份/隔离后
+  才校验，且已有普通媒体目标会被 `shutil.move` 静默覆盖。
+- **修复**：异常 ID 使用稳定 SHA-256 目录分量但 JSON 保留原 ID；统一验证 root、account、
+  posts、帖子目录及叶子的真实物理直属关系；拒绝 link/reparse/hardlink；replay 在任何写盘前
+  验证输入并 fail closed；重复 truth dir 可恢复地移入 `_orphan_posts`；reindex 按
+  `完整 > 残缺、残缺时媒体更多` 去重；`post.json` 改为同目录临时文件
+  `flush + fsync + replace`，失败保留旧 JSON/text/manifest；replay 在任何备份/移动前
+  无条件预检 truth 叶与全部媒体目标，普通文件冲突和重复目标均整体失败闭合。
+- **验证**：新增 `tests_replay.py`、`tests_store_boundaries.py`、`tests_store_links.py`，
+  覆盖 Windows junction/hardlink、账号根越界、错误 capture、重复真相源和原子替换失败。
+
+### CR-26 · P1 · 增量失败可能未记状态，或部分停摆却返回成功
+
+- **位置**：`routes/delta.py`、`core/notify.py`
+- **问题**：CDP attach/launch 的 `SystemExit`、未预期异常、禁止自动拉起但端口未就绪等路径
+  可能直接穿出，未累计各平台失败预算也不通知；一个平台预算耗尽而另一个成功时可能返回 0；
+  state 直接覆盖写会在中断时丢失 `last_success` 与失败预算；通知读取配置抛 `SystemExit` 时
+  连降级日志也到不了；严格路径检查后，平台 `Archive(...)` 构造失败仍位于旧异常闭环之外。
+- **修复**：所有共享启动/附着和平台异常统一记录、原子保存并通知；硬阻断给所有到期平台
+  记失败；部分停摆保持非零退出码；state 使用同目录临时文件、`fsync`、原子替换与清理；
+  通知状态目录在配置失败时退回安全默认路径；账号读取、Archive 构造与 `delta_once` 统一
+  置于平台级 try，权限/路径错误会落状态并通知，但作为本地错误不阻断另一个平台。
+- **验证**：`tests_delta_logged_in.py` 覆盖 attach/launch/generic exception、部分预算耗尽、
+  state 替换失败和通知；`tests_notify.py` 覆盖配置 `SystemExit`。
+
+### CR-27 · P1 · 200 响应可把登录页/SVG 当图片，原始 capture 可被中断截断
+
+- **位置**：`core/capture.py`、`routes/backfill.py`、`routes/delta.py`、`routes/fb_graph.py`
+- **问题**：只看 HTTP 200 或宽泛 `image/*` 会把伪 JPEG HTML、SVG、MIME/字节错配写进归档，
+  还会把 `media_complete` 错记为 true；回填几十 MB 的唯一原始响应直接写目标文件，
+  中断后最新 capture 会成为截断 JSON；系统 MIME 注册差异还会把 WebP 命名成 `.jpg`。
+- **修复**：两条下载路线共用 JPEG/PNG/WebP/GIF/AVIF 静态光栅白名单并校验文件签名与
+  MIME 一致；显式稳定扩展名；拒绝 SVG、HTML、空体与错配并保留可重试状态；回填/增量
+  capture 共用同目录 JSON 临时文件、`flush + fsync + replace`。
+- **验证**：`tests_backfill.py`、`tests_fb_graph.py` 覆盖四种常见合法格式、伪 JPEG、SVG、
+  MIME 错配、空体与 capture 中断；登录态增量使用真实 JPEG magic 夹具。
+
+### CR-28 · P1 · 译文只按 post_id 断点会把旧德文错配给新英文
+
+- **位置**：`translate.py`
+- **问题**：同 ID 的英文正文经解析修复或人工纠正后，旧实现仍把旧译文当完成；
+  `review.md` 会展示新英文 + 旧德文，帖子目录还残留旧 `text_de.txt`。另外，
+  `translated.jsonl` 若截在 UTF-8 多字节字符中，文本迭代会让后续已付费有效行全部不可见；
+  非字符串 ID/text 还可能触发无效付费请求。
+- **修复**：每条结果写 `source_text_sha256`（对实际发送的 strip 后 UTF-8 正文）；
+  `pending` 与 review 只有 ID+指纹同时匹配才算完成；旧/缺指纹记录明确列为过期并只重译
+  受影响帖子；过期 `text_de.txt` 派生副本安全移除但历史 JSONL 记录保留；JSONL 改为
+  二进制逐行独立解码，坏行不遮住后续结果；无效源 schema 在 API 前失败闭合。
+- **同时核对的付费边界**：DeepSeek 官方 Anthropic URL、`deepseek-v4-pro`、
+  `reasoning.effort=none`、实际响应 model 防 Flash 静默回退、单实例锁、共享错误首条熔断、
+  金额逐字符保留、坏尾追加 `fsync` 和 usage/费用记录均有线级或离线回归。
+- **验证**：`tests_translate.py` 212 项，含正文 A→B 只重译一帖、review 不错配、旧副本移除、
+  invalid UTF-8 后有效付费结果可读、无效源零调用以及 SDK MockTransport 线级请求。
+
+### CR-29 · P1 · 单个坏轮播子项会丢整帖，视频缩略图可被伪装成完整图片
+
+- **位置**：`core/parse.py`
+- **问题**：一个 malformed carousel child 的异常会向上冒泡并丢掉整篇父帖及其它合法子项；
+  节点已有 `video_versions` 却无可用视频 URL 时，旧逻辑会退回缩略图并标成普通完整图片。
+- **修复**：逐子项容错，保留合法 sibling 并把父帖标为 `media_complete=False`；
+  已知为视频但 URL 缺失时不把 thumbnail 当完整图片。
+- **验证**：`tests_parse.py` 覆盖坏子项、合法 sibling 与缺视频 URL 的不完整语义。
+
+### CR-30 · P1 · 迁移布局可通过 local_path 或预置目标链接移动账号外文件
+
+- **位置**：`tools/layout.py`
+- **问题**：manifest 中的外部 `media.local_path` 可使用 `../..` 或链接逃出账号目录；
+  即使链接仍指向账号内，迁移也可能搬走另一文件；预置的目标帖子目录/metadata/media
+  链接可把写入导向其它帖子或账号外 sentinel，已有普通媒体还会被静默覆盖。
+- **修复**：源路径要求 resolve 后仍在账号物理根内且拒绝链接；所有目标在备份前预检，
+  执行前再次验证真实直属关系、搬移后复核；symlink/junction/reparse/hardlink 源一律拒绝；
+  普通媒体或重复目标冲突使整次迁移在备份前失败闭合，不覆盖人工整理结果。
+- **验证**：`tests_store.py` 与 `tests_store_links.py` 覆盖 traversal、source/target junction、
+  叶链接、dry-run 及账号外 sentinel 不变。
+
+### CR-31 · P1 · 计划任务默认参数会暂停或跳过应跑的一天
+
+- **位置**：`tools/schedule.py`、`scripts/run_delta.bat`
+- **问题**：计划任务无参数调用批处理会被识别成人工双击并 `pause`；每日任务若误用
+  `--if-stale`，26 小时阈值与 24 小时间隔组合会变成隔天运行。
+- **修复**：每日 Action 显式 `--platform all`，登录/解锁补跑 Action 使用 `--if-stale`；
+  batch 只在人真正无参数双击时暂停，调度 XML 保持新项目根目录。
+- **验证**：`tests_schedule.py` 48 项，含 XML 参数、工作目录和 batch 字节级约定。
+
+### 10.3 最终验证基线
+
+| 检查 | 结果 |
+|---|---|
+| 全套 `tests/tests_*.py` | **15 套 788 项，全部 exit 0** |
+| `python -m compileall -q core routes tools translate.py tests` | 通过 |
+| `git diff --check` | 通过（仅现有 CRLF/LF 转换提示） |
+| 真实归档离线 `--estimate` | 45 + 1010 = 1055 条；约 US$1.08–5.39 |
+| 缺 Key 的 `translate.py --check` | 明确给出 `.env` 操作，exit 1，零网络请求 |
+| 旧项目绝对路径搜索 | 活动文件 0 命中 |
+| 已注册计划任务 | 两个任务均不存在，未产生外部定时访问 |
+
+真实 DeepSeek 连通、两个账号各 3 条试译、德语人工质量确认、全量翻译与真实带图审校
+仍是外部业务验收，不应被离线测试冒充完成。
+
+### 10.4 独立最终复审
+
+按 `requesting-code-review` 流程，由一名未参与实现的独立 reviewer 对基线
+`92e7018` 到当前工作树做了最终审查。首次复审发现 3 个 P1：replay truth 叶预检
+发生得太晚、replay/layout 可覆盖既有媒体或接受账号内链接、增量 Archive 构造仍在
+平台异常闭环之外。三项均补修并加入真实失败形态回归；同一 reviewer 复核后结论为：
+**无剩余 Critical / Important finding，补丁未引入新的 P0/P1。**
+
+---
+
+## 11. 增量离线自检工具 + DeepSeek 翻译的首次真实验收（2026-08-30 晚，第三轮）
+
+> ⚠️ **编号说明**：本节两条原编为 CR-25 / CR-26，与第 10 节的第二轮审查撞号，
+> 2026-08-31 改为 CR-37 / CR-38。第 10 节那两条保持不动——它们已被
+> `TRANSLATION_PLAN.md` 等文件引用，改它们的波及面更大。
+
+> 用户要求两件事：**"Instagram 合作帖这块到底解决了吗，核查并检测"**，
+> 以及 **"DeepSeek Key 已配好，把英译德也核验一遍"**。
+> 前者的结论是"已解决，并且现在可以随时自证"；后者查出一个 P0。
+
+### 10.1 合作帖：从"离线验过解析函数"升级到"离线跑完真实代码路径"
+
+上一轮验的是 `extract()` + `partition_by_owner()` 两个函数。这一轮补了
+`tools/dryrun_delta.py`：把 `_capture_delta_*.json` 喂给一个假页面，
+让 **`routes.delta.delta_once()` 原样跑完**——响应收集、登录墙判定、归属过滤、
+合作方哨兵、`min_own_posts` 闸、`ScanResult` 摘要、`should_append` 幂等判断
+全是真实实现，只有浏览器是假的。**零网络、零写盘**（内部固定 `dry_run=True`）。
+
+真实转储上的结果：
+
+| | 结果 |
+|---|---|
+| Instagram | `新增 0 篇 · 本账号 36 篇（原创 1 · 合作 35，2026-06-06 ~ 2026-08-27）· 丢弃 3 · 归档最新 2026-08-27` |
+| Facebook | `新增 0 篇 · 本账号 6 篇（原创 6 · 合作 0，2026-08-16 ~ 2026-08-25）· 丢弃 0 · 归档最新 2026-08-25` |
+| IG `--break-coauthors` | **当次中止**：`只看到 1 篇…；其中 35 篇来自**已知合作方**（irina.catmom、neakasa.global、…）—— 优先怀疑合作帖判定失效，而不是被拦` |
+
+**这个工具的价值不在于它今天说了什么，而在于它让"改完解析器对不对"
+不再需要用一次真实露面去回答。** 2026-08-30 那次正是靠一次实测才发现异常、
+然后又猜错了原因（CR-16）。
+
+`--break-coauthors` 把判定退回 CR-19 修复前的形态，用来回答
+**"哨兵真的会响吗"**——它只改内存里的函数引用，不碰任何文件。
+
+⚠️ **它验证不到媒体下载。** 那是增量里唯一还需要真实跑一次的东西
+（历次实测都是 0 新增，下载环节从没被触发过）。
+
+### CR-37（原 CR-25）· P0 · ~~DeepSeek 的 thinking 一直没关掉，真实文案 100% 失败~~
+
+> ⛔ **本条的修复已被后续决策取代，保留作事故记录。**
+> 2026-08-31 用户拍板把翻译主干换成 DeepSeek 原生 OpenAI 兼容接口，
+> 并**刻意开启 thinking**（见 CR-32 / CR-33）：不再发 `max_tokens`，
+> 因此『思考吃光输出预算』这种失败形态在新主干上不成立。
+>
+> **但它仍然值得读**，因为记着一个与 SDK 无关的通用教训：
+> *自检那句话短到即使参数没生效也能答对，于是自检发绿灯、真实文案全灭。*
+> 新主干的 `--check` 保留了从这里长出来的那道检查（回读响应里的
+> reasoning 用量，确认 thinking 的实际状态与配置一致）。
+
+- **位置**：`translate.py::Translator.request_kwargs`
+- **问题**：原实现用
+  `extra_body={"reasoning": {"effort": "none"}}` 关 thinking。
+  **DeepSeek 的 Anthropic 兼容端点根本不认这个字段**——不报错、也不生效。
+- **真实后果**（第一次拿真 Key 试译，FB 3 篇）：
+
+  ```
+  [1/3] 122098529409379375  失败：RuntimeError: 译文被 max_tokens=4096 截断…
+  [2/3] 122099269947379375  失败：…
+  [3/3] 122099685669379375  失败：…
+  完成：成功 0 篇，失败 3 篇。   输出 12288 tok（= 3 × 4096，全部顶满）
+  ```
+
+  单次诊断请求的响应形态：**只有一个 `thinking` 块，15444 字符，
+  `text` 块一个都没有**。785 字符的帖子换来 15000 字的思考。
+- **为什么自检没拦住**：`--check` 那句话（"Reply with the single word: OK"）
+  短到即使 thinking 开着也能顺利产出 text。**自检绿灯、真实文案全灭。**
+  这是"测试覆盖的是我们想到的形态"在翻译侧的又一次重演。
+- **为什么错误提示是有害的**：当时报的是"请调大 max_tokens 后重跑"。
+  **对这种失败照做只会让它想得更久、账单更高，译文一篇也拿不到。**
+- **修复**（三处，都实测过）：
+  1. `reasoning_effort == "none"` → 发 **Anthropic 标准的顶层
+     `thinking={"type": "disabled"}`**。实测：同一份提示词，
+     输出从 4096 tok 降到 30 tok，德语干净。
+     其余档位（low/high/max）在这个端点上没有可验证的映射，
+     **不再发那个被忽略的 `reasoning` 字段**——项目已经因为
+     "改了不生效的旋钮"吃过两次亏（`target_lang`、`runs_per_day`）。
+  2. `translate()` 区分两种截断：有 `text` 块 = 译文太长（调大 max_tokens）；
+     **只有 `thinking` 块 = thinking 没关掉（明确写"不要调大 max_tokens"）**。
+  3. `--check` 记录响应的内容块类型，**发现 `thinking` 块就判失败**并说明原因。
+     连通 ≠ 能用，自检不能再发假绿灯。
+- **修复后的真实验收**：
+
+  | | 结果 | 输出 tok | 费用上界 |
+  |---|---|---:|---:|
+  | `--check` | 通过，且"已确认关闭" | 1 | ~0 |
+  | FB 3 篇 | **3 成功 0 失败** | 1128 | US$0.019 |
+  | IG 3 篇 | **3 成功 0 失败** | 168 | US$0.0065 |
+
+### CR-38（原 CR-26）· P2 · 合作帖的授权提示没有任何测试覆盖
+
+- **位置**：`translate.py::run_review` 的合作帖提示块
+- **问题**：用户拍板"229 篇第三方创作者的合作帖全部进流水线"时，
+  **配套条件是 `review.md` 每篇仍标出原作者与授权提示**。
+  这条提示此前一个断言都没有——静默失效的话，
+  审校人再也看不到"这篇的著作权在别人手里"，而没人会发现少了一句话。
+- **修复**：`tests_translate.py` 新增 `[19b-2]` 段（3 项）：
+  合作帖标出原作者、写明确认授权、**自己原创的帖子不加这条提示**
+  （篇篇都有 = 等于没有）。
+
+### 10.2 译文质量的第一手观察（3+3 篇，人工看过）
+
+德语正文本身没问题，`【…】`、分隔点、emoji、品牌名、型号都保留了。
+**Instagram 译文比原文短 40–55%，全部来自话题标签被从 22 个砍到 3 个**
+（`config.toml` 的 `tone` 规则）——正文本身德语反而略长，符合预期。
+
+⚠️ **"IG 话题标签砍到 3 个"是一个业务决策，不是翻译问题**：
+IG 的话题标签直接影响自然流量，而这条规则会作用在全部 1010 篇上。
+本轮**没有改它**，留给用户拍板。
+
+### 10.3 本轮之后的测试基线
+
+**16 套 811 项，全绿**（stdout 被重定向的条件下同样全绿）。
+新增 `tests/tests_dryrun_delta.py`（13 项，含"一次网络请求都不发"的断言）、
+`tests_translate.py` 的 thinking 截断分流与合作帖提示两段。
+
+---
+
+## 12. DeepSeek 官方 API 与标签契约复审（2026-08-30，第四轮）
+
+> 本节记录当前有效实现。第 10 节 CR-25 的 Anthropic 关闭-thinking 修复保留为
+> 历史事故记录，但已经被用户的新决定取代；不能再据此恢复旧协议或旧参数。
+
+### CR-32 · P1 · DeepSeek 主干经过 Anthropic 协议层，配置与响应语义都绑定错接口
+
+- **位置**：`translate.py::build_client`、`Translator.translate`、`config.toml`、
+  `requirements.txt`
+- **问题**：主干使用 `anthropic.Anthropic`、`/anthropic/v1/messages`、`x-api-key` 和
+  内容块响应；这不是用户要求的 DeepSeek 官方原生/OpenAI 兼容调用，也导致 thinking、
+  finish reason 与 usage 字段必须绕一层协议映射。
+- **修复**：改用 OpenAI SDK 直连 `https://api.deepseek.com/chat/completions`，Bearer
+  鉴权；响应从 `choices[0].message.content/reasoning_content` 读取；移除
+  `custom_anthropic`、`auth_style`、`extra_headers`、`prompt_cache` 等非主干旋钮。
+- **验证**：MockTransport 在线级断言最终 URL、Authorization header、messages 和
+  OpenAI 格式响应解析；不是只检查调用前的 Python 字典。
+
+### CR-33 · P1 · 客户端输出上限与默认关闭 thinking 同时违背当前翻译契约
+
+- **位置**：`Settings`、`Translator.request_kwargs`、`run_check`
+- **问题**：旧请求固定 `max_tokens=4096` 且默认 `reasoning_effort=none`。前者会人为
+  截断模型，后者与用户要求的 High thinking 相反；旧错误提示还会建议继续调大该上限。
+- **修复**：thinking 显式 `enabled`，默认 `reasoning_effort="high"`；只接受官方
+  `low/high/max` 档位；不配置、不发送 `max_tokens`、`max_completion_tokens`、
+  temperature 或 top_p。服务端 `finish_reason=length` 单独报错，并明确客户端未设上限。
+  `--check` 除了核对 model，还要求响应提供 reasoning content/token 证据，避免假绿灯。
+- **验证**：业务层 kwargs 与 SDK 最终 JSON body 各有独立“无输出上限”断言；
+  `length` 回归确保提示不会让业务人员重新添加客户端限制。
+
+### CR-34 · P1 · “最多 3 个标签”会静默删除原帖发布内容
+
+- **位置**：`prompts/translate_de.md`、`config.toml`、`translate.py::run_translate`
+- **问题**：提示词、tone、示范和自检清单同时要求最多 3 个标签，真实 IG 试译已出现
+  22→3。用户现已明确要求原帖多少个就照搬多少个；只改一句提示词仍可能被模型违反。
+- **修复**：删除所有数量上限与裁剪示范，改为数量、内容、大小写、顺序完全一致；
+  新增 Unicode-aware `extract_hashtags` / `hashtags_preserved`，在付费结果写盘前硬校验。
+  少贴、多贴、翻译、改大小写或调序都拒绝写盘，失败项留在普通重跑队列。
+- **验证**：覆盖拉丁重音、CJK 标签、句尾标点，以及删/增/翻译/大小写/调序；
+  另有主流程回归确认违规结果不会进入 `translated.jsonl`。
+
+### CR-35 · P1 · 已保存译文不校验提示词版本，规则升级后仍会被当成完成
+
+- **位置**：`translate.py::translation_is_current`
+- **问题**：记录虽然保存 `prompt_version`，但“是否当前有效”只比较正文 SHA-256。
+  标签策略从裁 3 个改为全量照搬后，旧 3+3 的正文指纹仍匹配，普通运行会跳过，
+  使新规则实际上不生效，除非业务人员刚好记得加 `--force`。
+- **修复**：有效性同时要求正文指纹与 `PROMPT_VERSION`；版本从 4 升至 5。旧付费行
+  保留作历史，不删除；普通运行自动重译，`--review` 不再展示旧版结果或旧派生副本。
+- **验证**：旧版本同正文进入待译队列；当前版本重跑仍保持幂等。
+
+### CR-36 · P2 · High thinking 后旧离线费用仍被描述为“保守上界”
+
+- **位置**：`translate.py::run_estimate`、翻译操作文档
+- **问题**：旧估算只按可见德语长度估输出。High thinking 开启后，reasoning token
+  由模型按内容决定；继续把 US$1.08–5.39 写成“保守费用区间”会系统性低估预算。
+  迁移时还发现缓存费用调用仍传旧 `cache_read_input_tokens`，与新归一字段不一致。
+- **修复**：缓存计费改用 `prompt_cache_hit_tokens`；输出明确标成“可见译文”，费用标成
+  “未含 reasoning 的基础参考”，并要求用新版每账号 3 条真实 usage 外推全量。
+- **验证**：`usage` 回归覆盖 `prompt_tokens`、`completion_tokens`、缓存命中和嵌套
+  reasoning token；真实付费请求未在本轮擅自执行。
+
+### 11.1 验证状态
+
+- `tests/tests_translate.py`：通过，覆盖官方接口线级契约、High thinking、无输出上限、
+  标签硬校验与提示词版本自动过期。
+- 当前两份真实 manifest 的扫描结果：1065 条记录中识别到 **7652 个标签**，与独立
+  Unicode 类别扫描的总数一致；单帖最多 32 个，不存在“最多 3 个”的隐含假设。
+- 全项目 `tests/tests_*.py`：**16 套 815 项，全部 exit 0**。
+- 新版真实 `--check` 与 Facebook/Instagram 各 3 条仍待用户执行；旧 Anthropic 试跑
+  只作历史证据，不能作为当前实现的真实验收。
+
+---
+
+## 13. 真实验收之后暴露的两条（2026-08-31）
+
+> 用户 2026-08-31 按 `MANUAL_STEPS.md` 第 8 步完整跑了一遍（含最后那次真实抓取），
+> **C2 / C4 / C5 验收通过**。这一节记的是那次运行**顺带暴露出来的东西**——
+> 真实运行的价值往往不在它验证了什么，而在它顺手照出了什么。
+
+### 13.1 那次真实验收本身
+
+| | 结果 |
+|---|---|
+| Facebook | 新增 1 篇，**下了 5 张图**（91–100 KB，无 0 字节） |
+| Instagram | 新增 1 篇，**下了 1 张图**（323 KB） |
+| **IG 那篇新帖** | `owner=neakasa.global`、`coauthors=['neakasa.tech']` —— **它本身就是合作帖** |
+
+最后一行是整件事的收口：**当天真实抓到的那篇新帖，恰好就是修复前会被丢掉的那一类**。
+合作帖判定因此不只是"在保存的转储上成立"，而是**在当天的真实响应上仍然成立**。
+
+**媒体下载至此第一次被真正触发**——此前几次实测都是"新增 0 篇"，那段代码从没跑过。
+
+### CR-39 · P1 · 连续性检查看不见跨越窗口边界的缺口
+
+- **位置**：`core/integrity.py::run_checks`
+- **问题**：旧写法先把 60 天窗口外的帖子**整条剔掉**，再算相邻间隔。
+  于是**起点在窗口外、终点在窗口内的缺口会整个消失**：窗口内最早那篇
+  没有前邻居了，缺口无从产生。
+- **实测**（2026-08-31 那次运行）：Facebook 报出了 5.9 天的缺口，
+  而 **Instagram 一条都没报**——但归档里明明有一处
+  `2026-07-01 → 2026-07-09` 的 **8.4 天**缺口（IG 阈值 6 天）。
+  它一次都没被报过，**只因为起点比 60 天前早了一天**。
+- **为什么这个盲区正好落在最坏的地方**：本项检查要抓的是"一段历史根本没抓到"。
+  **洞越大，它的起点越早，就越容易被这样剔掉**——检查在最需要它的场景下最不灵。
+- **修复**：改成先算全量相邻间隔，再按**较晚那篇是否落在窗口内**筛选。
+  "不重报陈年缺口"的初衷不变（两端都在窗口外的仍然不报），盲区消失。
+- **回归**：`tests_integrity.py` 新增跨边界与两端皆在窗口外两组断言。
+
+### CR-40 · P1 · 离线预算漏掉了账单的主导项，低估一个数量级
+
+- **位置**：`translate.py::run_estimate`
+- **问题**：`--estimate` 按正文字符数换算 token，给出 **US$1.08–5.41**。
+  但 thinking 开着时，**输出费用的 97–99% 花在看不见的 reasoning 上**，
+  而字符换算完全不含这部分。它自己也承认估不了，让人"试跑 3 篇后自行外推"——
+  **把一个能自动做的事留给了人**，而这种事人不会做。
+- **实测**（2026-08-31，真实 3+3 篇）：
+
+  | | 每篇输出 tok（中位） | 其中 reasoning | 占比 |
+  |---|---:|---:|---:|
+  | Facebook | 25 662 | 25 400 | **99%** |
+  | Instagram | 4 464 | 4 351 | **97%** |
+
+- **修复**：每篇的 usage 本来就写进了 `translated.jsonl`。
+  `--estimate` 改为**优先按已译帖子的真实 usage 外推**（取中位数，不取均值——
+  单篇思考量长尾很重），只在没有任何当前提示词版本的记录时才退回字符换算，
+  并明确标注那个数不含 reasoning。**只采当前 `PROMPT_VERSION` 的样本**：
+  换了提示词，思考量不可比。
+- **修复后**：全量 1051 篇的预算从"US$1.08–5.41（不含 reasoning）"
+  变成 **US$23.73（按真实 usage 外推）**。
+
+### 13.2 一个留给业务拍板的量化结果
+
+同一篇 1261 字符的帖子，其余条件完全相同，只改 `reasoning_effort`：
+
+| effort | reasoning tok | 可见译文 tok | 单篇费用上界 |
+|---|---:|---:|---:|
+| `low` | **373** | 419 | US$0.0101 |
+| `high` | **9 899** | 420 | US$0.0412 |
+
+**可见译文一样长，思考量差 26 倍。** 但 `high` 的德语细节确实更好：
+`low` 那版出现了 `Schluss mit Schlechtem Gewissen`（句中误大写）
+和 `„…"` 引号不成对；`high` 两处都正确。
+
+全量口径：`high` ≈ **US$24**，`low` ≈ US$6–7。
+**这是业务取舍，代码不替用户定**，已写进 `config.toml` 的注释与
+`MANUAL_STEPS.md` 第 7 步。
+
+### 13.3 本轮之后的测试基线
+
+**16 套 825 项，全绿**（stdout 被重定向的条件下同样全绿）。
+新增 `tests_integrity.py` 的跨窗口缺口两项、`tests_translate.py` 的
+`--estimate` 实测外推段（7 项）。
+
+⚠️ 顺带修掉一条**写死配置值的断言**：`check(s.model == "deepseek-v4-pro")`
+在业务把模型改成 flash 时当场变红，而实现完全正常。
+**用哪个模型是 config.toml 里的业务取舍，不是代码契约**——
+断言改成跟着 `Settings.validate()` 的白名单走。

@@ -21,7 +21,7 @@
 | 路径     | 模块                       | 身份                            | 频次   | 封号风险       |
 | -------- | -------------------------- | ------------------------------- | ------ | -------------- |
 | **回填** | `routes/backfill.py`       | 登录态（专用小号）+**人工滚动** | 跑一次 | 一次性敞口     |
-| **增量** | `routes/delta.py` _(方案 B 待建)_ | **登录态**（同一专用小号）+ CDP 附着 | 每天 | ⚠️ **累积性敞口** |
+| **增量** | `routes/delta.py` | **登录态**（同一专用小号）+ CDP 附着 | 每天 | ⚠️ **累积性敞口** |
 
 > ⚠️ **2026-08-30 增量方案变更（用户拍板，方案 B）。**
 > 原设计是"增量完全登出"——没有账号、没有 session、没有 cookie，
@@ -73,13 +73,17 @@ scripts\run_backfill.bat facebook
 在浏览器里手工向下滚到最早的帖子，回终端按 Enter。IG 同理换成 `instagram`。
 
 ```
+Copy-Item .env.example .env
 scripts\run_translate.bat --check
-scripts\run_translate.bat --limit 3
+scripts\run_translate.bat --estimate
+scripts\run_translate.bat --account in_neakasa.tech --limit 3
 scripts\run_translate.bat --review
 ```
 
 翻译德语并生成人工审校清单。**首次用前先按
-[docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md) 第 6 步配置 API 网关与品牌语域。**
+[docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md) 第 6 步把 DeepSeek Key 放进 `.env`，
+再按第 7 步分别试跑两个账号。** 当前直连 DeepSeek 官方 OpenAI 兼容接口，默认 High
+thinking、不发送客户端输出上限，原帖话题标签逐个原样照搬；模型与术语表已配置好。
 
 ## 目录结构
 
@@ -96,6 +100,9 @@ FacebookScraper/
     setup.py  start_chrome.py
     replay.py               用 _capture_*.json 离线重建归档，不重新下载媒体
     layout.py               归档布局：migrate / reindex / index
+    dryrun_delta.py         用增量转储离线跑完 delta_once() 的**真实代码路径**，
+                            零网络零写盘。改完解析器先跑它，别用真实露面去验
+    schedule.py             Windows 计划任务：xml / install / status / remove
   docs/
     IMPLEMENTATION_PLAN.md  进度真相源
     MANUAL_STEPS.md         人工操作指南
@@ -107,7 +114,7 @@ FacebookScraper/
     config.py  chrome.py  store.py  parse.py  session.py
     http.py  integrity.py  notify.py  console.py
   routes/                  抓取路径
-    backfill.py  fb_graph.py  delta.py (C2 已实现，C3-C6 待建)
+    backfill.py  fb_graph.py  delta.py（登录态增量主流程已实现）
   tests/                   离线测试，setup.bat 用 glob 全跑
   _deprecated/             已否决路线的存档，不要引用、不要复活
 
@@ -178,8 +185,26 @@ post_id 在后，幂等查找不用打开文件。
    2026-08-30 实测一次 IG 回填混进了 266 条来自另外 195 个账号的帖子。
    不筛的话下游会翻译并发布他人内容，**这是法务风险**。
    筛掉的必须写进 `_rejected.jsonl`，不得静默丢弃。
+4. **判"这篇在不在本账号主页上"用 `parse.on_timeline_of()`，不要写 `owner == account`。**
+   Instagram 的**合作帖**由一方发布、**双方主页同时显示**，节点里的
+   `user.username` 只记原始发布者，合作关系在 `coauthor_producers[]` 里。
+   只比 owner 的话实测丢掉 **263 篇就在本账号主页上的帖子**；
+   增量看到的那一屏更极端——**36 篇里 35 篇是合作帖**。
+   `owner` 仍然记**真实作者**，不改写成目标账号：谁创作的是事实，
+   下游据此区分原创与合作（`index.html` 的绿标、`review.md` 的授权提示）。
 
 `media[].ocr_text` 预留给下游 OCR 阶段回填，本层不填。
+`coauthors` 是归一化小写的合作方 username 列表，原创帖为空数组。
+
+### 丢弃不是静默的
+
+`core/integrity.py` 的第四项检查 `check_dropped_partners()` 盯着一件事：
+**被丢弃的节点里，作者是不是我们的已知合作方**（名单从归档推导，实测 IG 210 个）。
+是的话就报出来——那多半意味着合作帖判定又漏判了。
+
+它在全部真实数据上零误报（210 个合作方与历史上被丢弃的 6 个账号交集为空），
+把判定退回旧实现则必响。**这一项存在的理由不是"检查得更全"，
+而是 2026-08-30 那 263 篇被静默丢了很久都没人知道。**
 
 ## 出问题时：不用重滚
 
@@ -195,7 +220,7 @@ python -m tools.replay instagram              # 真正重建（媒体不重新�
 已在盘上的文件按 URL 重新关联，关联不上的移进 `_orphan_media/`。
 
 2026-08-30 这条兜底第一次兑现价值：解析器发现三个缺陷后，
-整个归档（IG 756 篇 / FB 46 篇）完全离线重建，用户一次都没有重滚。
+整个归档（重建时 IG 1019 篇 / FB 46 篇；2026-08-31 增量后为 1020 / 47）完全离线重建，用户一次都没有重滚。
 **这条设计不许优化掉。**
 
 
