@@ -378,6 +378,59 @@ class DeltaBlocked(RuntimeError):
         self.hard = hard
 
 
+class DeltaRunAlreadyActive(RuntimeError):
+    """另一个每日/补跑实例已经持有全局增量锁。"""
+
+
+class DeltaRunLock:
+    """跨两个 Task Scheduler 任务的进程锁。
+
+    ``MultipleInstancesPolicy=IgnoreNew`` 只约束同一个计划任务；每日任务与
+    登录/解锁补跑是两个不同任务，醒机时仍可能同时进入这里。锁覆盖 stale
+    判定、随机延迟、浏览器和状态写入，保证整个增量主干并发恒为 1。
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._file = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a+b")
+        if self._file.seek(0, os.SEEK_END) == 0:
+            self._file.write(b"0")
+            self._file.flush()
+        self._file.seek(0)
+        try:
+            if sys.platform.startswith("win"):
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            self._file.close()
+            self._file = None
+            raise DeltaRunAlreadyActive(
+                "另一个增量实例正在运行；本次不再附着浏览器或写状态。") from None
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._file is not None:
+            try:
+                self._file.seek(0)
+                if sys.platform.startswith("win"):
+                    import msvcrt
+                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._file.close()
+                self._file = None
+        return False
+
+
 # ---- C5：运行状态 -------------------------------------------------------
 
 def state_path() -> Path:
@@ -644,6 +697,7 @@ class ScanResult:
     下面每个字段都是为了让这两件事长得不一样。
     """
     new: int = 0
+    upgraded: int = 0
     own: int = 0
     rejected: int = 0
     newest_seen: str = ""
@@ -664,9 +718,9 @@ class ScanResult:
     def summary(self) -> str:
         span = ("%s ~ %s" % (self.oldest_seen[:10], self.newest_seen[:10])
                 if self.newest_seen else "—")
-        return ("新增 %d 篇 · 本账号 %d 篇（原创 %d · 合作 %d，%s）"
+        return ("新增 %d 篇 · 修复旧帖 %d 篇 · 本账号 %d 篇（原创 %d · 合作 %d，%s）"
                 "· 丢弃 %d · 归档最新 %s"
-                % (self.new, self.own, self.authored, self.collab, span,
+                % (self.new, self.upgraded, self.own, self.authored, self.collab, span,
                    self.rejected, self.newest_known[:10] or "—"))
 
     def stale_view(self) -> bool:
@@ -740,7 +794,11 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     # 「看到的自家帖子太少」是"没看到时间线"最可靠的信号。
     # ⚠️ 用篇数而不是"最新一篇的日期倒退"来判：后者在账号删掉最新一帖时会
     # 每天误报、把失败预算耗光，而删帖是会真实发生的。
-    floor = min(dcfg.min_own_posts, len(known))
+    # 空归档不能把门槛一起降成 0：首次接入新账号时，推荐位/UGC 全被丢弃
+    # 仍会得到“成功、0 篇自家内容”，随后刷新 last_success 并掩盖错误目标。
+    # 归档很小时继续按已有规模降门槛，但只要配置没有显式设 0，至少要看到 1 篇。
+    floor = (0 if dcfg.min_own_posts == 0 else
+             min(max(1, dcfg.min_own_posts), max(1, len(known))))
     if len(posts) < floor:
         # 命中"丢弃的里面有合作方"时，把它写进中止理由里。**这一句是给下一个
         # 会话省几个小时的**：同样是"只看到 1 篇"，"归属判定漏了合作帖"
@@ -759,10 +817,14 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     for post in sorted(posts, key=lambda p: p.created_at or "", reverse=True):
         if not arc.should_append(post):
             continue
+        was_known = arc.has(post.post_id)
         head = (post.text or "").replace("\n", " ")[:38]
         if dry_run:
             print("  ~ %s  %s  %s" % (post.post_id, post.created_at or "(无日期)", head))
-            res.new += 1
+            if was_known:
+                res.upgraded += 1
+            else:
+                res.new += 1
             continue
         await download_media(ctx, arc, post, url)
         if not arc.append(post):
@@ -771,7 +833,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         imgs = sum(1 for m in post.media if m.kind == "image")
         vids = sum(1 for m in post.media if m.kind == "video")
         print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
-        res.new += 1
+        if was_known:
+            res.upgraded += 1
+        else:
+            res.new += 1
     return res
 
 
@@ -969,34 +1034,9 @@ def _parse_args(argv):
     return p.parse_args(argv)
 
 
-def main(argv=None) -> int:
-    args = _parse_args(argv)
-    # 运行分隔线由 Python 打，不由 .bat 的 echo %DATE% 打：
-    # cmd 按控制台代码页（本机 936）写，会在一份 UTF-8 日志里插进 GBK 字节。
-    # 输出被 run_delta.bat 追加进 state/delta.log，没有这行就分不清哪段是哪次跑的。
-    print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
-                                     or "(无参数)"))
-    if args.logged_out_probe:
-        return _probe(cfg()["targets"]["instagram"])
-
-    dcfg = DeltaConfig.load()
-    path = state_path()
-    state = load_state(path)
-    platforms = list(PLATFORMS) if args.platform == "all" else [args.platform]
-
-    if args.status:
-        _print_status(state)
-        return 0
-
-    if args.reset_failures:
-        for platform in platforms:
-            entry = state.setdefault(platform, blank_entry())
-            entry["consecutive_failures"] = 0
-            entry["last_error"] = None
-        save_state(path, state)
-        print("已清零 %s 的失败计数。" % "、".join(platforms))
-        return 0
-
+def _run_locked(args, dcfg: DeltaConfig, path: Path,
+                state: dict, platforms: list[str]) -> int:
+    """持有 :class:`DeltaRunLock` 后执行一次计划/手工增量。"""
     now = utcnow()
     due: list[str] = []
     blocked_by_budget: list[str] = []
@@ -1082,6 +1122,45 @@ def main(argv=None) -> int:
     # 一个平台预算耗尽、另一个仍可运行时，后者成功不能把“部分停摆”洗成 rc=0。
     # 运行本身失败（rc=1）优先；否则用 2 让 Task Scheduler 看见需要人工介入。
     return run_rc if run_rc else (2 if blocked_by_budget else 0)
+
+
+def main(argv=None) -> int:
+    args = _parse_args(argv)
+    # 运行分隔线由 Python 打，不由 .bat 的 echo %DATE% 打：
+    # cmd 按控制台代码页（本机 936）写，会在一份 UTF-8 日志里插进 GBK 字节。
+    # 输出被 run_delta.bat 追加进 state/delta.log，没有这行就分不清哪段是哪次跑的。
+    print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
+                                     or "(无参数)"))
+    if args.logged_out_probe:
+        return _probe(cfg()["targets"]["instagram"])
+
+    dcfg = DeltaConfig.load()
+    path = state_path()
+    platforms = list(PLATFORMS) if args.platform == "all" else [args.platform]
+
+    if args.status:
+        _print_status(load_state(path))
+        return 0
+
+    lock_path = path.with_name("delta.lock")
+    try:
+        with DeltaRunLock(lock_path):
+            # 锁前读出的 state 可能已经被另一个计划任务改过；拿到锁后才读，
+            # stale 判定和随后的原子写才能基于同一份最新状态。
+            state = load_state(path)
+            if args.reset_failures:
+                for platform in platforms:
+                    entry = state.setdefault(platform, blank_entry())
+                    entry["consecutive_failures"] = 0
+                    entry["last_error"] = None
+                save_state(path, state)
+                print("已清零 %s 的失败计数。" % "、".join(platforms))
+                return 0
+            return _run_locked(args, dcfg, path, state, platforms)
+    except DeltaRunAlreadyActive as e:
+        print("[i] %s" % e)
+        # 计划任务撞上另一个实例属于成功去重；人工 reset 没执行则必须报失败。
+        return 1 if args.reset_failures else 0
 
 
 if __name__ == "__main__":

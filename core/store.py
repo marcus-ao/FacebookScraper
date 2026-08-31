@@ -138,13 +138,8 @@ def _safe_post_id_component(post_id: str) -> str:
     return f"~id_{digest}"
 
 
-def _post_quality_rank(post: "Post | dict") -> tuple[int, int]:
-    """与增量升级规则共用的质量等级。
-
-    完整记录永远胜过残缺记录；两条都残缺时，媒体项更多的胜出。两条都完整
-    时视为同等级，因为 :meth:`Archive._is_upgrade` 本来就不允许完整记录之间
-    互相覆盖。把这条规则集中在一处，避免 append 与 reindex 各自发明胜负。
-    """
+def _post_quality_parts(post: "Post | dict") -> tuple[bool, int, int]:
+    """返回 ``(是否完整, 已知媒体数, 已落盘媒体数)``。"""
     if isinstance(post, Post):
         complete = post.media_complete
         media = post.media
@@ -152,7 +147,31 @@ def _post_quality_rank(post: "Post | dict") -> tuple[int, int]:
         complete = post.get("media_complete", True)
         media = post.get("media") or []
     media_count = len(media) if isinstance(media, (list, tuple)) else 0
-    return (1, 0) if complete else (0, media_count)
+    if isinstance(post, Post):
+        local_count = sum(1 for item in media if item.local_path)
+    else:
+        local_count = sum(
+            1 for item in media
+            if isinstance(item, dict) and item.get("local_path"))
+    return bool(complete), media_count, local_count
+
+
+def _post_quality_rank(post: "Post | dict") -> tuple[int, int, int]:
+    """与增量升级规则共用的质量等级。
+
+    完整记录永远胜过残缺记录；两条都残缺时，已实际落盘的媒体更多者胜出，
+    其次才看已知媒体项数。落盘数优先很重要：一次重试可能只
+    补回两张失败图片中的一张，虽然仍是 ``media_complete=False``，这部分
+    进展也必须写回真相源，不能在下一次重试时重新下载。
+
+    两条都完整时仍视为同等级，因为 :meth:`Archive._is_upgrade` 本来就不允许
+    完整记录之间互相覆盖。把规则集中在一处，避免 append 与 reindex 各自
+    发明胜负。
+    """
+    complete, media_count, local_count = _post_quality_parts(post)
+    if complete:
+        return (1, 0, 0)
+    return (0, local_count, media_count)
 
 
 class ArchivePathError(ValueError):
@@ -428,6 +447,40 @@ class Archive:
         return assert_physical_direct_path(
             d, media, kind="file", label=f"媒体文件 {media.name}")
 
+    def reusable_media_path(self, post: "Post", url: str) -> Path | None:
+        """返回同帖、同 URL 已安全落盘的媒体路径；没有则返回 ``None``。
+
+        残缺帖重试会重新解析出一个全新的 :class:`Post`，其中没有旧记录的
+        ``local_path``。若不在下载边界把已成功的部分接回来，每次重试都会
+        重复请求这些 CDN URL。只复用当前帖子预期 truth dir 下的真实普通文件；
+        时间被纠正导致目录变化时不跨目录借用，避免升级隔离旧目录后留下悬空引用。
+        """
+        old = self._rows.get(post.post_id)
+        if not isinstance(old, dict):
+            return None
+        expected_dir = self.post_dir(post)
+        for item in old.get("media") or []:
+            if not isinstance(item, dict) or item.get("url") != url:
+                continue
+            local = item.get("local_path")
+            if not isinstance(local, str) or not local.strip():
+                continue
+            rel = Path(local.replace("\\", "/"))
+            candidate = self.base / rel
+            try:
+                parent = assert_physical_direct_path(
+                    self.posts_dir, candidate.parent, kind="directory",
+                    label="已归档媒体的帖子目录")
+                if parent.resolve() != expected_dir.resolve():
+                    continue
+                assert_physical_direct_path(
+                    parent, candidate, kind="file", label="已归档媒体")
+            except (ArchivePathError, OSError, RuntimeError):
+                continue
+            if candidate.exists():
+                return candidate
+        return None
+
     @staticmethod
     def _available_recovery_path(root: Path, name: str) -> Path:
         """在恢复区生成不覆盖既有数据的目标路径。"""
@@ -609,7 +662,16 @@ class Archive:
     @staticmethod
     def _is_upgrade(old: dict, new: Post) -> bool:
         was_incomplete = not old.get("media_complete", True)
-        return was_incomplete and _post_quality_rank(new) > _post_quality_rank(old)
+        if not was_incomplete:
+            return False
+        new_complete, new_media, new_local = _post_quality_parts(new)
+        if new_complete:
+            return True
+        _, old_media, old_local = _post_quality_parts(old)
+        # 残缺 -> 残缺只能单调改进。否则“新响应多发现一张、但本次全部下载
+        # 失败”会以 media_count 更大为由覆盖旧 local_path，反而丢掉恢复成果。
+        return (new_media >= old_media and new_local >= old_local
+                and (new_media > old_media or new_local > old_local))
 
     @staticmethod
     def fingerprint(data: bytes) -> str:

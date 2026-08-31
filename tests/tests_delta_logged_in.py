@@ -27,7 +27,7 @@ from core.console import force_utf8   # noqa: E402
 
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
-from core.capture import Collector, prune_captures                  # noqa: E402
+from core.capture import Collector, download_media, prune_captures  # noqa: E402
 from core.store import Archive, Media, Post                         # noqa: E402
 import routes.delta as delta                                        # noqa: E402
 from routes.delta import (                                          # noqa: E402
@@ -288,10 +288,35 @@ with tempfile.TemporaryDirectory() as d:
     arc.append(stub)
     page = FakePage([resp(ig_payload("111", n_media=3))])
     n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
-    check(n.new == 1, "已存但媒体不全的帖子会被重新抓取并升级（不是 has() 语义）")
+    check(n.new == 0 and n.upgraded == 1,
+          "已存残缺帖记为旧帖修复，不冒充社媒新增并刷新零新增时钟")
     row = [r for r in arc.rows() if r["post_id"] == "111"][0]
     check(len(row["media"]) == 3 and row["media_complete"],
           "升级后媒体补全，media_complete 回到 True")
+
+with tempfile.TemporaryDirectory() as d:
+    # 上次两张只成功一张：新一轮应复用已落盘文件，只请求失败的那张。
+    arc = Archive(Path(d), "in_acme_us")
+    old = Post(post_id="reuse", platform="instagram", account="acme_us",
+               text="partial", created_at="2026-08-12T00:00:00Z", owner="acme_us",
+               media=[Media(url="https://cdn.example.com/reuse_1.jpg", kind="image"),
+                      Media(url="https://cdn.example.com/reuse_2.jpg", kind="image")],
+               media_complete=False)
+    first = arc.media_path(old, 0, "image/jpeg")
+    first.write_bytes(b"\xff\xd8\xffsaved")
+    old.media[0].local_path = str(first.relative_to(arc.base)).replace("\\", "/")
+    arc.append(old)
+    fresh = Post(post_id="reuse", platform="instagram", account="acme_us",
+                 text="partial", created_at="2026-08-12T00:00:00Z", owner="acme_us",
+                 media=[Media(url="https://cdn.example.com/reuse_1.jpg", kind="image"),
+                        Media(url="https://cdn.example.com/reuse_2.jpg", kind="image")],
+                 media_complete=True)
+    ctx = FakeCtx(FakePage([]))
+    asyncio.run(download_media(ctx, arc, fresh, "https://www.instagram.com/acme_us/"))
+    check(ctx.request.gets == ["https://cdn.example.com/reuse_2.jpg"],
+          "残缺重试不重复请求已成功的 CDN 图片，只补失败项")
+    check(all(m.local_path for m in fresh.media) and fresh.media_complete,
+          "复用路径与新下载路径合并后可正常补全")
 
 with tempfile.TemporaryDirectory() as d:
     arc = Archive(Path(d), "in_acme_us")
@@ -359,6 +384,19 @@ with tempfile.TemporaryDirectory() as d:
     page = FakePage([resp(ig_payload("111"))])
     n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
     check(n.new == 1, "归档本身就很小时不误报（新账号、刚开始抓的情况）")
+
+with tempfile.TemporaryDirectory() as d:
+    # 但空归档不能把闸门降成 0；否则错误账号/全是推荐位也会刷新 last_success。
+    arc = Archive(Path(d), "in_acme_us")
+    other = ig_payload("foreign", owner="someone_else")
+    page = FakePage([resp(other)])
+    try:
+        asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc,
+                               test_cfg(), dry_run=True))
+        check(False, "空归档看到 0 篇自家内容必须中止")
+    except DeltaBlocked as e:
+        check("期望至少 1 篇" in str(e),
+              "冷启动仍要求至少一篇自家内容，不把错误目标记成成功")
 
 r = delta.ScanResult(new=0, own=1, rejected=38, newest_seen="2026-06-06T00:00:00Z",
                      oldest_seen="2026-06-06T00:00:00Z",
@@ -576,6 +614,27 @@ with tempfile.TemporaryDirectory() as tmp:
     fb_rows = Archive(Path(tmp), "fa_acme_page").rows()
     check(len(fb_rows) == 1 and fb_rows[0]["owner"] == "acme_page",
           "Facebook 侧的归属取自 actors[0].url 的账号名段，不是展示名")
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 媒体修复是一次成功写入，但不是社媒刚发布的新帖；否则会把 quiet 时钟
+    # 错误刷新到今天，长期零新增告警最多再被推迟一个完整阈值周期。
+    arc = Archive(Path(tmp), "in_acme_us")
+    arc.append(Post(
+        post_id="111", platform="instagram", account="acme_us", text="old",
+        owner="acme_us", created_at="2025-08-12T12:00:00Z",
+        media=[Media(url="https://cdn.example.com/old.jpg", kind="image")],
+        media_complete=False))
+    old_new_at = "2026-07-01T00:00:00Z"
+    state = {"instagram": {**blank_entry(),
+                            "first_success": old_new_at,
+                            "last_new_at": old_new_at}}
+    rc, _ = run_due([FakePage([resp(ig_payload("111", n_media=3))])],
+                    state, tmp, platforms=("instagram",))
+    check(rc == 0 and Archive(Path(tmp), "in_acme_us").rows()[0]["media_complete"],
+          "旧帖媒体修复仍算本轮成功并真正补全归档")
+    check(state["instagram"]["last_new_count"] == 0
+          and state["instagram"]["last_new_at"] == old_new_at,
+          "但 last_new_at/last_new_count 不冒充新发布内容，quiet 时钟不被洗掉")
 
 with tempfile.TemporaryDirectory() as tmp:
     # 非 DeltaBlocked 的异常以前会穿透 _run_due：既不落状态也不通知，
@@ -900,6 +959,18 @@ with tempfile.TemporaryDirectory() as tmp:
     saved_state = json.loads((Path(tmp) / "delta_state.json").read_text(encoding="utf-8"))
     check(rc == 0 and saved_state["facebook"]["consecutive_failures"] == 0,
           "--reset-failures 清零，人工确认后能继续")
+
+    # 每日任务和补跑任务是两个不同的 Task Scheduler task；各自的
+    # MultipleInstancesPolicy 挡不住彼此，必须由进程锁兜底。
+    rec = Recorder()
+    held = delta.DeltaRunLock(Path(tmp) / "delta.lock")
+    held.__enter__()
+    try:
+        rc = run_main([], dict(state), rec, tmp=tmp)
+    finally:
+        held.__exit__(None, None, None)
+    check(rc == 0 and rec.sleeps == [] and rec.launched == [],
+          "另一个计划任务持锁时本次成功去重，不抖动、不碰 Chrome")
 
     # Chrome 没在跑
     rec = Recorder()

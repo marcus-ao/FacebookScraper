@@ -56,10 +56,47 @@ with tempfile.TemporaryDirectory() as d:
           len({r["post_id"]: r for r in a.rows()}["p2"]["media"]) == 3,
           "媒体仍是 3 个，未被降级")
 
+    print("\n[3b] 残缺重试的部分进展也必须落盘")
+    partial_old = Post(
+        post_id="p3", platform="instagram", account="x", text="partial",
+        created_at="2026-08-03T00:00:00Z",
+        media=[Media(url="u31", kind="image"), Media(url="u32", kind="image")],
+        source_route="delta", media_complete=False)
+    check(a.append(partial_old) is True, "先保存两张都未下载成功的残缺帖")
+    partial_new = Post(
+        post_id="p3", platform="instagram", account="x", text="partial",
+        created_at="2026-08-03T00:00:00Z",
+        media=[Media(url="u31", kind="image", local_path="posts/p3/01.jpg"),
+               Media(url="u32", kind="image")],
+        source_route="delta", media_complete=False)
+    check(a.append(partial_new) is True,
+          "媒体项数相同但多落盘一张时也算升级，不能丢掉恢复进展")
+    p3 = {r["post_id"]: r for r in a.rows()}["p3"]
+    check(p3["media"][0]["local_path"] and not p3["media_complete"],
+          "真相源记住已恢复路径，同时仍保留待补状态")
+    check(a.append(partial_new) is False,
+          "同样的部分进展重跑保持幂等，不反复追加")
+    more_but_lost = Post(
+        post_id="p3", platform="instagram", account="x", text="partial",
+        created_at="2026-08-03T00:00:00Z",
+        media=[Media(url=f"u3{i}", kind="image") for i in range(1, 4)],
+        source_route="delta", media_complete=False)
+    check(a.append(more_but_lost) is False,
+          "发现更多媒体但丢失旧落盘路径时拒绝倒退，不用项数覆盖恢复成果")
+    more_and_kept = Post(
+        post_id="p3", platform="instagram", account="x", text="partial",
+        created_at="2026-08-03T00:00:00Z",
+        media=[Media(url="u31", kind="image", local_path="posts/p3/01.jpg"),
+               Media(url="u32", kind="image"), Media(url="u33", kind="image")],
+        source_route="delta", media_complete=False)
+    check(a.append(more_and_kept) is True,
+          "保住旧落盘路径且发现更多媒体时允许单调升级")
+
     print("\n[4] 磁盘上确实是追加写（多行同 id），读取时收敛")
     raw_lines = [l for l in open(a.manifest, encoding="utf-8") if l.strip()]
-    check(len(raw_lines) == 3, f"物理 3 行（p1, p2残缺, p2完整），实得 {len(raw_lines)}")
-    check(len(a.rows()) == 2, "逻辑 2 条")
+    check(len(raw_lines) == 6,
+          f"物理 6 行（另含 p3 的两次单调升级），实得 {len(raw_lines)}")
+    check(len(a.rows()) == 3, "逻辑 3 条")
 
     print("\n[5] manifest 里的坏行被跳过，不中断整批加载")
     with open(a.manifest, "a", encoding="utf-8") as f:
@@ -68,8 +105,8 @@ with tempfile.TemporaryDirectory() as d:
         f.write('不是 json\n')
         f.write('{"no_id": 1}\n')
     reloaded = Archive(d, "acct")
-    check(len(reloaded.rows()) == 2,
-          f"三种坏行都被跳过，仍是 2 条，实得 {len(reloaded.rows())}")
+    check(len(reloaded.rows()) == 3,
+          f"三种坏行都被跳过，仍是 3 条，实得 {len(reloaded.rows())}")
 
 print("\n[J 组] 每帖一个文件夹")
 from core.store import post_dirname   # noqa: E402

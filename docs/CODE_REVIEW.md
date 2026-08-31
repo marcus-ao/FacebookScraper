@@ -1083,3 +1083,129 @@ IG 的话题标签直接影响自然流量，而这条规则会作用在全部 1
 在业务把模型改成 flash 时当场变红，而实现完全正常。
 **用哪个模型是 config.toml 里的业务取舍，不是代码契约**——
 断言改成跟着 `Settings.validate()` 的白名单走。
+
+---
+
+## 14. 已实现主干二次审查（2026-08-31）
+
+### 14.1 审查边界与取证方式
+
+- 本轮开始时的代码基线为 `a259582`。按 `HANDOFF.md` / `IMPLEMENTATION_PLAN.md`
+  当时的完成状态，只审 A/B/J/C/D/E/F 已实现主干；K（图片德语化）与 G（发布）
+  当时仍是任务书/配置脚手架，不把未实现计划当缺陷，也没有补写那些功能。
+- 审查过程中工作区被并行切到 `9ea342c`，并出现尚未提交的 K/G 实现文件。
+  这些在本轮开始后才出现的在途改动没有被回退、覆盖或纳入本轮缺陷结论；全量测试
+  只把它们当作兼容性验证。本文以下修改仅落在既有抓取、归档和翻译主干。
+- 修改前先跑 16 套既有测试，**825 项全部通过**；这说明下面的问题都是原测试未覆盖的
+  语义盲区，不能用“原来测试是绿的”否定。
+- 需要外部契约的两处均查了第一手资料：Windows Task Scheduler 的实例策略与
+  DeepSeek 的模型字段；其余结论均由本地最小复现、真实 archive/capture 离线扫描得到。
+- 本轮没有发起 Facebook/Instagram 抓取、没有调用付费翻译 API、没有安装计划任务。
+  两个 Windows 任务在审查时均为“未注册”；真实 capture 的验证全走离线重放。
+
+### CR-41 · P1 · 两个计划任务可并发进入同一增量主干
+
+- **位置**：`tools/schedule.py`、`routes/delta.py::main`
+- **问题**：每日任务 `FBScraperDelta` 与登录/解锁补跑任务
+  `FBScraperDeltaCatchup` 各自设置了 `MultipleInstancesPolicy=IgnoreNew`，但它只约束
+  **同一个任务**已有实例。笔记本醒机时，错过的每日触发会因 `StartWhenAvailable`
+  补跑，解锁触发器也会启动另一个任务；两者可同时读取同一份 `delta_state.json`、
+  附着同一个 Chrome、写同一账号的 truth/manifest/capture。除状态丢失外，这还直接
+  破坏 C7 “并发恒为 1”的风险边界。
+- **外部证据**：Microsoft 的
+  [Task Scheduler Settings schema](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-settings-tasktype-element)
+  明确 `StartWhenAvailable` 会补跑错过的时刻；
+  [`TASK_INSTANCES_POLICY`](https://learn.microsoft.com/en-us/windows/win32/api/taskschd/ne-taskschd-task_instances_policy)
+  把策略对象表述为该 task 的既有实例，而不是跨任务全局互斥。
+- **修复**：新增 OS 级 `DeltaRunLock`，使用 `state/delta.lock` 在 Windows 上做
+  `msvcrt` 非阻塞字节锁、其它平台做 `flock`。锁在读取 state、判断 stale 和随机抖动
+  **之前**取得，并一直覆盖 Chrome、归档和状态提交；`--reset-failures` 也走同一把锁。
+  撞锁的计划任务明确打印原因并以 0 退出，不附着浏览器、不写状态。
+- **验证**：同进程双实例回归通过；另用独立 Python 子进程竞争同一路径，子进程得到
+  `child-blocked` / rc=7，证明不是只挡住测试进程内的第二个对象。
+
+### CR-42 · P1 · 空归档会把“0 篇自家内容”判成成功
+
+- **位置**：`routes/delta.py::delta_once`
+- **问题**：旧门槛为 `min(config.min_own_posts, len(known))`。空归档时结果必为 0；
+  页面即使只给推荐位/UGC，归属过滤后 `own=0` 仍满足 `0 < 0 == False`，随后刷新
+  `last_success`、清空失败预算。错误账号、目标改名或冷启动没拿到时间线都会留下一个
+  看似健康的“新增 0 篇”。
+- **修复**：继续允许小归档按已有规模降低门槛，但只要配置没有显式设为 0，冷启动
+  至少必须看到 1 篇属于目标账号的帖子；已有 1 篇的小账号看到 1 篇仍不会误报。
+- **验证**：最小复现由“空归档 + 1 篇他人推荐位 => SUCCESS”变为
+  `DeltaBlocked(...期望至少 1 篇)`；原“小归档仅 1 篇”的反例仍通过。
+
+### CR-43 · P1 · 媒体只补回一部分时，恢复进展不会进入真相源
+
+- **位置**：`core/capture.py::download_media`、
+  `core/store.py::_post_quality_rank/Archive.reusable_media_path`
+- **问题**：下载前，新解析记录是 `media_complete=True`，所以能通过 `should_append()`；
+  如果两张失败图本次只补回一张，下载后又变成 `media_complete=False`。旧、新两条记录
+  的媒体项数相同，旧质量等级判成平级，`Archive.append()` 拒绝新条目。图片文件虽然
+  可能已写到磁盘，`post.json` / manifest 却不记录其 `local_path`；下一次又从头请求
+  全部 CDN 图片，完整性检查也一直看到旧状态。
+- **修复**：残缺记录改为“已知媒体数、已落盘数均不得倒退”的单调升级；同媒体项数下
+  有新恢复路径可以追加，而“发现更多项但本轮全下载失败”不能反向抹掉旧路径。下载前
+  按 `(post_id, media URL)` 找回旧路径，只复用当前预期
+  truth dir 内、通过 symlink/junction/reparse/hardlink 防护且文件签名仍是允许图片的
+  普通文件。已成功图片不再重复请求，只补失败项；若发布时间纠正导致 truth dir 变化，
+  则不跨目录借用，避免旧目录隔离后产生悬空引用。
+- **验证**：两图均失败 → 补回一图的记录现在会写盘且仍保持待补；同样进展重跑幂等；
+  新增媒体但丢失旧路径的倒退被拒绝，保住旧路径后再新增媒体则允许升级。另有下载链路
+  回归确认同 URL 的第二轮只请求第二张，复用第一张后可正常升级为完整记录。
+
+### CR-44 · P2 · 修复旧帖被计成社媒新增，静默推迟零新增告警
+
+- **位置**：`routes/delta.py::ScanResult/delta_once/_run_due`
+- **问题**：旧逻辑只要 `Archive.append()` 成功就执行 `res.new += 1`，包括已知
+  `post_id` 的媒体补全。`record_success(..., res.new)` 因而把 `last_new_at` 刷成今天，
+  把“修好一篇旧归档”误写成“账号今天发了新帖”，长期零新增告警与降频时钟最多被
+  推迟一个完整阈值周期。
+- **修复**：写入前记录该 ID 是否已存在；真正的新帖子计入 `new`，已知残缺帖升级
+  计入新设的 `upgraded` 诊断字段。摘要现在分别显示“新增 N / 修复旧帖 M”；状态机仍
+  只用 `new` 更新 `last_new_at`。
+- **验证**：真实 `_run_due` 路径完成一篇旧帖媒体升级后，归档变完整且本轮成功，
+  但 `last_new_count=0`、原 `last_new_at` 保持不变。
+
+### CR-45 · P1 · 模型名双向子串会放行未请求的短模型
+
+- **位置**：`translate.py::_model_matches`
+- **问题**：旧实现接受 `requested in actual` **或** `actual in requested`。
+  因此请求 `deepseek-v4-pro`、实际响应 `deepseek-v4` 会返回匹配，绕过本来用于防止
+  静默回退的 `ModelMismatchError`；整批付费结果可能在错误模型、成本和质量假设下落盘。
+- **外部证据**：DeepSeek 官方
+  [Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+  将请求模型列为明确 ID，并定义响应 `model` 为“用于该 completion 的模型”；当前
+  [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing)
+  分别列出 `deepseek-v4-flash` 与 `deepseek-v4-pro`，不是可互相包含的别名族。
+- **修复**：只做首尾空白与大小写归一化，然后要求精确相等；未知短前缀、后缀和
+  Flash/Pro 互换均失败闭合。
+- **验证**：同名不同大小写通过；`deepseek-v4`、`deepseek-v4-pro-unknown`、
+  `deepseek-v4-flash` 均触发不匹配。OpenAI SDK MockTransport 线级请求契约仍通过。
+
+### 14.2 核验后未改的事项
+
+- `browser.close()`：查阅 Playwright 官方
+  [`Browser.close`](https://playwright.dev/docs/api/class-browser#browser-close) 与
+  [`connectOverCDP`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp)
+  契约后，确认对外部 CDP 浏览器这里是断开连接语义，没有证据表明会结束用户的专用
+  Chrome，因此未做猜测性修改。
+- 真实 archive 审计：Facebook 47、Instagram 1020 个唯一 truth/manifest 记录；未发现
+  坏 JSON、重复 ID、缺 truth、越界 `local_path` 或当前 `media_complete=False`。
+- `ruff` 对本轮修改源码没有新增问题；全文件扫描仍会报告 `translate.py` 既有的一个
+  有意延后 import（E402）与两处无占位符 f-string（F541），均不影响运行，本轮不为
+  格式清理扩大改动边界。
+
+### 14.3 本轮最终验证
+
+- 截至 2026-08-31 02:16 PDT 的当前工作区全量：**18 套 974 项，全部 exit 0**。
+  其中本轮直接受影响的
+  `tests_store.py` / `tests_delta_logged_in.py` / `tests_translate.py` 分别为
+  **81 / 138 / 234** 项；并行新增的 K 组测试只计兼容性，不计本轮审查成果。
+- `python -m compileall -q core routes tools translate.py`：通过。
+- `uv pip check --python .venv\\Scripts\\python.exe`：23 个包依赖兼容。
+- `git diff --check`（仅本轮文件）：通过。
+- 两份最新真实 capture 离线跑完整 `delta_once()`：Facebook 6 篇自家内容、
+  Instagram 36 篇（原创 1 / 合作 35），均为 0 新增且无写盘；IG 的
+  `--break-coauthors` 自检会被 `min_own_posts` 闸正确中止并点名 35 篇已知合作方。

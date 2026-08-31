@@ -225,6 +225,15 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
     for i, m in enumerate(post.media):
         if m.kind == "video":
             continue
+        reusable = arc.reusable_media_path(post, m.url)
+        if reusable is not None:
+            try:
+                existing = reusable.read_bytes()
+            except OSError:
+                existing = b""
+            if existing and _detected_image_content_type(existing):
+                m.local_path = str(reusable.relative_to(arc.base)).replace("\\", "/")
+                continue
         try:
             resp = await ctx.request.get(m.url, headers={"Referer": referer})
             if not resp.ok:
