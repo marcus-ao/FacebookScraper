@@ -116,6 +116,9 @@ FacebookScraper/
     TRANSLATION_PLAN.md     F 组任务书（DeepSeek 德语翻译）
     IMAGE_PLAN.md           K 组任务书（GPT-Image-2 图内英文德语化）
     PUBLISH_PLAN.md         G 组任务书（Business Suite 定时发布）
+    PIPELINE_PLAN.md        L 组：**唯一一份跨组文档**。把上面这些段连成一条
+                            不用人管的线；自治分级、分流规则、死人开关、成本闸
+  pipeline.py               流水线编排（**待建**，L 组）。对账器，不是队列
   prompts/
     translate_de.md         英译德提示词，可直接编辑，改它不用动 Python
     image_de.md             图片德语化提示词（**待建**），同样可直接编辑

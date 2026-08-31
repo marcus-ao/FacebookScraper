@@ -3,7 +3,17 @@
 > 直接把本文件内容粘贴进新会话即可。你也可以先让会话进入项目根目录，再说
 > "读 docs/HANDOFF.md 然后开始"，效果一样。
 >
-> **最后更新：2026-08-31（第三轮）· 用户答复到齐，K/G 两组划成并行分支**
+> **最后更新：2026-08-31（第四轮）· 全局复盘，新增 L 组（流水线编排）**
+>
+> 📌 **一句话现状：这个项目目前没有任何东西在自动跑。**
+> 计划任务至今没有安装（实测查不到）。所有的幂等、断点、告警、降级都写好了
+> 也测过了，**但没有任何东西会在没人的时候运行它们**。
+> 见 `docs/PIPELINE_PLAN.md`——那是唯一一份**跨组**文档，
+> 回答"这些段怎么连成一条不用人管的线"。
+>
+> ---
+>
+> **上一轮：用户答复到齐，K/G 两组划成并行分支**
 >
 > 🔀 **如果你是被派来做 K 组或 G 组的 Agent，只需要读三样**：
 > 1. 你那份任务书（`docs/IMAGE_PLAN.md` 或 `docs/PUBLISH_PLAN.md`）**读完**；
@@ -73,6 +83,10 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
    照着 SDK 写就是错的。
 8. **`docs/PUBLISH_PLAN.md`** —— G 组任务书（Business Suite 定时发布）。
    范围已按用户 2026-08-31 的决定收窄，**不要把批量补发做回来**。
+9. **`docs/PIPELINE_PLAN.md`** —— L 组：**唯一一份跨组文档**。
+   A~K 每组回答"这一段怎么做对"，它回答"**这些段怎么连成一条不用人管的线**"。
+   **想改自动化程度、想砍掉某道确认闸之前，先读它的第 4 节和第 12 节**——
+   那里写着哪些人工是承重墙、哪些是可以消除的，以及把自动化推过头会踩哪几条红线。
 
 不要跳过第 1 步。计划里有大量"看起来可以优化、实际是保命设计"的地方，
 不读会被你顺手改掉。
@@ -117,7 +131,8 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 | ~~D4~~       | **完成**：第四项检查「丢弃了已知合作方的帖子」，离线双向验证过         | —                  |
 | ~~C2 / C4 / C5~~ | **完成并已实机验收**（2026-08-31）：真实增量各新增 1 篇，**媒体下载第一次被真正触发**（FB 5 图 / IG 1 图，全部非空）| —                  |
 | ~~用户复测~~ | **已完成**：`MANUAL_STEPS.md` 第 8 步全部跑通，含离线四步与真实一次 | — |
-| **E3 注册**  | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问             | 现在可以装了 |
+| **E3 注册**（= L0a） | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问。⚠️ **实测确认至今仍未安装：整个项目现在没有任何东西在自动跑** | **全部自动化** |
+| **L 组**（新） | 流水线编排。**L0 四项不依赖任何组，现在就能做**：装计划任务 / `pipeline status` / **死人开关** / 价格表。见 `docs/PIPELINE_PLAN.md` | 自动化程度 |
 | **F 组**     | 新接口已跑通：`--check` 通过、FB 3 + IG 3 篇试译成功。卡在**懂德语的人审校**与**全量预算拍板**（实测约 US$24） | K 组、G8 |
 | **K 组**（`feat/image-de`） | **计划完备、代码为零，但已无任何外部卡点**：密钥到位、两个待拍板项已结清（不做预扫描 / `quality=high`）、Pillow 已预置。**可以直接开工** | G8（发布要德语图） |
 | **G0 / G0b** | **不依赖任何人，现在就能写**：发布用独立 Chrome profile 的参数化 + `publish/compose.py` 的离线硬闸 | G2–G7 |
@@ -318,10 +333,25 @@ archive/in_neakasa.tech/
   开工可以，但 K9 的验收要等 F 那边有可信译文。
 - **G**：卡在 **G1 的真实 DOM 探查**。但 **G0 / G0b 不依赖 G1，现在就能写**。
 
+- **L（新）**：把上面三段连起来。**L0 四项不依赖任何组，现在就能做**，
+  其中 **L0a（装计划任务）是整个项目投入产出比最高的一件事**——
+  在它装上之前自动化程度是 0。见 `docs/PIPELINE_PLAN.md`。
+
 ⚠️ **一个会误导工期估算的数**：`1051 条待译正文` 是**翻译**口径。
 **发布**口径是 **470 篇**（FB 27 / IG 443）——项目约定"视频只记元数据不下载"，
 **585 篇纯视频帖没有可上传素材**。用户已定不补发历史，所以暂时不影响进度，
 但别拿 1051 去估发布侧的工作量。
+
+⚠️ **两条待办已被 2026-08-31 的全局复盘消解，别再当阻塞项**：
+
+1. **全量翻译的 US$24 预算拍板已不在关键路径上。** 既然不补发历史，
+   **只有要发的帖才需要译文**——稳态是 **5.2 篇/周**，不是 1051 篇。
+   它现在是可选项（跑了得到一份德语语料，当前没有自动化环节消费它）。
+   **建议先不跑全量**，让对账器按需翻译。
+2. **"229 篇第三方创作者合作帖的授权风险"在发布口径下基本蒸发。**
+   那些几乎全是纯视频 Reels，**本来就发不了**。图文可发的合作帖只有 39 篇，
+   近 90 天的原作者**全是自家兄弟账号**（`neakasa.global` 21 / `neakasa.de` 3）。
+   `review.md` 与 `index.html` 的提示保留，但它不再是发布的实际阻碍。
 
 ⚠️ **翻译账单的主导项是 thinking，不是译文。** 实测同一篇帖子：
 `reasoning_effort=high` 时 reasoning 9899 tok / 可见译文 420 tok；
@@ -662,34 +692,43 @@ CDN URL 带签名且有时效，必须在拿到响应的**同一次运行内**�
 | ~~C2–C7（登录态增量）~~ | `feat/delta-logged-in` | — | ✅ **已合**（2026-08-31 核实是 main 的祖先） |
 | ~~D3~~ | `feat/integrity-alerts` | — | ✅ **已合** |
 | E 组 | `feat/scheduler` | `main` | E3 验收通过时 |
-| **K 组**（图片德语化） | **`feat/image-de`** | **`docs/plan-image-publish`** | **K9 真实验收通过时**（懂德语的人确认过图） |
-| **G 组**（Business Suite 发布） | **`feat/business-suite-publish`** | **`docs/plan-image-publish`** | **G8 验收通过时** |
+| **K 组**（图片德语化） | **`feat/image-de`** | `main` | **K9 真实验收通过时**（懂德语的人确认过图） |
+| **G 组**（Business Suite 发布） | **`feat/business-suite-publish`** | `main` | **G8 验收通过时** |
+| **L 组**（流水线编排） | **`feat/pipeline`** | `main` | 分阶段：L0 各项验收后即可合 |
 
-**K / G 两组 2026-08-31 起并行开发，分别委托给不同 Agent。**
-两条分支**必须从 `docs/plan-image-publish` 开**——那里有两份任务书、
-`config.toml` 的 `[image]`/`[publish]` 段和已预置的 Pillow；
-从 `main` 开会拿不到这些。（若用户已把它快进进 `main`，从 `main` 开等价。）
+**K / G / L 三组 2026-08-31 起并行开发，可分别委托给不同 Agent。**
+`docs/plan-image-publish` **已由用户快进合进 `main`**，所以三条分支
+**都从 `main` 开**（`main` 里已有全部任务书、`[image]`/`[publish]`/`[pipeline]`
+三段配置、以及预置好的 Pillow）。
 
 ```bash
-git checkout -b feat/image-de docs/plan-image-publish
-git checkout -b feat/business-suite-publish docs/plan-image-publish
+git checkout -b feat/image-de main
+git checkout -b feat/business-suite-publish main
+git checkout -b feat/pipeline main
 ```
 
-**文件所有权表**在 `IMAGE_PLAN.md` 第 10 节与 `PUBLISH_PLAN.md` 第 12 节，
-内容相同、两边各留一份（并行开发时没人会去读另一组的任务书）。
-要点：
+**文件所有权表**在 `IMAGE_PLAN.md` 第 10 节、`PUBLISH_PLAN.md` 第 12 节
+（内容相同、两边各留一份，因为并行开发时没人会去读另一组的任务书），
+以及 `PIPELINE_PLAN.md` 第 13 节。要点：
 
 - `core/chrome.py`、`core/config.py`、`publish/**`、`tools/*publish*` 归 G 组；
 - `localize_images.py`、`prompts/image_de.md`、`translate.py` 的 `run_review` 归 K 组；
-- **`core/store.py` / `core/parse.py` / `core/capture.py` / `routes/**` 两组都不许动**；
-- `requirements.txt` **两组都不用改**（Pillow 已预置，就是为了避开这个冲突点）；
+- `pipeline.py`、`docs/PIPELINE_PLAN.md`、`config.toml` 的 `[pipeline]` 段归 L 组。
+  **L 组不改 K / G 的任何实现文件**，只调用它们的入口、读它们的产物——
+  这既是架构约束，也顺带让三条分支互不冲突；
+- **`core/store.py` / `core/parse.py` / `core/capture.py` / `routes/**` 三组都不许动**；
+- `requirements.txt` **三组都不用改**（Pillow 已预置，就是为了避开这个冲突点）；
+- ⚠️ `config.toml` 的 `[publish]` 段：**L 组会往末尾加三个子表**
+  （`price_map` / `trusted_owners` / `schedule_rule`），TOML 要求子表在段末，
+  所以 **G 组新增标量键必须加在子表之前**（该段已就地留了警告注释）；
 - 共享文档**只改自己那一节**，附录 D 各自追加、标题带分支名，
-  **合并冲突时两段都保留，不许二选一**。
+  **合并冲突时各段都保留，不许二选一**。
 
 ⚠️ **K 组现在没有任何外部卡点，可以直接开工。**
 G 组能立刻做的是 G0（独立 profile 参数化）与 G0b（`compose.py` 的离线硬闸），
 **但 `publish/selectors.py` 在 G1 之前必须是空的**——
 提交一个"看起来合理"的选择器，比不提交更糟：下一个人会以为它验证过。
+**L 组的 L0 四项也不依赖任何人，现在就能做。**
 
 **规则**：
 
