@@ -369,6 +369,11 @@ timezone = "Europe/Berlin"
 schedule_min_minutes_ahead = 10
 schedule_max_days_ahead = 75
 
+# 只有完成 G1、并把真实 dump 文件名与四类 IG/UI 限制逐项回填后才能改 true。
+# G0b 会把上面两个占位值视为“未知”，不会拿它们给真实发布放行。
+ui_constraints_verified = false
+ui_probe_dump = ""
+
 # ⚠️ **自动发布到品牌主页是不可回滚的对外行为。**
 # 抓错了可以重抓、译错了可以重译，**发出去了只能删帖，而删帖在粉丝侧是可见的**。
 # true = 程序把待发清单（原作者 / 译文 / 图 / 排期时刻）打出来，人点头才提交。

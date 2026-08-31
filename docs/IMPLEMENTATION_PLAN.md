@@ -1852,7 +1852,7 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
 > Business Suite 是 React SPA，class name 是构建期混淆的，
 > 任何"看起来合理"的选择器都是错的。
 
-- [ ] **G0**（2026-08-31 新增前置）发布走**独立的 Chrome profile**
+- [x] **G0**（2026-08-31 新增前置）发布走**独立的 Chrome profile**
 
   > **这是红线不是优化项。** `MANUAL_STEPS.md` 早写了发布账号要用另一个 profile，
   > 与抓取小号分开避免指纹关联。抓取小号被封是本项目唯一不可恢复的失败模式，
@@ -1871,6 +1871,14 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
   - 【验收】两个 profile 同时跑，`cdp_ready(9222)` 与 `cdp_ready(9223)` 都为 True，
     且**登录态互不可见**（发布 Chrome 里打开 instagram.com 不是抓取小号）
   - **G0 不依赖 G1，现在就能做**——它是整组唯一一件不需要真实 DOM 的事
+
+  > 完成：2026-08-31 · `core.chrome.launch/attach` 支持显式 port/profile，
+  > `cdp_ready()` 支持显式 port/profile 且无参仍回退 `[chrome]`；Windows 上会只读
+  > 核对监听进程的 `--user-data-dir`，端口对但 profile 错也拒绝。配置把两侧端口
+  > 或 profile 误写成相同值时启动前失败闭合；backfill/delta 零改动。
+  > 新增发布专用 Python/.bat 入口并做字节级验收。实机 9222/9223 同时为 True；
+  > 抓取 profile 有 FB/IG 登录 cookie，新建发布 profile 两边 cookie 为 0
+  > （只比较登录 cookie 名、未读取或打印值），会话互不可见。
 - [ ] **G0b** `publish/compose.py`：发布前的离线硬闸（同样不依赖 G1）
 
   > UI 自动化最贵的是时间、最险的是半成品。**能在离线阶段拦下的，绝不留到线上拦。**
@@ -1892,6 +1900,13 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
        `review.md` 与 `index.html` 已有同款提示，发布这最后一环不能反而没有
   - 【验收】最新 3 篇真实帖组装成功；人为把译文改过期 / 删掉一张图，
     各自被正确拒绝且说清原因
+
+  > 进展：2026-08-31 · 代码与离线测试已完成：复用
+  > `translate.money_preserved` / `translation_is_current`，逐图优先 `media_de`、
+  > 缺图告警回退原图，Pillow 解码、残缺轮播、合作方原作者、aware datetime
+  > 均有硬闸；IG/定时数字必须携带 G1 probe dump 来源，严格发布模式缺值即失败。
+  > 真实当前译文中 5 篇图文帖组装成功、1 篇纯视频被正确拒绝；但计划点名的
+  > 最新三篇均尚无译文，所以“最新 3 篇成功”未通过，本项按协议不勾选。
 - [ ] **G1** 探查 Business Suite 的真实 DOM 与流程　**← 需要你操作，且它阻塞 G2–G7**
 
   - 用 **G0 建的发布 profile**（不是 A3 那个抓取 profile）登录**有 DE Page 发布权的账号**
@@ -1915,6 +1930,11 @@ FB 视频帖被当成抓取失败 20 条）。具体修法写在 B2/B4，根因�
     每个注释写清「对应哪一步 / 来自哪份 probe dump / 什么信号说明它失效了」
   - 【记录】**定时窗口的 UI 上下限**（最早排多久之后、最晚排多远）与时区行为。
     Graph API 那边是 10 分钟–75 天，**但 UI 不一定一样，必须实测**
+
+  > 进展：2026-08-31 · `tools/probe_publish.py` 已交付并通过离线 recorder 测试：
+  > 只监听人工 click/input/change/submit，逐步截图、原子写 JSON，记录命中元素与
+  > 语义祖先的稳定属性，不记录 class/CSS path/cookie/密码值；结束时补记时区、
+  > 窗口、slug 与成功信号。用户尚未实际运行，`selectors.py` 仍只有 TODO，故不勾选。
 - [ ] **G2** 登录态与**目标 Page**检查
 
   - `publish/business_suite.py::ensure_logged_in(page) -> bool`
@@ -3149,3 +3169,18 @@ reasoning 实际成本通过后，才允许全量。
 离线基线 **16 套全绿**（`config.toml` 改动未破坏任何既有断言），
 `git diff --check` 与 `compileall` 干净，`.bat` 仍是纯 ASCII + CRLF。
 **本轮仍未写任何功能代码，也未发过任何付费请求。**
+
+### 2026-08-31 · `feat/business-suite-publish` · G0/G0b/G1 阶段记录
+
+- **G0 已完成并真实验收。** 发布侧固定走 `.fbscraper-publish` / 9223，抓取侧
+  无参调用仍走 `.fbscraper-chrome` / 9222；Windows 还会核对监听 Chrome 的
+  `--user-data-dir`。两端实机同时可附着，且只核对 cookie 名得到抓取侧已登录、
+  新发布侧未登录，证明会话没有串用。
+- **G0b 只完成代码与离线验收，未完成任务书的真实验收。** `compose_post()` 已把
+  当前版译文、金额不变、媒体完整性与可解码、合作帖来源、aware 排期以及带 probe
+  来源的未知 UI 约束做成失败闭合；当前库里 5 篇图文实帖可组装、1 篇纯视频被拒绝，
+  但计划点名的最新三篇都没有当前版译文，故 G0b 保持未勾选。
+- **G1 只交付记录器。** `tools/probe_publish.py` 附着 9223 后仅监听人工交互、记录
+  稳定语义属性并逐步截图，不导航、不点击、不填表、不上传、不提交；用户尚未手工
+  跑完流程，因此真实选择器、FB slug、定时窗口和 Page 时区仍为空，G1 保持未勾选，
+  `publish/selectors.py` 只有 TODO，G2–G7 也只有失败闭合的函数契约。

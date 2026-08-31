@@ -1000,21 +1000,50 @@ instagram_account  = "neakasa.de"            # IG handle
 
 ### 你要做什么
 
-1. 我会先做完 G0（把发布 profile 的支持加进代码）并给你
-   `scripts\start_chrome_publish.bat`；
-2. 你双击它，在弹出的**新** Chrome 里登录 DE 发布账号；
-3. 跑 `tools.probe_publish`，然后**手工完整走一遍定时发帖流程**
-   （建帖 → 传图 → 写文案 → 勾选 FB 和 IG 两个渠道 → 开定时 → 选日期时间 → 提交）；
-4. 程序全程在旁边**记录**你点到的每个控件的稳定属性，并每步截图。
-   **它不驱动页面，驱动的是你**——和第 4 步的人工滚动是同一条设计。
+G0 已在 2026-08-31 完成并实机验收：9222 / 9223 能同时运行，新的发布
+profile 没有抓取小号的 FB/IG cookie。按下面顺序做：
 
-### 走的时候请特意留意这三样
+1. 双击 `scripts\start_chrome_publish.bat`。它只会使用
+   `.fbscraper-publish` / 9223，不会碰抓取侧 `.fbscraper-chrome` / 9222；
+2. 在弹出的**发布专用 Chrome** 里人工登录有 DE Page 发布权的账号。
+   不要把账号密码输入任何脚本；会话过期以后也仍然是你在这个窗口里重登；
+3. 另开一个终端，`cd` 到项目根目录后运行：
+
+   ```bat
+   .venv\Scripts\python.exe tools\probe_publish.py
+   ```
+
+4. 终端出现“G1 探查已开始”以后，在发布 Chrome 里按你平常的方式**手工**
+   进入 Business Suite 并完整走一次：建帖 → 传图 → 写文案 → 勾选 FB 和 IG →
+   开定时 → 选日期时间 → 提交；
+5. 每次 click / input / change / submit 都会记录命中元素及语义祖先的
+   `tag / role / aria-label / data-testid / name / placeholder / 可见文本 /
+   contenteditable`，并存一张当前视口截图。**工具不会打开网址、点击、填写、
+   上传或提交，驱动页面的始终是你**；
+6. 完成后回终端按 Enter。程序会请你原样抄下入口 URL、FB slug、UI 时区、
+   定时上下限与成功信号；不知道的项直接留空，绝不猜；
+7. 把终端打印的 JSON 路径和截图目录交回来。输出形态是：
+
+   ```text
+   state/publish_probe_<时间戳>.json
+   state/publish_probe_<时间戳>_screenshots/001_click.png
+   ```
+
+> ⚠️ 如果你为了取得“提交成功信号”排了一条测试帖，验证后要在 Business Suite
+> 里**人工取消**。探查工具不会删除帖子或草稿；异常退出时也先检查是否留下草稿。
+
+### 走的时候请覆盖七个流程点，并另记定时窗口上下限
 
 | 要留意 | 为什么 |
 |---|---|
+| **创建帖入口的最终 URL 与按钮** | SPA 可能不换 URL，两个信号都要留 |
+| **图片控件是 file input 还是拖拽区** | 决定后续能否用稳定的 `set_input_files()` |
+| **文案框是 textarea 还是 contenteditable** | contenteditable 的多段换行不能想当然用 `fill()` |
+| **FB 和 IG 两个渠道的勾选在哪** | 你要的是同时发，这一路是新增的 |
+| **定时开关在哪里** | 后续每一步都要回读确认 |
 | **日期时间选择器上显示的是哪个时区** | ⚠️ **这是整个发布环节最容易出错的一步。** Business Suite 跟 **Page 的时区设置**走，不一定是你电脑的时区，也不一定是德国时区 |
 | **最早能排多久之后、最晚能排多远** | 这两个数后面会被代码依赖 |
-| **FB 和 IG 两个渠道的勾选在哪** | 你要的是同时发，这一路是新增的 |
+| **提交成功的明确信号** | 必须是 toast / 跳转 / 排期列表项之一，不能“点完就算成功” |
 
 ### 用来做端到端测试的两篇（我已经挑好）
 
@@ -1057,17 +1086,17 @@ Instagram  3973012230169803390  2026-08-27
 | `scripts\run_translate.bat --limit 3` | 试跑 3 篇 |
 | `scripts\run_translate.bat` | 翻译全部未翻译的 |
 | `scripts\run_translate.bat --review` | 生成人工审校清单 |
+| `scripts\start_chrome_publish.bat` | 起**发布用**的专用 Chrome（端口 9223，与抓取那个并存） |
+| `.venv\Scripts\python.exe tools\probe_publish.py` | **G1 探查**：你手工操作，程序只记录并截图 |
 
 **待实现**（K 组 / G 组，命令名以最终实现为准）：
 
 | 命令 | 作用 |
 |---|---|
-| `scripts\start_chrome_publish.bat` | 起**发布用**的专用 Chrome（端口 9223，与抓取那个并存） |
 | `scripts\run_images.bat --check` | 极小请求验证图片 API 与实际模型（**会花一点钱**） |
 | `scripts\run_images.bat --show-prompt` | 打印实际发给模型的图片提示词（不调 API） |
 | `scripts\run_images.bat --estimate` | 按已跑过的真实 usage 外推费用（不调 API） |
 | `scripts\run_images.bat --limit 3` | 给最新 3 篇的配图做德语化 |
-| `python -m tools.probe_publish` | **G1 探查**：你手工走一遍，程序在旁边记录（不驱动页面） |
 | `scripts\run_publish.bat --dry-run` | 组装待发清单并跑完全部离线硬闸，不碰浏览器 |
 | `scripts\run_publish.bat --post <id>` | 给指定的一篇排定时发布 |
 
