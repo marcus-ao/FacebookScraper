@@ -952,6 +952,11 @@ def run_review(arc_base: Path) -> int:
     if not trans:
         print(f"  {arc_base.name}：还没有译文，跳过（先跑一次翻译）")
         return 0
+    # 延迟导入避免模块加载时形成 translate <-> localize_images 循环；这里只读
+    # images_de.jsonl / media_de，不触发客户端构造、密钥读取或 API 调用。
+    import localize_images as image_de
+    image_state = image_de.load_image_state(arc_base / "images_de.jsonl")
+    image_settings = image_de.Settings()
 
     eligible = {pid for pid, r in rows.items() if (r.get("text") or "").strip()}
     orphan_ids = sorted(set(trans) - set(rows))
@@ -992,7 +997,8 @@ def run_review(arc_base: Path) -> int:
         "1. **数字**。提示词**刻意不换算**货币金额与数字尺码——德国站的定价与尺码"
         "对照是商务决策，模型无从知道，擅自换算就是把文案问题变成商业事故。"
         "含这类数字的帖子下面会标出来。",
-        "2. **图内英文文字**。本期走人工处理，勾上对应的框由设计同事替换。",
+        "2. **图内德语图**。程序产出、人工可覆盖；逐张并排核对德语正确性、"
+        "不可改内容与产品外观。K3 预扫描已取消，因此下面的逐类人工清单是唯一验收口。",
         "",
     ]
     if orphan_ids:
@@ -1080,6 +1086,58 @@ def run_review(arc_base: Path) -> int:
             lines += ["> ⚠️ 该帖媒体不全（登出增量只拿到轮播封面），"
                       "配图可能少于实际。", ""]
 
+        image_pairs = image_de.review_image_pairs(
+            arc_base, src, t, state=image_state)
+        if image_pairs:
+            lines += ["**原图 / 德语图并排审校（K8）**", "",
+                      "| 原图 | 德语图 |", "| --- | --- |"]
+            for pair in image_pairs:
+                source_ref = pair.source_rel.replace("\\", "/")
+                original_cell = f"![{pid} 原图 {pair.media_index + 1}](<{source_ref}>)"
+                if pair.localized_rel:
+                    localized_ref = pair.localized_rel.replace("\\", "/")
+                    kind = "人工覆盖" if pair.manual else "程序产出"
+                    localized_cell = (
+                        f"![{pid} 德语图 {pair.media_index + 1}](<{localized_ref}>)"
+                        f"<br>{kind}")
+                else:
+                    localized_cell = "⚠️ **尚未生成德语图**"
+                lines.append(f"| {original_cell} | {localized_cell} |")
+            lines.append("")
+
+            for pair in image_pairs:
+                lines += [f"**第 {pair.media_index + 1} 张图逐类检查**", ""]
+                if pair.record:
+                    distance = pair.record.get("dhash_distance", "?")
+                    drift = pair.record.get("aspect_drift_percent", "?")
+                    lines.append(
+                        f"> 程序记录：size {pair.record.get('size_requested', '?')} → "
+                        f"{pair.record.get('size_returned', '?')}；dHash 距离 {distance}；"
+                        f"宽高比形变 {drift} %。")
+                    if (isinstance(drift, (int, float))
+                            and drift > image_settings.aspect_drift_warn_percent):
+                        lines.append(
+                            f"> ⚠️ 宽高比形变超过配置阈值 "
+                            f"{image_settings.aspect_drift_warn_percent:g} %，重点检查构图。")
+                    lines.append("")
+                elif pair.manual:
+                    lines += ["> ℹ️ 当前德语图是人工覆盖版本，仍需逐类验收。", ""]
+                else:
+                    lines += ["> ⚠️ 先生成/补齐德语图，以下项目才能勾选。", ""]
+                lines += [
+                    "- [ ] 德语文字正确，且所有应译英文均已替换（无漏译/错译）",
+                    "- [ ] 优惠码 / 折扣码逐字符未变",
+                    "- [ ] 品牌名 / Logo / 商标逐字符未变",
+                    "- [ ] 产品型号逐字符未变",
+                    "- [ ] 合作方水印 / 署名 / 作者账号逐字符未变",
+                    "- [ ] 金额 / 货币符号 / 小数点 / 符号位置逐字符未变",
+                    "- [ ] 数值与单位逐字符未变，且没有换算",
+                    "- [ ] 认证、合规与法律标记逐字符未变",
+                    "- [ ] @提及 / #标签 / URL / 二维码 / 条码 / 人名地名未变",
+                    "- [ ] 产品外观、人物、背景、构图、配色与非文字元素未变",
+                    "",
+                ]
+
         lines.append("- [ ] 译文已审校")
         if money_violations:
             lines.append("- [ ] **金额已核对回原文写法**（模型改动过，必查）")
@@ -1087,7 +1145,8 @@ def run_review(arc_base: Path) -> int:
             lines.append("- [ ] **话题标签已恢复为与原帖完全一致**（模型改动过，必查）")
         if flags:
             lines.append("- [ ] 数字已按德国站确认/替换")
-        lines += ["- [ ] 图内含英文文字，需人工替换", "", "---", ""]
+        lines += ["- [ ] 图内德语图已逐张完成 K8 审校（见上方逐类清单）",
+                  "", "---", ""]
 
     out = arc_base / "review.md"
     backup = arc_base / "review.previous.md"

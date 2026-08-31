@@ -273,6 +273,11 @@ timeout_seconds = 180              # 图像生成比文本慢得多，120 秒偏
 max_retries = 2                    # SDK 自带指数退避
 request_gap_seconds = 2.0          # 相邻两次调用的最小间隔
 
+# 默认只处理自动图片德语化立项之后的新帖，避免首次运行把 818 张历史图全送去付费。
+# K9 验收用 `--latest-posts 3` 显式选最新三篇；未来若业务重新决定补历史，
+# 还必须同时传 `--all-history --confirm-all-history-cost`，不能靠误双击触发。
+incremental_since = "2026-08-31T00:00:00Z"
+
 # 费率（核对日期 2026-08-31，OpenAI 上游价；**中转网关通常有加价**，
 # 真实账单以 inferera 控制台为准）。这张表只用来算量级和"要不要跑"。
 cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }
@@ -302,17 +307,17 @@ aspect_drift_warn_percent = 2.0
 
 # ⚠️ 最危险的一类，放在最前面：优惠码是**任意字符串却长得像单词**，
 #    模型最容易顺手"翻译"掉。码错了 = 用户结账失败 = 直接的商业事故。
-promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11"]
+promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11", "PH5RIKO"]
 
 # 品牌名与商标。Neabot 是旧品牌名，语料里仍然出现。
 brands = ["Neakasa", "NEAKASA", "Neabot"]
 
 # 产品型号，含 Neakasa 与型号连写的形态（语料里两种写法都有）。
-models = ["M1", "P1", "P2", "S1", "F1", "N3", "Magic1", "S1 Pro",
-          "NeakasaM1", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
+models = ["M1", "P1", "P1 Pro", "P2", "S1", "F1", "N3", "Magic1", "Riko", "RIKO",
+          "NeakasaM1", "NeakasaP1Pro", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
 
 # 展会 / 活动名。
-events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025"]
+events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025", "IFA2026"]
 
 # 认证、合规与法律标记。
 marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
