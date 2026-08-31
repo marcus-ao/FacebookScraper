@@ -120,8 +120,8 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 | **E3 注册**  | 工具与离线验收完成，**故意没注册**——装上就开始每天真实访问             | 现在可以装了 |
 | **F 组**     | 新接口已跑通：`--check` 通过、FB 3 + IG 3 篇试译成功。卡在**懂德语的人审校**与**全量预算拍板**（实测约 US$24） | K 组、G8 |
 | **K 组**（`feat/image-de`） | **计划完备、代码为零，但已无任何外部卡点**：密钥到位、两个待拍板项已结清（不做预扫描 / `quality=high`）、Pillow 已预置。**可以直接开工** | G8（发布要德语图） |
-| **G0 / G0b** | **G0 已完成并实机验收**：9222/9223 并存且会话隔离。**G0b 代码/离线验收完成但未勾选**：5 篇当前译文实帖可组装，计划点名的最新 3 篇尚无译文 | G0b 真实验收还依赖 F 的最新译文 |
-| **G1**       | `tools/probe_publish.py` 已交付（只记录/逐步截图，不驱动）；仍需用户在发布 profile 登录 DE 发布账号并手工走一遍。`selectors.py` 目前只有 TODO | G2–G7 全部 |
+| **G0 / G0b** | **两项都已完成并验收**（2026-08-31 同步审查轮）。G0 实机验过9222/9223 并存且会话隔离；G0b 的「最新 3 篇组装成功」现已通过 —— 三篇全部组装、零拦下，金额硬闸在真实正文的 `$219.99`/`$100` 上通过。新增 `tools/compose_publish.py` + `scripts\run_publish.bat`，这条验收终于有命令可以复跑（CR-58） | — |
+| **G1**       | `tools/probe_publish.py` 已交付（只记录/逐步截图，不驱动）；仍需你在发布 profile 登录 DE 发布账号并手工走一遍。`selectors.py` 目前只有 TODO。⚠️ **顺带发现 G5 的一个隐藏阻塞（CR-60）**：`ZoneInfo("Europe/Berlin")` 在本机直接抛异常（Windows 不自带 IANA 时区库，`TZPATH` 为空），已加 `tzdata` 到 requirements 并验证两个夏令时切换日 | G2–G7 全部 |
 | ~~DE 账号~~  | **已提供**：`facebook_page_name = "Neakasa Deutschland"`（⚠️ **显示名，不是 URL 段**）、`instagram_account = "neakasa.de"`。`facebook_page_slug` 留空不阻塞 | — |
 
 ### ✅ Instagram 合作帖：2026-08-31 真实验收通过，这一条已经结束

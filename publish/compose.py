@@ -5,6 +5,7 @@ Business Suite 没有事务性；越早失败，就越不可能留下半成品�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -496,6 +497,106 @@ def _validate_image(path: Path, post_id: str) -> tuple[int, int]:
         raise _fail(post_id, "图片无法由 Pillow 完整打开：%s（%s）" % (path, exc)) from exc
 
 
+def _program_owned_media_de(account_dir: Path) -> dict[str, set[str | None]]:
+    """读 ``images_de.jsonl``，得到「哪些 ``media_de/`` 文件是程序产出」。
+
+    返回 ``{归档相对路径: {output_sha256, ...}}``；集合里出现 ``None`` 表示
+    有一条旧 schema 的记录没有写 ``output_sha256``，此时只能按路径认所有权。
+
+    ⚠️ **故意不 import ``localize_images``**：那是 K 组独占文件（所有权表），
+    而这里只需要读它的**产物**。这条边界与 ``PIPELINE_PLAN`` 第 2 节
+    「只读产物、不重写别人的逻辑」是同一条。判定规则必须与
+    ``localize_images.py::_candidate_is_program_owned`` 保持一致 ——
+    两边对同一个目录只能有一套语义（CR-48）。
+    """
+    path = account_dir / "images_de.jsonl"
+    owned: dict[str, set[str | None]] = {}
+    if not path.is_file():
+        return owned
+    try:
+        assert_physical_direct_path(
+            account_dir, path, kind="file", label="images_de.jsonl")
+    except ArchivePathError:
+        return owned
+    try:
+        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return owned
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue            # 逐行独立解码：一条坏行不该让整篇发不出去
+        if not isinstance(row, dict):
+            continue
+        rel = row.get("out_path")
+        if not isinstance(rel, str) or not rel.strip():
+            continue
+        pure = PurePosixPath(rel.strip().replace("\\", "/"))
+        if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+            continue
+        digest = row.get("output_sha256")
+        owned.setdefault(pure.as_posix(), set()).add(
+            digest if isinstance(digest, str) and len(digest) == 64 else None)
+    return owned
+
+
+def _is_program_output(account_dir: Path, candidate: Path,
+                       owned: dict[str, set[str | None]]) -> bool:
+    try:
+        rel = candidate.relative_to(account_dir).as_posix()
+    except ValueError:
+        return False
+    digests = owned.get(rel)
+    if not digests:
+        return False
+    if None in digests:
+        return True             # 旧 schema 没有哈希，只能按路径认
+    try:
+        with candidate.open("rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return False
+    # 字节被改过就不再是程序产出 —— 人在程序产出上改了几笔，也算人工版本。
+    return digest.hexdigest() in digests
+
+
+def _pick_localized(account_dir: Path, candidates: list[Path], *,
+                    post_id: str, position: int,
+                    owned: dict[str, set[str | None]]) -> tuple[Path, bool]:
+    """同序号有多个德语图时按「人工优先」选一个，返回 (选中的图, 是否人工)。
+
+    ⚠️ **这一条以前是硬错误，现在不是了**（CR-48）。K 组**刻意支持**
+    「程序图 ``01.jpg`` 与设计同事的修订版 ``01.png`` 并存、人工优先」，
+    而 compose 原先见到多个候选就 ``ComposeError`` —— 于是
+    **K 组专门为设计同事设计的那个场景，会让这篇帖子发不出去**。
+    两组对同一个目录必须只有一套语义，用户 2026-08-31 拍板改 G 侧。
+
+    仍然失败闭合的只有一种：**多个都不是程序产出**。那是真的分不清该发哪张，
+    机器不该替人猜（IMAGE_PLAN 第 3.1 节「不确定时的默认动作：不动」同源）。
+    """
+    manual = [item for item in sorted(candidates)
+              if not _is_program_output(account_dir, item, owned)]
+    if len(manual) > 1:
+        raise _fail(post_id, "media_de 里第 %d 张图有多个**人工**候选（%s）；"
+                             "分不清该发哪张，请只保留一个"
+                    % (position, "、".join(item.name for item in manual)))
+    if manual:
+        return manual[0], True
+    program = sorted(candidates)
+    if len(program) > 1:
+        raise _fail(post_id, "media_de 里第 %d 张图有多个程序产出（%s）；"
+                             "多半是改过 [image].output_format，"
+                             "请清理掉旧格式那张再发" % (
+                                 position, "、".join(i.name for i in program)))
+    return program[0], False
+
+
 def _choose_images(arc: Archive, source: dict, post_dir: Path,
                    warnings: list[str]) -> tuple[
                        tuple[Path, ...],
@@ -527,6 +628,7 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
             post_dir, media_de, kind="directory", label="media_de 目录")
     except ArchivePathError as exc:
         raise _fail(post_id, str(exc)) from exc
+    owned_media_de = _program_owned_media_de(arc.base)
 
     selected: list[Path] = []
     sources: list[Literal["media_de", "original"]] = []
@@ -547,14 +649,21 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
                              and candidate.is_file()]
             except OSError as exc:
                 raise _fail(post_id, "无法读取 media_de：%s" % exc) from exc
-        if len(localized) > 1:
-            raise _fail(post_id, "media_de 里第 %d 张图有多个候选：%s"
-                        % (position, "、".join(p.name for p in localized)))
 
+        chosen: Path | None = None
+        source_kind: Literal["media_de", "original"] = "original"
         if localized:
-            chosen = localized[0]
-            source_kind: Literal["media_de", "original"] = "media_de"
-        else:
+            chosen, manual = _pick_localized(
+                arc.base, localized, post_id=post_id, position=position,
+                owned=owned_media_de)
+            source_kind = "media_de"
+            if manual:
+                # PIPELINE_PLAN 第 6 节第 5 条：这一篇被设计同事动过手，
+                # 本身就说明它特殊，操作者按下"排期"前应当看见。
+                warnings.append(
+                    "第 %d 张用的是**人工放置**的德语图 %s（不是程序产出），"
+                    "已按人工优先选用" % (position, chosen.name))
+        if chosen is None:
             chosen = original
             source_kind = "original"
             warnings.append(

@@ -61,6 +61,14 @@ def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
     发布侧若只验端口，另一个 Chrome 恰好占了 9223 时仍会把 DE 内容带进
     错误会话。Windows 是部署目标，因此用只读的进程信息补上这条归属证据。
     返回 ``None`` 表示系统不支持/无法读取；调用方在 Windows 上应失败闭合。
+
+    ⚠️ **这个调用不便宜**：每次都要 fork 一个 ``powershell.exe``
+    （``Get-NetTCPConnection`` + ``Win32_Process``，超时 5 秒）。
+    所以 :func:`launch` 的轮询循环**只用不带 profile 的轻量 CDP 探测**，
+    等端口真的起来了再核对一次归属（CR-59）——
+    否则 15 秒窗口里每秒一次，一次启动最多 fork 16 个 PowerShell。
+    **不要为了"更快"把归属核对整个去掉**：`/json/version` 证明不了是哪份
+    profile，而这条证据正是 G0 存在的全部理由。
     """
     if not sys.platform.startswith("win"):
         return None
@@ -163,10 +171,12 @@ def launch(wait_seconds: float = PORT_WAIT_SECONDS,
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(argv, creationflags=flags, close_fds=True)
 
+    # 轮询只做**轻量**的 CDP 探测：归属核对要 fork PowerShell，每秒一次太贵
+    # （CR-59）。端口真的起来之后再核对一次，判据完全不变。
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
-        if cdp_ready(port, profile=profile if verify_profile else None):
-            return True
+        if cdp_ready(port):
+            return cdp_ready(port, profile=profile if verify_profile else None)
         time.sleep(1)
         if on_tick is not None:
             on_tick()

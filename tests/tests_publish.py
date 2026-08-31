@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -312,6 +314,198 @@ with tempfile.TemporaryDirectory() as d:
           "排期保留调用方显式时区，不做本机隐式转换")
     check(any("G1" in warning for warning in post.warnings),
           "尚无 UI 实测约束时不假绿，明确记录 G1 仍待完成")
+
+
+print("\n[CR-58] compose 的用户入口：tools/compose_publish.py")
+# PUBLISH_PLAN 第 5 节的【验收】要求"对最新 3 篇真实帖组装成功、人为改坏各自被拒"。
+# 在此之前 compose_post 的唯一调用方是本测试文件 —— 那条验收没有任何命令
+# 可以让用户自己复跑，而项目工作协议要求需要用户操作的功能进 MANUAL_STEPS。
+import tools.compose_publish as compose_cli  # noqa: E402
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    state_dir = Path(d) / "state"
+    state_dir.mkdir()
+
+    class CliCfg:
+        archive_dir = root
+
+        def get(self, section, key, default=None):
+            if (section, key) == ("publish", "timezone"):
+                return "Europe/Berlin"
+            return default
+
+    original = compose_cli.cfg
+    try:
+        compose_cli.cfg = lambda: CliCfg()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_ok = compose_cli.main(["--post-id", "fixture-post"])
+        printed = buf.getvalue()
+
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            rc_missing = compose_cli.main(["--post-id", "no-such-post"])
+        missing_out = buf2.getvalue()
+
+        buf3 = io.StringIO()
+        with contextlib.redirect_stdout(buf3):
+            rc_latest = compose_cli.main(["--latest", "3"])
+        latest_out = buf3.getvalue()
+    finally:
+        compose_cli.cfg = original
+
+    check(rc_ok == 0, "入口对可组装的帖子返回 0")
+    check("fixture-post" in printed and "德语正文" in printed,
+          "入口把译文与帖子标识打出来 —— 这就是 require_confirmation 要看的清单")
+    check("原图" in printed or "德语图" in printed,
+          "逐张标出用的是德语图还是回退的原图")
+    check(rc_missing == 1 and "no-such-post" in missing_out,
+          "找不到的 post_id 返回非零并点名，不静默成功")
+    check(rc_latest == 0 and "fixture-post" in latest_out,
+          "--latest 跨账号取最新 N 篇，不需要人手抄 post_id")
+    check("零浏览器" in printed and "零写盘" in printed,
+          "入口明确声明自己不碰浏览器、不写盘")
+    check(not (state_dir / "published.jsonl").exists(),
+          "离线预演确实没有写出任何发布留痕")
+
+
+print("\n[CR-60] 排期时区：Windows 上必须有 tzdata，且夏令时切换日要对")
+# ⚠️ 实测发现（2026-08-31）：本机 zoneinfo.TZPATH 是**空的**，
+# 缺 tzdata 时 ZoneInfo("Europe/Berlin") 直接抛 ZoneInfoNotFoundError。
+# 而 PUBLISH_PLAN 第 3.3 节把显式时区转换写成硬要求，还要求在切换日各测一次。
+# 这一节存在的意义：**别让人用"写死 UTC 偏移"绕过去**。
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # noqa: E402
+
+configured_tz = "Europe/Berlin"
+try:
+    berlin = ZoneInfo(configured_tz)
+except ZoneInfoNotFoundError:
+    berlin = None
+check(berlin is not None,
+      "Europe/Berlin 可解析（Windows 需要 requirements.txt 里的 tzdata；"
+      "缺它时 G5 的显式时区转换根本无法实现）")
+if berlin is not None:
+    # 2026 年德国夏令时：3/29 前进，10/25 后退。
+    transitions = {
+        "2026-03-29T01:30": timedelta(0),
+        "2026-03-29T03:30": timedelta(hours=1),
+        "2026-10-25T01:30": timedelta(hours=1),
+        "2026-10-25T03:30": timedelta(0),
+    }
+    correct = all(
+        datetime.fromisoformat(stamp).replace(tzinfo=berlin).dst() == expected
+        for stamp, expected in transitions.items())
+    check(correct,
+          "两个夏令时切换日的偏移都正确 —— 写死 +01:00/+02:00 会在这两天发错时刻")
+
+tz_error = ""
+original_cfg = compose_cli.cfg
+try:
+    class BadTzCfg:
+        archive_dir = Path(".")
+
+        def get(self, section, key, default=None):
+            if (section, key) == ("publish", "timezone"):
+                return "Not/AZone"
+            return default
+
+    compose_cli.cfg = lambda: BadTzCfg()
+    try:
+        compose_cli._schedule_timezone()
+    except SystemExit as exc:
+        tz_error = str(exc)
+finally:
+    compose_cli.cfg = original_cfg
+check("tzdata" in tz_error or "有效时区名" in tz_error,
+      "时区解析失败时给出可直接照做的处置，而不是抛一个裸异常")
+
+
+print("\n[2b][CR-48] media_de 同序号多候选：改成与 K 组一致的『人工优先』")
+# ⚠️ 这一节钉住的是一条**语义对齐**，不是普通回归。
+# K 组刻意支持「程序图 01.jpg 与设计同事的 01.png 并存、人工优先」，
+# 而 compose 原先见到多个候选就硬失败 ——
+# K 专门为设计同事设计的那个场景会让这篇帖子发不出去。
+def _sha256_of(path):
+    import hashlib as _h
+    return _h.sha256(path.read_bytes()).hexdigest()
+
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    media_de = fixture["post_dir"] / "media_de"
+    media_de.mkdir()
+    program_img = media_de / "01.jpg"
+    manual_img = media_de / "01.png"
+    Image.new("RGB", (101, 100), (9, 9, 9)).save(program_img)
+    Image.new("RGB", (101, 100), (7, 7, 7)).save(manual_img)
+    rel = program_img.relative_to(fixture["account_dir"]).as_posix()
+    (fixture["account_dir"] / "images_de.jsonl").write_text(
+        json.dumps({"post_id": "fixture-post", "media_index": 0,
+                    "out_path": rel,
+                    "output_sha256": _sha256_of(program_img)},
+                   ensure_ascii=False) + "\n",
+        encoding="utf-8")
+
+    post = compose_post("fixture-post", WHEN, archive_root=root,
+                        warning_sink=None)
+    check(post.image_paths[0].name == "01.png",
+          "程序图与人工图并存时选人工那张 —— 与 K 组 _candidate_is_program_owned "
+          "同一套规则（CR-48）")
+    check(post.image_sources[0] == "media_de", "人工图仍然算 media_de 来源")
+    check(any("人工放置" in w for w in post.warnings),
+          "用了人工版本要显式说出来：这一篇被设计同事动过手，操作者应当看见")
+
+    # 程序产出的字节被人改过 -> 不再算程序产出（与 K 组一致的保守方向）
+    Image.new("RGB", (101, 100), (5, 5, 5)).save(program_img)
+    two_manual = ""
+    try:
+        compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    except ComposeError as exc:
+        two_manual = str(exc)
+    check("多个**人工**候选" in two_manual,
+          "两张都不是程序产出时仍然失败闭合 —— 机器不替人猜该发哪张")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    media_de = fixture["post_dir"] / "media_de"
+    media_de.mkdir()
+    Image.new("RGB", (101, 100), (9, 9, 9)).save(media_de / "01.jpg")
+    Image.new("RGB", (101, 100), (8, 8, 8)).save(media_de / "01.png")
+    rows = []
+    for name in ("01.jpg", "01.png"):
+        target = media_de / name
+        rows.append(json.dumps({
+            "post_id": "fixture-post", "media_index": 0,
+            "out_path": target.relative_to(fixture["account_dir"]).as_posix(),
+            "output_sha256": _sha256_of(target)}, ensure_ascii=False))
+    (fixture["account_dir"] / "images_de.jsonl").write_text(
+        "\n".join(rows) + "\n", encoding="utf-8")
+    both_program = ""
+    try:
+        compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    except ComposeError as exc:
+        both_program = str(exc)
+    check("多个程序产出" in both_program and "output_format" in both_program,
+          "两张都是程序产出时点名真实原因（多半改过 output_format），"
+          "而不是笼统报『有多个候选』")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    media_de = fixture["post_dir"] / "media_de"
+    media_de.mkdir()
+    Image.new("RGB", (101, 100), (9, 9, 9)).save(media_de / "01.png")
+    (fixture["account_dir"] / "images_de.jsonl").write_text(
+        "{ not json at all\n", encoding="utf-8")
+    post = compose_post("fixture-post", WHEN, archive_root=root,
+                        warning_sink=None)
+    check(post.image_paths[0].name == "01.png",
+          "images_de.jsonl 整份坏掉时按『不是程序产出』保守处理，"
+          "不让一条坏行把整篇帖子挡下来")
 
 
 print("\n[3] G0b 硬失败：过期译文、金额变化、删图、坏图、残缺轮播")

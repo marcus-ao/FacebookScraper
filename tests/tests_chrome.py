@@ -279,5 +279,52 @@ with tempfile.TemporaryDirectory() as d:
           "发布 profile 误配成抓取 profile 时启动前失败闭合")
 
 
+print("\n[CR-59] launch 轮询期间不做昂贵的 profile 归属核对")
+# 归属核对每次都要 fork 一个 powershell.exe（超时 5 秒），而 launch 会在
+# 15 秒窗口里每秒轮询一次 —— 一次启动最多 16 个 PowerShell 进程。
+# 轮询改用轻量 CDP 探测，端口起来之后再核对一次；**判据一个字没松**。
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d)
+    calls = {"plain": 0, "with_profile": 0}
+    state = {"ticks": 0}
+
+    class FakeCfg:
+        chrome_exe = "chrome.exe"
+        debug_port = 9222
+        profile_dir = root / "scrape"
+
+    def fake_cdp_ready(_port=None, *_a, profile=None, **_k):
+        # 真实语义：profile 版只是在 CDP 已就绪之上多一道归属核对，
+        # 所以端口没起来时两者都是 False。
+        if profile is None:
+            calls["plain"] += 1
+        else:
+            calls["with_profile"] += 1
+        return state["ticks"] >= 3            # 第 4 次轮询时端口才起来
+
+    original = (chrome.cfg, chrome.cdp_ready, chrome.port_open,
+                chrome.subprocess.Popen, chrome.time.sleep)
+    try:
+        chrome.cfg = lambda: FakeCfg()
+        chrome.cdp_ready = fake_cdp_ready
+        chrome.port_open = lambda _port, *_a, **_k: False
+        chrome.subprocess.Popen = lambda *_a, **_k: None
+        chrome.time.sleep = lambda _s: state.__setitem__("ticks",
+                                                         state["ticks"] + 1)
+        ready = chrome.launch(port=9223, profile=root / "publish")
+    finally:
+        (chrome.cfg, chrome.cdp_ready, chrome.port_open,
+         chrome.subprocess.Popen, chrome.time.sleep) = original
+
+    check(ready, "端口起来之后 launch 返回 True")
+    check(calls["with_profile"] == 2,
+          "整个启动过程只核对 2 次 profile 归属（开头一次 + 就绪后一次），"
+          "不是每秒一次 —— 每次都要 fork 一个 powershell.exe（CR-59）")
+    check(calls["plain"] >= 3,
+          "轮询用的是不带 profile 的轻量 CDP 探测")
+    check(calls["plain"] > calls["with_profile"],
+          "轻量探测次数必须多于昂贵核对次数；反过来说明有人把归属核对搬回轮询里了")
+
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)
