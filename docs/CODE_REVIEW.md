@@ -1630,3 +1630,55 @@ IG 的话题标签直接影响自然流量，而这条规则会作用在全部 1
 - `feat/business-suite-publish`：**17 套全绿**；`tests_publish.py` 从 89 项增至
   **92 项**（CR-61 的三条）。
 - 两条分支 `compileall` 干净、`git diff --check` 干净。
+- **合并落 `main` 之后**：**18 套 / 1108 项全绿**，`compileall -q .` 干净、
+  `git diff --check` 干净、代码里零冲突标记、`tomllib` 解析通过、
+  `uv pip check` 24 包兼容、8 个 `.bat` 全部 0 裸 LF / 无 BOM / 纯 ASCII。
+
+### 16.4 合并态在**真实数据**上的复核（feature worktree 里做不到）
+
+两条 feature worktree 都没有 `archive/`，所以它们跑 `--estimate` / `--dry-run`
+只会得到误导性的 0（`HANDOFF` 早就写了这条）。归位成单目录之后补做的：
+
+| 复核 | 结果 |
+|---|---|
+| `localize_images.py --dry-run --post-id ×3` | **11 张待处理**（FB 5 + IG 5 + IG 1），与合并前一致 |
+| `--estimate --all-history` | 正常收尾、**零 traceback**（CR-52 的回归点） |
+| 三道费用闸 | `--all-history` 真实运行退出码 **2**；`--latest-posts 4` 被拒；`--confirm-all-history-cost` 不能单独用 |
+| `translate.py --dry-run --post-id ×3` | 作用域正确（作用域内 1 + 2 篇），不存在的 post_id 失败闭合退出 1 |
+| `tools/compose_publish.py --post-id ×3` | **3 篇全部组装成功、零拦下**（G0b 在合并态复现）；`--strict` 3 篇全部正确失败闭合 |
+| **K→G 所有权契约** | 7 条断言全过（见下） |
+| **K8 并排审校** | 7 条断言全过（在真实数据的临时副本上真跑 `run_review`） |
+| **CR-56 降级** | 把 `[image]` 弄坏之后审校清单照常生成，只是不打形变/放大告警 |
+| **CR-60 tzdata** | `tzdata 2026.3`；2026 年两个切换日的偏移四次全对 |
+| 浏览器隔离闸 | 真实 config 上 9222/`.fbscraper-chrome` 与 9223/`.fbscraper-publish` 互不相同 |
+
+**K→G 所有权契约的七条**（这是两组唯一的交接面，也是 CR-48 改过的地方）：
+K 写出的记录 K 认得、G 也认得；把产出字节改掉之后**两边同时**判为人工版本
+（同向保守）；`01.jpg`（程序）与 `01.png`（人工）并存时，K 只把 `01.png` 当人工、
+不误伤自己的 `01.jpg`，而 G 选人工版并显式告警——**这正是 CR-48 修掉的拒发场景**；
+两个候选都不是程序产出时 G 失败闭合并点名，不替人猜。
+
+**全程零 API 调用、零费用、零社媒访问，真实 `archive/` 一个字节都没动过。**
+
+### 16.5 CR-62 · P2 · 切分支之后 `.bat` 会带着裸 LF，而 `git status` 看不见
+
+- **位置**：不在代码里，在**工作区与 git filter 的交互**上。
+- **发现经过**：合并推送完、主目录从 `wip` 切到 `main` 之后跑全量，
+  `tests_schedule.py` 报 `run_images.bat 有裸 LF` ——
+  而同一份文件在 feature worktree 里刚验过是 13 CRLF / 0 裸 LF。
+- **事实**：`.gitattributes` 写着 `*.bat text eol=crlf`，所以
+  **仓库里的 blob 是 LF，检出时才转 CRLF**。但 clean filter 把 CRLF 和 LF
+  **归一成同一个 blob**，于是工作区那份即使是裸 LF，`git status` 也报干净——
+  **git 结构性地看不见这个漂移**。
+- **后果**：裸 LF 的 `.bat` 在 `cmd.exe` 里整行误解析，表现为
+  `'xxx' 不是内部或外部命令`。用户双击就坏，而仓库里是对的。
+- **处置**：✅ 让 git 重新物化该文件即可，仓库内容本身没问题：
+
+  ```bash
+  rm scripts/run_images.bat && git checkout -- scripts/run_images.bat
+  ```
+
+  修完 8 个 `.bat` 全部 0 裸 LF / 无 BOM / 纯 ASCII，18 套 1108 项全绿。
+- ⛔ **不要手工改字节，更不要去改那条断言。**
+  `tests_schedule.py` 的三条 `.bat` 字节断言就是为这件事写的，
+  这一轮它是唯一发现问题的东西。**切分支之后跑一次全量，理由就是这个。**

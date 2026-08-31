@@ -3608,3 +3608,61 @@ K9 明确用 `--latest-posts 3`，全历史还需 `--all-history` 与
 无参 `launch/attach` 恢复旧 CDP-only 行为，只有显式 profile 才核对进程归属。
 修正后原 16 套加新增发布套件共 **17 套全绿**；`ruff`、`compileall -q .` 与
 `git diff --check` 均通过，发布 `.bat` 的 ASCII/CRLF/无 BOM 断言包含在全量测试中。
+
+### 2026-08-31（第七轮）· K/G 合并进 `main` 并推送；仓库回到单目录单分支
+
+分支：合并在一个一次性 worktree 里做，做完即删；结果推到 **`origin/main` = `9f8c1bf`**。
+
+#### 1. 合并顺序按 CR-46 走，没有走那条"最自然"的错路
+
+两条 feature 分支都从 `9ea342c` 开出，**比 `main`（`3736303`）还早**，
+所以 `git merge --ff-only` 必然失败——**那不是 `main` 被人动过**。
+正确顺序是**先落两条 feature 分支，再把 `wip` 上只属于主干的东西摘过来**；
+反过来（先把 `main` 快进到 `wip`）实测会把冲突从 1~2 个文档放大到 6/10 个、
+其中含整文件 add/add，因为 `wip` 里带着两条线更早的快照。
+
+实际冲突与 CR-46 的预测一致，且**全部在共享文档里，代码零冲突**
+（`config.toml` / `requirements.txt` / `translate.py` / `core/chrome.py` 全部自动合）：
+
+| 合并 | 冲突文件 |
+|---|---|
+| `← feat/image-de` | `IMPLEMENTATION_PLAN.md` |
+| `← feat/business-suite-publish` | `IMPLEMENTATION_PLAN.md`、`MANUAL_STEPS.md`、`HANDOFF.md` |
+
+解冲突按既定约定**两段都保留**：附录 D 的三段（L 组复盘 / K 组第四轮 /
+G 组 G0-G0b-G1）各自独立全部保留；`MANUAL_STEPS` 的第 10b 步（K）与
+第 10c 步（G）各自独立全部保留；摘要表按**"每组自己那一行以自己分支为准"**取并集。
+
+#### 2. 抢救回来的三样（CR-49）
+
+`c35715d` 的主干修复（cherry-pick，实测零冲突）、`config.toml` 的 `[pipeline]` 整段、
+`[publish]` 段末那条 TOML 子表顺序警告。后两样只存在于 `wip`，
+按合并路径本来会丢，而 `PIPELINE_PLAN` 第 13/14 节直接引用它们。
+
+#### 3. 本轮唯一的代码改动：CR-61
+
+`publish/compose.py::_load_current_translation` 此前只再判 `money_preserved`，
+不判 `hashtags_preserved`——而这两条在 `translate.py` 里本来就是同一类
+「不可改内容规则」，写盘时一起判。**写盘侧判过不等于发布侧不用判**：
+`translated.jsonl` 是真相源，人工审校的修正就是直接改它，不经过写盘闸。
+已复用 `hashtags_preserved`（不重写第二份）+ 三条断言 + `PUBLISH_PLAN` §5.2b。
+上线前在真实归档 9 条当前有效译文上验过：金额违规 0 / 标签违规 0，**新闸不改变任何现有可组装帖**。
+
+#### 4. 验证与诚实边界
+
+- 合并态 **18 套 / 1108 项全绿**；`compileall -q .`、`git diff --check`、
+  零冲突标记、`tomllib` 解析、`uv pip check`（24 包）、8 个 `.bat` 字节约定全过。
+- **在真实 `archive/` 上复核了合并态**（feature worktree 里做不到，它们没有归档）：
+  11 张待处理与合并前一致、三道费用闸都响、3 篇真实帖组装成功且 `--strict` 正确失败闭合、
+  K→G 所有权契约 7 条、K8 并排审校 7 条、CR-56 降级、CR-60 tzdata 四个偏移。
+  **全程零 API 调用、零费用、零社媒访问，真实 `archive/` 一个字节都没动过**
+  （`run_review` 是在临时副本上跑的）。
+- **发现并修掉 CR-62**：切分支之后 `.bat` 的工作区副本会带裸 LF，
+  而 `git status` 结构性地看不见（clean filter 把 CRLF/LF 归一成同一 blob）。
+  是 `tests_schedule.py` 抓到的。详见 `CODE_REVIEW.md` 16.5。
+- **`publish/selectors.py` 仍然是空的，`business_suite.py` 五个 `ProbeRequired` 原样保留**——
+  红线 5，本轮一个字都没动。
+- 冗余分支已清：本地 6 条 + 远端 2 条，`-d` 全程用安全删（`wip` 用 `-D`，
+  删前确认过三样东西都已进 `main`，并留下 `backup/pre-merge-2026-08-31`）。
+- **仍然卡在用户手上的三件一件都没动**：K9 图片费用确认、G1 真实 DOM 探查、
+  L0a 装计划任务。
