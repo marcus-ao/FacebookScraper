@@ -11,9 +11,45 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.chrome import PORT_WAIT_SECONDS, cdp_ready, launch, port_open  # noqa: E402
+from core.chrome import (PORT_WAIT_SECONDS, _cdp_profile_matches,  # noqa: E402
+                         cdp_ready, launch, listening_pid, port_open)
 from core.config import cfg                                             # noqa: E402
 from core.console import force_utf8                                     # noqa: E402
+
+
+def _report_profile_mismatch(port: int, profile) -> int:
+    """端口上是 Chrome、但归属核对没过时，说清到底是哪一种。
+
+    ⚠️ **"确实是别的 profile" 与 "核对不了" 是两件事**（CR-63）。
+    原来两种情况印同一段话，于是 2026-09-01 用户调 G1 时，
+    一个**完全正确**的环境被报成"你开错了浏览器"，还被建议去关掉它——
+    真实原因是归属核对的子进程超时（5 秒不够，实测要 7–9 秒）。
+    **让人去关一个本来就对的 Chrome，比不报错更坏。**
+    """
+    verdict = _cdp_profile_matches(port, profile)
+    if verdict is False:
+        print("[!] 发布端口 %d 上是 Chrome，但它用的**不是**发布 profile。" % port)
+        print("    目标发布 profile：%s" % profile)
+        print("    为防把 DE 内容带进错误会话，已停止。")
+        print("    请关掉占着这个端口的那个 Chrome，再重跑本脚本。")
+        print("    ⚠️ 只关那一个，不要误关仍在 9222 上工作的抓取 Chrome。")
+        return 1
+
+    pid = listening_pid(port)
+    print("[!] 发布端口 %d 上是 Chrome，但**无法确认**它属于哪份 profile。" % port)
+    print("    注意：这不是说它错了，是说这台机器上读不到监听进程的命令行。")
+    print("    目标发布 profile：%s" % profile)
+    print("    为安全起见仍然停下。自己核一眼（两条都是只读的）：")
+    print("        netstat -ano | findstr :%d" % port)
+    if pid is not None:
+        print("        powershell -NoProfile -Command \"(Get-CimInstance Win32_Process "
+              "-Filter 'ProcessId = %d').CommandLine\"" % pid)
+    else:
+        print("        powershell -NoProfile -Command \"(Get-CimInstance Win32_Process "
+              "-Filter 'ProcessId = <上面那个PID>').CommandLine\"")
+    print("    命令行里的 --user-data-dir 就是它真正在用的 profile；")
+    print("    如果它和上面那行一致，说明环境是对的，是核对手段读不出来。")
+    return 1
 
 
 def main() -> int:
@@ -35,10 +71,7 @@ def main() -> int:
         print("    不会启动第二个实例；可直接运行 G1 探查工具。")
         return 0
     if cdp_ready(port):
-        print("[!] 发布端口 %d 上是 Chrome，但它不属于发布 profile，" % port)
-        print("    或 Windows 无法确认进程归属。为防附着到抓取小号，已停止。")
-        print("    目标发布 profile：%s" % profile)
-        return 1
+        return _report_profile_mismatch(port, profile)
     if port_open(port):
         print("[!] 发布端口 %d 已被其它程序占用，但它不是 Chrome 调试端口。" % port)
         print("    请关闭占用程序，或只修改 config.toml 的 [publish].debug_port。")
@@ -57,6 +90,13 @@ def main() -> int:
         return 0
 
     print()
+    # ⚠️ `launch()` 有两种失败：端口一直没起来、以及端口起来了但归属核对没过。
+    # 原来这里只印前一种（还写死"等了 15 秒"），于是归属核对失败时
+    # 用户看到的是一份**全是错的**排查清单 —— 2026-09-01 真踩了（CR-63）。
+    # 所以这里重新分诊一次，再决定说什么。
+    if cdp_ready(port):
+        return _report_profile_mismatch(port, profile)
+
     print("[!] 等了 %d 秒，发布 Chrome 的调试端点 %d 仍未就绪。常见原因："
           % (PORT_WAIT_SECONDS, port))
     print("    1. 发布 profile 已被另一个 Chrome 占用；Chrome 会静默复用旧实例，")

@@ -26,6 +26,24 @@ from core.config import cfg
 # Chrome 冷启动到端口可连有几秒延迟，立刻去连 CDP 会失败，看起来像"脚本坏了"
 PORT_WAIT_SECONDS = 15
 
+# profile 归属核对的子进程超时。**这个数是实测标定的，不要凭感觉调小**（CR-63）。
+#
+# 2026-09-01 本机（Windows 11 / Chrome 152）逐段实测：
+#     powershell.exe 空跑（纯启动开销）      2.17s
+#     + Get-NetTCPConnection                7.84s   ← 光加载 NetTCPIP 模块就 ~5.7s
+#     + Get-CimInstance Win32_Process       3.84s
+#     netstat -ano（纯 exe，同一个 PID）      0.49s
+#
+# 原实现是 `Get-NetTCPConnection` + `Get-CimInstance` 一次跑完，实测
+# **7.4–9.4 秒**，而超时写的是 5 秒 —— 于是**每一次都超时**，
+# 被 `except SubprocessError` 吃掉、返回 None，一个完全正确的环境被判成
+# "核对不了"并失败闭合。用户看到的是"发布 Chrome 没起来"，其实它好好地开着。
+#
+# 现在端口→PID 改用 netstat（0.12s），只剩 PID→命令行 走 PowerShell（~3.5s）。
+# 20 秒是在实测 3.5s 上留了 5 倍余量：这条路径一轮只跑一两次，
+# 宁可慢也不能**误判**——误判的代价是把对的环境说成错的。
+PROFILE_PROBE_TIMEOUT = 20.0
+
 
 def _resolved_port(port: int | None) -> int:
     """显式端口优先；不给时保持原调用方的 [chrome] 行为。"""
@@ -54,42 +72,98 @@ def _profile_from_command_line(command_line: str) -> str | None:
     return next((value for value in match.groups() if value is not None), None)
 
 
-def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
-    """Windows 上确认监听端口的 Chrome 命令行确实使用目标 profile。
+def listening_pid(port: int) -> int | None:
+    """监听 ``port`` 的进程 PID；读不出来返回 ``None``。
 
-    ``/json/version`` 只能证明“这是 Chrome”，不能证明“这是哪份 profile”。
-    发布侧若只验端口，另一个 Chrome 恰好占了 9223 时仍会把 DE 内容带进
-    错误会话。Windows 是部署目标，因此用只读的进程信息补上这条归属证据。
-    返回 ``None`` 表示系统不支持/无法读取；调用方在 Windows 上应失败闭合。
+    ⚠️ **用 `netstat -ano` 而不是 `Get-NetTCPConnection`**（CR-63）。
+    两者给出同一个 PID，但本机实测 `Get-NetTCPConnection` 光加载 NetTCPIP
+    模块就要约 5.7 秒，而 `netstat` 只要 **0.12 秒**——差 40 倍。
+    原实现把它和 `Get-CimInstance` 串在一条 PowerShell 里，
+    总耗时 7.4–9.4 秒却只给了 5 秒超时，于是**每次都超时**。
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=PROFILE_PROBE_TIMEOUT, creationflags=flags, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        # 协议 本地地址 外部地址 状态 PID —— IPv6 是 [::1]:9223，rpartition 同样成立
+        if len(fields) < 5 or fields[0].upper() != "TCP":
+            continue
+        if fields[3].upper() != "LISTENING":
+            continue
+        _host, sep, actual = fields[1].rpartition(":")
+        if not sep or actual != str(port) or not fields[4].isdigit():
+            continue
+        return int(fields[4])
+    return None
 
-    ⚠️ **这个调用不便宜**：每次都要 fork 一个 ``powershell.exe``
-    （``Get-NetTCPConnection`` + ``Win32_Process``，超时 5 秒）。
-    所以 :func:`launch` 的轮询循环**只用不带 profile 的轻量 CDP 探测**，
-    等端口真的起来了再核对一次归属（CR-59）——
-    否则 15 秒窗口里每秒一次，一次启动最多 fork 16 个 PowerShell。
-    **不要为了"更快"把归属核对整个去掉**：`/json/version` 证明不了是哪份
-    profile，而这条证据正是 G0 存在的全部理由。
+
+def _command_line_of(pid: int) -> str | None:
+    """进程的完整命令行；读不出来返回 ``None``。
+
+    这一步只能走 WMI/CIM —— Windows 上没有别的办法从 PID 拿到命令行
+    （`Get-Process` 只给可执行文件路径，那证明不了 ``--user-data-dir``）。
+    本机实测约 3.5 秒，是这条链路上剩下的主要开销。
     """
     if not sys.platform.startswith("win"):
         return None
     script = (
         "$ErrorActionPreference='Stop';"
         "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
-        "$c=Get-NetTCPConnection -LocalPort %d -State Listen | Select-Object -First 1;"
-        "if($null -eq $c){exit 3};"
-        "$p=Get-CimInstance Win32_Process -Filter ('ProcessId = '+$c.OwningProcess);"
-        "$p.CommandLine" % port)
+        "(Get-CimInstance Win32_Process -Filter 'ProcessId = %d').CommandLine" % pid)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=5, creationflags=flags, check=False)
+            timeout=PROFILE_PROBE_TIMEOUT, creationflags=flags, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0 or not result.stdout.strip():
         return None
-    raw_profile = _profile_from_command_line(result.stdout)
+    return result.stdout
+
+
+def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
+    """Windows 上确认监听端口的 Chrome 命令行确实使用目标 profile。
+
+    ``/json/version`` 只能证明“这是 Chrome”，不能证明“这是哪份 profile”。
+    发布侧若只验端口，另一个 Chrome 恰好占了 9223 时仍会把 DE 内容带进
+    错误会话。Windows 是部署目标，因此用只读的进程信息补上这条归属证据。
+
+    **三态返回，调用方必须区分**（CR-63）：
+
+    - ``True``  归属确认，可以附着；
+    - ``False`` **确实是别的 profile** —— 危险，必须停下并让用户去关那个 Chrome；
+    - ``None``  **核对不了**（非 Windows、netstat/WMI 读不出来）。
+      仍然失败闭合，但**原因完全不同**：多半是工具链问题，不是环境错了。
+      把这两种混成同一句话，会让一个正确的环境被报成"你开错了浏览器"——
+      2026-09-01 用户调 G1 时就被这么误导过一次。
+
+    ⚠️ **这个调用不便宜**（实测约 3.5 秒，见 :data:`PROFILE_PROBE_TIMEOUT` 的标定）。
+    所以 :func:`launch` 的轮询循环**只用不带 profile 的轻量 CDP 探测**，
+    等端口真的起来了再核对一次归属（CR-59）。
+    **不要为了"更快"把归属核对整个去掉**：`/json/version` 证明不了是哪份
+    profile，而这条证据正是 G0 存在的全部理由。
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    pid = listening_pid(port)
+    if pid is None:
+        return None
+    command_line = _command_line_of(pid)
+    if command_line is None:
+        return None
+    raw_profile = _profile_from_command_line(command_line)
     if raw_profile is None:
         return None
     actual = Path(raw_profile).resolve(strict=False)
@@ -209,10 +283,27 @@ async def attach(port: int | None = None,
 
     if not cdp_ready(port, profile=profile if verify_profile else None):
         if cdp_ready(port):
-            detail = (f"端口 {port} 是 Chrome 调试端口，但不属于目标 profile，"
-                      f"或 Windows 无法读取其进程归属。\n"
-                      f"目标 profile：{profile}\n"
-                      f"不要继续附着；先关闭占错端口的 Chrome，再运行 {start_script}。")
+            # ⚠️ **"是别的 profile" 与 "核对不了" 必须分开说**（CR-63）。
+            # 原来两句合成一句，于是 2026-09-01 用户调 G1 时，
+            # 一个**完全正确**的环境被报成"你开错了浏览器，去关掉它"——
+            # 真实原因是归属核对子进程超时（5 秒不够，实测要 7–9 秒）。
+            # 让人去关一个本来就对的 Chrome，是比不报错更坏的结果。
+            verdict = _cdp_profile_matches(port, profile)
+            if verdict is False:
+                detail = (f"端口 {port} 是 Chrome 调试端口，但它用的**不是**目标 profile。\n"
+                          f"目标 profile：{profile}\n"
+                          f"不要继续附着；先关闭占着这个端口的那个 Chrome，"
+                          f"再运行 {start_script}。")
+            else:
+                detail = (f"端口 {port} 是 Chrome 调试端口，但**无法确认**它属于哪份 profile"
+                          f"（读不到监听进程的命令行，不是说它错了）。\n"
+                          f"目标 profile：{profile}\n"
+                          f"为安全起见仍然停下。自己查一眼归属：\n"
+                          f"    netstat -ano | findstr :{port}\n"
+                          f"    powershell -NoProfile -Command "
+                          f"\"(Get-CimInstance Win32_Process -Filter 'ProcessId = <上面那个PID>')"
+                          f".CommandLine\"\n"
+                          f"命令行里的 --user-data-dir 就是它真正在用的 profile。")
         elif port_open(port):
             detail = (f"端口 {port} 已被其它程序占用，但它不是 Chrome 调试端口。\n"
                       f"目标 profile：{profile}\n"

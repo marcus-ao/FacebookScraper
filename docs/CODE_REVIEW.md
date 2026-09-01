@@ -1682,3 +1682,92 @@ K 写出的记录 K 认得、G 也认得；把产出字节改掉之后**两边�
 - ⛔ **不要手工改字节，更不要去改那条断言。**
   `tests_schedule.py` 的三条 `.bat` 字节断言就是为这件事写的，
   这一轮它是唯一发现问题的东西。**切分支之后跑一次全量，理由就是这个。**
+
+---
+
+## 17. CR-63 · P1 · 归属核对的超时是 5 秒，而这台机器要 7–9 秒（2026-09-01）
+
+> **发现方式与前面所有条都不同：不是审查看出来的，是用户调 G1 时当场撞上的。**
+> 离线测试全绿、17 套断言全过，而真实环境里这条路径**从来没成功过一次**。
+
+### 17.1 现象
+
+用户跑 `scripts\start_chrome_publish.bat`，**浏览器窗口正常打开了**，却得到：
+
+```
+等待发布调试端口就绪....
+[!] 等了 15 秒，发布 Chrome 的调试端点 9223 仍未就绪。常见原因：
+    1. 发布 profile 已被另一个 Chrome 占用……
+```
+
+接着 `tools/probe_publish.py` 说：
+
+```
+端口 9223 是 Chrome 调试端口，但不属于目标 profile，或 Windows 无法读取其进程归属。
+不要继续附着；先关闭占错端口的 Chrome，再运行 scripts\start_chrome_publish.bat。
+```
+
+**两条消息都是错的**，而且第二条会让用户去关掉一个**本来就正确**的浏览器。
+
+### 17.2 根因：一个没有被标定过的超时
+
+`core/chrome.py::_cdp_profile_matches` 把
+`Get-NetTCPConnection` + `Get-CimInstance Win32_Process` 串成一条 PowerShell
+跑，**超时写死 5 秒**。本机（Windows 11 / Chrome 152）逐段实测：
+
+| 步骤 | 耗时 |
+|---|---:|
+| `powershell.exe` 空跑（纯启动开销） | **2.17s** |
+| ＋ `Get-NetTCPConnection` | **7.84s**（光加载 NetTCPIP 模块就 ~5.7s） |
+| ＋ `Get-CimInstance Win32_Process` | 3.84s |
+| `netstat -ano`（纯 exe，给出**同一个** PID） | **0.49s** |
+
+整条实测 **7.4–9.4 秒**，于是**每一次都 `TimeoutExpired`**，
+被 `except (OSError, subprocess.SubprocessError)` 吃掉、返回 `None`，
+调用方按"核对不了"失败闭合。
+
+**这是 CR-59 留下的尾巴**：那一轮正确地发现"这个调用很贵"并把它从
+每秒一次降到 2 次，**却没有人真的测过它到底多贵**，5 秒的超时原样留着。
+真实环境里它 100% 失败——而离线测试全部 mock 掉了 `_cdp_profile_matches`，
+所以 17 套断言一条都没响。
+
+> **教训**：`timeout=` 是一个**关于目标机器的经验断言**。
+> 没有在目标机器上量过的超时值，和写死的选择器是同一类东西。
+
+### 17.3 处置
+
+**① 端口→PID 改用 `netstat -ano`，只留 PID→命令行走 PowerShell。**
+两者给出同一个 PID，但 0.12s vs 5.7s。改完实测 **3.4–3.6 秒**。
+
+**② `PROFILE_PROBE_TIMEOUT = 20.0`**，抽成模块常量并把上面那张实测表
+写在它旁边。20 秒是在实测 3.5s 上留 5 倍余量：这条路径一轮只跑一两次，
+**宁可慢也不能误判**。
+
+**③ 三态分诊：`False`（确实是别的 profile）与 `None`（核对不了）必须分开说。**
+原来两种情况印同一段话，于是正确的环境被报成"你开错了浏览器，去关掉它"。
+**让人去关一个本来就对的 Chrome，比不报错更坏。**
+`None` 那一支现在改成"**无法确认**它属于哪份 profile（不是说它错了）"，
+并给出两条只读的自查命令（`netstat` + `Get-CimInstance`），
+让用户自己看一眼 `--user-data-dir`。仍然失败闭合，但话说对了。
+
+**④ `tools/start_chrome_publish.py` 在 `launch()` 返回 False 后重新分诊。**
+原来只印"等了 15 秒端口没起来"那一种，还把秒数写死——
+而归属核对失败时它其实只等了 4 秒，那份排查清单三条全不适用。
+
+### 17.4 验证（真实环境，不是 mock）
+
+- 用户当时开着的那个 Chrome：`_cdp_profile_matches` 从 `None` → **`True`**（4.02s）；
+  `attach()` 成功（6.38s），`contexts=1 / pages=1`，窗口没被动过。
+- `scripts\start_chrome_publish.bat` 现在正确识别为"已就绪"，退出码 0。
+- 反向也验了：传抓取 profile → `False`；传没人监听的端口 → `None`。
+- 新增 17 条断言（`tests_chrome.py` 33 → 50）：netstat 解析（含 IPv6、
+  **端口整段匹配不能子串命中**、只认 LISTENING）、超时下限、
+  三态不许塌成两态、attach 两支话不同。**19 套 / 1199 项全绿。**
+
+### 17.5 顺带清掉的东西
+
+用户那三次失败尝试在 `state/` 留下三份**空的** probe dump
+（`interactions=0`、`observations` 全空）。它们不会被误当成真的——
+`compose.py::_validated_probe_dump` 要求 ≥7 条可信交互与全部必填观察，
+空 dump 会被拒。**但它们是噪音，G1 真正跑通后应当删掉，
+免得下次有人对着一堆同名文件分不清哪份是真的。**

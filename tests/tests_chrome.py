@@ -326,5 +326,90 @@ with tempfile.TemporaryDirectory() as d:
           "轻量探测次数必须多于昂贵核对次数；反过来说明有人把归属核对搬回轮询里了")
 
 
+print("\n[归属核对的两个真实教训（CR-63，2026-09-01 用户调 G1 时踩的）]")
+
+# ① 超时太短会把**对的**环境判成错的。本机逐段实测：
+#    powershell 空跑 2.17s / +Get-NetTCPConnection 7.84s / +Get-CimInstance 3.84s
+#    / netstat -ano 0.49s。原实现两个 cmdlet 串跑要 7.4–9.4s，超时却写 5s。
+check(chrome.PROFILE_PROBE_TIMEOUT >= 15,
+      "归属核对超时 >= 15 秒：实测这条链路要 ~3.5 秒，5 秒那版**每次都超时**，"
+      "于是一个完全正确的发布 Chrome 被报成'核对不了'并失败闭合")
+
+netstat_sample = "\n".join([
+    "活动连接", "",
+    "  协议  本地地址          外部地址        状态           PID",
+    "  TCP    127.0.0.1:9222         0.0.0.0:0              LISTENING       111",
+    "  TCP    127.0.0.1:9223         0.0.0.0:0              LISTENING       7044",
+    "  TCP    127.0.0.1:92230        0.0.0.0:0              LISTENING       222",
+    "  TCP    127.0.0.1:9224         127.0.0.1:5555         ESTABLISHED     333",
+    "  TCP    [::1]:9225             [::]:0                 LISTENING       444",
+])
+
+
+class _FakeRun:
+    def __init__(self, stdout, returncode=0):
+        self.stdout, self.returncode, self.stderr = stdout, returncode, ""
+
+
+original_run = chrome.subprocess.run
+original_platform = chrome.sys.platform
+try:
+    chrome.sys.platform = "win32"
+    chrome.subprocess.run = lambda *_a, **_k: _FakeRun(netstat_sample)
+    check(chrome.listening_pid(9223) == 7044, "从 netstat 输出里取出监听端口的 PID")
+    check(chrome.listening_pid(9222) == 111, "不同端口取到不同 PID")
+    check(chrome.listening_pid(92230) == 222,
+          "**端口按整段匹配，不是子串**：9223 不能命中 92230，反之亦然")
+    check(chrome.listening_pid(9224) is None,
+          "ESTABLISHED 不算：只认 LISTENING，否则会拿到连过去的那一头")
+    check(chrome.listening_pid(9225) == 444, "IPv6 的 [::1]:9225 也能解析")
+    check(chrome.listening_pid(9999) is None, "没人监听时返回 None")
+
+    chrome.subprocess.run = lambda *_a, **_k: _FakeRun("", returncode=1)
+    check(chrome.listening_pid(9223) is None, "netstat 失败时返回 None，不抛异常")
+
+    # ② 三态必须保住：读不出来是 None，不能塌成 False。
+    #    False 的含义是"确实是别的 profile，去关掉它"；把 None 说成 False，
+    #    就是让用户去关一个本来就对的浏览器 —— 比不报错更坏。
+    chrome.subprocess.run = original_run
+    original_pid, original_cmd = chrome.listening_pid, chrome._command_line_of
+    try:
+        chrome.listening_pid = lambda _port: None
+        check(chrome._cdp_profile_matches(9223, Path("C:/x")) is None,
+              "拿不到 PID → None（核对不了），**不是 False**")
+        chrome.listening_pid = lambda _port: 7044
+        chrome._command_line_of = lambda _pid: None
+        check(chrome._cdp_profile_matches(9223, Path("C:/x")) is None,
+              "拿不到命令行 → None，不是 False")
+        chrome._command_line_of = lambda _pid: (
+            '"chrome.exe" --remote-debugging-port=9223 --user-data-dir=C:\\x')
+        check(chrome._cdp_profile_matches(9223, Path("C:/x")) is True,
+              "命令行里的 --user-data-dir 与目标一致 → True")
+        chrome._command_line_of = lambda _pid: (
+            '"chrome.exe" --remote-debugging-port=9223 --user-data-dir=C:\\other')
+        check(chrome._cdp_profile_matches(9223, Path("C:/x")) is False,
+          "确实是别的 profile → False（这一种才该让用户去关浏览器）")
+    finally:
+        chrome.listening_pid, chrome._command_line_of = original_pid, original_cmd
+finally:
+    chrome.subprocess.run = original_run
+    chrome.sys.platform = original_platform
+
+source = inspect.getsource(chrome.attach)
+check("verdict is False" in source,
+      "attach 按三态分诊：'是别的 profile' 与 '核对不了' 必须给不同的话")
+check(source.count("无法确认") >= 1 and "netstat -ano" in source,
+      "'核对不了'那一支给出可自查的只读命令，而不是让用户去关浏览器")
+# 只看真正会被执行的那两个函数：注释里保留 Get-NetTCPConnection 是有意的
+# （记着为什么不用它），但它不能再出现在任何一条真的会跑的命令里。
+executed = inspect.getsource(chrome._command_line_of) + inspect.getsource(
+    chrome.listening_pid).split('"""')[-1]
+check("Get-NetTCPConnection" not in executed,
+      "真正执行的命令里不再有 Get-NetTCPConnection —— "
+      "它光加载 NetTCPIP 模块就 ~5.7 秒，是原来那次超时的主因")
+check("netstat" in inspect.getsource(chrome.listening_pid),
+      "端口→PID 走 netstat（0.12s），不是 PowerShell cmdlet")
+
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)
