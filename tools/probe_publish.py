@@ -598,7 +598,30 @@ async def install_on_page(context, page, script: str,
 
     if (verify.get("result") or {}).get("value") != "object":
         return session, False, "注入后回读不到监听器标记（页面可能立刻导航了）"
+
+    # 主帧一导航就立刻补注入一次。addScriptToEvaluateOnNewDocument 正常情况下
+    # 已经覆盖了新文档，但**"正常情况下"正是这次栽跟头的地方**：装到一半页面
+    # 就跳走、跨进程换渲染器等等都可能让它落空。这一层给的是"立刻"，
+    # 巡检那一层给的是"最多两秒"，两层都便宜，都留着。
+    def _on_navigated(params):
+        frame = (params or {}).get("frame") or {}
+        if frame.get("parentId"):
+            return                      # 只管主帧，子帧由 init script 覆盖
+        asyncio.create_task(_reinject(session, script))
+
+    session.on("Page.frameNavigated", _on_navigated)
     return session, True, "ok"
+
+
+async def _reinject(session, script: str) -> None:
+    """导航后补注入。失败不抛——巡检那一层还会再兜一次。"""
+    try:
+        await asyncio.wait_for(
+            session.send("Runtime.evaluate",
+                         {"expression": script, "returnByValue": True}),
+            timeout=_INSTALL_TIMEOUT)
+    except Exception:
+        pass
 
 
 async def cdp_page_targets(port: int) -> list[dict]:
@@ -643,7 +666,7 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
         async def receive(page, payload):
             try:
                 if await recorder.record(page, payload,
-                                         session=installed.get(id(page))):
+                                         session=installed.get(page)):
                     # ⚠️ 逐条回显。上一次用户走完整个流程才发现 dump 是空的——
                     # 只要屏幕上不再跳数字，当场就知道没记上（CR-64）。
                     print("  #%d %s" % (len(recorder.data["interactions"]),
@@ -655,16 +678,19 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
                 pass
 
         script = install_script(recorder.session_id)
-        installed: dict[int, object] = {}          # id(page) -> cdp session
+        # ⚠️ 用 page 对象本身做键，**不要用 id(page)**：id 会在对象被回收后重用，
+        # 那样一个新页面可能被当成"已经装过了"而被跳过。
+        installed: dict[object, object] = {}        # page -> cdp session
         failures: list[str] = []
+        repairs = {"count": 0}
 
         async def ensure_installed(page, *, quiet: bool = False) -> bool:
-            if id(page) in installed:
+            if page in installed:
                 return True
             session, ok, detail = await install_on_page(
                 context, page, script, receive)
             if ok:
-                installed[id(page)] = session
+                installed[page] = session
                 if not quiet:
                     print("  [ok] 已挂上监听：%s" % (_safe_url(page.url) or "(新标签页)"))
                 return True
@@ -674,6 +700,40 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
                       % (_safe_url(page.url) or "未知页面", detail))
             return False
 
+        async def repair_if_lost(page) -> None:
+            """回读标记；掉了就地补装。**这是整套东西真正的安全网。**
+
+            监听器会因为很多种原因消失：跨进程导航、装到一半页面就跳走了、
+            SPA 把 window 上的东西清掉、Playwright 的 page 对象本身是坏的……
+            与其逐一去猜是哪一种（2026-09-01 试过，scratch 环境复现不出来），
+            不如**每隔几秒回读一次，掉了就补**。
+            这样无论因为什么丢的，最多几秒钟就自己回来了。
+            """
+            session = installed.get(page)
+            if session is None:
+                return
+            try:
+                probe = await asyncio.wait_for(
+                    session.send("Runtime.evaluate",
+                                 {"expression": "typeof window.%s" % REGISTRY_NAME,
+                                  "returnByValue": True}),
+                    timeout=8)
+            except Exception:
+                installed.pop(page, None)      # 会话废了，下一轮当新页面重装
+                return
+            if (probe.get("result") or {}).get("value") == "object":
+                return
+            try:
+                await asyncio.wait_for(
+                    session.send("Runtime.evaluate",
+                                 {"expression": script, "returnByValue": True}),
+                    timeout=8)
+                repairs["count"] += 1
+                print("  [~] 监听器掉了，已就地补装：%s"
+                      % (_safe_url(page.url) or "当前页面"))
+            except Exception:
+                installed.pop(page, None)
+
         for page in list(context.pages):
             await ensure_installed(page)
 
@@ -682,21 +742,30 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
 
         context.on("page", _on_new_page)
 
-        # 定期巡检：补装新页面，并核对 Playwright 有没有漏掉 CDP 能看见的页面。
+        # 每 2 秒巡检一次：① 补装新页面 ② **回读校验并补装掉了的监听器**
+        # ③ 核对 Playwright 有没有漏掉 CDP 能看见的页面。
+        # ②是关键：不管监听器因为什么原因消失（跨进程导航、装到一半页面跳走、
+        # 页面对象本身是坏的），最多 2 秒就自己回来，用户不需要知道为什么。
         stop_sweep = asyncio.Event()
+        missing_warned = {"at": -1}
 
         async def sweep() -> None:
             while not stop_sweep.is_set():
                 try:
-                    await asyncio.wait_for(stop_sweep.wait(), timeout=3.0)
+                    await asyncio.wait_for(stop_sweep.wait(), timeout=2.0)
                     return
                 except asyncio.TimeoutError:
                     pass
                 try:
                     for page in list(context.pages):
-                        await ensure_installed(page, quiet=True)
+                        if page in installed:
+                            await repair_if_lost(page)
+                        else:
+                            await ensure_installed(page, quiet=True)
                     targets = await cdp_page_targets(port)
-                    if len(targets) > len(installed):
+                    # 只在数字变化时说一次，别每 2 秒刷一屏
+                    if len(targets) > len(installed) != missing_warned["at"]:
+                        missing_warned["at"] = len(installed)
                         print("  [!] 浏览器有 %d 个页面，但只挂上了 %d 个监听。"
                               % (len(targets), len(installed)))
                         print("      没挂上的那个页面**不会被记录**。"

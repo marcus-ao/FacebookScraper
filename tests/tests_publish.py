@@ -1071,6 +1071,34 @@ check(page.screenshot_timeouts and page.screenshot_timeouts[0] is not None,
 check(inspect.iscoroutinefunction(probe_module.cdp_page_targets),
       "有一条直接问 CDP 要 page 目标的路 —— 用来核对 Playwright 有没有漏页")
 
+# 监听器"不知为何就没了"是这一轮最难复现的一类：scratch 环境怎么试都正常，
+# 用户真机上就是丢。与其继续猜是哪一种原因，不如让它**自己好起来**。
+sessN, (_sn, okN, _dn) = asyncio.run(_install())
+check(okN and "Page.frameNavigated" in sessN.handlers,
+      "装完注册 Page.frameNavigated：主帧一导航就**立刻**补注入一次，"
+      "不用等巡检那 2 秒")
+
+sess_re = FakeCDPSession()
+asyncio.run(probe_module._reinject(sess_re, "SCRIPT"))
+check(any(m == "Runtime.evaluate" and p.get("expression") == "SCRIPT"
+          for m, p in sess_re.sent),
+      "_reinject 真的把脚本再打一遍")
+sess_bad = FakeCDPSession(fail_on=("Runtime.evaluate",))
+asyncio.run(probe_module._reinject(sess_bad, "SCRIPT"))
+check(True, "_reinject 失败时不抛异常 —— 巡检那一层还会再兜一次")
+
+run_src = inspect.getsource(probe_module.run_probe)
+check("repair_if_lost" in run_src and "REGISTRY_NAME" in run_src,
+      "**巡检会回读监听器标记并就地补装**：不管因为什么丢的（跨进程导航、"
+      "装到一半页面跳走、page 对象本身是坏的），最多两秒就自己回来")
+check("installed[page]" in run_src and "installed[id(" not in run_src
+      and "installed.get(id(" not in run_src,
+      "已装表用 page 对象本身做键 —— id() 会在对象回收后重用，"
+      "那会让一个新页面被误当成'已经装过了'而跳过"
+      "（注释里提到 id(page) 是有意的，所以只查真正的取值写法）")
+check("timeout=2.0" in run_src,
+      "巡检间隔 2 秒：这是用户走流程时能忍的'掉了多久会自己回来'")
+
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 raise SystemExit(1 if fails else 0)
