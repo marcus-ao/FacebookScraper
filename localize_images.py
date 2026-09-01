@@ -282,6 +282,14 @@ class ModelMismatchError(RuntimeError):
     """网关返回的实际模型与付费请求不一致。"""
 
 
+class ModelUnavailableError(RuntimeError):
+    """模型目录未精确列出请求模型；必须在付费 edits 请求前停止。"""
+
+
+class ModelCatalogPreflightError(RuntimeError):
+    """模型目录请求本身失败；本客户端不再重试目录或进入付费调用。"""
+
+
 class FatalBatchError(RuntimeError):
     """鉴权、端点、模型或共享请求契约错误，继续整批只会重复花钱。"""
 
@@ -295,6 +303,7 @@ class EditResult:
     b64_json: str
     model: str
     usage: dict[str, Any]
+    model_verification: str = "response"
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -307,10 +316,10 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 
 def normalize_usage(usage: Any) -> dict[str, Any]:
-    """保留 GPT-Image-2 的四层 usage 契约，转成可 JSON 序列化的整数。"""
+    """保留 GPT-Image-2 usage，转成可 JSON 序列化的非负整数。"""
     raw = _as_dict(usage)
     out: dict[str, Any] = {}
-    for key in ("input_tokens", "output_tokens"):
+    for key in ("input_tokens", "output_tokens", "total_tokens"):
         value = raw.get(key, getattr(usage, key, None))
         if _valid_token_count(value):
             out[key] = value
@@ -331,7 +340,7 @@ def _valid_token_count(value: Any) -> bool:
 
 
 def usage_contract_errors(usage: Mapping[str, Any]) -> list[str]:
-    """``--check`` 所需的完整 usage 路径；返回空列表表示契约完整。"""
+    """最低 usage 契约；输出明细是 Images API 的可选字段。"""
     errors: list[str] = []
     for key in ("input_tokens", "output_tokens"):
         if not _valid_token_count(usage.get(key)):
@@ -343,12 +352,37 @@ def usage_contract_errors(usage: Mapping[str, Any]) -> list[str]:
         for key in ("image_tokens", "text_tokens"):
             if not _valid_token_count(input_details.get(key)):
                 errors.append(f"input_tokens_details.{key}")
-    output_details = usage.get("output_tokens_details")
-    if not isinstance(output_details, Mapping):
-        errors.append("output_tokens_details")
-    elif not _valid_token_count(output_details.get("image_tokens")):
-        errors.append("output_tokens_details.image_tokens")
     return errors
+
+
+def safe_error_summary(exc: Exception) -> str:
+    """API 异常只暴露类型、HTTP 状态和安全 request ID。"""
+    error_type = type(exc).__name__
+    try:
+        import openai
+    except ImportError:
+        return f"{error_type}: {exc}"
+    api_error = getattr(openai, "APIError", None)
+    if not isinstance(api_error, type) or not isinstance(exc, api_error):
+        return f"{error_type}: {exc}"
+
+    parts = [error_type]
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if not isinstance(status, int) and response is not None:
+        status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        parts.append(f"HTTP {status}")
+
+    request_id = getattr(exc, "request_id", None)
+    if not isinstance(request_id, str) and response is not None:
+        headers = getattr(response, "headers", {})
+        if isinstance(headers, Mapping):
+            request_id = headers.get("x-request-id") or headers.get("request-id")
+    if (isinstance(request_id, str)
+            and re.fullmatch(r"[A-Za-z0-9._:/-]{1,200}", request_id)):
+        parts.append(f"request_id={request_id}")
+    return " / ".join(parts)
 
 
 class ImageEditor:
@@ -358,8 +392,12 @@ class ImageEditor:
         self.s = settings
         self._client = client
         self._last_call = 0.0
+        self._catalog_attempted = False
+        self._catalog_verified = False
+        self._catalog_error: Exception | None = None
         self.last_usage: dict[str, Any] = {}
         self.last_model = ""
+        self.last_model_verification = ""
 
     @property
     def client(self):
@@ -374,6 +412,42 @@ class ImageEditor:
         if elapsed < self.s.gap:
             time.sleep(self.s.gap - elapsed)
         self._last_call = time.monotonic()
+
+    def verify_model_available(self) -> None:
+        """每个客户端实例只查一次目录，且必须先于付费图片调用。"""
+        if self._catalog_verified:
+            return
+        if self._catalog_attempted:
+            assert self._catalog_error is not None
+            raise self._catalog_error
+        self._catalog_attempted = True
+        try:
+            catalog = self.client.models.list()
+        except Exception as exc:
+            cached = ModelCatalogPreflightError(
+                "模型目录预检失败，已停止本批且本客户端不再重试："
+                + safe_error_summary(exc))
+            self._catalog_error = cached
+            raise cached from exc
+        raw = _as_dict(catalog)
+        entries = raw.get("data", getattr(catalog, "data", None))
+        if not isinstance(entries, (list, tuple)):
+            entries = []
+        model_ids = {
+            value
+            for entry in entries
+            for value in [
+                _as_dict(entry).get("id", getattr(entry, "id", None))
+            ]
+            if isinstance(value, str)
+        }
+        if self.s.model not in model_ids:
+            cached = ModelUnavailableError(
+                f"模型目录未返回精确模型 {self.s.model!r}；"
+                "已在图片 edits 付费请求前停止")
+            self._catalog_error = cached
+            raise cached
+        self._catalog_verified = True
 
     def request_kwargs(self, image, prompt: str, size: str, *,
                        quality: str | None = None) -> dict[str, Any]:
@@ -393,31 +467,46 @@ class ImageEditor:
 
     def edit(self, source_path: Path, prompt: str, size: str, *,
              quality: str | None = None) -> EditResult:
-        self._pace()
         self.last_usage = {}
         self.last_model = ""
+        self.last_model_verification = ""
+        self.verify_model_available()
+        self._pace()
         with Path(source_path).open("rb") as image_file:
             response = self.client.images.edit(
                 **self.request_kwargs(image_file, prompt, size, quality=quality))
 
-        self.last_model = str(getattr(response, "model", "") or "")
-        if self.last_model.strip().lower() != self.s.model.lower():
+        response_raw = _as_dict(response)
+        reported_model = response_raw.get("model", getattr(response, "model", None))
+        reported_model = str(reported_model).strip() if reported_model is not None else ""
+        if reported_model and reported_model.lower() != self.s.model.lower():
             raise ModelMismatchError(
-                f"请求模型 {self.s.model!r}，实际响应 model={self.last_model!r}；"
+                f"请求模型 {self.s.model!r}，实际响应 model={reported_model!r}；"
                 "已停止，避免把 free/其它模型产物混进正式批次")
-        self.last_usage = normalize_usage(getattr(response, "usage", None))
+        if reported_model:
+            self.last_model = reported_model
+            self.last_model_verification = "response"
+        else:
+            self.last_model = self.s.model
+            self.last_model_verification = "catalog"
+
+        usage_value = response_raw.get("usage", getattr(response, "usage", None))
+        self.last_usage = normalize_usage(usage_value)
         usage_errors = usage_contract_errors(self.last_usage)
         if usage_errors:
             raise ResponseContractError(
                 "图片 edits 响应 usage 契约不完整，缺少：" + "、".join(usage_errors))
 
-        data = getattr(response, "data", None) or []
+        data = response_raw.get("data", getattr(response, "data", None)) or []
         if not data:
             raise ResponseContractError("图片 edits 响应没有 data[0]")
-        payload = getattr(data[0], "b64_json", None)
+        first_raw = _as_dict(data[0])
+        payload = first_raw.get("b64_json", getattr(data[0], "b64_json", None))
         if not isinstance(payload, str) or not payload.strip():
             raise ResponseContractError("图片 edits 响应没有 data[0].b64_json")
-        return EditResult(payload.strip(), self.last_model, self.last_usage)
+        return EditResult(
+            payload.strip(), self.last_model, self.last_usage,
+            self.last_model_verification)
 
 
 _DATA_URL_PREFIX_RE = re.compile(r"^data:image/[A-Za-z0-9.+-]+;base64,")
@@ -486,7 +575,7 @@ def run_check(settings: Settings, editor: ImageEditor | None = None) -> int:
         except SystemExit:
             raise
         except Exception as exc:
-            print(f"[!] {type(exc).__name__}: {exc}")
+            print(f"[!] {safe_error_summary(exc)}")
             return 1
 
     if returned_size != (816, 816):
@@ -496,7 +585,8 @@ def run_check(settings: Settings, editor: ImageEditor | None = None) -> int:
     if errors:
         print("[!] usage 契约不完整，缺少：" + "、".join(errors))
         return 1
-    print(f"[ok] API 连通；实际 model={result.model}；图片 816x816 可解码。")
+    print(f"[ok] API 连通；model={result.model} "
+          f"(verification={result.model_verification})；图片 816x816 可解码。")
     print("usage：" + json.dumps(result.usage, ensure_ascii=False, sort_keys=True))
     return 0
 
@@ -888,6 +978,7 @@ def load_image_state(path: Path) -> ImageState:
             media_index = row.get("media_index")
             out_rel = _safe_rel_string(row.get("out_path"))
             output_sha = row.get("output_sha256")
+            model_verification = row.get("model_verification")
             if (not isinstance(post_id, str) or not post_id.strip()
                     or not isinstance(media_index, int) or isinstance(media_index, bool)
                     or media_index < 0
@@ -895,6 +986,8 @@ def load_image_state(path: Path) -> ImageState:
                     or not _valid_sha256(row.get("text_de_sha256"))
                     or not isinstance(row.get("prompt_version"), int)
                     or not isinstance(row.get("model"), str) or not row["model"].strip()
+                    or (model_verification is not None
+                        and model_verification not in {"response", "catalog"})
                     or not isinstance(row.get("size_requested"), str)
                     or not isinstance(row.get("size_returned"), str)
                     or not isinstance(row.get("quality"), str)
@@ -1106,6 +1199,7 @@ def readonly_archive(arc_base: Path) -> Archive:
 
 def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                force: bool = False,
+               media_index_filter: int | None = None,
                report: Any = None) -> tuple[list[ImageJob], ImageState, RunStats]:
     """把帖子展开成图片任务；没有当前译文、人工覆盖或已完成项均不入队。
 
@@ -1130,8 +1224,9 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
         trans = translated.get(post_id)
         if not translation.translation_is_current(row, trans):
             image_count = sum(
-                1 for media in (row.get("media") or [])
-                if isinstance(media, dict) and media.get("kind") == "image")
+                1 for index, media in enumerate(row.get("media") or [])
+                if (media_index_filter is None or index == media_index_filter)
+                and isinstance(media, dict) and media.get("kind") == "image")
             stats.skipped_no_translation += image_count
             continue
         text_de = trans["text_de"].strip()
@@ -1139,6 +1234,9 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
         if not isinstance(media_list, list):
             raise ValueError(f"帖子 {post_id} 的 media 不是数组")
         for media_index, media in enumerate(media_list):
+            if (media_index_filter is not None
+                    and media_index != media_index_filter):
+                continue
             if not isinstance(media, dict) or media.get("kind") != "image":
                 continue
             # 这一段的任何失败都只影响这一张图：缺文件、坏字节、超过 3:1
@@ -1268,7 +1366,9 @@ def _is_fatal_api_error(exc: Exception) -> bool:
     瞬时错误与单图 400 计为单张失败，由 ``failure_budget``
     的连续失败计数兜住（形状照抄 ``[delta].failure_budget``）。
     """
-    if isinstance(exc, (ModelMismatchError, ResponseContractError)):
+    if isinstance(exc, (
+            ModelCatalogPreflightError, ModelMismatchError,
+            ModelUnavailableError, ResponseContractError)):
         return True
     try:
         import openai
@@ -1279,6 +1379,7 @@ def _is_fatal_api_error(exc: Exception) -> bool:
             getattr(openai, "AuthenticationError", None),
             getattr(openai, "PermissionDeniedError", None),
             getattr(openai, "NotFoundError", None),
+            getattr(openai, "APIResponseValidationError", None),
         ) if isinstance(candidate, type))
     return bool(fatal) and isinstance(exc, fatal)
 
@@ -1294,9 +1395,11 @@ def _scale_mark(job: ImageJob, settings: Settings) -> str:
 
 def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                  rows: list[dict], limit: int | None, force: bool,
-                 dry_run: bool) -> RunStats:
+                 dry_run: bool, media_index_filter: int | None = None) -> RunStats:
     """处理一个账号；离线 dry-run 会完整建任务/渲染提示词但零 API、零写盘。"""
-    jobs, state, stats = build_jobs(settings, arc_base, rows, force=force)
+    jobs, state, stats = build_jobs(
+        settings, arc_base, rows, force=force,
+        media_index_filter=media_index_filter)
     if limit is not None:
         jobs = jobs[:limit]
     stats.queued = len(jobs)
@@ -1342,6 +1445,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 "text_de_sha256": job.text_de_sha256,
                 "prompt_version": IMAGE_PROMPT_VERSION,
                 "model": result.model,
+                "model_verification": result.model_verification,
                 "source_size": f"{job.source_size[0]}x{job.source_size[1]}",
                 "size_requested": size_string,
                 "size_returned": f"{validated.width}x{validated.height}",
@@ -1368,7 +1472,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             stats.failed += 1
             consecutive_failures += 1
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
-                  f"失败：{type(exc).__name__}: {exc}")
+                  f"失败：{safe_error_summary(exc)}")
             if _is_fatal_api_error(exc):
                 raise FatalBatchError(
                     "API 鉴权/端点/模型或共享请求错误，已停止剩余图片，"
@@ -1509,20 +1613,20 @@ def select_rows(settings: Settings, dirs: list[Path], *,
 
 
 def image_usage_cost(settings: Settings, usage: Mapping[str, Any]) -> float | None:
-    """按真实 token 明细和配置费率计算上游成本；不完整样本不编金额。"""
+    """按真实 token 和配置费率计算上游成本；不完整样本不编金额。"""
     if usage_contract_errors(usage):
         return None
     input_details = usage["input_tokens_details"]
-    output_details = usage["output_tokens_details"]
     return (
         int(input_details["text_tokens"]) * float(settings.cost_rates["text_input"])
         + int(input_details["image_tokens"]) * float(settings.cost_rates["image_input"])
-        + int(output_details["image_tokens"]) * float(settings.cost_rates["image_output"])
+        + int(usage["output_tokens"]) * float(settings.cost_rates["image_output"])
     ) / 1_000_000
 
 
 def run_estimate(settings: Settings, scoped_rows: Mapping[Path, list[dict]], *,
-                 force: bool = False, limit: int | None = None) -> int:
+                 force: bool = False, limit: int | None = None,
+                 media_index_filter: int | None = None) -> int:
     """离线统计待处理量，并只用当前提示词版本的真实 usage 中位数外推。"""
     remaining = limit
     total_pending = 0
@@ -1532,7 +1636,9 @@ def run_estimate(settings: Settings, scoped_rows: Mapping[Path, list[dict]], *,
     for arc_base, rows in scoped_rows.items():
         if remaining == 0:
             break
-        jobs, state, stats = build_jobs(settings, arc_base, rows, force=force)
+        jobs, state, stats = build_jobs(
+            settings, arc_base, rows, force=force,
+            media_index_filter=media_index_filter)
         if remaining is not None:
             jobs = jobs[:remaining]
         total_pending += len(jobs)
@@ -1641,6 +1747,9 @@ def main(argv=None) -> int:
                         help="只处理 archive/ 下一个账号目录，如 in_neakasa.tech")
     parser.add_argument("--limit", type=int, default=None,
                         help="所有账号合计最多处理 N 张图片")
+    parser.add_argument(
+        "--media-index", type=int, default=None,
+        help="只处理单个 --post-id 的指定媒体序号（从 0 开始；0 对应 01.jpg）")
     parser.add_argument("--force", action="store_true",
                         help="当前指纹有效的程序产物也重做；人工文件仍绝不覆盖")
     scope = parser.add_mutually_exclusive_group()
@@ -1655,6 +1764,13 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit < 0:
         parser.error("--limit 不能为负数")
+    if args.media_index is not None:
+        if args.media_index < 0:
+            parser.error("--media-index 不能为负数")
+        if not args.post_id or len(args.post_id) != 1:
+            parser.error("--media-index 必须与恰好一个 --post-id 同时使用")
+        if args.check or args.show_prompt:
+            parser.error("--media-index 不能与 --check/--show-prompt 同时使用")
     if (args.latest_posts is not None
             and not 1 <= args.latest_posts <= MAX_LATEST_POSTS):
         parser.error(f"--latest-posts 必须在 1..{MAX_LATEST_POSTS}（只用于 K9 验收）")
@@ -1682,6 +1798,19 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"[!] {exc}")
         return 1
+    if args.media_index is not None:
+        selected_exists = any(
+            isinstance(media_list := row.get("media"), list)
+            and args.media_index < len(media_list)
+            and isinstance(media_list[args.media_index], dict)
+            and media_list[args.media_index].get("kind") == "image"
+            for rows in scoped.values()
+            for row in rows
+            if isinstance(row, dict)
+        )
+        if not selected_exists:
+            print(f"[!] 指定帖子没有可处理的 media_index={args.media_index} 图片。")
+            return 1
 
     # 离线命令也要失败闭合成可读的一行，而不是抛 traceback（CR-52）：
     # --estimate 是"要不要花这笔钱"的最后一道人类判断，它崩掉的代价是
@@ -1690,7 +1819,9 @@ def main(argv=None) -> int:
         if args.show_prompt:
             return run_show_prompt(settings, scoped)
         if args.estimate:
-            return run_estimate(settings, scoped, force=args.force, limit=args.limit)
+            return run_estimate(
+                settings, scoped, force=args.force, limit=args.limit,
+                media_index_filter=args.media_index)
     except (ValueError, ArchivePathError, OSError) as exc:
         print(f"[!] {type(exc).__name__}: {exc}")
         return 1
@@ -1711,7 +1842,8 @@ def main(argv=None) -> int:
                     break
                 stats = run_localize(
                     settings, editor, arc_base, scoped.get(arc_base, []),
-                    remaining, args.force, args.dry_run)
+                    remaining, args.force, args.dry_run,
+                    media_index_filter=args.media_index)
                 for field in RunStats.__dataclass_fields__:
                     setattr(total, field, getattr(total, field) + getattr(stats, field))
                 if remaining is not None:

@@ -44,8 +44,8 @@ check(settings.api_key_env == "IMAGE_API_KEY", f"api_key_env={settings.api_key_e
 check(settings.model == "gpt-image-2", f"model={settings.model}")
 check(settings.quality == "high", "用户拍板的正式 quality=high 被显式读到")
 check(settings.output_format == "jpeg", "output_format=jpeg")
-check(settings.timeout > 0 and settings.max_retries >= 0 and settings.gap >= 0,
-      "超时、重试、调用间隔全部进入 Settings")
+check(settings.timeout == 720 and settings.max_retries >= 0 and settings.gap >= 0,
+      "图片超时固定为 720 秒，重试与调用间隔全部进入 Settings")
 check(settings.incremental_since == "2026-08-31T00:00:00Z",
       "默认增量起点进入 Settings，不会误跑 818 张历史")
 check(settings.dhash_max_distance == -1, "dHash 阈值仍为 -1，未擅自拍板")
@@ -103,18 +103,34 @@ check(missing_key_failed, "缺 Key 给出完整 .env 复制命令且无需创建
 
 
 print("\n[K1] Images edits 请求契约")
+class FakeModels:
+    def __init__(self, ids=("gpt-image-2",)):
+        self.ids = ids
+        self.calls = 0
+
+    def list(self):
+        self.calls += 1
+        return SimpleNamespace(data=[SimpleNamespace(id=value) for value in self.ids])
+
+
+def minimal_usage():
+    return {
+        "input_tokens": 12,
+        "input_tokens_details": {"image_tokens": 9, "text_tokens": 3},
+        "output_tokens": 7,
+    }
+
+
 class FakeImages:
     def __init__(self):
         self.kwargs = None
+        self.calls = 0
 
     def edit(self, **kwargs):
+        self.calls += 1
         self.kwargs = kwargs
-        usage = {
-            "input_tokens": 12,
-            "input_tokens_details": {"image_tokens": 9, "text_tokens": 3},
-            "output_tokens": 7,
-            "output_tokens_details": {"image_tokens": 7},
-        }
+        usage = {**minimal_usage(),
+                 "output_tokens_details": {"image_tokens": 7}}
         return SimpleNamespace(
             model="gpt-image-2",
             data=[SimpleNamespace(b64_json=png_b64())],
@@ -123,12 +139,14 @@ class FakeImages:
 
 
 fake_images = FakeImages()
-fake_client = SimpleNamespace(images=fake_images)
+fake_models = FakeModels()
+fake_client = SimpleNamespace(images=fake_images, models=fake_models)
 editor = L.ImageEditor(settings, client=fake_client)
 with tempfile.TemporaryDirectory() as tmp:
     source = Path(tmp) / "source.png"
     Image.new("RGB", (816, 816), "white").save(source)
     result = editor.edit(source, "PROMPT", "816x816")
+    editor.edit(source, "PROMPT", "816x816")
 
 request_keys = set(fake_images.kwargs)
 check(request_keys == {"model", "prompt", "image", "n", "size", "quality", "output_format"},
@@ -137,10 +155,76 @@ check("input_fidelity" not in request_keys, "绝不发送 input_fidelity")
 check(fake_images.kwargs["quality"] == "high", "正式请求显式发送 quality=high")
 check(fake_images.kwargs["size"] == "816x816", "请求显式发送合法 size")
 check(result.model == "gpt-image-2" and not L.usage_contract_errors(result.usage),
-      "响应实际模型与四层 usage 契约可验证")
+      "响应实际模型与最低 usage 契约可验证")
+check(result.model_verification == "response", "响应含 model 时记录 response 验证")
+check(fake_models.calls == 1 and fake_images.calls == 2,
+      "同一客户端多次 edits 只执行一次 /models 精确预检")
 check(bool(L.decode_image_payload(result.b64_json)), "响应裸 base64 可解码为合法图片")
 
-wrong_client = SimpleNamespace(images=SimpleNamespace(
+blocked_images = FakeImages()
+blocked_client = SimpleNamespace(
+    models=FakeModels(("gpt-image-2-free",)), images=blocked_images)
+with tempfile.TemporaryDirectory() as tmp:
+    source = Path(tmp) / "source.png"
+    Image.new("RGB", (816, 816), "white").save(source)
+    try:
+        L.ImageEditor(settings, client=blocked_client).edit(source, "PROMPT", "816x816")
+        catalog_failed = False
+    except L.ModelUnavailableError:
+        catalog_failed = True
+check(catalog_failed and blocked_images.calls == 0,
+      "目录无精确 gpt-image-2 时在付费 edits 前停止")
+
+class FailingModels:
+    def __init__(self):
+        self.calls = 0
+
+    def list(self):
+        self.calls += 1
+        raise RuntimeError("catalog unavailable")
+
+
+failing_models = FailingModels()
+preflight_images = FakeImages()
+preflight_editor = L.ImageEditor(
+    settings, client=SimpleNamespace(
+        models=failing_models, images=preflight_images))
+with tempfile.TemporaryDirectory() as tmp:
+    source = Path(tmp) / "source.png"
+    Image.new("RGB", (816, 816), "white").save(source)
+    preflight_failures = 0
+    for _ in range(2):
+        try:
+            preflight_editor.edit(source, "PROMPT", "816x816")
+        except L.ModelCatalogPreflightError:
+            preflight_failures += 1
+check(preflight_failures == 2 and failing_models.calls == 1
+      and preflight_images.calls == 0,
+      "目录请求失败也只尝试一次并缓存失败，永不进入付费 edits")
+
+no_model_client = SimpleNamespace(
+    models=FakeModels(),
+    images=SimpleNamespace(edit=lambda **kwargs: SimpleNamespace(
+        data=[SimpleNamespace(b64_json=png_b64())], usage=minimal_usage())))
+with tempfile.TemporaryDirectory() as tmp:
+    source = Path(tmp) / "source.png"
+    Image.new("RGB", (816, 816), "white").save(source)
+    catalog_result = L.ImageEditor(settings, client=no_model_client).edit(
+        source, "PROMPT", "816x816")
+check(catalog_result.model == "gpt-image-2"
+      and catalog_result.model_verification == "catalog",
+      "响应缺 model 时由请求模型 + 已通过目录预检完成验证")
+expected_cost = (
+    3 * settings.cost_rates["text_input"]
+    + 9 * settings.cost_rates["image_input"]
+    + 7 * settings.cost_rates["image_output"]
+) / 1_000_000
+check("output_tokens_details" not in catalog_result.usage
+      and not L.usage_contract_errors(catalog_result.usage)
+      and abs(L.image_usage_cost(settings, catalog_result.usage) - expected_cost) < 1e-12,
+      "output_tokens_details 可缺省，图片输出费直接使用顶层 output_tokens")
+
+wrong_client = SimpleNamespace(models=FakeModels(), images=SimpleNamespace(
     edit=lambda **kwargs: SimpleNamespace(
         model="gpt-image-2-free", data=[SimpleNamespace(b64_json=png_b64())], usage={})))
 with tempfile.TemporaryDirectory() as tmp:
@@ -153,7 +237,7 @@ with tempfile.TemporaryDirectory() as tmp:
         mismatch_failed = True
 check(mismatch_failed, "实际 model=gpt-image-2-free 会立即失败，不接受静默降级")
 
-incomplete_client = SimpleNamespace(images=SimpleNamespace(
+incomplete_client = SimpleNamespace(models=FakeModels(), images=SimpleNamespace(
     edit=lambda **kwargs: SimpleNamespace(
         model="gpt-image-2", data=[SimpleNamespace(b64_json=png_b64())], usage={})))
 with tempfile.TemporaryDirectory() as tmp:
@@ -456,7 +540,8 @@ with tempfile.TemporaryDirectory() as contract_tmp:
 
     missing_usage_images = MissingUsageImages()
     contract_editor = L.ImageEditor(
-        settings, client=SimpleNamespace(images=missing_usage_images))
+        settings, client=SimpleNamespace(
+            images=missing_usage_images, models=FakeModels()))
     try:
         L.run_localize(settings, contract_editor, arc, [row], None, False, False)
         contract_fatal = False
@@ -481,11 +566,20 @@ with tempfile.TemporaryDirectory() as pipeline_tmp:
           and source.read_bytes() == patterned_image(), "manifest 与原图一个字节都没改")
     saved = L.load_image_state(truth).latest[("p100", 0)]
     check(saved["prompt_version"] == L.IMAGE_PROMPT_VERSION
-          and saved["quality"] == "high" and saved["out_path"].endswith("media_de/01.jpg"),
-          "真相行记录版本、显式质量与相对产出路径")
+          and saved["quality"] == "high"
+          and saved["model_verification"] == "response"
+          and saved["out_path"].endswith("media_de/01.jpg"),
+          "真相行记录版本、模型验证方式、显式质量与相对产出路径")
     check(saved["size_requested"] == "816x816" and "usage" in saved
           and isinstance(saved["dhash_distance"], int),
           "尺寸、真实 usage 与 dHash 距离都进入真相源")
+    legacy_saved = dict(saved)
+    legacy_saved.pop("model_verification")
+    legacy_truth = arc / "legacy_images_de.jsonl"
+    legacy_truth.write_text(
+        json.dumps(legacy_saved, ensure_ascii=False) + "\n", encoding="utf-8")
+    check(("p100", 0) in L.load_image_state(legacy_truth).latest,
+          "旧 images_de.jsonl 缺 model_verification 时仍可读取")
 
     output_before = output.read_bytes()
     truth_before = truth.read_bytes()
@@ -532,6 +626,46 @@ with tempfile.TemporaryDirectory() as pipeline_tmp:
           and "US$" in estimate_text, "K7 只按当前版本真实 usage 中位数外推")
     check("dHash 真实距离分布" in estimate_text and "values=" in estimate_text,
           "第一批后打印完整 dHash 距离分布，不自动设置阈值")
+
+
+with tempfile.TemporaryDirectory() as exact_media_tmp:
+    root = Path(exact_media_tmp) / "archive"
+    arc, row, source = make_image_archive(root)
+    second_source = source.parent / "02.jpg"
+    second_source.write_bytes(patterned_image(orientation="horizontal"))
+    row["media"].append({
+        "kind": "image",
+        "local_path": second_source.relative_to(arc).as_posix(),
+        "width": 816,
+        "height": 816,
+    })
+    (arc / "manifest.jsonl").write_text(
+        json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    exact_first_editor = FakePipelineEditor()
+    exact_first = L.run_localize(
+        settings, exact_first_editor, arc, [row], 1, False, False,
+        media_index_filter=0)
+    exact_output = source.parent / "media_de" / "01.jpg"
+    forbidden_output = source.parent / "media_de" / "02.jpg"
+    exact_truth = arc / "images_de.jsonl"
+    exact_output_before = exact_output.read_bytes()
+    exact_truth_before = exact_truth.read_bytes()
+    exact_second_editor = FakePipelineEditor()
+    exact_second = L.run_localize(
+        settings, exact_second_editor, arc, [row], 1, False, False,
+        media_index_filter=0)
+    unrestricted_jobs, _, _ = L.build_jobs(settings, arc, [row])
+    check(exact_first.succeeded == 1 and len(exact_first_editor.calls) == 1,
+          "--media-index 0 首次只处理 01.jpg")
+    check(exact_second.skipped_current == 1 and len(exact_second_editor.calls) == 0,
+          "精确媒体命令复跑只检查 media 0，不会滑到下一张付费")
+    check(exact_output.read_bytes() == exact_output_before
+          and exact_truth.read_bytes() == exact_truth_before
+          and not forbidden_output.exists(),
+          "精确媒体复跑零图片写盘、零 JSONL 追加，02.jpg 保持不存在")
+    check([job.media_index for job in unrestricted_jobs] == [1],
+          "未加精确过滤时第二张确实仍待处理，回归夹具能复现原风险")
+
 
 with tempfile.TemporaryDirectory() as crash_tmp:
     root = Path(crash_tmp) / "archive"
@@ -606,11 +740,13 @@ with tempfile.TemporaryDirectory() as manual_tmp:
 with tempfile.TemporaryDirectory() as stale_tmp:
     root = Path(stale_tmp) / "archive"
     arc, row, source = make_image_archive(root, translated=False)
+    row["media"].append(dict(row["media"][0]))
     no_trans_editor = FakePipelineEditor()
     no_trans = L.run_localize(
-        settings, no_trans_editor, arc, [row], None, False, False)
+        settings, no_trans_editor, arc, [row], None, False, False,
+        media_index_filter=0)
     check(no_trans.skipped_no_translation == 1 and len(no_trans_editor.calls) == 0,
-          "没有当前版本 text_de 时硬跳过，不做降级或付费调用")
+          "精确媒体没有当前版本 text_de 时只统计目标图并硬跳过，不做付费调用")
 
 with tempfile.TemporaryDirectory() as jsonl_tmp:
     path = Path(jsonl_tmp) / "images_de.jsonl"
@@ -726,6 +862,31 @@ with tempfile.TemporaryDirectory() as scope_tmp:
                 latest_cli_failed = exc.code == 2
         check(latest_cli_failed, "CLI 同样在读取密钥/获取锁前拒绝 --latest-posts 4+")
 
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                L.main(["--dry-run", "--media-index", "0"])
+                media_scope_failed = False
+            except SystemExit as exc:
+                media_scope_failed = exc.code == 2
+        check(media_scope_failed,
+              "--media-index 必须绑定恰好一个 --post-id，不能形成跨帖歧义")
+
+        exact_output = io.StringIO()
+        with contextlib.redirect_stdout(exact_output):
+            exact_rc = L.main([
+                "--dry-run", "--post-id", "p100", "--media-index", "0"])
+        check(exact_rc == 0 and "p100[0]" in exact_output.getvalue()
+              and "待处理 1 张" in exact_output.getvalue(),
+              "完整 CLI 的精确媒体 dry-run 只选中 0（即 01.jpg）")
+
+        missing_media_output = io.StringIO()
+        with contextlib.redirect_stdout(missing_media_output):
+            missing_media_rc = L.main([
+                "--dry-run", "--post-id", "p100", "--media-index", "1"])
+        check(missing_media_rc == 1
+              and "media_index=1" in missing_media_output.getvalue(),
+              "指定帖子不存在该媒体序号时在联网/写盘前清晰失败")
+
         dry_output = io.StringIO()
         with contextlib.redirect_stdout(dry_output):
             dry_rc = L.main(["--dry-run", "--latest-posts", "1"])
@@ -803,6 +964,7 @@ check(still_strict, "剥空白没有放松校验：非 base64 字母表的字符
 
 # --- CR-53 致命集合收窄：单图 400 / 429 / 超时不再掀整批 ---------------------
 import openai as _openai  # noqa: E402
+import httpx as _httpx  # noqa: E402
 
 fake_response = SimpleNamespace(
     status_code=429, headers={}, request=None,
@@ -817,8 +979,32 @@ check(not L._is_fatal_api_error(ValueError("dHash 距离过大")),
       "单张硬闸失败不算致命")
 check(L._is_fatal_api_error(L.ModelMismatchError("free")),
       "模型被静默降级仍然立刻停批")
+check(L._is_fatal_api_error(L.ModelUnavailableError("missing")),
+      "目录预检缺精确模型仍然立刻停批")
+check(L._is_fatal_api_error(L.ModelCatalogPreflightError("timeout")),
+      "目录请求本身失败也立刻停批，不在下一张重复预检")
 check(L._is_fatal_api_error(L.ResponseContractError("no b64")),
       "响应契约破裂仍然立刻停批")
+auth_response = _httpx.Response(
+    401,
+    request=_httpx.Request("GET", "https://api.example.test/v1/models"),
+    headers={"x-request-id": "req_test_123"},
+)
+auth_error = _openai.AuthenticationError(
+    "SECRET_KEY_SHOULD_NOT_APPEAR", response=auth_response, body={})
+safe_summary = L.safe_error_summary(auth_error)
+check("SECRET_KEY_SHOULD_NOT_APPEAR" not in safe_summary
+      and "HTTP 401" in safe_summary and "request_id=req_test_123" in safe_summary,
+      "API 错误日志只保留类型、HTTP 状态和 request ID，不回显原始消息")
+validation_response = _httpx.Response(
+    200,
+    request=_httpx.Request("POST", "https://api.example.test/v1/images/edits"),
+    headers={"x-request-id": "req_validation_123"},
+)
+validation_error = _openai.APIResponseValidationError(
+    validation_response, body={}, message="invalid paid response")
+check(L._is_fatal_api_error(validation_error),
+      "SDK 对 2xx 付费响应解析失败时立刻停批，不继续丢后续付费产出")
 check(issubclass(_openai.RateLimitError, _openai.APIError)
       and issubclass(_openai.BadRequestError, _openai.APIError),
       "429 与 400 确实都是 openai.APIError 的子类 —— "
@@ -827,8 +1013,8 @@ check(_openai.AuthenticationError.__name__ in (
           "AuthenticationError",) and all(
           isinstance(getattr(_openai, name, None), type)
           for name in ("AuthenticationError", "PermissionDeniedError",
-                       "NotFoundError")),
-      "收窄后依赖的三个 SDK 异常类都存在，不会因改名而静默变成“永不致命”")
+                       "NotFoundError", "APIResponseValidationError")),
+      "收窄后依赖的四个 SDK 异常类都存在，不会因改名而静默变成“永不致命”")
 
 # --- CR-57 产出路径进入完成判据 --------------------------------------------
 with tempfile.TemporaryDirectory() as tmp:
@@ -900,5 +1086,5 @@ for token in ("S1 Pro", "S1Pro", "P1 Pro", "P1Pro", "Riko", "RIKO"):
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 if not fails:
-    print("\n真实 API 验收需用户确认费用后运行：scripts\\run_images.bat --check")
+    print("\n真实 low 自检与两张 high 技术验收已完成；重跑 --check 仍会产生费用。")
 sys.exit(1 if fails else 0)

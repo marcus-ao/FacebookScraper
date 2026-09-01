@@ -269,7 +269,7 @@ output_format = "jpeg"
 #      也就无法自动回答"有没有漏改"。K8 的审校清单因此是唯一的验收关口。
 # 要恢复预扫描的话，K3 的设计仍在 docs/IMAGE_PLAN.md 里（标为已取消，未删除）。
 
-timeout_seconds = 180              # 图像生成比文本慢得多，120 秒偏紧
+timeout_seconds = 720              # 供应商提示可能超过 5 分钟，预留 12 分钟
 max_retries = 2                    # SDK 自带指数退避
 request_gap_seconds = 2.0          # 相邻两次调用的最小间隔
 

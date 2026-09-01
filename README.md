@@ -94,7 +94,7 @@ FacebookScraper/
   requirements.txt
   translate.py             德语翻译 + 审校清单（F 组）
   localize_images.py       图内英文德语化（K 组，GPT-Image-2）。
-                           ⚠️ 已实现，在 `feat/image-de` 上，尚未进 main
+                           已实现并完成两张 high 真实技术验收；德语仍需人工审校
 
   scripts/                 双击入口，**纯 ASCII 壳**，逻辑在 tools/ 里
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
@@ -174,8 +174,8 @@ archive/<平台前缀>_<账号>/
     undated_<post_id>/              时间解析不出来的进这里，**不猜**
   translated.jsonl                  德语译文的真相源
   images_de.jsonl                   德语图的真相源（K 组）。
-                                    ⚠️ 代码已就绪，但 GPT-Image-2 还一次都没调过，
-                                    所以这个文件目前还不存在
+                                    已有两张 GPT-Image-2 high 真实产出与 usage；
+                                    其余图片不会在未单独授权时自动补跑
   review.md                         人工审校清单。K 组落地后它同时是
                                     **德语图唯一的验收关口**（预扫描已按用户决定取消，
                                     机器读不出"德语对不对"）
