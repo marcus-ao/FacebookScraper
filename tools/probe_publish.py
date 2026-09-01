@@ -448,7 +448,7 @@ class ProbeRecorder:
         self.screenshot_dir = self.state_dir / (
             "publish_probe_%s_screenshots" % self.timestamp)
         self._lock = asyncio.Lock()
-        self._counter = 0
+        # 没有 _counter：序号一律从 len(interactions) 推（CR-67，见 record()）。
         self.data = {
             "schema_version": 1,
             "session_id": self.session_id,
@@ -483,8 +483,15 @@ class ProbeRecorder:
         if payload is None:
             return False
         async with self._lock:
-            self._counter += 1
-            sequence = self._counter
+            # ⚠️ **序号必须由已落盘的条数推出来，不能用一个只增不减的计数器**（CR-67）。
+            # 旧写法先 `self._counter += 1` 再去截图/写盘；中途只要失败一次
+            # （截图抛异常、任务被取消、进程被 Ctrl+C），这个号就**永久空掉**。
+            # 而 `compose._validated_probe_dump` 要求 sequence 从 1 起严格连续，
+            # 于是一份内容完好的 dump 会被判为"交互序号不连续"而永远用不了。
+            # 2026-09-01 真踩了：那次 Business Suite 录到 24 条，
+            # 却因为死锁被中断，缺了 #19/#21/#24/#27 —— 数据在，但严格模式不认。
+            # 现在按 len(interactions)+1 取号：失败的那一次不占号，下一次接着用。
+            sequence = len(self.data["interactions"]) + 1
             event_type = str(payload.get("event_type") or "interaction")
             safe_event = "".join(ch for ch in event_type if ch.isalnum() or ch in "-_")[:24]
             screenshot = self.screenshot_dir / (

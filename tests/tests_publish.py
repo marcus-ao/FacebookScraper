@@ -1182,5 +1182,49 @@ with tempfile.TemporaryDirectory() as d:
           "宁可换掉那几个字符，也不能让整份 dump 丢掉")
 
 
+print("\n[9][CR-67] 一次失败的记录不许把 sequence 永久空掉")
+
+
+class ExplodingPage(FakePage):
+    """第 2 次截图直接炸，模拟中途失败/任务被取消。"""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def screenshot(self, *, path, full_page, mask, timeout=None):
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("boom")
+        Image.new("RGB", (8, 6), (1, 2, 3)).save(path, format="PNG")
+
+
+async def _seq_probe(page):
+    rec = ProbeRecorder(Path(tempfile.mkdtemp()), port=1, profile=Path("."))
+    for index in range(4):
+        await rec.record(page, {
+            "session_id": rec.session_id, "is_trusted": True,
+            "event_type": "click", "target": {"tag": "button"},
+            "client_timestamp": "2026-09-01T00:00:0%dZ" % index,
+        })
+    return rec
+
+
+rec_seq = asyncio.run(_seq_probe(ExplodingPage()))
+seqs = [i["sequence"] for i in rec_seq.data["interactions"]]
+check(seqs == list(range(1, len(seqs) + 1)),
+      "截图中途炸过一次，**序号仍然从 1 起严格连续**（实得 %s）—— "
+      "compose._validated_probe_dump 要求连续，空一个号整份 dump 就永远用不了" % seqs)
+check(len(seqs) == 4,
+      "截图失败不丢交互本身：4 次事件仍然记下 4 条（失败那条带 screenshot_error）")
+# 去掉注释行再查：说明文字里**引用**旧写法是有意的，不能当成还在用它。
+rec_code = "\n".join(
+    line for line in inspect.getsource(ProbeRecorder.record).splitlines()
+    if not line.lstrip().startswith("#"))
+check("self._counter +=" not in rec_code
+      and 'len(self.data["interactions"]) + 1' in rec_code,
+      "record() 不再用只增不减的计数器取号，改由已落盘条数推出")
+
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 raise SystemExit(1 if fails else 0)
