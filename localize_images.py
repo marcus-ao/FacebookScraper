@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
+from core import paid_requests                      # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
                         assert_physical_direct_path, post_dirname)
 import translate as translation                    # noqa: E402
@@ -388,7 +389,8 @@ def safe_error_summary(exc: Exception) -> str:
 class ImageEditor:
     """一次 GPT-Image-2 edits 调用；整体可替换，离线测试不接触 SDK/网络。"""
 
-    def __init__(self, settings: Settings, client=None) -> None:
+    def __init__(self, settings: Settings, client=None,
+                 paid_controller: paid_requests.RequestController | None = None) -> None:
         self.s = settings
         self._client = client
         self._last_call = 0.0
@@ -398,6 +400,29 @@ class ImageEditor:
         self.last_usage: dict[str, Any] = {}
         self.last_model = ""
         self.last_model_verification = ""
+        self._paid_controller = paid_controller
+        self._paid_job_key = ""
+        self._paid_source_ref = ""
+        self._paid_media_index: int | None = None
+        self._paid_receipt: paid_requests.PaidReceipt | None = None
+
+    def set_paid_context(self, job_key: str, source_ref: str,
+                         media_index: int) -> None:
+        self._paid_job_key = str(job_key)
+        self._paid_source_ref = str(source_ref)
+        self._paid_media_index = int(media_index)
+
+    @property
+    def paid_request_id(self) -> str:
+        return self._paid_receipt.request_id if self._paid_receipt else ""
+
+    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
+        if self._paid_controller is None or self._paid_receipt is None:
+            return
+        receipt = self._paid_receipt
+        self._paid_controller.finalize(
+            receipt, accepted=accepted, reason=reason)
+        self._paid_receipt = None
 
     @property
     def client(self):
@@ -467,6 +492,35 @@ class ImageEditor:
 
     def edit(self, source_path: Path, prompt: str, size: str, *,
              quality: str | None = None) -> EditResult:
+        if self._paid_controller is None:
+            return self._edit_once(source_path, prompt, size, quality=quality)
+        # 免费模型目录预检与本地参数/源文件检查先完成；started 紧贴真实 edits。
+        self.verify_model_available()
+        self.request_kwargs(None, prompt, size, quality=quality)
+        with Path(source_path).open("rb"):
+            pass
+        fallback = hashlib.sha256(
+            (self.s.model + "\0" + str(Path(source_path).resolve()) + "\0"
+             + prompt + "\0" + size).encode("utf-8")).hexdigest()
+        job_key = self._paid_job_key or ("image-check:" + fallback)
+        source_ref = self._paid_source_ref or "check:image"
+        self._paid_receipt = None
+        result, receipt = self._paid_controller.run(
+            stage="image", job_key=job_key, source_ref=source_ref,
+            media_index=self._paid_media_index, model=self.s.model,
+            request=lambda: self._edit_once(
+                source_path, prompt, size, quality=quality),
+            usage_getter=lambda: self.last_usage,
+            usage_errors=usage_contract_errors,
+            usage_cost=lambda usage: image_usage_cost(self.s, usage))
+        self._paid_receipt = receipt
+        self._paid_job_key = ""
+        self._paid_source_ref = ""
+        self._paid_media_index = None
+        return result
+
+    def _edit_once(self, source_path: Path, prompt: str, size: str, *,
+                   quality: str | None = None) -> EditResult:
         self.last_usage = {}
         self.last_model = ""
         self.last_model_verification = ""
@@ -477,6 +531,11 @@ class ImageEditor:
                 **self.request_kwargs(image_file, prompt, size, quality=quality))
 
         response_raw = _as_dict(response)
+        # 响应已经产生费用：先取 usage，再做模型/内容契约。即使后续拒绝产出，
+        # paid ledger 也能记下真实成本，而不是退化成未知金额。
+        usage_value = response_raw.get("usage", getattr(response, "usage", None))
+        self.last_usage = normalize_usage(usage_value)
+        usage_errors = usage_contract_errors(self.last_usage)
         reported_model = response_raw.get("model", getattr(response, "model", None))
         reported_model = str(reported_model).strip() if reported_model is not None else ""
         if reported_model and reported_model.lower() != self.s.model.lower():
@@ -490,9 +549,6 @@ class ImageEditor:
             self.last_model = self.s.model
             self.last_model_verification = "catalog"
 
-        usage_value = response_raw.get("usage", getattr(response, "usage", None))
-        self.last_usage = normalize_usage(usage_value)
-        usage_errors = usage_contract_errors(self.last_usage)
         if usage_errors:
             raise ResponseContractError(
                 "图片 edits 响应 usage 契约不完整，缺少：" + "、".join(usage_errors))
@@ -575,19 +631,27 @@ def run_check(settings: Settings, editor: ImageEditor | None = None) -> int:
         except SystemExit:
             raise
         except Exception as exc:
+            if hasattr(editor, "finalize_paid"):
+                editor.finalize_paid(False, "image connectivity check rejected output")
             print(f"[!] {safe_error_summary(exc)}")
             return 1
 
     if returned_size != (816, 816):
+        if hasattr(editor, "finalize_paid"):
+            editor.finalize_paid(False, "image connectivity check wrong dimensions")
         print(f"[!] 自检返回尺寸 {returned_size[0]}x{returned_size[1]}，预期 816x816")
         return 1
     errors = usage_contract_errors(result.usage)
     if errors:
+        if hasattr(editor, "finalize_paid"):
+            editor.finalize_paid(False, "image connectivity check usage invalid")
         print("[!] usage 契约不完整，缺少：" + "、".join(errors))
         return 1
     print(f"[ok] API 连通；model={result.model} "
           f"(verification={result.model_verification})；图片 816x816 可解码。")
     print("usage：" + json.dumps(result.usage, ensure_ascii=False, sort_keys=True))
+    if hasattr(editor, "finalize_paid"):
+        editor.finalize_paid(True, "image connectivity check verified")
     return 0
 
 
@@ -1368,7 +1432,8 @@ def _is_fatal_api_error(exc: Exception) -> bool:
     """
     if isinstance(exc, (
             ModelCatalogPreflightError, ModelMismatchError,
-            ModelUnavailableError, ResponseContractError)):
+            ModelUnavailableError, ResponseContractError,
+            paid_requests.PaidRequestBlocked)):
         return True
     try:
         import openai
@@ -1433,6 +1498,15 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 continue
             started = time.monotonic()
             assert editor is not None
+            paid_job_key = "image:" + hashlib.sha256(
+                (job.account + "\0" + job.post_id + "\0"
+                 + str(job.media_index) + "\0" + job.source_sha256 + "\0"
+                 + job.text_de_sha256 + "\0" + str(IMAGE_PROMPT_VERSION))
+                .encode("utf-8")).hexdigest()
+            if hasattr(editor, "set_paid_context"):
+                editor.set_paid_context(
+                    paid_job_key, "%s:%s" % (job.account, job.post_id),
+                    job.media_index)
             result = editor.edit(job.source_path, prompt, size_string)
             validated = validate_output(
                 result.b64_json, job.source_path, job.requested_size,
@@ -1460,7 +1534,12 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "usage": result.usage,
             }
+            paid_request_id = str(getattr(editor, "paid_request_id", "") or "")
+            if paid_request_id:
+                record["paid_request_id"] = paid_request_id
             _write_output(job, validated, record, state)
+            if hasattr(editor, "finalize_paid"):
+                editor.finalize_paid(True, "localized image artifact fsynced")
             stats.succeeded += 1
             consecutive_failures = 0
             drift_mark = ("  !形变告警" if job.aspect_drift_percent
@@ -1469,6 +1548,8 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                   f"dHash={validated.dhash_distance} / {elapsed:.1f}s"
                   f"{drift_mark}{scale_mark}")
         except Exception as exc:
+            if editor is not None and hasattr(editor, "finalize_paid"):
+                editor.finalize_paid(False, "localized image output rejected")
             stats.failed += 1
             consecutive_failures += 1
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
@@ -1778,7 +1859,11 @@ def main(argv=None) -> int:
         parser.error("--confirm-all-history-cost 只能与 --all-history 同时使用")
     settings = Settings()
     if args.check:
-        return run_check(settings)
+        return run_check(
+            settings,
+            ImageEditor(
+                settings,
+                paid_controller=paid_requests.RequestController(cfg().state_dir)))
 
     root = cfg().archive_dir
     dirs = translation.account_dirs(root, args.account)
@@ -1831,7 +1916,9 @@ def main(argv=None) -> int:
               "--confirm-all-history-cost。")
         return 2
 
-    editor = None if args.dry_run else ImageEditor(settings)
+    editor = (None if args.dry_run else ImageEditor(
+        settings,
+        paid_controller=paid_requests.RequestController(cfg().state_dir)))
     total = RunStats()
     remaining = args.limit
     lock = nullcontext() if args.dry_run else ImageRunLock(cfg().state_dir / "images.lock")

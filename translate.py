@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import statistics
@@ -29,15 +30,18 @@ import sys
 import time
 import unicodedata
 from collections import Counter
+from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
+from core import paid_requests                     # noqa: E402
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)              # noqa: E402
 
@@ -115,6 +119,14 @@ class Settings:
             raise SystemExit("[translate].style_examples 不能为负数")
         if self.reasoning_effort not in {"low", "high", "max"}:
             raise SystemExit("[translate].reasoning_effort 可选值：low, high, max")
+        if (set(self.cost_rates) != {"input", "cache_read", "output"}
+                or any(not isinstance(value, (int, float))
+                       or isinstance(value, bool)
+                       or not math.isfinite(float(value)) or float(value) < 0
+                       for value in self.cost_rates.values())):
+            raise SystemExit(
+                "[translate].cost_rates_usd_per_million 必须且只能包含"
+                " input/cache_read/output，且费率是非负有限数字")
 
     def _raw_key(self) -> tuple[str, str]:
         """返回 (密钥, 来源)。环境变量优先，其次项目内的 .env。
@@ -378,9 +390,38 @@ _MONEY_TOKEN_RE = re.compile(
     re.I)
 
 
-def _norm_money(tok: str) -> str:
+def normalize_money_token(tok: str) -> str:
     """比对用的归一化：只去掉空白。数值、分隔符、符号、符号位置都要求原样。"""
     return re.sub(r"\s+", "", tok)
+
+
+# 兼容模块内旧名字；流水线预检使用公开入口，避免与实际替换规则漂移。
+_norm_money = normalize_money_token
+
+
+def extract_money_tokens(text: str) -> tuple[str, ...]:
+    """公开给流水线分流使用的金额真相；与写盘硬闸共用同一正则。"""
+    return tuple(token.strip() for token in _MONEY_TOKEN_RE.findall(text or ""))
+
+
+def apply_money_mapping(text: str, mapping: Mapping[str, str]) -> str:
+    """按完整金额 token 应用业务价格表；空白差异沿用金额硬闸的归一化。
+
+    这一步只改最终发布副本，不回写 ``translated.jsonl``。配置里归一化后
+    重复且值不同的键会失败，避免字典顺序偷偷决定价格。
+    """
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in mapping.items():
+        key = _norm_money(str(raw_key))
+        value = str(raw_value).strip()
+        if not key or not value:
+            raise ValueError("价格映射的键和值都不能为空")
+        if key in normalized and normalized[key] != value:
+            raise ValueError("归一化后重复的金额映射值不一致：%r" % raw_key)
+        normalized[key] = value
+    return _MONEY_TOKEN_RE.sub(
+        lambda match: normalized.get(_norm_money(match.group(0)), match.group(0)),
+        text or "")
 
 
 def money_preserved(src_en: str, text_de: str) -> list[str]:
@@ -554,7 +595,7 @@ def _usage_values(usage) -> dict[str, int]:
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    if isinstance(exc, ModelMismatchError):
+    if isinstance(exc, (ModelMismatchError, paid_requests.PaidRequestBlocked)):
         return True
     try:
         import openai
@@ -566,7 +607,8 @@ def _is_fatal_api_error(exc: Exception) -> bool:
 class Translator:
     """一次翻译调用。抽成类是为了测试能整体替换掉它，不必打桩到 SDK 内部。"""
 
-    def __init__(self, settings: Settings, client=None) -> None:
+    def __init__(self, settings: Settings, client=None,
+                 paid_controller: paid_requests.RequestController | None = None) -> None:
         self.s = settings
         self._client = client
         self._last_call = 0.0
@@ -576,6 +618,26 @@ class Translator:
         # 而不是只凭请求参数猜测 thinking 已生效。
         self.last_blocks: list[str] = []
         self.usage_totals: Counter = Counter()
+        self._paid_controller = paid_controller
+        self._paid_job_key = ""
+        self._paid_source_ref = ""
+        self._paid_receipt: paid_requests.PaidReceipt | None = None
+
+    def set_paid_context(self, job_key: str, source_ref: str) -> None:
+        self._paid_job_key = str(job_key)
+        self._paid_source_ref = str(source_ref)
+
+    @property
+    def paid_request_id(self) -> str:
+        return self._paid_receipt.request_id if self._paid_receipt else ""
+
+    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
+        if self._paid_controller is None or self._paid_receipt is None:
+            return
+        receipt = self._paid_receipt
+        self._paid_controller.finalize(
+            receipt, accepted=accepted, reason=reason)
+        self._paid_receipt = None
 
     @property
     def client(self):
@@ -608,6 +670,28 @@ class Translator:
         return kw
 
     def translate(self, text: str, system: str) -> str:
+        if self._paid_controller is None:
+            return self._translate_once(text, system)
+        # 客户端/密钥的纯本地构造先做；只有即将进入真实请求时才写 started。
+        _ = self.client
+        fallback = hashlib.sha256(
+            (self.s.model + "\0" + system + "\0" + text).encode("utf-8")).hexdigest()
+        job_key = self._paid_job_key or ("translation-check:" + fallback)
+        source_ref = self._paid_source_ref or "check:translation"
+        self._paid_receipt = None
+        result, receipt = self._paid_controller.run(
+            stage="translation", job_key=job_key, source_ref=source_ref,
+            media_index=None, model=self.s.model,
+            request=lambda: self._translate_once(text, system),
+            usage_getter=lambda: self.last_usage,
+            usage_errors=translation_usage_errors,
+            usage_cost=lambda usage: usage_cost_upper_bound(self.s, dict(usage)))
+        self._paid_receipt = receipt
+        self._paid_job_key = ""
+        self._paid_source_ref = ""
+        return result
+
+    def _translate_once(self, text: str, system: str) -> str:
         self._pace()
         self.last_usage = {}
         self.last_model = ""
@@ -672,6 +756,25 @@ def usage_cost_upper_bound(s: Settings, usage: dict[str, int]) -> float | None:
     return (miss * float(rates["input"])
             + hit * float(rates["cache_read"])
             + output * float(rates["output"])) / 1_000_000
+
+
+def translation_usage_errors(usage: Mapping[str, Any]) -> list[str]:
+    """计费至少要有输出，以及总输入或完整 cache hit/miss。"""
+    errors: list[str] = []
+    output = usage.get("output_tokens")
+    if not isinstance(output, int) or isinstance(output, bool) or output < 0:
+        errors.append("output_tokens")
+    total_input = usage.get("input_tokens")
+    total_valid = (isinstance(total_input, int)
+                   and not isinstance(total_input, bool) and total_input >= 0)
+    hit = usage.get("prompt_cache_hit_tokens")
+    miss = usage.get("prompt_cache_miss_tokens")
+    split_valid = all(isinstance(value, int)
+                      and not isinstance(value, bool) and value >= 0
+                      for value in (hit, miss))
+    if not total_valid and not split_valid:
+        errors.append("input_tokens 或完整 prompt_cache_hit/miss_tokens")
+    return errors
 
 
 def print_usage_summary(s: Settings, usage: dict[str, int]) -> None:
@@ -939,6 +1042,13 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
             ok += 1
             continue
 
+        source_ref = "%s:%s" % (
+            str(r.get("platform") or "source").strip().lower(), pid)
+        paid_job_key = "translation:" + hashlib.sha256(
+            (arc_base.name + "\0" + pid + "\0" + source_text_sha256(text)
+             + "\0" + str(PROMPT_VERSION)).encode("utf-8")).hexdigest()
+        if hasattr(translator, "set_paid_context"):
+            translator.set_paid_context(paid_job_key, source_ref)
         try:
             de = translator.translate(text, system)
         except Exception as e:
@@ -955,6 +1065,9 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         hashtag_violations = hashtags_preserved(text, de)
         violations = money_violations + hashtag_violations
         if violations:
+            if hasattr(translator, "finalize_paid"):
+                translator.finalize_paid(
+                    False, "translation immutable-content gate rejected output")
             bad += 1
             money_violated += bool(money_violations)
             hashtag_violated += bool(hashtag_violations)
@@ -974,7 +1087,18 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         usage = getattr(translator, "last_usage", None)
         if usage:
             row["usage"] = usage
-        append_jsonl(out_path, row)
+        paid_request_id = str(getattr(translator, "paid_request_id", "") or "")
+        if paid_request_id:
+            row["paid_request_id"] = paid_request_id
+        try:
+            append_jsonl(out_path, row)
+        except BaseException:
+            if hasattr(translator, "finalize_paid"):
+                translator.finalize_paid(
+                    False, "translated artifact persistence failed")
+            raise
+        if hasattr(translator, "finalize_paid"):
+            translator.finalize_paid(True, "translated artifact fsynced")
         ok += 1
         flags = review_numeric_flags(text, de)
         if flags:
@@ -1315,7 +1439,8 @@ def markdown_text_block(text: str) -> list[str]:
 # 连通性自检
 # --------------------------------------------------------------------------
 
-def run_check(s: Settings) -> int:
+def run_check(s: Settings,
+              paid_controller: paid_requests.RequestController | None = None) -> int:
     """--check：用一次极小的请求验证 API 配置对不对。
 
     把"密钥错了"、"base_url 错了"、"模型名端点不认"等常见配置错误
@@ -1333,7 +1458,7 @@ def run_check(s: Settings) -> int:
     print()
 
     import openai
-    translator = Translator(s)
+    translator = Translator(s, paid_controller=paid_controller)
     try:
         text = translator.translate(
             "Compute 17 * 19 silently. If the result is 323, reply with exactly OK.",
@@ -1385,9 +1510,11 @@ def run_check(s: Settings) -> int:
         print("[!] 请求已发送 thinking=enabled / reasoning_effort="
               f"{s.reasoning_effort}，但响应没有可验证的 reasoning_content/token。")
         print("    为避免假绿灯，先核对 DeepSeek 端点和模型支持情况，再开始整批翻译。")
+        translator.finalize_paid(False, "connectivity check could not verify thinking")
         return 1
     print(f"thinking：已确认启用，effort={s.reasoning_effort}"
           + (f"，本次 {reasoning_tokens} reasoning tok" if reasoning_tokens else ""))
+    translator.finalize_paid(True, "connectivity check verified")
     return 0
 
 
@@ -1544,7 +1671,8 @@ def main(argv=None) -> int:
 
     s = Settings()
     if a.check:
-        return run_check(s)
+        return run_check(
+            s, paid_controller=paid_requests.RequestController(cfg().state_dir))
 
     root = cfg().archive_dir
     dirs = account_dirs(root, a.account)
@@ -1605,7 +1733,10 @@ def main(argv=None) -> int:
         print(f"\n共 {total} 篇进入审核清单。")
         return 0
 
-    translator = Translator(s)
+    translator = Translator(
+        s, paid_controller=(
+            None if a.dry_run
+            else paid_requests.RequestController(cfg().state_dir)))
     ok = bad = 0
     remaining = a.limit
     lock = nullcontext() if a.dry_run else TranslationRunLock(cfg().state_dir / "translate.lock")
