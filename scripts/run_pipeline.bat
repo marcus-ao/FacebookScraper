@@ -3,9 +3,14 @@ REM ---------------------------------------------------------------------
 REM Pipeline reconciler entry point (L group). Usage:
 REM     run_pipeline.bat                (double click; status, then pauses)
 REM     run_pipeline.bat status         (backlog per stage, zero network)
+REM     run_pipeline.bat activate --g8-verified
+REM     run_pipeline.bat run            (manual/assisted according to config)
+REM     run_pipeline.bat approve --item-id ID [--item-id ID]
 REM     run_pipeline.bat check-alive    (dead man switch; scheduled task)
 REM
-REM Both subcommands are READ ONLY: no network, no cost, no archive writes.
+REM status is read only. manual run only reconciles local truth sources.
+REM assisted run may call delta/translate/images but never opens publish Chrome;
+REM approve is the only pipeline command that may submit, after confirmation.
 REM check-alive's only side effect is the alert line core\notify.py appends
 REM to state\alerts.log (plus a desktop toast).
 REM
@@ -39,12 +44,19 @@ REM Labels instead of parenthesised blocks: %ERRORLEVEL% inside a block is
 REM expanded when the block is parsed, not when it runs, so the captured
 REM code would always be the one from before the command.
 if /i "%~1"=="check-alive" goto :alive
+if /i "%~1"=="run" goto :run
 if "%~1"=="" goto :interactive
 
 ".venv\Scripts\python.exe" pipeline.py %*
 exit /b %ERRORLEVEL%
 
 :alive
+".venv\Scripts\python.exe" pipeline.py %* >> "state\pipeline.log" 2>&1
+set "RC=%ERRORLEVEL%"
+echo [exit=%RC%]>> "state\pipeline.log"
+exit /b %RC%
+
+:run
 ".venv\Scripts\python.exe" pipeline.py %* >> "state\pipeline.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\pipeline.log"

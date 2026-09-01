@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from core import paid_requests as P
+from core.console import force_utf8
+import pipeline_assisted as A
+import translate as T
+
+force_utf8()
+fails = []
+
+
+def check(condition, message):
+    print(("  OK   " if condition else "  FAIL ") + message)
+    if not condition:
+        fails.append(message)
+
+
+def usage_errors(usage):
+    return T.translation_usage_errors(usage)
+
+
+def cost(usage):
+    return float(usage["output_tokens"]) / 100.0
+
+
+GOOD = {"input_tokens": 10, "output_tokens": 25}
+
+print("[1] started 在请求前 fsync，usage 与产出结转各自追加")
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    controller = P.RequestController(state, preflight=lambda: None)
+    seen_started = []
+
+    def request():
+        events = P.load_events(state)
+        seen_started.append(events[-1]["event"] == P.EVENT_STARTED)
+        return "result"
+
+    result, receipt = controller.run(
+        stage="translation", job_key="job-ok", source_ref="facebook:p1",
+        media_index=None, model="fixture", request=request,
+        usage_getter=lambda: GOOD, usage_errors=usage_errors, usage_cost=cost)
+    check(result == "result" and seen_started == [True],
+          "真实调用开始前已经能从磁盘读到 started")
+    pending = P.ledger_snapshot(state, now=datetime.now(timezone.utc))
+    check(pending.unknown and receipt.request_id in pending.request_ids,
+          "usage 已记录但产出尚未 fsync 时全局失败闭合")
+    controller.finalize(receipt, accepted=True, reason="fixture artifact fsynced")
+    events = P.load_events(state)
+    check([row["event"] for row in events] == [
+              P.EVENT_STARTED, P.EVENT_USAGE, P.EVENT_ACCEPTED],
+          "成功请求严格追加 started→usage_recorded→accepted")
+    snapshot = P.ledger_snapshot(state, now=datetime.now(timezone.utc))
+    check(not snapshot.unknown and abs(snapshot.daily_usd - .25) < 1e-9,
+          "独立账本按响应 usage 计费，不依赖业务产物是否可读")
+
+    # 产出硬闸失败仍保留费用；同一 job 禁止自动重花，别的 job 可继续。
+    _, rejected = controller.run(
+        stage="translation", job_key="job-rejected",
+        source_ref="instagram:p2", media_index=None, model="fixture",
+        request=lambda: "bad", usage_getter=lambda: GOOD,
+        usage_errors=usage_errors, usage_cost=cost)
+    controller.finalize(rejected, accepted=False, reason="immutable gate")
+    try:
+        controller.run(
+            stage="translation", job_key="job-rejected",
+            source_ref="instagram:p2", media_index=None, model="fixture",
+            request=lambda: "must-not-run", usage_getter=lambda: GOOD,
+            usage_errors=usage_errors, usage_cost=cost)
+    except P.PaidRequestBlocked:
+        same_job_blocked = True
+    else:
+        same_job_blocked = False
+    check(same_job_blocked,
+          "output_rejected 的已付费任务在人工处理前禁止自动重试")
+
+print("\n[2] crash/未知 usage 最多留下一个在途请求，并阻断全部后续付费")
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    controller = P.RequestController(state, preflight=lambda: None)
+    try:
+        controller.run(
+            stage="image", job_key="crash", source_ref="instagram:p3",
+            media_index=0, model="fixture",
+            request=lambda: (_ for _ in ()).throw(RuntimeError("fixture")),
+            usage_getter=lambda: {}, usage_errors=lambda _usage: ["missing"],
+            usage_cost=lambda _usage: None)
+    except P.PaidRequestBlocked:
+        uncertain = True
+    else:
+        uncertain = False
+    called = []
+    try:
+        controller.run(
+            stage="translation", job_key="later", source_ref="facebook:p4",
+            media_index=None, model="fixture",
+            request=lambda: called.append(True), usage_getter=lambda: GOOD,
+            usage_errors=usage_errors, usage_cost=cost)
+    except P.PaidRequestBlocked:
+        later_blocked = True
+    else:
+        later_blocked = False
+    check(uncertain and later_blocked and not called,
+          "无 usage 异常记 uncertain；另一个任务也在 API 前立即停手")
+
+print("\n[3] 新产物用 paid_request_id 去重，旧产物仍按 legacy usage 计")
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder)
+    state = root / "state"
+    account = root / "archive" / "fa_fixture"
+    account.mkdir(parents=True)
+    controller = P.RequestController(state, preflight=lambda: None)
+    _, receipt = controller.run(
+        stage="translation", job_key="dedupe", source_ref="facebook:p5",
+        media_index=None, model="fixture", request=lambda: "ok",
+        usage_getter=lambda: GOOD, usage_errors=usage_errors, usage_cost=cost)
+    controller.finalize(receipt, accepted=True)
+    now = datetime.now(timezone.utc)
+    (account / "translated.jsonl").write_text(
+        json.dumps({
+            "post_id": "p5", "translated_at": now.isoformat(),
+            "paid_request_id": receipt.request_id,
+            "usage": {"input_tokens": 999999999, "output_tokens": 999999999},
+        }) + "\n", encoding="utf-8")
+    snapshot = A.budget_snapshot([account], now=now, state_dir=state)
+    check(abs(snapshot.daily_usd - .25) < 1e-9 and not snapshot.unknown,
+          "新业务行不重复计费；金额只取独立 ledger 的一次 usage")
+
+print("\n[4] 付费锁跨文本/图片共用")
+with tempfile.TemporaryDirectory() as folder:
+    path = Path(folder) / P.LOCK_NAME
+    try:
+        with P.PaidRequestLock(path):
+            with P.PaidRequestLock(path):
+                pass
+    except P.PaidRequestBlocked:
+        locked = True
+    else:
+        locked = False
+    check(locked, "同一时刻最多一个文本或图片请求在途")
+
+if fails:
+    print("\n%d 项失败" % len(fails))
+    raise SystemExit(1)
+print("\n全部通过")

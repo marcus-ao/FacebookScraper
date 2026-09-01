@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.console import force_utf8  # noqa: E402
+from core import paid_requests  # noqa: E402
 
 force_utf8()
 
@@ -86,9 +87,8 @@ check(raises(P.PipelineConfigError,
              lambda: P.pipeline_settings({**GOOD_CONFIG, "monthly_budget_usd": -1}),
              "monthly_budget_usd"),
       "负预算被拒")
-check(P.PIPELINE_CONFIG_KEYS["dead_man_days"] is True
-      and not P.PIPELINE_CONFIG_KEYS["autonomy"],
-      "键表如实标注了哪些真的被消费了——status 靠它诚实地说'还没接上'")
+check(all(P.PIPELINE_CONFIG_KEYS.values()),
+      "autonomy、死人开关与日/月预算都已经有真实消费者")
 
 real = P.pipeline_settings()
 check(set(real) == set(P.PIPELINE_CONFIG_KEYS),
@@ -217,20 +217,33 @@ check(P.publishable_ids([{"post_id": "", "text": "x", "media": []},
 
 
 # ---------------------------------------------------------------------------
-print("\n[5] 「待发布」没有真相源时显示 —— 而不是 0")
+print("\n[5] 待发布只认 scheduled/source_refs，并受激活边界约束")
 
 with tempfile.TemporaryDirectory() as d:
     state = Path(d) / "state"
     state.mkdir()
-    check(P.published_ids(state) is None,
-          "published.jsonl 不存在时返回 None，**不是空集**："
-          "空集会让'待发布'等于'可发'，打出一个看起来像积压的假数字")
+    check(P.published_ids(state) == set(),
+          "published.jsonl 不存在表示尚无 scheduled 成功记录")
     (state / "published.jsonl").write_text(
-        '{"post_id":"a","platform":"facebook"}\n'
+        '{"post_id":"a","platform":"facebook","status":"scheduled"}\n'
         'not json at all\n'
-        '{"post_id":"b","platform":"instagram"}\n', encoding="utf-8")
-    check(P.published_ids(state) == {"a", "b"},
-          "存在之后逐行容错解析：一条坏行不该让整张表打不出来")
+        '{"post_id":"b","platform":"instagram","status":"prepared"}\n'
+        '{"post_id":"c","platform":"instagram","status":"scheduled"}\n', encoding="utf-8")
+    check(P.published_ids(state) == {"a", "c"},
+          "逐行容错且只把最终 scheduled 计为已发布；prepared 不扣积压")
+    published_refs = P.published_source_refs(state)
+    check(P.pending_publish_count(
+              {"publishable_refs": {"facebook:a", "facebook:other"}},
+              published_refs) == 1
+          and P.pending_publish_count(
+              {"publishable_refs": {"instagram:b", "instagram:c"}},
+              published_refs) == 1,
+          "积压按每个账号的 source_refs 求交集；其它账号记录不会从本账号扣除")
+    check(P.pending_publish_count(
+              {"publishable_refs": {"facebook:history", "facebook:new"},
+               "pipeline_publishable_refs": {"facebook:new"}},
+              set()) == 1,
+          "激活前历史库存不计入待发布，只统计边界后的 source_refs")
 
 with tempfile.TemporaryDirectory() as d:
     state = Path(d) / "state"
@@ -239,12 +252,11 @@ with tempfile.TemporaryDirectory() as d:
     with contextlib.redirect_stdout(out):
         P.run_status([], NOW, state)
     text = out.getvalue()
-    check("—" in text and "G6" in text,
-          "status 在'待发布'那一列打 —— 并说清是 G6 还没落地")
-    check("这里不打 0" in text, "为什么不打 0 这句话直接印在输出里，不只在代码注释里")
+    check("—" in text and "尚未激活" in text,
+          "G8/activate 前待发布列打 ——，不会把历史存量冒充流水线积压")
     check("发布口径" in text, "可发的口径写在脚注里，读表的人不用去翻文档")
-    check("还没接上的" in text and "autonomy" in text,
-          "诚实地说出 [pipeline] 里哪几个键还没有代码在消费")
+    check("autonomy 与日/月预算均已" in text,
+          "status 如实说明 autonomy 与预算已经接入 pipeline run")
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +287,45 @@ check(P._parse_iso_z("2026-09-01T00:00:00Z") is not None
       and P._parse_iso_z("2026-09-01") is None
       and P._parse_iso_z(None) is None,
       "时间解析只接受带时区的 ISO，其余一律当作没有")
+
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d)
+    state = root / "state"
+    acct = root / "in_x"
+    acct.mkdir()
+    controller = paid_requests.RequestController(state, preflight=lambda: None)
+    _result, receipt = controller.run(
+        stage="translation", job_key="status-rejected",
+        source_ref="facebook:p-ledger", media_index=None, model="fixture",
+        request=lambda: "translated", usage_getter=lambda: {"tokens": 1},
+        usage_errors=lambda _usage: [], usage_cost=lambda _usage: 2.5)
+    controller.finalize(receipt, accepted=False, reason="hard gate")
+    (acct / "translated.jsonl").write_text(json.dumps({
+        "post_id": "p-ledger", "translated_at": "2026-09-01T12:00:00Z",
+        "paid_request_id": receipt.request_id,
+        "usage": {"input_tokens": 999999, "output_tokens": 999999},
+    }) + "\n", encoding="utf-8")
+    text_cost, image_cost, problems = P.month_spend(
+        [acct], "2026-09", lambda _m: None, state_dir=state)
+    check(text_cost == 2.5 and image_cost == 0 and not problems,
+          "status 从独立 ledger 计入 output_rejected 真实费用，并按 paid_request_id 去重产物")
+
+with tempfile.TemporaryDirectory() as d:
+    state = Path(d) / "state"
+    controller = paid_requests.RequestController(state, preflight=lambda: None)
+    try:
+        controller.run(
+            stage="image", job_key="status-uncertain",
+            source_ref="instagram:p", media_index=1, model="fixture",
+            request=lambda: (_ for _ in ()).throw(RuntimeError("lost")),
+            usage_getter=lambda: {}, usage_errors=lambda _usage: ["missing"],
+            usage_cost=lambda _usage: None)
+    except paid_requests.PaidRequestBlocked:
+        pass
+    _text, _image, problems = P.month_spend(
+        [], "2026-09", lambda _m: None, state_dir=state)
+    check(any("未闭合" in problem for problem in problems),
+          "status 明示 paid ledger 的 uncertain/unknown，不再假称费用完整")
 
 
 # ---------------------------------------------------------------------------

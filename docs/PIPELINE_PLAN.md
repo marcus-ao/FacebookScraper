@@ -6,12 +6,22 @@
 >
 > **开发分支：`docs/pipeline-plan` → 实施时 `feat/pipeline`。**
 > 与 `feat/image-de`、`feat/business-suite-publish` 的边界见第 13 节。
+>
+> **实现状态（2026-09-01）**：本轮范围内的 L1/G9 assisted 已落地：
+> 原子激活边界、跨平台候选合并/待确认、真实 usage 日/月预算、追加式
+> `needs_human.jsonl` + 派生 HTML、批量 approve 与德国双槽排期均已有离线覆盖。
+> 付费调用另有 `state/paid_requests.jsonl` + 全局 paid lock：请求前先写 started、响应到达
+> 立即写真实 usage，业务硬闸拒绝产出也照常计费；未知 usage 会阻断后续全部付费。
+> 配对窗口未满 30 小时的候选暂不付费；已 scheduled 后迟到的 exact 来源进入耐久
+> `late_scheduled_overlap`，必须由 `pipeline approve` 人工确认覆盖后才结转。
+> 当前仍是 `autonomy = "manual"`、尚未 activate、尚未安装计划任务；
+> `supervised` / `autonomous` 明确失败闭合。G8 通过后才能激活并切到 assisted。
 
 ---
 
 ## 0. 一句话结论
 
-这个项目现在有 **四个各自完好、互不相连的阶段**，而且**没有任何东西在自动跑**——
+项目的四个阶段现在已由对账器连接，但**尚未激活，也没有任何东西在自动跑**——
 计划任务至今没有安装（E3 故意留给用户按）。
 
 把它们连起来**不需要新建队列**，需要一个**对账器**（第 2 节）。
@@ -32,8 +42,8 @@
 | 回填 | 人工滚一次，**已完成** | — | `_capture_*.json` | — |
 | **增量** `routes/delta.py` | ⛔ **计划任务未装，纯手工** | ✅ `should_append()` | `manifest.jsonl` / `post.json` | ✅ toast + `alerts.log` + `delta.log` + `delta_state.json` |
 | **翻译** `translate.py` | 手工命令 | ✅ | `post_id + 正文指纹 + PROMPT_VERSION` | ⚠️ **只在终端**，跑完就没了 |
-| **调图** K 组 | 未实现 | 设计有 | `post_id + media_index + 原图指纹 + 译文指纹 + 版本` | 未定 |
-| **发布** G 组 | 未实现 | 设计有 | `post_id + 平台` | 未定 |
+| **调图** K 组 | 手工；assisted 激活后由 `pipeline run` 推进 | ✅ | `post_id + media_index + 原图指纹 + 译文指纹 + 版本` | usage journal + needs_human |
+| **发布** G 组 | 单帖默认提交前；`--submit` 显式启用 | ✅ 五态 journal | `source_refs + 最终正文/图片指纹 + 目标时刻` | 截图 + 成功信号 + 日历回读 |
 | 完整性 `core/integrity.py` | 内嵌在增量里 | ✅ 只报新问题 | `delta_state.alerts` | ✅ 同增量 |
 
 **这里有一件运气很好的事，值得点破**：
@@ -112,7 +122,7 @@
 |---|---|---|
 | `pipeline.py` | 对账器 + 唯一编排入口 | 现在四条命令要人记得 |
 | `state/needs_human.jsonl` + `needs_human.html` | **把"人"变成一个阶段，而不是一次中断** | 见第 5 节 |
-| ~~`state/pipeline_state.json`~~ | 心跳 + 积压 + 成本 + **死人开关** | 见第 7 节。⚠️ **2026-09-01 实现时没有建这个文件**：`delta_state.json` 已经记了运行标记，再记一份就是第二个真相源。理由见 10.2，L1a 时再议 |
+| `state/pipeline_state.json` | 只记激活边界与最近一次成功 run，不缓存阶段队列 | G8 通过后由 `activate` 原子创建；阶段完成与否仍从各自真相源重算 |
 
 **沿用已被验证的做法，不发明新的**：
 `needs_human.html` 走 `tools/layout.py::index` 那条路子（**双击就能看**，
@@ -405,16 +415,18 @@ CR-40 立过规矩「不许有改了不生效的死旋钮」，
 
 ### L1 · 对账器主干（K 或 G 任一落地后即可接）
 
-- [ ] **L1a `pipeline run`** —— 按顺序推进；每阶段调各自已有的入口，不重写逻辑
-- [ ] **L1b 预算闸** —— 第 8 节
-- [ ] **L1c `needs_human` 队列 + 单页 HTML** —— 第 3 节
-- [ ] **L1d `autonomy = assisted`** —— 抓取/翻译/调图自动，发布停在待确认
+- [x] **L1a `pipeline run`** —— 每次从归档和阶段真相源对账；不建立发布任务队列
+- [x] **L1b 预算闸** —— 每个付费请求前后按真实 usage 重算，最多只容纳在途单请求超额
+- [x] **L1b-2 独立付费请求账本** —— started→usage_recorded→accepted/output_rejected
+  逐事件 fsync；翻译与图片共用全局 paid lock，status 与预算按 paid_request_id 去重
+- [x] **L1c `needs_human` 追加式记录 + 派生单页 HTML** —— item_id 幂等，重复 run 不重复未决项
+- [x] **L1d `autonomy = assisted` 代码路径** —— 自动增量/翻译/调图，生成待确认项且不碰发布浏览器；配置仍保持 manual，等 G8 后切换
 
 ### L2 · 分流（G8 通过之后）
 
-- [ ] **L2a 七条分流规则** —— 第 6 节
-- [ ] **L2b `trusted_owners` 白名单** —— 第 4.2 ②
-- [ ] **L2c 排期规则** —— 第 4.2 ③
+- [ ] **L2a 七条分流规则** —— 本轮已完成用户指定的跨平台合并/相似待确认、金额/作者/素材/译文硬闸；其余 legacy 规则留后续
+- [x] **L2b `trusted_owners` 白名单** —— 未知合作作者在任何付费调用前进入 needs_human
+- [x] **L2c 排期规则** —— Europe/Berlin 每天 10:00 / 17:00，读取远端占用后取最近空槽
 - [ ] **L2d `autonomy = supervised`**
 
 ### L3 · 收敛
@@ -459,15 +471,14 @@ CR-40 立过规矩「不许有改了不生效的死旋钮」，
 - ⚠️ **`RunOnlyIfNetworkAvailable` 设成 `false`**（另外两个任务是 `true`）。
   这个检查一个字节都不联网，**"家里断网了"绝不能成为警报不响的理由**。
 
-#### 三处实现细节，都写成了断言
+#### 第四轮现状（下面替代当时的三处实现假设）
 
-- **「待发布」列打 `—` 而不是 0。** `state/published.jsonl` 由 G6 写、G6 被 G1 卡着，
-  今天这个文件不存在。返回空集会让"待发布"等于"可发"，
-  打出一个**看起来像积压、实际是"这阶段还没接上"**的数字。与 CR-19 同源。
-- **`[pipeline]` 做了双向配置审计。** CR-40 立的规矩：不许有改了不生效的死旋钮。
-  实现前实测 `grep -rn '"pipeline"' --include=*.py` 为空——那四个键当时**一个都没被读**。
-  现在 `dead_man_days` 真的被消费了，其余三个 `status` 会**显式打印"还没接上"**，
-  而不是假装一切正常。
+- **「待发布」在激活前打 `—`。** `pipeline activate` 原子记录 G8 通过后的边界，
+  激活后才只统计边界之后的新帖；每个账号只减去与其 `source_refs` 相交的最终
+  `scheduled`，不会再把历史帖、其它账号或 prepared/failed 状态扣掉。
+- **`[pipeline]` 已全部被消费。** `manual` 只对账，`assisted` 执行 delta/按 ID
+  翻译与调图后停在待确认；日/月预算在每次真实付费请求前后按 usage 重算。
+  `supervised` / `autonomous` 明确失败闭合。
 - **首次安装后必然响的那一次，消息里写明是自检。** 装完到第一次增量成功之间，
   `check-alive` 一定报"从未成功运行"。不解释清楚，用户第一次见到就会把通知关掉——
   **那正是最坏的结果**。

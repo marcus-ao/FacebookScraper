@@ -71,13 +71,13 @@ print("\n[2] 参数不能搞反（搞反了要几天后才看出来）")
 daily, catchup = trees[DAILY_TASK], trees[CATCHUP_TASK]
 daily_args = text(daily, "Actions", "Exec", "Arguments")
 catchup_args = text(catchup, "Actions", "Exec", "Arguments")
-check(daily_args == "--platform all",
-      "每日任务显式传 --platform all（语义仍是两个平台），避免无参数调用 bat 后 pause")
+check(daily_args == "run",
+      "每日任务调用 pipeline run，由 autonomy 决定 manual/assisted 行为")
 check("--if-stale" not in daily_args,
       "每日任务**不带 --if-stale** —— stale 阈值 26 小时 > 24，"
       "带上会变成跑一天、跳一天")
-check(catchup_args == "--if-stale",
-      "补跑任务**必须带 --if-stale** —— 否则每次解锁都要真抓一遍")
+check(catchup_args == "run --if-stale",
+      "补跑任务调用 pipeline run --if-stale —— 否则每次解锁都要真抓一遍")
 
 
 print("\n[3] 三个触发器（每天 / 登录时 / 解锁时）")
@@ -127,10 +127,10 @@ bat = ROOT / "scripts" / "run_delta.bat"
 check(bat.exists(), "scripts\\run_delta.bat 存在（E1）")
 check((ROOT / "scripts" / "run_pipeline.bat").exists(),
       "scripts\\run_pipeline.bat 存在（L0b/L0c）")
-# 抓取的两个走 run_delta.bat，死人开关走 run_pipeline.bat。
+# 三个稳定任务名都经 run_pipeline.bat；前两个动作分别是 run / run --if-stale。
 # ⚠️ 这不是随手分的：死人开关要抓的失效正是「增量任务不跑了」，
 #    与增量共用入口就会跟着一起哑掉。见 tools/schedule.py::alive_xml。
-expected_bat = {DAILY_TASK: "run_delta.bat", CATCHUP_TASK: "run_delta.bat",
+expected_bat = {DAILY_TASK: "run_pipeline.bat", CATCHUP_TASK: "run_pipeline.bat",
                 ALIVE_TASK: "run_pipeline.bat"}
 for name, tree in trees.items():
     cmd = text(tree, "Actions", "Exec", "Command")

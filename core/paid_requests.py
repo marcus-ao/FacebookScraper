@@ -1,0 +1,423 @@
+r"""付费 API 的追加式请求/usage 账本与全局互斥。
+
+业务产物日志不能同时充当费用真相源：响应已经计费、但随后的金额/图片硬闸
+拒绝产出时，费用仍然真实发生。本模块先耐久写 ``started``，响应一到立即写
+``usage_recorded``，最后才由调用方写 ``accepted`` 或 ``output_rejected``。
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import sys
+import uuid
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
+from datetime import datetime, time, timezone
+from pathlib import Path
+from typing import Any, Callable, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+LEDGER_NAME = "paid_requests.jsonl"
+LOCK_NAME = "paid_requests.lock"
+
+EVENT_STARTED = "started"
+EVENT_USAGE = "usage_recorded"
+EVENT_ACCEPTED = "accepted"
+EVENT_REJECTED = "output_rejected"
+EVENT_UNCERTAIN = "uncertain"
+EVENT_USAGE_UNKNOWN = "usage_unknown"
+
+_EVENTS = {
+    EVENT_STARTED, EVENT_USAGE, EVENT_ACCEPTED, EVENT_REJECTED,
+    EVENT_UNCERTAIN, EVENT_USAGE_UNKNOWN,
+}
+_GLOBAL_BLOCKING = {
+    EVENT_STARTED, EVENT_USAGE, EVENT_UNCERTAIN, EVENT_USAGE_UNKNOWN,
+}
+
+
+class PaidRequestBlocked(RuntimeError):
+    """账本/预算不能证明下一次请求安全，失败闭合。"""
+
+
+class PaidRequestLock(AbstractContextManager):
+    """所有文本与图片付费入口共用的一把跨进程锁。"""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._file = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a+b")
+        if self._file.seek(0, os.SEEK_END) == 0:
+            self._file.write(b"0")
+            self._file.flush()
+        self._file.seek(0)
+        try:
+            if sys.platform.startswith("win"):
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(
+                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as exc:
+            self._file.close()
+            self._file = None
+            raise PaidRequestBlocked(
+                "另一个翻译/调图付费请求正在进行；本次未发请求") from exc
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self._file is not None:
+            try:
+                self._file.seek(0)
+                if sys.platform.startswith("win"):
+                    import msvcrt
+                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._file.close()
+                self._file = None
+        return False
+
+
+@dataclass(frozen=True)
+class PaidReceipt:
+    request_id: str
+    job_key: str
+    stage: str
+
+
+@dataclass(frozen=True)
+class LedgerSnapshot:
+    daily_usd: float
+    monthly_usd: float
+    request_ids: frozenset[str]
+    unknown: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LedgerMonthSnapshot:
+    translation_usd: float
+    image_usd: float
+    request_ids: frozenset[str]
+    unknown: tuple[str, ...] = ()
+
+
+def ledger_path(state_dir: Path) -> Path:
+    return Path(state_dir) / LEDGER_NAME
+
+
+def _now_text() -> str:
+    return datetime.now(timezone.utc).isoformat(
+        timespec="microseconds").replace("+00:00", "Z")
+
+
+def _append(state_dir: Path, event: Mapping[str, Any]) -> None:
+    path = ledger_path(state_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(
+            dict(event), ensure_ascii=False, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def load_events(state_dir: Path) -> list[dict]:
+    path = ledger_path(state_dir)
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise PaidRequestBlocked("付费请求账本读不了：%s" % exc) from exc
+    rows: list[dict] = []
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise PaidRequestBlocked(
+                "%s 第 %d 行损坏；不能在漏算费用时继续" % (path, number)) from exc
+        if (not isinstance(row, dict)
+                or row.get("event") not in _EVENTS
+                or not isinstance(row.get("request_id"), str)
+                or not row["request_id"].strip()
+                or not isinstance(row.get("job_key"), str)
+                or not row["job_key"].strip()):
+            raise PaidRequestBlocked(
+                "%s 第 %d 行不满足付费账本契约" % (path, number))
+        rows.append(row)
+    return rows
+
+
+def _latest_by_request(rows: list[dict]) -> dict[str, dict]:
+    latest: dict[str, dict] = {}
+    for row in rows:
+        latest[str(row["request_id"])] = row
+    return latest
+
+
+def _assert_startable(state_dir: Path, job_key: str) -> None:
+    rows = load_events(state_dir)
+    latest = _latest_by_request(rows)
+    blocking = [row for row in latest.values()
+                if row.get("event") in _GLOBAL_BLOCKING]
+    if blocking:
+        row = blocking[0]
+        raise PaidRequestBlocked(
+            "付费账本存在未闭合请求 %s（%s）；为把未知超额限制在一次请求，"
+            "人工核账前已停止全部后续付费"
+            % (row.get("request_id"), row.get("event")))
+    rejected = [row for row in latest.values()
+                if row.get("job_key") == job_key
+                and row.get("event") == EVENT_REJECTED]
+    if rejected:
+        raise PaidRequestBlocked(
+            "同一付费任务已有 output_rejected 记录（request_id=%s）；"
+            "人工处理前禁止自动重试" % rejected[-1].get("request_id"))
+
+
+def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "event": event,
+        "request_id": receipt.request_id,
+        "job_key": receipt.job_key,
+        "stage": receipt.stage,
+        "recorded_at": _now_text(),
+    }
+
+
+def default_budget_preflight() -> None:
+    """在 paid lock 内按全账号真相源重算日/月预算。"""
+    from core.config import cfg
+    import translate
+    from pipeline import pipeline_settings
+    from pipeline_assisted import assert_budget
+
+    c = cfg()
+    assert_budget(
+        translate.account_dirs(c.archive_dir), pipeline_settings(),
+        now=datetime.now(timezone.utc), state_dir=c.state_dir)
+
+
+class RequestController:
+    """把一次真实 API 调用包进 started→usage 的耐久临界区。"""
+
+    def __init__(self, state_dir: Path, *,
+                 preflight: Callable[[], None] | None = None) -> None:
+        self.state_dir = Path(state_dir)
+        self.preflight = preflight or default_budget_preflight
+
+    def run(self, *, stage: str, job_key: str, source_ref: str,
+            media_index: int | None, model: str,
+            request: Callable[[], Any], usage_getter: Callable[[], Mapping[str, Any]],
+            usage_errors: Callable[[Mapping[str, Any]], list[str]],
+            usage_cost: Callable[[Mapping[str, Any]], float | None]
+            ) -> tuple[Any, PaidReceipt]:
+        receipt = PaidReceipt(str(uuid.uuid4()), job_key, stage)
+        with PaidRequestLock(self.state_dir / LOCK_NAME):
+            try:
+                self.preflight()
+            except PaidRequestBlocked:
+                raise
+            except Exception as exc:
+                raise PaidRequestBlocked(
+                    "付费前预算/账本检查失败；本次未发请求：%s" % exc) from exc
+            _assert_startable(self.state_dir, job_key)
+            started = _base_event(receipt, EVENT_STARTED)
+            started.update({
+                "source_ref": str(source_ref),
+                "media_index": media_index,
+                "model": str(model),
+            })
+            _append(self.state_dir, started)
+            try:
+                result = request()
+            except BaseException as exc:
+                failed_usage = dict(usage_getter() or {})
+                failed_errors = (usage_errors(failed_usage)
+                                 if failed_usage else ["usage missing"])
+                failed_cost = (usage_cost(failed_usage)
+                               if not failed_errors else None)
+                self._record_failed_response(
+                    receipt, failed_usage, usage_errors, usage_cost,
+                    reason="request_or_contract_error:%s" % type(exc).__name__)
+                if (failed_errors or failed_cost is None
+                        or not math.isfinite(float(failed_cost))
+                        or float(failed_cost) < 0):
+                    raise PaidRequestBlocked(
+                        "请求异常且无法取得完整 usage；已记不确定费用并停止全部后续付费"
+                    ) from exc
+                raise
+            usage = dict(usage_getter() or {})
+            errors = usage_errors(usage)
+            cost = usage_cost(usage) if not errors else None
+            if (errors or cost is None or not math.isfinite(float(cost))
+                    or float(cost) < 0):
+                unknown = _base_event(receipt, EVENT_USAGE_UNKNOWN)
+                unknown.update({"usage": usage, "usage_errors": list(errors)})
+                _append(self.state_dir, unknown)
+                raise PaidRequestBlocked(
+                    "付费响应 usage/费率不完整；已记 usage_unknown 并停止后续付费")
+            recorded = _base_event(receipt, EVENT_USAGE)
+            recorded.update({"usage": usage, "cost_usd": float(cost)})
+            _append(self.state_dir, recorded)
+            return result, receipt
+
+    def _record_failed_response(
+            self, receipt: PaidReceipt, usage: Mapping[str, Any],
+            usage_errors: Callable[[Mapping[str, Any]], list[str]],
+            usage_cost: Callable[[Mapping[str, Any]], float | None], *,
+            reason: str) -> None:
+        clean = dict(usage or {})
+        errors = usage_errors(clean) if clean else ["usage missing"]
+        cost = usage_cost(clean) if not errors else None
+        if (not errors and cost is not None and math.isfinite(float(cost))
+                and float(cost) >= 0):
+            recorded = _base_event(receipt, EVENT_USAGE)
+            recorded.update({"usage": clean, "cost_usd": float(cost)})
+            _append(self.state_dir, recorded)
+            rejected = _base_event(receipt, EVENT_REJECTED)
+            rejected["reason"] = reason
+            _append(self.state_dir, rejected)
+        elif clean:
+            unknown = _base_event(receipt, EVENT_USAGE_UNKNOWN)
+            unknown.update({"usage": clean, "usage_errors": list(errors)})
+            _append(self.state_dir, unknown)
+        else:
+            uncertain = _base_event(receipt, EVENT_UNCERTAIN)
+            uncertain["reason"] = reason
+            _append(self.state_dir, uncertain)
+
+    def finalize(self, receipt: PaidReceipt, *, accepted: bool,
+                 reason: str = "") -> None:
+        with PaidRequestLock(self.state_dir / LOCK_NAME):
+            latest = _latest_by_request(load_events(self.state_dir)).get(
+                receipt.request_id)
+            if latest is None or latest.get("event") != EVENT_USAGE:
+                raise PaidRequestBlocked(
+                    "request_id=%s 不在 usage_recorded，不能伪造完成状态"
+                    % receipt.request_id)
+            event = _base_event(
+                receipt, EVENT_ACCEPTED if accepted else EVENT_REJECTED)
+            if reason:
+                event["reason"] = str(reason)[:300]
+            _append(self.state_dir, event)
+
+
+def ledger_snapshot(state_dir: Path, *, now: datetime,
+                    zone_name: str = "Europe/Berlin") -> LedgerSnapshot:
+    """只按独立 usage 账本计费，并报告未闭合/损坏状态。"""
+    rows = load_events(state_dir)
+    latest = _latest_by_request(rows)
+    usage_rows: dict[str, dict] = {}
+    unknown: list[str] = []
+    for row in rows:
+        if row.get("event") != EVENT_USAGE:
+            continue
+        request_id = str(row["request_id"])
+        if request_id in usage_rows:
+            unknown.append("request_id=%s 重复 usage_recorded" % request_id)
+        usage_rows[request_id] = row
+    for request_id, row in latest.items():
+        event = row.get("event")
+        if event in _GLOBAL_BLOCKING:
+            unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
+        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+            unknown.append("request_id=%s 完成态缺 usage" % request_id)
+
+    zone = ZoneInfo(zone_name)
+    local = now.astimezone(zone)
+    day_start = datetime.combine(local.date(), time.min, tzinfo=zone).astimezone(
+        timezone.utc)
+    month_start = datetime(local.year, local.month, 1, tzinfo=zone).astimezone(
+        timezone.utc)
+    daily = monthly = 0.0
+    for request_id, row in usage_rows.items():
+        try:
+            when = datetime.fromisoformat(
+                str(row.get("recorded_at") or "").replace("Z", "+00:00"))
+            cost = float(row.get("cost_usd"))
+        except (TypeError, ValueError):
+            unknown.append("request_id=%s usage 时间/金额无效" % request_id)
+            continue
+        if (when.tzinfo is None or when.utcoffset() is None
+                or not math.isfinite(cost) or cost < 0):
+            unknown.append("request_id=%s usage 时间/金额无效" % request_id)
+            continue
+        when = when.astimezone(timezone.utc)
+        if when >= month_start:
+            monthly += cost
+            if when >= day_start:
+                daily += cost
+    return LedgerSnapshot(
+        daily, monthly, frozenset(usage_rows), tuple(dict.fromkeys(unknown)))
+
+
+def ledger_month_snapshot(state_dir: Path, *, month: str,
+                          zone_name: str = "Europe/Berlin"
+                          ) -> LedgerMonthSnapshot:
+    """按独立账本汇总一个业务月份，并保留所有未闭合告警。"""
+    try:
+        year, mon = (int(part) for part in month.split("-"))
+        start_local = datetime(year, mon, 1, tzinfo=ZoneInfo(zone_name))
+        if mon == 12:
+            end_local = datetime(year + 1, 1, 1, tzinfo=ZoneInfo(zone_name))
+        else:
+            end_local = datetime(year, mon + 1, 1, tzinfo=ZoneInfo(zone_name))
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise PaidRequestBlocked("无效账单月份/时区：%s/%s" % (
+            month, zone_name)) from exc
+    start = start_local.astimezone(timezone.utc)
+    end = end_local.astimezone(timezone.utc)
+    rows = load_events(state_dir)
+    latest = _latest_by_request(rows)
+    usage_rows: dict[str, dict] = {}
+    unknown: list[str] = []
+    for row in rows:
+        if row.get("event") != EVENT_USAGE:
+            continue
+        request_id = str(row["request_id"])
+        if request_id in usage_rows:
+            unknown.append("request_id=%s 重复 usage_recorded" % request_id)
+        usage_rows[request_id] = row
+    for request_id, row in latest.items():
+        event = row.get("event")
+        if event in _GLOBAL_BLOCKING:
+            unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
+        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+            unknown.append("request_id=%s 完成态缺 usage" % request_id)
+
+    text_cost = image_cost = 0.0
+    for request_id, row in usage_rows.items():
+        try:
+            when = datetime.fromisoformat(
+                str(row.get("recorded_at") or "").replace("Z", "+00:00"))
+            cost = float(row.get("cost_usd"))
+        except (TypeError, ValueError):
+            unknown.append("request_id=%s usage 时间/金额无效" % request_id)
+            continue
+        if (when.tzinfo is None or when.utcoffset() is None
+                or not math.isfinite(cost) or cost < 0):
+            unknown.append("request_id=%s usage 时间/金额无效" % request_id)
+            continue
+        if not start <= when.astimezone(timezone.utc) < end:
+            continue
+        stage = row.get("stage")
+        if stage == "translation":
+            text_cost += cost
+        elif stage == "image":
+            image_cost += cost
+        else:
+            unknown.append("request_id=%s stage=%r 未知" % (request_id, stage))
+    return LedgerMonthSnapshot(
+        text_cost, image_cost, frozenset(usage_rows),
+        tuple(dict.fromkeys(unknown)))

@@ -8,8 +8,8 @@ r"""注册 / 查看 / 删除每日增量的 Windows 计划任务。对应实施�
 **为什么是三个任务而不是一个**：Task Scheduler 的一个任务只能有一个 Action，
 而这些触发器需要三种参数：
 
-  FBScraperDelta         每天固定时刻 → run_delta.bat --platform all
-  FBScraperDeltaCatchup  登录时 / 解锁时 → run_delta.bat --if-stale
+  FBScraperDelta         每天固定时刻 → run_pipeline.bat run
+  FBScraperDeltaCatchup  登录时 / 解锁时 → run_pipeline.bat run --if-stale
   FBScraperAlive         登录时 / 每天 20:00 → run_pipeline.bat check-alive
 
 ⚠️ **每天那个不能带 `--if-stale`。** `stale_after_hours = 26`，而每天同一时刻
@@ -23,10 +23,11 @@ r"""注册 / 查看 / 删除每日增量的 Windows 计划任务。对应实施�
 **为什么用 XML 而不是拼 schtasks 参数**：`/SC ONLOGON` 有，但"解锁时触发"
 （SessionStateChangeTrigger）只能通过 XML 表达。计划里也写明允许走 XML 导入。
 
-⚠️ **注册之后每天就会真的去访问一次 Facebook 和 Instagram。**
-方案 B 的累积敞口从这一刻开始计。装之前先确认增量本身是好的
-（`run_delta.bat --dry-run` 能看到本账号的时间线），否则装上去的是一个
-每天准时失败的东西。
+⚠️ **注册之后每天就会真的调用一次流水线。** `manual` 模式只对账；
+`assisted` 会访问 Facebook / Instagram 并按预算执行增量、翻译与调图，
+但 `pipeline run` 仍不会接触发布浏览器。方案 B 的累积敞口从激活并切到
+`assisted` 后开始计。装之前先用 `pipeline status` 核对当前状态，否则装上去的
+可能是一个每天准时失败的任务。
 """
 from __future__ import annotations
 
@@ -114,7 +115,7 @@ def _actions(bat: Path, root: Path, arguments: str) -> str:
 
 
 def daily_xml(bat: Path, root: Path, at: str) -> str:
-    """每天固定时刻。显式传 all，但**不带 --if-stale** —— 理由见模块头。"""
+    """每天固定时刻调用完整 pipeline run，不带 --if-stale。"""
     return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="%s">
   <RegistrationInfo>
@@ -135,7 +136,7 @@ def daily_xml(bat: Path, root: Path, at: str) -> str:
 %s
 </Task>
 """ % (NS, DAILY_TASK, at, _principal(), _settings(),
-       _actions(bat, root, "--platform all"))
+       _actions(bat, root, "run"))
 
 
 def catchup_xml(bat: Path, root: Path) -> str:
@@ -164,7 +165,7 @@ def catchup_xml(bat: Path, root: Path) -> str:
 %s
 </Task>
 """ % (NS, CATCHUP_TASK, _user(), _user(), _principal(), _settings(),
-       _actions(bat, root, "--if-stale"))
+       _actions(bat, root, "run --if-stale"))
 
 
 def alive_xml(bat: Path, root: Path) -> str:
@@ -220,8 +221,8 @@ def plan(root: Path | None = None, at: str | None = None) -> list[tuple[str, str
     `status` / `remove` 都遍历这个列表，所以在这里加一项就等于处处都加上了。
     """
     root = root or Path(__file__).resolve().parent.parent
-    bat = root / "scripts" / "run_delta.bat"
-    alive_bat = root / "scripts" / "run_pipeline.bat"
+    bat = root / "scripts" / "run_pipeline.bat"
+    alive_bat = bat
     at = at or str(cfg().get("delta", "daily_time", "09:30"))
     return [(DAILY_TASK, daily_xml(bat, root, at)),
             (CATCHUP_TASK, catchup_xml(bat, root)),

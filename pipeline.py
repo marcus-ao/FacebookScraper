@@ -1,9 +1,12 @@
-r"""L 组：把四个阶段的产物对起来。**这是一个只读对账器，不是队列。**
+r"""L 组：把四个阶段的真相源重新对账。**不建立发布任务队列。**
 
     pipeline.py status        各阶段积压 + 最近一次成功 + 本月花费
     pipeline.py check-alive   死人开关：太久没有成功运行就告警
+    pipeline.py activate      G8 通过后原子记录“只处理此后新帖”的边界
+    pipeline.py run           manual/assisted 对账并从真相源恢复中断
+    pipeline.py approve       批量确认待处理项，并在确认后逐篇提交
 
-两个子命令都**零网络、零费用、零写盘**（`check-alive` 唯一的副作用是
+前两个只读子命令**零网络、零费用、零写盘**（`check-alive` 唯一的副作用是
 `core.notify` 那条告警，它本来就要落 `state/alerts.log`）。
 
 ### 三条设计约束，改这个文件之前先读
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import unicodedata
 from datetime import datetime, timezone
@@ -43,10 +47,10 @@ import translate as translation                     # noqa: E402
 # 也不许有拼错了却静默被忽略的键。所以这张表是双向的 ——
 # 表外的键报错，表里标 False 的键在 status 里显式说明"还没接上"。
 PIPELINE_CONFIG_KEYS: dict[str, bool] = {
-    "autonomy": False,             # L1d 才消费
+    "autonomy": True,
     "dead_man_days": True,         # ← 本文件的 check-alive 就在消费它
-    "monthly_budget_usd": False,   # L1b 才真正当闸用；status 只拿它做分母
-    "daily_budget_usd": False,     # L1b
+    "monthly_budget_usd": True,
+    "daily_budget_usd": True,
 }
 AUTONOMY_LEVELS = ("manual", "assisted", "supervised", "autonomous")
 
@@ -97,7 +101,7 @@ def pipeline_settings(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for key in ("monthly_budget_usd", "daily_budget_usd"):
         value = raw[key]
         if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                or value < 0):
+                or not math.isfinite(float(value)) or value < 0):
             raise PipelineConfigError(
                 "[pipeline].%s 必须是非负数，实得 %r" % (key, value))
         budgets[key] = float(value)
@@ -245,18 +249,12 @@ def pending_image_ids(rows: list[dict], arc_base: Path, publishable: set[str],
             pending_jobs)
 
 
-def published_ids(state_dir: Path | None = None) -> set[str] | None:
-    """读 `state/published.jsonl`；**文件不存在时返回 ``None``，不是空集**。
-
-    ⚠️ 这个区分是有意的：`published.jsonl` 由 **G6** 写，而 G6 被 G1 卡着，
-    今天这个文件根本不存在。返回空集会让"待发布"等于"可发"，
-    打印出来是一个**看起来像积压、实际是"这个阶段还没接上"**的数字。
-    调用方看到 ``None`` 应当显示 ``—`` 并注明原因。
-    """
+def published_source_refs(state_dir: Path | None = None) -> set[str]:
+    """只读最终 ``scheduled`` 的 source_refs；文件不存在就是尚无成功记录。"""
     state_dir = state_dir or cfg().state_dir
     path = state_dir / "published.jsonl"
     if not path.is_file():
-        return None
+        return set()
     out: set[str] = set()
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
@@ -266,9 +264,21 @@ def published_ids(state_dir: Path | None = None) -> set[str] | None:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue                    # 一条坏行不该让整张表打不出来
-        if isinstance(row, dict) and isinstance(row.get("post_id"), str):
-            out.add(row["post_id"].strip())
+        if not isinstance(row, dict) or row.get("status") != "scheduled":
+            continue
+        refs = row.get("source_refs")
+        if isinstance(refs, list):
+            out.update(str(ref).strip() for ref in refs if str(ref).strip())
+        elif isinstance(row.get("post_id"), str):
+            platform = str(row.get("platform") or "").strip().lower()
+            out.add("%s:%s" % (platform, row["post_id"].strip()))
     return out
+
+
+def published_ids(state_dir: Path | None = None) -> set[str]:
+    """兼容旧调用方：只返回最终 scheduled 来源 ID。"""
+    refs = published_source_refs(state_dir)
+    return {ref.rsplit(":", 1)[-1] for ref in refs}
 
 
 # ---------------------------------------------------------------------------
@@ -285,15 +295,31 @@ def _previous_month(month: str) -> str:
 
 
 def month_spend(dirs: list[Path], month: str,
-                warn: Callable[[str], None]) -> tuple[float, float, list[str]]:
+                warn: Callable[[str], None], *,
+                state_dir: Path | None = None) -> tuple[float, float, list[str]]:
     """返回 (翻译花费, 图片花费, 无法计算的原因列表)，单位 US$。
 
-    ⚠️ **只读两个阶段已经逐条记下的真实 usage，不按字符数或张数外推。**
+    ⚠️ **优先读独立 paid ledger，旧产物才按逐条真实 usage 兼容汇总；**
+    不按字符数或张数外推，且按 paid_request_id 去重。
     CR-40 的教训：F 组按字符估给出 US$1.08–5.41，真实是 US$23.73，
     低估一个数量级 —— 漏掉了 thinking 那个主导项。
     """
     problems: list[str] = []
     text_cost = image_cost = 0.0
+    paid_ids: frozenset[str] = frozenset()
+    if state_dir is not None:
+        from core import paid_requests
+        try:
+            paid = paid_requests.ledger_month_snapshot(
+                state_dir, month=month, zone_name="Europe/Berlin")
+        except paid_requests.PaidRequestBlocked as exc:
+            problems.append("[paid ledger] %s" % exc)
+        else:
+            text_cost += paid.translation_usd
+            image_cost += paid.image_usd
+            paid_ids = paid.request_ids
+            problems.extend("[paid ledger] %s" % value
+                            for value in paid.unknown)
 
     try:
         ts = translation.Settings()
@@ -310,26 +336,57 @@ def month_spend(dirs: list[Path], month: str,
     for arc_base in dirs:
         if ts is not None:
             for row in _jsonl_rows(arc_base / "translated.jsonl"):
+                paid_id = str(row.get("paid_request_id") or "")
+                if paid_id:
+                    if paid_id not in paid_ids:
+                        problems.append("[translate] %s/%s 引用缺失 paid request %s" % (
+                            arc_base.name, row.get("post_id") or "?", paid_id))
+                    continue
                 when = _parse_iso_z(row.get("translated_at"))
                 if when is None or _month_key(when) != month:
                     continue
                 usage = row.get("usage")
                 if not isinstance(usage, dict):
+                    problems.append("[translate] %s/%s usage 缺失" % (
+                        arc_base.name, row.get("post_id") or "?"))
+                    continue
+                errors = translation.translation_usage_errors(usage)
+                if errors:
+                    problems.append("[translate] %s/%s usage 不完整：%s" % (
+                        arc_base.name, row.get("post_id") or "?",
+                        "、".join(errors)))
                     continue
                 cost = translation.usage_cost_upper_bound(ts, usage)
-                if cost is not None:
-                    text_cost += cost
+                if cost is None or not math.isfinite(cost) or cost < 0:
+                    problems.append("[translate] %s/%s 费用无法计算" % (
+                        arc_base.name, row.get("post_id") or "?"))
+                    continue
+                text_cost += cost
         if isettings is not None:
             for row in _jsonl_rows(arc_base / "images_de.jsonl"):
+                paid_id = str(row.get("paid_request_id") or "")
+                if paid_id:
+                    if paid_id not in paid_ids:
+                        problems.append("[image] %s/%s/%s 引用缺失 paid request %s" % (
+                            arc_base.name, row.get("post_id") or "?",
+                            row.get("media_index") or "?", paid_id))
+                    continue
                 when = _parse_iso_z(row.get("created_at"))
                 if when is None or _month_key(when) != month:
                     continue
                 usage = row.get("usage")
                 if not isinstance(usage, Mapping):
+                    problems.append("[image] %s/%s/%s usage 缺失" % (
+                        arc_base.name, row.get("post_id") or "?",
+                        row.get("media_index") or "?"))
                     continue
                 cost = image_de.image_usage_cost(isettings, usage)
-                if cost is not None:
-                    image_cost += cost
+                if cost is None or not math.isfinite(cost) or cost < 0:
+                    problems.append("[image] %s/%s/%s 费用无法计算" % (
+                        arc_base.name, row.get("post_id") or "?",
+                        row.get("media_index") or "?"))
+                    continue
+                image_cost += cost
     for problem in problems:
         warn(problem)
     return text_cost, image_cost, problems
@@ -354,11 +411,13 @@ def _jsonl_rows(path: Path):
 # status
 # ---------------------------------------------------------------------------
 
-def account_counts(arc_base: Path, report: Callable[[str], None]) -> dict:
+def account_counts(arc_base: Path, report: Callable[[str], None], *,
+                   activated_at: datetime | None = None) -> dict:
     """一个账号的各阶段积压。任何一段炸掉都只影响这个账号，不掀掉整张表。"""
     counts = {"name": arc_base.name, "archived": 0, "publishable": 0,
               "pending_translation": 0, "pending_images": 0,
-              "pending_image_files": 0, "errors": []}
+              "pending_image_files": 0, "publishable_refs": set(),
+              "pipeline_publishable_refs": set(), "errors": []}
     try:
         rows = Archive(arc_base.parent, arc_base.name).rows()
     except (OSError, ArchivePathError, ValueError) as exc:
@@ -368,6 +427,16 @@ def account_counts(arc_base: Path, report: Callable[[str], None]) -> dict:
 
     publishable = publishable_ids(rows)
     counts["publishable"] = len(publishable)
+    counts["publishable_refs"] = {
+        "%s:%s" % (str(row.get("platform") or "").strip().lower(), row["post_id"])
+        for row in rows if row.get("post_id") in publishable}
+    if activated_at is not None:
+        counts["pipeline_publishable_refs"] = {
+            "%s:%s" % (str(row.get("platform") or "").strip().lower(), row["post_id"])
+            for row in rows
+            if row.get("post_id") in publishable
+            and (created := _parse_iso_z(row.get("created_at"))) is not None
+            and created > activated_at.astimezone(timezone.utc)}
 
     try:
         pending_tr = pending_translation_ids(rows, arc_base, publishable)
@@ -415,6 +484,15 @@ def _age_text(now: datetime, when: datetime) -> str:
     return "%.1f 天前" % (hours / 24)
 
 
+def pending_publish_count(account: Mapping[str, Any],
+                          published: set[str]) -> int:
+    """按当前账号 publishable refs 与 scheduled refs 的交集扣减。"""
+    refs = account.get("pipeline_publishable_refs")
+    if refs is None:
+        refs = account.get("publishable_refs")
+    return len(set(refs or ()) - published)
+
+
 def run_status(dirs: list[Path], now: datetime | None = None,
                state_dir: Path | None = None) -> int:
     now = now or datetime.now(timezone.utc)
@@ -427,9 +505,21 @@ def run_status(dirs: list[Path], now: datetime | None = None,
         print("[!] %s" % exc)
         return 1
 
+    activated = None
+    open_count = 0
+    g9_error = None
+    try:
+        import pipeline_assisted
+        activated = pipeline_assisted.activation_time(state_dir)
+        latest = pipeline_assisted.latest_human_items(state_dir)
+        open_count = sum(1 for row in latest.values() if row.get("status") == "open")
+    except Exception as exc:                         # 状态页必须能降级展示
+        g9_error = exc
+
     quiet: list[str] = []
-    rows_out = [account_counts(d, quiet.append) for d in dirs]
-    published = published_ids(state_dir)
+    rows_out = [account_counts(
+        d, quiet.append, activated_at=activated) for d in dirs]
+    published = published_source_refs(state_dir)
 
     labels = ("归档", "可发", "待译", "待调图", "待发布")
     name_width = max([display_width("账号"), display_width("合计")]
@@ -448,8 +538,8 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     for item in rows_out:
         for key in total:
             total[key] += item.get(key, 0)
-        pub_cell = "—" if published is None else max(
-            item["publishable"] - len(published), 0)
+        pub_cell = ("—" if activated is None else
+                    pending_publish_count(item, published))
         print(line(item["name"], (
             item["archived"], item["publishable"],
             item["pending_translation"], item["pending_images"], pub_cell)))
@@ -457,8 +547,8 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     print(line("合计", (
         total["archived"], total["publishable"],
         total["pending_translation"], total["pending_images"],
-        "—" if published is None else max(
-            total["publishable"] - len(published), 0))))
+        "—" if activated is None else sum(
+            pending_publish_count(item, published) for item in rows_out))))
 
     for item in rows_out:
         for problem in item["errors"]:
@@ -472,11 +562,11 @@ def run_status(dirs: list[Path], now: datetime | None = None,
           "scripts\\run_publish.bat --latest 3。")
     print("「待调图」按**帖**计；本次要付费的**图片**张数是 %d 张。"
           % total["pending_image_files"])
-    if published is None:
-        print("「待发布」显示 —— 因为 state\\published.jsonl 还不存在："
-              "它由 G6 写，而 G6 被 G1 卡着。")
-        print("         这里不打 0 —— 0 会被读成「没有积压」，"
-              "实际含义是「这个阶段还没接上」。")
+    if activated is None:
+        print("「待发布」显示 —— 因为流水线尚未激活；G8 通过前不把历史帖算进队列。")
+    else:
+        print("「待发布」只统计激活边界之后的可发 source_refs；prepared/failed 与"
+              "其它账号的 scheduled 都不会从本账号扣减。")
 
     print()
     when, sources = last_successful_run(state_dir)
@@ -492,27 +582,33 @@ def run_status(dirs: list[Path], now: datetime | None = None,
         print("                  证据：%s" % "、".join(sources))
 
     month = _month_key(now)
-    text_cost, image_cost, _ = month_spend(dirs, month, quiet.append)
+    text_cost, image_cost, _ = month_spend(
+        dirs, month, quiet.append, state_dir=state_dir)
     print("本月（%s）花费：US$%.4f / %.2f　（翻译 US$%.4f + 图片 US$%.4f）"
           % (month, text_cost + image_cost, settings["monthly_budget_usd"],
              text_cost, image_cost))
     # 月初刚翻篇时本月必然是 0，而上个月可能刚花过钱。只打本月会让人误以为
     # "这东西从来没花过钱"，顺带也看不出费用计算到底通没通。
     prev = _previous_month(month)
-    prev_text, prev_image, _ = month_spend(dirs, prev, lambda _m: None)
+    prev_text, prev_image, _ = month_spend(
+        dirs, prev, lambda _m: None, state_dir=state_dir)
     if prev_text or prev_image:
         print("上月（%s）：US$%.4f　（翻译 US$%.4f + 图片 US$%.4f）"
               % (prev, prev_text + prev_image, prev_text, prev_image))
-    print("                  按两个阶段逐条记下的**真实 usage** 算，不按字符/张数外推。")
+    print("                  按独立 paid ledger + 旧产物的**真实 usage** 算，"
+          "output_rejected 也计费，不按字符/张数外推。")
     for problem in quiet:
         print("  ! %s" % problem)
 
     print()
-    not_wired = [k for k, wired in PIPELINE_CONFIG_KEYS.items() if not wired]
-    print("[pipeline] 当前只有 dead_man_days 被真的消费了（本文件的 check-alive）。")
-    print("           还没接上的：%s —— autonomy 归 L1d，两个 budget 归 L1b。"
-          % "、".join(not_wired))
+    print("[pipeline] autonomy 与日/月预算均已由 pipeline run 消费。")
     print("           autonomy = %s" % settings["autonomy"])
+    if g9_error is not None:
+        print("           G9 状态读不了：%s" % g9_error)
+    else:
+        print("           激活边界 = %s" % (
+            activated.isoformat() if activated else "未激活（G8 通过后再 activate）"))
+        print("           待确认项 = %d（state\\needs_human.html）" % open_count)
     return 0
 
 
@@ -589,7 +685,7 @@ def run_check_alive(now: datetime | None = None, state_dir: Path | None = None,
 def main(argv=None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(
-        description="流水线只读对账器（L 组）。零网络、零费用、零写盘。")
+        description="流水线对账、激活与 assisted 执行入口（G9）")
     sub = parser.add_subparsers(dest="command", required=True)
 
     status_parser = sub.add_parser(
@@ -605,12 +701,66 @@ def main(argv=None) -> int:
         "--no-popup", action="store_true",
         help="只写 state\\alerts.log，不弹桌面通知（自动化验收用）")
 
+    activate_parser = sub.add_parser(
+        "activate", help="G8 通过后原子记录发布边界；不会补发历史")
+    activate_parser.add_argument(
+        "--g8-verified", action="store_true",
+        help="显式确认 G8 真机验收已通过（必填安全闸）")
+
+    run_parser = sub.add_parser(
+        "run", help="按 autonomy 对账；assisted 自动 delta/翻译/调图但不碰发布浏览器")
+    run_parser.add_argument("--if-stale", action="store_true",
+                            help="补跑触发器：delta 未过 stale 窗口就跳过")
+    run_parser.add_argument("--account", default=None,
+                            help="只处理一个归档账号目录（排障用）")
+
+    approve_parser = sub.add_parser(
+        "approve", help="批量选择版本/确认 ready 项；首次不明确失败即停止整批")
+    approve_parser.add_argument("--item-id", action="append", required=True,
+                                help="待确认 item_id；可重复")
+    approve_parser.add_argument(
+        "--select-source", action="append", default=None,
+        metavar="ITEM=PLATFORM:POST_ID",
+        help="相似跨平台项选择哪个源版本；可重复")
+    approve_parser.add_argument("--assume-yes", action="store_true",
+                                help=argparse.SUPPRESS)
+
     args = parser.parse_args(argv)
 
     if args.command == "check-alive":
         return run_check_alive(popup=not args.no_popup)
 
+    import pipeline_assisted as assisted
+    if args.command == "activate":
+        try:
+            when = assisted.activate(
+                cfg().state_dir, g8_verified=args.g8_verified)
+        except assisted.PipelineRunError as exc:
+            print("[!] %s" % exc)
+            return 2
+        print("[ok] 流水线激活边界：%s" % when.isoformat())
+        print("     只处理此后新帖；重复 activate 不会移动边界。")
+        return 0
+
+    if args.command == "approve":
+        selections = {}
+        for raw in args.select_source or []:
+            if "=" not in raw:
+                parser.error("--select-source 必须是 ITEM=platform:post_id")
+            item_id, ref = raw.split("=", 1)
+            if not item_id.strip() or ":" not in ref:
+                parser.error("--select-source 必须是 ITEM=platform:post_id")
+            selections[item_id.strip()] = ref.strip()
+        try:
+            return assisted.approve(
+                item_ids=args.item_id, selections=selections,
+                state_dir=cfg().state_dir, assume_yes=args.assume_yes)
+        except (assisted.PipelineRunError, PipelineConfigError) as exc:
+            print("[!] %s" % exc)
+            return 2
+
     root = cfg().archive_dir
+    all_dirs = translation.account_dirs(root)
     dirs = translation.account_dirs(root, args.account)
     if args.account and not dirs:
         available = [path.name for path in translation.account_dirs(root)]
@@ -620,7 +770,17 @@ def main(argv=None) -> int:
     if not dirs:
         print("[!] %s 下没有含 manifest.jsonl 的账号目录；先完成抓取。" % root)
         return 1
-    return run_status(dirs)
+    if args.command == "status":
+        return run_status(dirs)
+    try:
+        settings = pipeline_settings()
+        return assisted.run(
+            account_dirs=all_dirs, processing_account_dirs=dirs,
+            state_dir=cfg().state_dir, settings=settings,
+            if_stale=args.if_stale, budget_account_dirs=all_dirs)
+    except (assisted.PipelineRunError, PipelineConfigError) as exc:
+        print("[!] %s" % exc)
+        return 2
 
 
 if __name__ == "__main__":
