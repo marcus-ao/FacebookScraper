@@ -21,7 +21,8 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.config import cfg                                        # noqa: E402
-from tools.schedule import CATCHUP_TASK, DAILY_TASK, NS, plan      # noqa: E402
+from tools.schedule import (ALIVE_TASK, CATCHUP_TASK, DAILY_TASK,  # noqa: E402
+                            NS, plan)
 
 fails = []
 
@@ -48,11 +49,11 @@ def text(root, *path):
     return node.text if node is not None else None
 
 
-print("[1] 生成的 XML 本身要是合法的、且是那两个任务")
+print("[1] 生成的 XML 本身要是合法的、且是那三个任务")
 
 tasks = dict(plan())
-check(sorted(tasks) == sorted([DAILY_TASK, CATCHUP_TASK]),
-      "生成两个任务：%s / %s" % (DAILY_TASK, CATCHUP_TASK))
+check(sorted(tasks) == sorted([DAILY_TASK, CATCHUP_TASK, ALIVE_TASK]),
+      "生成三个任务：%s / %s / %s" % (DAILY_TASK, CATCHUP_TASK, ALIVE_TASK))
 check(all(name.isascii() for name in tasks),
       "任务名纯 ASCII —— 它要经过 schtasks 的命令行")
 
@@ -62,7 +63,7 @@ for name, xml in tasks.items():
         trees[name] = ET.fromstring(xml)
     except ET.ParseError as e:
         check(False, "%s 的 XML 解析失败：%s" % (name, e))
-check(len(trees) == 2, "两份 XML 都能被 XML 解析器接受")
+check(len(trees) == 3, "三份 XML 都能被 XML 解析器接受")
 
 
 print("\n[2] 参数不能搞反（搞反了要几天后才看出来）")
@@ -124,11 +125,21 @@ print("\n[5] 指向的入口脚本得真的存在")
 
 bat = ROOT / "scripts" / "run_delta.bat"
 check(bat.exists(), "scripts\\run_delta.bat 存在（E1）")
+check((ROOT / "scripts" / "run_pipeline.bat").exists(),
+      "scripts\\run_pipeline.bat 存在（L0b/L0c）")
+# 抓取的两个走 run_delta.bat，死人开关走 run_pipeline.bat。
+# ⚠️ 这不是随手分的：死人开关要抓的失效正是「增量任务不跑了」，
+#    与增量共用入口就会跟着一起哑掉。见 tools/schedule.py::alive_xml。
+expected_bat = {DAILY_TASK: "run_delta.bat", CATCHUP_TASK: "run_delta.bat",
+                ALIVE_TASK: "run_pipeline.bat"}
 for name, tree in trees.items():
     cmd = text(tree, "Actions", "Exec", "Command")
-    check(cmd and Path(cmd).name == "run_delta.bat", "%s 指向 run_delta.bat" % name)
+    check(cmd and Path(cmd).name == expected_bat[name],
+          "%s 指向 %s" % (name, expected_bat[name]))
     check(text(tree, "Actions", "Exec", "WorkingDirectory") == str(ROOT),
           "%s 的工作目录是项目根（.bat 里也会 cd，双保险）" % name)
+check(text(trees[ALIVE_TASK], "Actions", "Exec", "Arguments") == "check-alive",
+      "死人开关传的是 check-alive —— 传错子命令会变成一个不告警的哑任务")
 
 
 print("\n[6] 所有 .bat 的字节级约定（靠人守迟早会破，所以在这里守）")

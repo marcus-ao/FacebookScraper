@@ -5,14 +5,20 @@ r"""注册 / 查看 / 删除每日增量的 Windows 计划任务。对应实施�
     python -m tools.schedule status    查询已注册的任务
     python -m tools.schedule remove    删除
 
-**为什么是两个任务而不是一个**：Task Scheduler 的一个任务只能有一个 Action，
-而三个触发器需要两种参数：
+**为什么是三个任务而不是一个**：Task Scheduler 的一个任务只能有一个 Action，
+而这些触发器需要三种参数：
 
   FBScraperDelta         每天固定时刻 → run_delta.bat --platform all
   FBScraperDeltaCatchup  登录时 / 解锁时 → run_delta.bat --if-stale
+  FBScraperAlive         登录时 / 每天 20:00 → run_pipeline.bat check-alive
 
 ⚠️ **每天那个不能带 `--if-stale`。** `stale_after_hours = 26`，而每天同一时刻
 的间隔是 24 小时——带上就会"跑一天、跳一天"。补跑触发器才需要它去重。
+
+⚠️ **`FBScraperAlive` 是死人开关（L0c），它必须独立于上面两个。**
+它要抓的失效正是「上面两个不跑了而没人知道」——挂进它们里面就会跟着一起哑掉。
+它只读 `state/` 下的运行标记：**不联网、不抓取、不花钱**，
+所以也**不设** `RunOnlyIfNetworkAvailable`（没网不能成为警报不响的理由）。
 
 **为什么用 XML 而不是拼 schtasks 参数**：`/SC ONLOGON` 有，但"解锁时触发"
 （SessionStateChangeTrigger）只能通过 XML 表达。计划里也写明允许走 XML 导入。
@@ -37,6 +43,7 @@ from core.console import force_utf8        # noqa: E402
 
 DAILY_TASK = "FBScraperDelta"
 CATCHUP_TASK = "FBScraperDeltaCatchup"
+ALIVE_TASK = "FBScraperAlive"
 
 # 任务名保持纯 ASCII：A1 的结论是 cmd 处理非 ASCII 不可靠，
 # 而 schtasks 的任务名会经过命令行。描述走 XML（UTF-16），中文没问题。
@@ -49,8 +56,12 @@ def _user() -> str:
     return "%s\\%s" % (domain, name) if domain else name
 
 
-def _settings() -> str:
-    """两个任务共用的 Settings 段。每一项都有理由，不是抄来的模板。"""
+def _settings(network: bool = True, time_limit: str = "PT2H") -> str:
+    """任务共用的 Settings 段。每一项都有理由，不是抄来的模板。
+
+    ⚠️ ``network=False`` 只给**死人开关**用，理由在 :func:`alive_xml`：
+    那个检查一个字节都不联网，而**"没网"绝不能成为警报不响的原因**。
+    """
     return """  <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <!-- 笔记本常在电池上跑。勾着"仅交流电"等于这个任务大半时间不工作。 -->
@@ -59,7 +70,7 @@ def _settings() -> str:
     <AllowHardTerminate>true</AllowHardTerminate>
     <!-- 合盖错过了就在醒来后补跑。这正是"笔记本会睡"要解决的问题。 -->
     <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <RunOnlyIfNetworkAvailable>%s</RunOnlyIfNetworkAvailable>
     <IdleSettings>
       <StopOnIdleEnd>false</StopOnIdleEnd>
       <RestartOnIdle>false</RestartOnIdle>
@@ -71,9 +82,9 @@ def _settings() -> str:
     <!-- 绝不把机器叫醒来抓取：半夜自己醒一下既没必要，也是个显眼的行为特征。 -->
     <WakeToRun>false</WakeToRun>
     <!-- 随机延迟最多 45 分钟 + 抓取本身，2 小时足够；卡住了也不会一直挂着。 -->
-    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>%s</ExecutionTimeLimit>
     <Priority>7</Priority>
-  </Settings>"""
+  </Settings>""" % ("true" if network else "false", time_limit)
 
 
 def _principal() -> str:
@@ -156,13 +167,65 @@ def catchup_xml(bat: Path, root: Path) -> str:
        _actions(bat, root, "--if-stale"))
 
 
+def alive_xml(bat: Path, root: Path) -> str:
+    r"""死人开关（L0c）。登录时 + 每天 20:00 各查一次，**只读、不联网**。
+
+    ⚠️ **为什么必须是一个独立任务，而不是挂进上面两个**：
+    `PIPELINE_PLAN` 第 7 节要抓的失效是「整条流水线停了而没人知道」——
+    而计划任务被禁用/删除正是最常见的停法。**挂在增量任务里的检查，
+    会跟着增量任务一起哑掉**，恰恰在最需要它的时候不响。
+    独立任务意味着要**两个**东西同时失效才会静默，而不是一个。
+
+    ⚠️ **`RunOnlyIfNetworkAvailable` 必须是 false。**
+    `pipeline check-alive` 一个字节都不联网（它只读 `state/` 下的运行标记），
+    而"家里网断了"绝不该成为"流水线死了但没告警"的原因。
+
+    ⚠️ **不加 SessionUnlock 触发器**（上面的补跑任务有）。
+    这个检查一天最多只会得出一个新结论，锁屏解锁一次就弹一次是纯噪音——
+    `core/integrity.py` 已经立过规矩：**误报的代价不是打扰，
+    是让整条告警通道失效**，用户关掉通知之后真故障就再没人知道了。
+    """
+    return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="%s">
+  <RegistrationInfo>
+    <Description>死人开关：检查流水线是不是还在跑。只读 state/ 下的运行标记，不联网、不抓取、不花钱。超过 [pipeline].dead_man_days 天没有成功运行就告警。</Description>
+    <URI>\\%s</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>%s</UserId>
+      <Delay>PT5M</Delay>
+    </LogonTrigger>
+    <CalendarTrigger>
+      <StartBoundary>2026-01-01T20:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+%s
+%s
+%s
+</Task>
+""" % (NS, ALIVE_TASK, _user(), _principal(),
+       _settings(network=False, time_limit="PT10M"),
+       _actions(bat, root, "check-alive"))
+
+
 def plan(root: Path | None = None, at: str | None = None) -> list[tuple[str, str]]:
-    """返回 [(任务名, XML)]。抽成纯函数是为了能离线断言。"""
+    """返回 [(任务名, XML)]。抽成纯函数是为了能离线断言。
+
+    `status` / `remove` 都遍历这个列表，所以在这里加一项就等于处处都加上了。
+    """
     root = root or Path(__file__).resolve().parent.parent
     bat = root / "scripts" / "run_delta.bat"
+    alive_bat = root / "scripts" / "run_pipeline.bat"
     at = at or str(cfg().get("delta", "daily_time", "09:30"))
     return [(DAILY_TASK, daily_xml(bat, root, at)),
-            (CATCHUP_TASK, catchup_xml(bat, root))]
+            (CATCHUP_TASK, catchup_xml(bat, root)),
+            (ALIVE_TASK, alive_xml(alive_bat, root))]
 
 
 def _write_xml(name: str, xml: str) -> Path:
@@ -192,11 +255,15 @@ def install(dry_run: bool = False) -> int:
         print("\n（--dry-run：只打印了命令，什么都没注册。XML 已写到 state\\）")
         return 0
     if rc == 0:
-        print("\n[ok] 两个任务都注册好了。验证：")
+        print("\n[ok] 三个任务都注册好了。验证：")
         print("     python -m tools.schedule status")
         print("     schtasks /Run /TN %s" % DAILY_TASK)
         print("\n⚠️ 从现在开始，每天会真的去访问一次 Facebook 和 Instagram。")
         print("   想停：python -m tools.schedule remove")
+        print("\n%s 是死人开关：只读、不联网、不花钱。" % ALIVE_TASK)
+        print("   在第一次增量成功之前，它会告诉你「流水线从未成功运行」——")
+        print("   **那是正常的，而且正好证明这条告警通道是通的**。")
+        print("   想现在就看它说什么：python pipeline.py check-alive")
     else:
         print("\n[!] 注册失败。若提示拒绝访问，用管理员身份开命令提示符再跑一次。")
     return rc
