@@ -3768,3 +3768,35 @@ G 组 G0-G0b-G1）各自独立全部保留；`MANUAL_STEPS` 的第 10b 步（K�
 真实验证：用户那个 Chrome 的核对从 `None` → **`True`**（4.02s），
 `attach()` 成功（6.38s），窗口未受影响；反向传抓取 profile → `False`、
 传空端口 → `None`。新增 17 条断言（`tests_chrome` 33 → 50），**19 套 / 1199 项全绿**。
+
+### 2026-09-01 · G1 recorder 静默记录不到（CR-64）——同一天的第二个真机 bug
+
+用户走完**整个** Business Suite 发帖流程，结束后发现 dump 里
+`interactions` 只有 1 条（NTP 上那次点击），"点进网址之后全部丢失"。
+20 分钟人工操作作废，而**过程中一句提示都没有**。
+
+根因：`connect_over_cdp` 附着到**连接前就已打开**的页面时，Playwright 的
+page 对象可能永远拿不到帧树——实测 `page.url=''`、`page.evaluate('1+1')`
+**TimeoutError**、`expose_binding` 后 `typeof window[binding]` 是 `undefined`；
+而**同一 target 的原始 CDP 一切正常**。旧的 `_install_existing` 用
+`except Exception: continue` 把这个 TimeoutError 整个吞掉，
+于是监听器一个都没装上、一条没记、零提示。
+
+> 教训：**`except Exception: continue` 用在"装设备"这一步，
+> 等于把"设备没装上"变成"设备装好了但什么都没发生"**——
+> 这两件事在输出上一模一样，和 L0c 死人开关要区分的
+> 「没跑」vs「跑了没事做」是同一类失效。
+
+修复中还撞出第二个：改走 CDP 后**不 `Runtime.enable`/`Page.enable` 就跨不过导航**，
+症状和原 bug 完全一样（首页正常、一导航全丢）。没有跨导航回归测试的话，
+这个修复会带着同一个症状上线。
+
+处置见 `CODE_REVIEW.md` 第 18 节：CDP 安装 + **回读校验**、通路统一成
+JSON 字符串、装不上大声报、**逐条回显**（屏幕不跳数字就是没记上）、
+空 dump 收尾告警、3 秒巡检用 `/json/list` 核对漏页、
+截图显式超时 + CDP 回退（**回退路径同样遮罩敏感输入，插不进遮罩就不截**）。
+
+验证：scratch Chrome 真·可信点击，跨**两次导航**均记录、密码框仍不记录、
+截图无错误；用户那个原本静默失败的页面 `install_on_page -> True | ok`，
+页面内回读 `handlers=object | binding=function`。
+新增 20 条断言（`tests_publish` 92 → 112），**19 套 / 1219 项全绿**。

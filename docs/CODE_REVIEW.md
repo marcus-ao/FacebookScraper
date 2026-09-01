@@ -1771,3 +1771,117 @@ K 写出的记录 K 认得、G 也认得；把产出字节改掉之后**两边�
 `compose.py::_validated_probe_dump` 要求 ≥7 条可信交互与全部必填观察，
 空 dump 会被拒。**但它们是噪音，G1 真正跑通后应当删掉，
 免得下次有人对着一堆同名文件分不清哪份是真的。**
+
+---
+
+## 18. CR-64 · P0 · G1 recorder 静默记录不到：走完整个发帖流程才发现 dump 是空的（2026-09-01）
+
+> 与 CR-63 同一天、同一个人、同一条链路上的**第二个**问题。
+> 这条更贵：CR-63 至少**报了错**（虽然报错内容是错的），
+> 这一条**从头到尾一句提示都没有**——用户完整走完一遍 Business Suite 发帖流程，
+> 结束后才发现 `interactions` 是空的。20 分钟的人工操作直接作废。
+
+### 18.1 现象
+
+同一晚两次运行，同一个工具、同一个浏览器：
+
+| dump | 交互数 | 起始页 | 结果 |
+|---|---:|---|---|
+| `..._195237_...` | **63** | 已经停在 `www.facebook.com` | 正常，跨 5 个 URL 全程记录 |
+| `..._203718_...` | **1** | `chrome://new-tab-page` | 只记下 NTP 上那一次点击，**之后全丢** |
+
+用户描述：「**点进网址之后的所有操作全部丢失**」。
+
+### 18.2 根因：Playwright 的 page 对象是坏的，而失败被整个吞掉
+
+对用户那个仍然开着的标签页实测（只读）：
+
+| 探测 | 结果 |
+|---|---|
+| `page.url` | `''` ← 真实是 `business.facebook.com/latest/content_calendar/...` |
+| `page.frames` | 1 个**空**帧 |
+| `page.evaluate("1+1")` | **TimeoutError** |
+| `expose_binding` 之后 `typeof window[binding]` | **`undefined`** |
+| `add_init_script` | 不生效（SPA 客户端路由，**不产生新文档**） |
+| **同一 target 的原始 CDP** `Runtime.evaluate("location.href")` | ✅ 返回真实 URL |
+| **同一 target 的原始 CDP** `Page.getFrameTree` | ✅ 返回真实主帧 |
+| **同一 target 的原始 CDP** 注入监听脚本 | ✅ `handlers = object` |
+
+即：**`connect_over_cdp` 附着到"连接之前就已经打开"的页面时，
+Playwright 的 page 对象可能永远拿不到帧树，而底层 CDP 完全正常。**
+
+而旧代码是这么装监听器的：
+
+```python
+async def _install_existing(context, script):
+    for page in list(context.pages):
+        for frame in list(page.frames):
+            try:
+                await frame.evaluate(script)
+            except Exception:
+                continue          # ← 把上面那个 TimeoutError 整个吞掉
+```
+
+于是：**监听器一个都没装上 → 一条事件都没记 → 全程零提示。**
+两次运行的差别只是"附着时那一页是不是刚打开的"，而这件事用户完全无从得知。
+
+> **教训：`except Exception: continue` 用在"装设备"这一步上，
+> 等于把"设备没装上"变成"设备装好了但什么都没发生"。
+> 这两件事在输出上一模一样——和 §7 死人开关要区分的
+> 「没跑」vs「跑了没事做」是同一类失效。**
+
+### 18.3 实施中发现的第二个 bug：CDP 通路不 enable 就跨不过导航
+
+改走 CDP 之后，scratch Chrome 上实测：首个文档记录正常，**一导航就再也收不到
+`Runtime.bindingCalled`**——症状和原 bug 一模一样。
+原因是 `Runtime.addBinding` 只会装进**已被跟踪的**执行上下文，
+而不 `Runtime.enable` / `Page.enable` 时，新文档那个上下文根本不被跟踪。
+**如果没有跨导航的回归测试，这个修复会带着同一个症状上线。**
+
+### 18.4 处置
+
+1. **安装改走 CDP**，`install_on_page()` 一次做四件事并**回读校验**：
+   `Runtime.enable` → `Page.enable` → `Runtime.addBinding` →
+   `Page.addScriptToEvaluateOnNewDocument`（覆盖后续文档/frame）→
+   `Runtime.evaluate`（覆盖**当前**文档，SPA 路由不产生新文档，只靠前者会漏）→
+   回读 `typeof window[registry]`，**不是 `"object"` 就算失败**。
+2. **通路统一成 CDP binding**，页面侧改发 `JSON.stringify(payload)`
+   （`Runtime.addBinding` 只接受 string 参数），Python 侧统一解析。
+3. **装不上就大声说**：逐页打印挂载结果；一个都没挂上时直接告诉用户
+   "现在开始走流程会全部记录不到，先按 F5 刷新那一页"。
+4. **逐条回显**：每记录一条打一行 `#N click`。**屏幕不再跳数字 = 当场就知道没记上**，
+   而不是走完 20 分钟才发现。
+5. **收尾时空 dump 显式告警**：明说这份不能用来回填 `selectors.py`。
+6. **定期巡检**（3 秒）：补装新开的页面，并用 `/json/list` 核对
+   Playwright 有没有漏页——漏了就等于那一页全程不记录。
+7. **截图**：给 Playwright 截图加 8 秒显式超时（`record()` 是**持锁**的，
+   一次挂住会把后面所有事件堵死），失败时用 CDP `Page.captureScreenshot` 兜底。
+   ⚠️ **回退路径同样遮罩敏感输入**：`mask=` 用不了，改成临时插一条
+   CSS 把密码/邮箱/OTP 类输入模糊掉，截完撤掉；**插不进去就不截**——
+   宁可没有截图，也不能把凭据拍进去。
+
+### 18.5 验证
+
+**真实浏览器**（scratch Chrome，真·可信点击，非 mock）：
+
+- 首个文档点击 → 记录；**密码框点击 + 输入 → 不记录**（隐私闸仍然成立）；
+- **导航一次 → 记录；再导航一次 → 记录**（三条分属三个不同 URL）；
+- 截图全部生成、`screenshot_error` 全为 `None`。
+
+**用户那个原本静默失败的页面**（只读复核）：
+`install_on_page → True | ok`，页面内回读
+`handlers=object | binding=function | https://business.facebook.com/latest/...`。
+**同一个页面，旧代码装不上且不吭声，新代码装上了。**
+
+新增 20 条断言（`tests_publish.py` 92 → 112），含 enable 顺序、
+回读校验失败必须返回失败、坏 JSON 不炸 binding、
+`session_id` 对不上仍拒收、CDP 截图遮罩插不进去就不截。
+**19 套 / 1219 项全绿。**
+
+### 18.6 给下一个人的一句话
+
+**这一轮两个 bug（CR-63 的超时、CR-64 的静默）都不是审查能看出来的，
+都是真机跑出来的。** 它们的共同点是：**离线测试把出问题的那一层整个 mock 掉了**。
+`_cdp_profile_matches` 被 mock、`page.evaluate` 被 FakePage 替掉——
+于是 17 套断言全绿，而真实环境里那两条路径从来没成功过。
+**mock 掉的边界，就是没有被测到的边界。**

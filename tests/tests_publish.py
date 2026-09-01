@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
+import inspect
 import io
 import json
 import sys
@@ -138,12 +139,16 @@ class FakePage:
 
     def __init__(self):
         self.mask_selectors = []
+        self.screenshot_timeouts = []
 
     def locator(self, selector):
         self.mask_selectors.append(selector)
         return FakeLocator()
 
-    async def screenshot(self, *, path, full_page, mask):
+    async def screenshot(self, *, path, full_page, mask, timeout=None):
+        # timeout 是 CR-64 加的：帧树坏掉的页面上 Playwright 截图会一直挂着，
+        # 而 record() 是持锁的，一次挂住就把后面所有事件堵死。
+        self.screenshot_timeouts.append(timeout)
         Image.new("RGB", (24, 16), (1, 2, 3)).save(path, format="PNG")
 
 
@@ -931,6 +936,140 @@ with tempfile.TemporaryDirectory() as d:
     rejected_data = json.loads(rejected.output_path.read_text(encoding="utf-8"))
     check(not synthetic and not sensitive and not rejected_data["interactions"],
           "合成事件与密码输入即使直接调用 exposed binding 也不会持久化或截图")
+
+
+print("\n[7][CR-64] 监听器改走 CDP 安装，且**装不上必须报出来**")
+
+# 背景：用户 2026-09-01 走完整个发帖流程后才发现 dump 是空的。
+# 实测那个 Business Suite 标签页上 Playwright 的 page 对象是坏的：
+#   page.url='' / frames=1 个空帧 / page.evaluate('1+1') -> TimeoutError
+#   expose_binding 之后 typeof window[binding] -> undefined
+# 而**同一个 target 的原始 CDP 完全正常**。旧的 _install_existing 用
+# `except Exception: continue` 把这个 TimeoutError 整个吞掉，于是一条都没记，
+# 全程零提示。下面每条断言都指向"这种静默不许回来"。
+
+import tools.probe_publish as probe_module  # noqa: E402
+
+
+class FakeCDPSession:
+    def __init__(self, verify="object", fail_on=()):
+        self.sent = []
+        self.handlers = {}
+        self.verify = verify
+        self.fail_on = set(fail_on)
+        self.detached = False
+
+    def on(self, event, handler):
+        self.handlers[event] = handler
+
+    async def send(self, method, params=None):
+        self.sent.append((method, params or {}))
+        if method in self.fail_on:
+            raise RuntimeError("boom:%s" % method)
+        if method == "Runtime.evaluate":
+            expr = (params or {}).get("expression", "")
+            if "typeof window." in expr and "Handlers" in expr:
+                return {"result": {"value": self.verify}}
+            return {"result": {"value": None}}
+        if method == "Page.captureScreenshot":
+            import base64 as _b64
+            buf = io.BytesIO()
+            Image.new("RGB", (8, 6), (4, 5, 6)).save(buf, format="PNG")
+            return {"data": _b64.b64encode(buf.getvalue()).decode()}
+        return {}
+
+    async def detach(self):
+        self.detached = True
+
+
+class FakeCtx:
+    def __init__(self, session):
+        self.session = session
+
+    async def new_cdp_session(self, _page):
+        return self.session
+
+
+async def _install(verify="object", fail_on=()):
+    sess = FakeCDPSession(verify=verify, fail_on=fail_on)
+    out = await probe_module.install_on_page(
+        FakeCtx(sess), FakePage(), "SCRIPT", lambda *_a: None)
+    return sess, out
+
+
+sess, (_s, ok, detail) = asyncio.run(_install())
+methods = [m for m, _ in sess.sent]
+check(ok and detail == "ok", "正常情况下安装成功")
+check("Runtime.enable" in methods and "Page.enable" in methods,
+      "**先 enable Runtime 与 Page 域**：实测不 enable 时首个文档一切正常，"
+      "一导航就再也收不到 bindingCalled —— 症状和这次的 bug 一模一样")
+check(methods.index("Runtime.enable") < methods.index("Runtime.addBinding"),
+      "enable 必须在 addBinding 之前，否则新执行上下文不会被跟踪")
+check("Runtime.addBinding" in methods,
+      "用 CDP 的 Runtime.addBinding 做通路，不依赖 Playwright 的 expose_binding —— "
+      "后者在坏掉的 page 对象上是 undefined")
+check("Page.addScriptToEvaluateOnNewDocument" in methods,
+      "覆盖后续文档与新建 frame")
+check(any(m == "Runtime.evaluate" and p.get("expression") == "SCRIPT"
+          for m, p in sess.sent),
+      "**同时对当前文档注入一次**：SPA 客户端路由不产生新文档，只靠 init script 会漏")
+check("Runtime.bindingCalled" in sess.handlers,
+      "挂上 bindingCalled 监听，事件才有地方回来")
+
+_, (_s2, ok2, detail2) = asyncio.run(_install(verify="undefined"))
+check(not ok2 and "回读不到" in detail2,
+      "**注入后回读不到标记就算失败**，不许假装装上了 —— "
+      "旧实现连回读都没有，装没装上全靠猜")
+_, (_s3, ok3, detail3) = asyncio.run(_install(fail_on=("Runtime.addBinding",)))
+check(not ok3 and "RuntimeError" in detail3,
+      "任何一步抛异常都如实带回原因，不再 except: continue 吞掉")
+
+# 只看代码，不看 docstring —— 那段说明里**引用**了旧写法，是有意保留的。
+src = inspect.getsource(probe_module.install_on_page).split('"""')[-1]
+check("except Exception: continue" not in src,
+      "install_on_page 的代码里不许再出现吞掉一切的 except: continue")
+check("JSON.stringify" in probe_module.INSTALL_FUNCTION,
+      "页面侧传 JSON 字符串 —— CDP 的 addBinding 只接受 string 参数")
+check(probe_module._safe_payload(json.dumps(
+        {"session_id": "s", "is_trusted": True, "event_type": "click",
+         "target": {"tag": "button"}}), "s") is not None,
+      "_safe_payload 收得下 JSON 字符串（新通路的实际形态）")
+check(probe_module._safe_payload("{坏 json", "s") is None,
+      "坏 JSON 被丢弃而不是抛异常炸掉 binding 回调")
+check(probe_module._safe_payload(json.dumps(
+        {"session_id": "别人", "is_trusted": True, "event_type": "click",
+         "target": {"tag": "button"}}), "s") is None,
+      "session_id 对不上仍然拒收 —— 换了通路，这道闸不能松")
+
+# 截图：Playwright 挂住时的 CDP 回退，隐私边界必须一起带过去
+with tempfile.TemporaryDirectory() as d:
+    shot = Path(d) / "s.png"
+    sess4 = FakeCDPSession()
+    okk, det = asyncio.run(probe_module._cdp_screenshot(sess4, shot))
+    exprs = [p.get("expression", "") for m, p in sess4.sent if m == "Runtime.evaluate"]
+    check(okk and shot.is_file() and shot.stat().st_size > 0,
+          "CDP 截图回退能真的写出 PNG")
+    check(any("blur" in e for e in exprs),
+          "**回退路径也要遮罩敏感输入**：Playwright 的 mask= 用不了，"
+          "改成临时插一条 CSS 把密码/邮箱/OTP 模糊掉")
+    check(any("remove()" in e for e in exprs), "截完把临时样式撤掉，不留痕迹")
+
+    sess5 = FakeCDPSession(fail_on=("Runtime.evaluate",))
+    shot2 = Path(d) / "s2.png"
+    ok5, det5 = asyncio.run(probe_module._cdp_screenshot(sess5, shot2))
+    check(not ok5 and not shot2.exists(),
+          "**遮罩插不进去就不截图** —— 宁可没有截图，也不能把敏感输入拍进去")
+
+page = FakePage()
+_rec = ProbeRecorder(Path(tempfile.mkdtemp()), port=1, profile=Path("."))
+asyncio.run(_rec.record(page, {"session_id": _rec.session_id, "is_trusted": True,
+                               "event_type": "click", "target": {"tag": "b"}}))
+check(page.screenshot_timeouts and page.screenshot_timeouts[0] is not None,
+      "record() 给截图显式超时：坏页面上 Playwright 截图会一直挂着，"
+      "而 record 持锁，一次挂住就把后面所有事件堵死")
+
+check(inspect.iscoroutinefunction(probe_module.cdp_page_targets),
+      "有一条直接问 CDP 要 page 目标的路 —— 用来核对 Playwright 有没有漏页")
 
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))

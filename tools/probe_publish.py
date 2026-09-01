@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import http.client
 import json
 import sys
 from datetime import datetime, timezone
@@ -119,7 +121,16 @@ def _safe_element(value: object) -> dict | None:
 
 
 def _safe_payload(payload: object, session_id: str) -> dict | None:
-    """页面只能提交固定 schema；未知字段和非可信事件一律丢弃。"""
+    """页面只能提交固定 schema；未知字段和非可信事件一律丢弃。
+
+    页面侧统一发 JSON 字符串（CDP 的 ``Runtime.addBinding`` 只收 string），
+    所以这里先解析再校验。仍然接受 dict，便于测试直接喂结构体。
+    """
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, ValueError):
+            return None
     if not isinstance(payload, dict):
         return None
     if payload.get("session_id") != session_id or payload.get("is_trusted") is not True:
@@ -306,7 +317,12 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
       target: chain[0] || null,
       candidates: chain,
     };
-    Promise.resolve(binding(payload)).catch(() => {});
+    // ⚠️ 必须传**字符串**。CDP 的 Runtime.addBinding 暴露出来的函数只接受一个
+    // string 参数；早期版本直接传对象，只有 Playwright 的 expose_binding 认。
+    // 现在两条通路都走 JSON 字符串，Python 侧统一解析（CR-64）。
+    try {
+      Promise.resolve(binding(JSON.stringify(payload))).catch(() => {});
+    } catch (err) { /* 页面被卸载途中，忽略 */ }
   };
 
   const timers = new Map();
@@ -343,6 +359,53 @@ def install_script(session_id: str, binding_name: str = BINDING_NAME) -> str:
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_MASK_STYLE_ID = "__fbscraperPublishProbeMask"
+
+
+async def _cdp_screenshot(session, path: Path) -> tuple[bool, str]:
+    """Playwright 截不了时用 CDP 兜底，**并且保住敏感输入的遮罩**。
+
+    Playwright 的 ``mask=`` 在这条路上用不了，所以先临时插一条 CSS 把
+    密码/邮箱/OTP 类输入模糊掉，截完再撤掉。**不能因为换了通路就把隐私边界丢了**——
+    `PUBLISH_PLAN` 的探查隐私要求对两条路径同样成立。
+    """
+    add_mask = (
+        "(() => { const s = document.createElement('style');"
+        " s.id = %s;"
+        " s.textContent = %s + '{filter:blur(12px)!important}';"
+        " document.documentElement.appendChild(s); })()"
+        % (json.dumps(_MASK_STYLE_ID), json.dumps(_SENSITIVE_INPUT_SELECTOR)))
+    drop_mask = (
+        "(() => { const s = document.getElementById(%s);"
+        " if (s) s.remove(); })()" % json.dumps(_MASK_STYLE_ID))
+    try:
+        await asyncio.wait_for(
+            session.send("Runtime.evaluate",
+                         {"expression": add_mask, "returnByValue": True}),
+            timeout=5)
+    except Exception:
+        return False, "插入遮罩样式失败，为免泄露敏感输入放弃截图"
+    try:
+        shot = await asyncio.wait_for(
+            session.send("Page.captureScreenshot", {"format": "png"}),
+            timeout=10)
+        data = shot.get("data")
+        if not isinstance(data, str) or not data:
+            return False, "CDP 没有返回图片数据"
+        path.write_bytes(base64.b64decode(data))
+        return True, "ok"
+    except Exception as exc:
+        return False, "%s: %s" % (type(exc).__name__, str(exc).splitlines()[0][:80])
+    finally:
+        try:
+            await asyncio.wait_for(
+                session.send("Runtime.evaluate",
+                             {"expression": drop_mask, "returnByValue": True}),
+                timeout=5)
+        except Exception:
+            pass
 
 
 class ProbeRecorder:
@@ -383,7 +446,7 @@ class ProbeRecorder:
             encoding="utf-8")
         temporary.replace(self.output_path)
 
-    async def record(self, page, payload: object) -> bool:
+    async def record(self, page, payload: object, session=None) -> bool:
         payload = _safe_payload(payload, self.session_id)
         if payload is None:
             return False
@@ -397,10 +460,17 @@ class ProbeRecorder:
             screenshot_error = None
             try:
                 masks = [page.locator(_SENSITIVE_INPUT_SELECTOR)]
+                # ⚠️ 显式短超时：帧树坏掉的页面上 Playwright 截图会一直挂着，
+                # 而 record 是持锁的 —— 一次挂住就把后面所有事件堵死（CR-64）。
                 await page.screenshot(
-                    path=str(screenshot), full_page=False, mask=masks)
+                    path=str(screenshot), full_page=False, mask=masks,
+                    timeout=8000)
             except Exception as exc:  # 页面恰在导航/关闭时，记录失败但不丢交互本身
                 screenshot_error = "%s: %s" % (type(exc).__name__, exc)
+                if session is not None:
+                    ok, detail = await _cdp_screenshot(session, screenshot)
+                    screenshot_error = None if ok else "%s；CDP 回退也失败：%s" % (
+                        screenshot_error, detail)
 
             record = dict(payload)
             record["sequence"] = sequence
@@ -440,14 +510,119 @@ async def _read_line(prompt: str) -> str:
         return ""
 
 
+REGISTRY_NAME = "__fbscraperPublishProbeHandlers"
+_INSTALL_TIMEOUT = 15.0
+
+
 async def _install_existing(context, script: str) -> None:
+    """遗留入口：只在已有页面上注入，不做校验。**新代码请用 install_on_page。**
+
+    保留是因为老测试与手工排查还在用它。
+    """
     for page in list(context.pages):
         for frame in list(page.frames):
             try:
                 await frame.evaluate(script)
             except Exception:
-                # 某个 frame 正在导航/销毁不应终止整场；init script 会覆盖下一页。
                 continue
+
+
+async def install_on_page(context, page, script: str,
+                          on_payload) -> tuple[object | None, bool, str]:
+    """把监听器装进一个页面，**并确认它真的装上了**。返回 (session, ok, 说明)。
+
+    ⚠️ **为什么整条改走 CDP，而不是 Playwright 的 page/frame API**（CR-64）：
+
+    用 `connect_over_cdp` 附着到**连接之前就已经打开**的页面时，Playwright 的
+    page 对象可能永远拿不到帧树——2026-09-01 实测用户那个 Business Suite 标签页：
+
+        page.url            -> ''          （真实是 business.facebook.com/...）
+        page.frames         -> 1 个空帧
+        page.evaluate('1+1')-> **TimeoutError**
+        expose_binding 之后 typeof window[binding] -> undefined
+        add_init_script     -> 不生效（SPA 客户端路由，不产生新文档）
+
+    而**同一个 target 上的原始 CDP 完全正常**：
+
+        Runtime.evaluate('location.href') -> 真实 URL
+        Page.getFrameTree                 -> 真实主帧
+        Runtime.evaluate(注入脚本)         -> handlers = object
+
+    旧实现在 `_install_existing` 里 `except Exception: continue` 把这个
+    TimeoutError **整个吞掉**，于是：监听器一个都没装上、一条事件都没记录、
+    **而且从头到尾没有任何提示**。用户走完整个发帖流程才发现 dump 是空的。
+
+    所以现在：① 用 CDP 装；② **装完立刻回读校验**；③ 装不上就如实报出来。
+    """
+    try:
+        session = await context.new_cdp_session(page)
+    except Exception as exc:
+        return None, False, "开不了 CDP 会话：%s" % type(exc).__name__
+
+    def _on_binding(params):
+        if params.get("name") != BINDING_NAME:
+            return
+        asyncio.create_task(on_payload(page, params.get("payload")))
+
+    try:
+        session.on("Runtime.bindingCalled", _on_binding)
+        # ⚠️ **这两个 enable 不能省。** 实测：不开 Runtime/Page 域时，
+        # 首个文档上一切正常，但**一导航就再也收不到 bindingCalled**——
+        # addBinding 只会被装进"已被跟踪的"执行上下文，而新文档那个
+        # 没有 Runtime.enable 就不会被跟踪。表现和这次的 bug 一模一样：
+        # 前面记得好好的，换一页就全丢（CR-64）。
+        await asyncio.wait_for(session.send("Runtime.enable"),
+                               timeout=_INSTALL_TIMEOUT)
+        await asyncio.wait_for(session.send("Page.enable"),
+                               timeout=_INSTALL_TIMEOUT)
+        await asyncio.wait_for(
+            session.send("Runtime.addBinding", {"name": BINDING_NAME}),
+            timeout=_INSTALL_TIMEOUT)
+        # 覆盖后续文档与新建的 frame（含跨源 iframe）。
+        await asyncio.wait_for(
+            session.send("Page.addScriptToEvaluateOnNewDocument",
+                         {"source": script}),
+            timeout=_INSTALL_TIMEOUT)
+        # 覆盖**当前**这个文档——SPA 客户端路由不产生新文档，只靠上一条会漏。
+        await asyncio.wait_for(
+            session.send("Runtime.evaluate",
+                         {"expression": script, "returnByValue": True}),
+            timeout=_INSTALL_TIMEOUT)
+        verify = await asyncio.wait_for(
+            session.send("Runtime.evaluate",
+                         {"expression": "typeof window.%s" % REGISTRY_NAME,
+                          "returnByValue": True}),
+            timeout=_INSTALL_TIMEOUT)
+    except Exception as exc:
+        return session, False, "%s: %s" % (type(exc).__name__, str(exc).splitlines()[0][:120])
+
+    if (verify.get("result") or {}).get("value") != "object":
+        return session, False, "注入后回读不到监听器标记（页面可能立刻导航了）"
+    return session, True, "ok"
+
+
+async def cdp_page_targets(port: int) -> list[dict]:
+    """直接问 CDP 有哪些 page target —— 用来**核对 Playwright 有没有漏页**。
+
+    Playwright 的 `context.pages` 与浏览器真实的 page target 可能对不上
+    （见 :func:`install_on_page` 的实测）。漏了就等于那一页全程不记录，
+    所以宁可多问一次 HTTP，也不能默认它们一致。
+    """
+    def _fetch() -> list[dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", "/json/list")
+            data = json.loads(conn.getresponse().read())
+        finally:
+            conn.close()
+        if not isinstance(data, list):
+            return []
+        return [t for t in data
+                if isinstance(t, dict) and t.get("type") == "page"]
+    try:
+        return await asyncio.to_thread(_fetch)
+    except Exception:
+        return []
 
 
 async def run_probe(*, collect_notes: bool = True) -> Path:
@@ -465,24 +640,100 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
             start_script=r"scripts\start_chrome_publish.bat",
             login_hint="DE 发布账号")
 
-        async def receive(source, payload):
-            page = source.get("page")
-            if page is not None:
-                await recorder.record(page, payload)
+        async def receive(page, payload):
+            try:
+                if await recorder.record(page, payload,
+                                         session=installed.get(id(page))):
+                    # ⚠️ 逐条回显。上一次用户走完整个流程才发现 dump 是空的——
+                    # 只要屏幕上不再跳数字，当场就知道没记上（CR-64）。
+                    print("  #%d %s" % (len(recorder.data["interactions"]),
+                                        _safe_text(
+                                            (_safe_payload(payload, recorder.session_id)
+                                             or {}).get("event_type"), 12) or "?"))
+            except Exception:
+                # 记录一条失败不能让后面全都收不到（binding 回调里抛异常会静默断链）
+                pass
 
-        await context.expose_binding(BINDING_NAME, receive)
         script = install_script(recorder.session_id)
-        await context.add_init_script(script=script)
-        await _install_existing(context, script)
+        installed: dict[int, object] = {}          # id(page) -> cdp session
+        failures: list[str] = []
 
-        print("G1 探查已开始：%s" % recorder.output_path)
+        async def ensure_installed(page, *, quiet: bool = False) -> bool:
+            if id(page) in installed:
+                return True
+            session, ok, detail = await install_on_page(
+                context, page, script, receive)
+            if ok:
+                installed[id(page)] = session
+                if not quiet:
+                    print("  [ok] 已挂上监听：%s" % (_safe_url(page.url) or "(新标签页)"))
+                return True
+            failures.append(detail)
+            if not quiet:
+                print("  [!] 挂不上监听（%s）：%s"
+                      % (_safe_url(page.url) or "未知页面", detail))
+            return False
+
+        for page in list(context.pages):
+            await ensure_installed(page)
+
+        def _on_new_page(page):
+            asyncio.create_task(ensure_installed(page))
+
+        context.on("page", _on_new_page)
+
+        # 定期巡检：补装新页面，并核对 Playwright 有没有漏掉 CDP 能看见的页面。
+        stop_sweep = asyncio.Event()
+
+        async def sweep() -> None:
+            while not stop_sweep.is_set():
+                try:
+                    await asyncio.wait_for(stop_sweep.wait(), timeout=3.0)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    for page in list(context.pages):
+                        await ensure_installed(page, quiet=True)
+                    targets = await cdp_page_targets(port)
+                    if len(targets) > len(installed):
+                        print("  [!] 浏览器有 %d 个页面，但只挂上了 %d 个监听。"
+                              % (len(targets), len(installed)))
+                        print("      没挂上的那个页面**不会被记录**。"
+                              "在它上面按 F5 刷新一次通常就能补上。")
+                except Exception:
+                    pass
+
+        sweeper = asyncio.create_task(sweep())
+
+        if not installed:
+            print("\n[!] **一个页面都没能挂上监听——现在开始走流程会全部记录不到。**")
+            print("    先在发布 Chrome 里按 F5 刷新一次那个标签页，再重跑本工具。")
+            for detail in failures[:3]:
+                print("    原因：%s" % detail)
+
+        print("\nG1 探查已开始：%s" % recorder.output_path)
+        print("已挂上监听的页面：%d 个" % len(installed))
         print("模式：只记录，不驱动。工具不会打开 URL、点击、填写、上传或提交。")
         print("请先确认 DE 发布账号已经人工登录；不要在探查运行期间输入账号密码。")
         print("请在发布专用 Chrome 里手工走完整流程；每次 click/input/change/submit 都会截图。")
+        print("⚠️ 边走边看这里：每记录一条会累加计数。**长时间不动就是没记上**，")
+        print("   那时先按 F5 刷新页面，而不是把整个流程走完才发现是空的。")
         print("不要关闭这个终端。完成后回到这里按 Enter 停止记录。")
         await _read_line("\n按 Enter 停止记录：")
+        stop_sweep.set()
+        sweeper.cancel()
         # 让最后一次 input 的 700ms 去抖有机会落盘；不触碰页面状态。
         await asyncio.sleep(0.9)
+
+        # ⚠️ 空 dump 必须当场说清楚。用户上一次就是走完整个流程才发现是空的。
+        if not recorder.data["interactions"]:
+            print("\n[!] **这一轮一条交互都没记录到。**")
+            print("    这份 dump 不能用来回填 selectors.py，请不要拿它当验收材料。")
+            print("    最常见的原因：附着时那个标签页早就打开着，Playwright 拿不到它的帧树。")
+            print("    做法：在发布 Chrome 里按 F5 刷新一次要操作的页面，再重跑本工具。")
+            if failures:
+                print("    本轮挂载失败原因：%s" % failures[0])
 
         if collect_notes:
             print("\n下面只记你亲眼看到的结果；不知道就直接按 Enter，绝不猜。")
