@@ -3,27 +3,95 @@
 > 直接把本文件内容粘贴进新会话即可。你也可以先让会话进入项目根目录，再说
 > "读 docs/HANDOFF.md 然后开始"，效果一样。
 >
-> **最后更新：2026-09-01 · L0b/L0c 已落地；G1 已录到两份真实 dump；
-> 期间修掉五个只能在真机上暴露的 bug（CR-63 ~ CR-67）**
+> **最后更新：2026-09-01 第五轮 · 真实 Business Suite 判读完成，G6/G6c 生产闸已开**
 >
-> 🎯 **如果你是被派来接着干的新会话，先看这四件**：
-> 1. **`main` 与 `origin/main` 同步，19 套 1244 项全绿。**
->    当前提交用 `git log --oneline -1` 看——**这里不写死 hash，写了下一次提交就过期。**
->    单目录单分支：只有 `main`（+ 安全网 ref `backup/pre-merge-2026-08-31`），
->    远端只有 `origin/main`。
-> 2. **G1 已经录到真实数据了，但还没收口** —— 这是当前唯一的关键路径，
->    详见下面「🎬 G1 现在到底走到哪了」。**先读那一节再动手。**
-> 3. **动 `publish/` 或 `core/chrome.py` 之前读 `CODE_REVIEW.md` 第 17 + 18 节**
+> ## 🆕 一分钟看懂现状（这一段覆盖本文件后面所有历史轮次）
+>
+> **上线路径只剩一步卡在用户手上。** 顺序照 → **`docs/GO_LIVE.md`** 走，
+> 那是唯一一份"照着按就能上线"的清单，本文件不重复它。
+>
+> | 环节 | 状态 |
+> |---|---|
+> | A/B/C/D/E/J 抓取归档 | ✅ 已验收 |
+> | F 翻译（DeepSeek） | ✅ 管道通；德语审校仍待人 |
+> | K 图内德语化（GPT-Image-2） | ✅ 两张真实产出，第一张用户确认可用 |
+> | **G1 真实 DOM 探查** | ✅ **首份完整通过 v2 契约的 dump 已录到并判读完** |
+> | **G6/G6c 生产证据** | ✅ **五件全部机械推导 + 逐条回查通过，三道闸已开** |
+> | G8 真机发一篇 | ⬜ 等下面那一步 |
+> | **`ui_constraints_verified`** | ⛔ **仍 false —— 当前唯一阻塞项**，见 `GO_LIVE.md` 第 3b 步 |
+> | L 流水线 activate / assisted | ⬜ G8 通过后 |
+> | 计划任务 | ⬜ 用户显式决定 |
+>
+> **测试基线：23 套 / 1543 项全绿**（`scripts\setup.bat` 全跑；
+> ⚠️ 别把数字当契约，要断言的是"全绿"）。
+>
+> ### 这一轮最重要的一件事：**证据契约按真实 UI 整段重写了**
+>
+> 2026-09-01 用户录到 `publish_probe_20260901_054226_378622.json`
+> （56 交互 / 71 快照 / 117 截图，**v2 契约首次完整通过**）。
+> 判读之后发现：**此前那套 G6c 契约是照着想象中的 UI 写的，现实完全不长那样。**
+>
+> - composer 上**从头到尾没有 IG 帐号名**，渠道只有 `img 'Instagram'` 一个图标；
+> - Planner 上**没有"一张卡片带全部元数据"这种东西**：FB 与 IG 是
+>   **两个独立对象、两个 remote ID、两个详情弹窗**；
+> - Planner 侧**零图片数量语义**；可见范围是 `heading 'September'` +
+>   `heading '2026'` 两条，不是 "start - end" 串。
+>
+> **所以缺的东西不是没录到，是那个 UI 上不存在 —— 重录一百遍也不会有。**
+> 逐条判读（每条都带快照编号）在 **`docs/PROBE_FINDINGS_20260901.md`**。
+> ⛔ **动 `publish/evidence.py` 或 `business_suite.py` 之前必读那份**，
+> 否则很容易把已经按现实校准过的判据"改回"想象中的样子。
+>
+> ### 🎯 如果你是被派来接着干的新会话，先看这五件
+>
+> 1. **先读 `docs/GO_LIVE.md`**，再读 `docs/PROBE_FINDINGS_20260901.md`。
+>    前者是操作顺序，后者是真实 UI 事实。本文件是背景与禁令。
+> 2. **单目录单分支**：只有 `main`（+ 安全网 ref `backup/pre-merge-2026-08-31`），
+>    远端只有 `origin/main`。当前提交用 `git log --oneline -1` 看
+>    ——**这里不写死 hash，写了下一次提交就过期。**
+> 3. **生产闸现在是开的**，`scripts\run_publish_post.bat ... --submit`
+>    会**真的点提交**。查一眼：`scripts\run_probe_signals.bat --status`。
+> 4. **动 `publish/` 或 `core/chrome.py` 之前读 `CODE_REVIEW.md` 第 17 + 18 节**
 >    （CR-63 ~ CR-67）。那五条**全部是用户真机跑出来的，没有一条是审查看出来的**，
 >    而离线测试当时全绿。共同教训写在 **18.9**：**mock 掉的边界就是没被测到的边界。**
-> 4. **仍然卡在用户手上的两件**：装计划任务（第 9 步，现在解锁了）、
->    K9 图片费用确认（第 10b 步，≈US$2.4）。⛔ **这两件不要替用户按。**
+>    这一轮又验证了一次：契约被推翻的那五条，离线夹具全都"验过"。
+> 5. **外部动作顺序不能改**：填 14 个 UI 上限 → G8 `--submit` 并取消 →
+>    同项复跑 → activate → 切 assisted → 用户显式安装任务。
+>    ⛔ 不替用户提交测试帖、取消排期、激活或安装任务。
 >
-> 📌 **一句话现状：这个项目目前没有任何东西在自动跑。**
-> 计划任务至今没有安装（实测查不到）。所有的幂等、断点、告警、降级都写好了
-> 也测过了，**但没有任何东西会在没人的时候运行它们**。
+> 📌 **一句话现状：这个项目目前仍然没有任何东西在自动跑。**
+> 计划任务至今没有安装。所有的幂等、断点、告警、降级都写好了也测过了，
+> **但没有任何东西会在没人的时候运行它们**。
 > 见 `docs/PIPELINE_PLAN.md`——那是唯一一份**跨组**文档，
 > 回答"这些段怎么连成一条不用人管的线"。
+>
+> ### 🧰 这一轮新增的工具（记住它们，别重复造）
+>
+> | 命令 | 干什么 |
+> |---|---|
+> | `run_probe_signals.bat --status` | 三道生产闸现在是开是关，关着差哪条 |
+> | `run_probe_signals.bat --check <dump>` | 录完 30 秒体检：这份 dump 能不能解锁生产提交 |
+> | `run_probe_signals.bat --report <dump>` | **推不出来时看它**：摊开 dump 里真实存在的语义 |
+> | `run_probe_signals.bat --emit <dump>` | 推导 → 回查 → 写 `publish/signals_backfilled.py` |
+> | `probe_publish.py --fill-notes <dump> --set-note K=V` | 非交互填观察项，不用走 20 问 |
+>
+> ⛔ `publish/signals_backfilled.py` 是**生成文件**，不要手工编辑
+> ——下一次 `--emit` 会整份覆盖。
+>
+> ---
+>
+> <details>
+> <summary>历史：2026-09-01 第三/四轮（已被上面覆盖，只用于理解当时为什么那么做）</summary>
+>
+> - 第四轮：`probe_publish.py` 升级 schema v2；G6/G6c 实现单次提交、成功等待、
+>   Planner 回读与追加式五态 journal；G9 assisted 实现 activate/run/approve/status。
+>   当时旧 dump 证明不了因果链，所以 `SIGNALS` 保持空、`--submit` 在碰浏览器前失败闭合。
+>   **那个状态已在第五轮解除。**
+> - 第三轮：G1 的 24 条 dump 人工读完并回填 `publish/selectors.py`（12 条 composer 定位）；
+>   G2–G5/G7 实现，链路跑到"提交前一步"；UI 时区定案为跟发帖设备本机时间走；
+>   渠道勾选确认默认全选。
+>
+> </details>
 >
 > ---
 >
@@ -76,6 +144,11 @@ C2/C4/C5 与 E3 的注册卡在用户跑一次复测）。
 
 ## 第一步：按这个顺序读
 
+0. **`docs/GO_LIVE.md`** —— **想知道"现在该按哪个键"就只读这一份。**
+   从当前状态到"不用人管"的全部步骤，每步带判据和过不了怎么办。
+0b. **`docs/PROBE_FINDINGS_20260901.md`** —— 真实 Business Suite 长什么样，
+   每条带快照编号。**动 `publish/evidence.py` 或 `business_suite.py` 之前必读**：
+   那里记着五条"照直觉写就会错"的 UI 事实，都是被真实 dump 推翻出来的。
 1. **`docs/IMPLEMENTATION_PLAN.md`** —— 唯一的进度真相源。背景、约束、
    关键事实速查、全部任务、依赖图、验收清单、故障速查表都在里面。
    **完整读完再动手**，尤其是第 1 节（关键事实）、第 2 节（禁止事项）、
@@ -356,89 +429,109 @@ f111057 fix(review): 主干二次审查 CR-41 ~ CR-45（cherry-pick 自 c35715d�
 
 ---
 
-## 🎬 G1 现在到底走到哪了（2026-09-01，**接手先读这一节**）
+## 🎬 G1 已收口（2026-09-01 第五轮）
 
-**G1 不再是"完全没开始"，但也还没收口。** 用户已经真实录到两份 dump，
-`state/` 下现在有四份，只有两份有价值：
+**`state/` 下现在只留三份 dump，每一份都有明确用途**（其余失败尝试已删）：
 
-| dump | 交互 | 覆盖路径 | 能用来干什么 |
-|---|---:|---|---|
-| `publish_probe_20260831_195237_008047.json` | **63** | `www.facebook.com/professional_dashboard/*`（旧版创作者后台） | 序号连续、`finished_at` 完整 |
-| `publish_probe_20260831_222850_347719.json` | **24** | **`business.facebook.com/latest/composer/`**（← G1 真正要的那条） | **回填 `selectors.py` 就靠它** |
-| `..._203718_...` / `..._214804_...` | 1 / 2 | 只有新标签页那一下 | **是失败尝试的残渣，删掉** |
+| dump | schema | 交互/快照 | 用途 |
+|---|---|---:|---|
+| `publish_probe_20260901_054226_378622.json` | **v2** | 56 / 71 | ✅ **生产证据来源**。`config.toml` 的 `ui_probe_dump` 指向它，`publish/signals_backfilled.py` 从它推导 |
+| `publish_probe_20260831_222850_347719.json` | v1 | 24 / 0 | `selectors.py` 里 **12 条 composer 定位**的来源，`tests_publish.py` 会逐条回查。**别删** |
+| `publish_probe_20260831_195237_008047.json` | v1 | 63 / 0 | 旁证：唯一录到过「Meta 的 Photo/video 按钮背后是真的 `<input type=file multiple>`」。**别删** |
 
-### 那份 24 条的 dump 里已经有什么
+⚠️ 那两份 v1 `finished_at`/`sequence` 有硬伤，**过不了严格模式，这是对的**；
+它们只用来给 `Locator` 做回查，不参与 G6/G6c 生产证据。
+⛔ **不要手工改序号把它们"修好"**——那两条校验存在的意义就是证明记录没丢过。
 
-`content_calendar` 上的 **Create post** → 进 `composer/` →
-**Add photo/video** → 正文输入（`role=combobox`）→ 话题标签搜索与勾选
-（`role=searchbox` / `role=checkbox`）→ 表情 → **`Set date and time` 开关
-（`role=switch`）** → 日期选择器（`role=textbox`）、`meridiem` / `minutes`
-（`role=spinbutton`）。**24 张截图齐全，零截图失败。**
+### 录完之后该跑什么
 
-也就是说 **G3（上传）/ G4（文案）/ G5（排期）要的定位证据基本都在里面了**。
+```bash
+scripts\run_probe_signals.bat --check state\publish_probe_<时间戳>.json --caption "正文里的一小句"
+```
 
-### ⚠️ 但它有两个硬伤，别拿它当"G1 已完成"
+30 秒告诉你这份录制成不成立。推不出来时用 `--report` 看 dump 里**真实存在**什么
+——这一轮就是靠它发现"缺的东西 UI 上根本不存在"，而不是又去重录一遍。
 
-1. **`finished_at` 是 `null`** —— 那一轮是被 CR-66 的死锁中断的，收尾没跑完；
-2. **`sequence` 不连续**（缺 #19/#21/#24/#27）—— 中断时有几条记录死在半路。
+观察项随时可补，不用重录：
 
-`compose._validated_probe_dump` **两条都要查**（`finished_at` 必须是 ISO 时间、
-`sequence` 必须从 1 起严格连续），所以**这份 dump 过不了严格模式**。
+```bash
+.venv\Scripts\python.exe tools\probe_publish.py --fill-notes state\<dump>.json --set-note KEY=VALUE
+```
 
-> **但它完全可以用来人工读、回填 `selectors.py`** ——
-> 那本来就是 G1 产出的主要用途。⛔ **不要去手工改序号把它"修好"**：
-> 那两条校验存在的意义就是证明记录没丢过，改了就等于把证据抹掉。
+⚠️ IG 的四类上限与排期窗口**只能人亲眼看 UI 得到，程序不许猜**（全局红线 5）。
+不确定的**宁可空着**：空着只是继续挡住，填错是放行一个错的。
 
-### 所以 G1 的收口动作是（两步，都很短）
+### ✅ 2026-09-01 第二轮：回填做完了
 
-1. **用户重跑一次干净的探查**（现在死锁修了、序号 bug 也修了，
-   一次走完 → 按 Enter → 正常收尾即可）：
+`publish/selectors.py` 现在是一张**带证据的登记表**（`Locator` / `Gap`
+两个 dataclass），不是一堆裸字符串：
 
-   ```bash
-   .venv\Scripts\python.exe tools\probe_publish.py
-   ```
+- **12 条 composer 定位**，每条写清「对应哪一步 / 出自这份 dump 的第几条 /
+  什么信号说明它失效了」；
+- **2 条旧版后台的旁证**，明确标注**不许拿到 composer 上用**
+  （`locator_for()` 会直接 `KeyError`）；
+- **8 条缺口登记**，每条写清「为什么没有 / 挡住了谁 / 怎么补上」。
 
-2. **想开 `--strict` 时再补观察项**（随时，不用重录）：
+**并且回填不再靠自觉**：`publish/evidence.py` 把每条定位**回查**到它自称的
+dump（role + 可访问名 + 稳定属性都要对上），`tests_publish.py` 第 [5] 节
+把它变成断言，本机 **14/14 全部命中**。⛔ **编出来的定位会当场被打回。**
+⚠️ dump 不进版本库，别的机器上是"跳过"不是"通过"——两者分开打印。
 
-   ```bash
-   .venv\Scripts\python.exe tools\probe_publish.py --fill-notes state\publish_probe_<时间戳>.json
-   ```
-
-   ⚠️ 那 20 个数字**只能人亲眼看 UI 得到，程序不许猜**（全局红线 5）。
-   缺任一项 `--strict` 都会失败闭合，工具会逐条列出还缺哪些。
-
-**代码侧在 G1 收口之前能做的**：拿那份 24 条 dump **人工读**，
-把 `role` / `accessible-name` / `data-testid` 这类稳定定位**带来源注释**地
-回填进 `publish/selectors.py`（现在仍是 8 行 TODO）。
-⛔ **只准用 dump 里真实出现过的属性，一个都不许从截图猜。**
+**三处"dump 里没有、但不用重录也能做对"的**（详见 `IMPLEMENTATION_PLAN` 附录 D）：
+composer 的 file input 走 **Playwright file chooser 通道**（连选择器都不用）、
+小时 spinbutton 按**排除法**（个数不是 3 就失败闭合）、
+缩略图**不假装验过**（作为提示交回给人）。
 
 ---
 
-## 🚦 接下来做什么（2026-09-01 更新）
+## 🚦 接下来做什么
 
-### 代码侧（不等任何人，现在就能开工）
+**操作顺序在 `docs/GO_LIVE.md`，这里只写"不许越级"那条纪律。**
 
-| # | 做什么 | 依据 |
-|---|---|---|
-| **1** | **人工读那份 24 条 dump，回填 `publish/selectors.py`** | 上一节。⛔ 只准用 dump 里真实出现过的 `role`/`accessible-name`/`data-testid`，**一个都不许从截图猜**（红线 5）。每条定位带来源注释（写清出自哪一条 sequence） |
-| **2** | 回填之后才谈 **G2–G6** 的实现 | `PUBLISH_PLAN.md` 第 4 节。`business_suite.py` 那五个 `ProbeRequired` 就是按这个顺序解开的 |
-| **3** | **L0d 价格表** | 46 种金额串已抓好（`PIPELINE_PLAN.md` 14 节 L0d）。⚠️ 排在 G1 之后，理由见 `PIPELINE_PLAN` 10.1（`[publish.price_map]` 是子表，必须在 `[publish]` 段最后，而 G1 还要往那段写值）|
-| **4** | **L1a `pipeline run`** | 等发布链路真能跑通再做 |
+代码侧 G6/G6c/G9 与证据契约都已完成，**不要再重写状态机、另建发布队列，
+也不要把 G6c 的判据"改回"一张卡片带全部元数据的样子**——
+那个形状被真实 dump 推翻过一次（`docs/PROBE_FINDINGS_20260901.md`）。
 
-### 用户侧（两件，⛔ 都不要替他按）
+前一步没过不得越级：
+填 14 个 UI 上限 → `ui_constraints_verified = true` → G8 `--submit` 并手工取消 →
+同项复跑（必须零浏览器）→ `pipeline activate --g8-verified` → 切 `assisted` →
+用户显式决定装不装计划任务。
 
-| # | 做什么 | 花多久 | 在哪 |
-|---|---|---|---|
-| **A** | **重跑一次干净的 G1 探查**（拿到 `finished_at` 完整、序号连续的 dump）| 约 20 分钟 | 第 11 步 |
-| **B** | **装每日计划任务** | 5 分钟 | 第 9 步（死人开关已就位，解锁了）|
-| **C** | K9 图片费用确认 ≈US$2.4 | 5 分钟 | 第 10b 步 |
+## 🔭 自动定时发布链路：当前边界
 
-> A 只有在要开 `--strict` 真实发布时才是硬需求；
-> **光是回填 `selectors.py` 的话，现有那份 24 条 dump 就够用。**
+```
+归档 → 跨平台对账 → 按 ID 翻译/调图 → 离线硬闸 → 待确认
+                                                   ↓ approve
+Composer 准备 → 单击提交 → 成功信号 → Planner 回读 → scheduled
+```
+
+- `manual` 只对账；`assisted` 的 `pipeline run` 最多做到待确认，**不接触发布浏览器**；
+- `approve` 才逐篇调用显式 `--submit`，首个浏览器或提交状态不明确即停止整批；
+- 30h 配对窗口未闭合时零付费；部分 source ref 已 scheduled 而 exact counterpart
+  迟到时写 `late_scheduled_overlap`，人工 approve 只扩展覆盖证据、零浏览器操作；
+- 所有真实付费先写 `paid_requests.jsonl` 的 started，响应 usage 先于业务产物落盘；
+  output_rejected 仍计费，uncertain/usage_unknown 会停止后续全部付费；
+- `prepared`、`submit_ambiguous`、`submitted_unverified`、`failed_pre_submit`
+  都不算发布成功，只有自动回读或人工证据结转后的 `scheduled` 才算；
+- 德国排期固定 10:00/17:00，UI 使用美西时区。两地 DST 独立换算；若德国
+  10:00 落到美西秋季回拨的重复 01:00，单帖命令失败闭合，批量分配跳到当天 17:00。
+
+### 渠道证据的边界（2026-09-01 按真实 UI 校准，**不要改回去**）
+
+- FB/IG 勾选控件**不读也不点**，依赖 composer 默认全选（用户实测确认）；
+- **提交前只能证明 Facebook**：composer 上根本没有 IG 帐号名，
+  只有 `img 'Instagram'` 一个图标。目标主页由预览抬头那条 `heading h2`
+  按**完整值**比较证明（多一个词就是另一个主页）；
+- **IG 由提交后回读证明**：Planner 上 FB 与 IG 是两个独立对象、
+  两个 remote ID、两个详情弹窗，各自点开读 `ID: <数字>` + 渠道标记 + 账号 token；
+- **两个渠道少任一个都不能记 `scheduled`** —— 这条保证没有放松，
+  只是确认时机从提交前挪到了提交后；
+- **图片数量的硬闸不在 Planner 侧**（那里零数量语义），
+  由 composer 上传后数缩略图保证。
 
 ---
 
-## 🧨 这一轮踩到的五个坑（CR-63 ~ CR-67，**全是真机跑出来的**）
+## 🧨 这一轮踩到的六个坑（CR-63 ~ CR-68，**全是真机跑出来的**）
 
 **一条都不是审查看出来的，而当时离线测试全绿。** 记在这里是因为它们
 会以同样的形状再来一次：
@@ -447,9 +540,10 @@ f111057 fix(review): 主干二次审查 CR-41 ~ CR-45（cherry-pick 自 c35715d�
 |---|---|---|
 | **CR-63** | profile 归属核对的 `timeout=5`，而本机要 7–9 秒 → **每次都超时**，正确的环境被报成"你开错了浏览器" | **没在目标机器上量过的超时值，和写死的选择器是同一类东西** |
 | **CR-64** | 装监听器失败被 `except Exception: continue` 吞掉 → 一条没记、全程零提示，用户走完 20 分钟才发现 dump 是空的 | **`except: continue` 用在"装设备"这步，等于把"没装上"变成"装好了但什么都没发生"** |
-| **CR-65** | 监听器还是会不明原因消失，而 scratch 环境**怎么都复现不出来** | 复现不出来就别继续猜原因，**改成每 2 秒回读+自愈**，对所有原因都成立 |
-| **CR-66** | 「按 Enter 停止记录」只停了巡检、没停记录 → 问答和记录抢同一把锁，**死锁** | 「停止」必须是真的停：关闸 + `session.detach()` |
+| **CR-65** | 监听器还是会不明原因消失，而 scratch 环境**怎么都复现不出来** | 复现不出来就别继续猜原因；每 4 个 0.5 秒 tick 发起回读+自愈，慢页单飞合并，不承诺坏 CDP 的完成时延 |
+| **CR-66** | 「按 Enter 停止记录」只停了巡检、没停记录 → 问答和记录抢同一把锁，**死锁** | 「停止」必须是真的停：同步 admission 关闸、硬 deadline、先撤 callback/init-script/binding 再清 DOM listener/mask、detach 全部 session；专用 runner 关环不做无界 gather |
 | **CR-67** | 序号用只增不减的计数器，一次失败就**永久空掉一个号** → 内容完好的 dump 被严格校验判死 | **可失败的操作不许先占号**，序号由已落盘条数推 |
+| **CR-68** | Playwright 每张截图先耗满 8 秒，CDP 后备虽成功但队列已落后 70 秒；阶段截图被后续 Planner 覆盖，Enter 的 final 也排在队尾 | CDP 走主路径；每页语义采样单飞合并；URL/Boost/Planner 独立截图；截图前在锁内重采语义；Enter 用单一 deadline 收尾 |
 
 ⚠️ **另外两条一般性的**：
 
@@ -463,17 +557,43 @@ f111057 fix(review): 主干二次审查 CR-41 ~ CR-45（cherry-pick 自 c35715d�
 
 ## 现在卡在哪（读完这段就知道该干什么）
 
+**只剩一件事：14 个只能人亲眼量的 UI 上限。** 其余全通。
+
+| 项目 | 当前状态 | 下一动作 |
+|---|---|---|
+| G1 v2 | ✅ `publish_probe_20260901_054226_378622.json` 完整通过 v2 契约 | — |
+| G6/G6c 证据 | ✅ 五件全部推导 + 回查通过，三道闸已开 | — |
+| 20 个观察项 | 🟡 4 项已按 dump 证据填，**14 项待人量** | `GO_LIVE.md` 第 3b 步，一条 `--set-note` 命令填完 |
+| `ui_constraints_verified` | ⛔ `false` | 14 项填完改 `true` |
+| G8 | ⬜ 未真机执行 | 上一行完成后显式 `--submit`；核对后**手工取消** |
+| 幂等复跑 | ⬜ | 同项原样重跑，必须零浏览器 |
+| G9 / 计划任务 | ⬜ 仍 `manual`、未激活、未安装 | G8 通过后 activate → assisted → 用户决定装不装 |
+
+⛔ 不替用户提交/取消测试排期，不激活，不安装任务。
+
+⚠️ **生产闸现在是开的**：`run_publish_post.bat ... --submit` 会**真的点提交**。
+`scripts\run_probe_signals.bat --status` 一眼看清。
+
+### 历史第三轮快照（以下内容被上面的第四轮状态覆盖）
+
 **A / B / J / C / D / E 六组已落地并合回 `main`。**
 **K 组与 G 组的代码也已经全部在 `main` 里**，**L 组的 L0b/L0c 也落地了**
 （`d97b413`，19 套 1244 项全绿），形态见上面「当前仓库形态」。
 
 **抓取侧已经没有不依赖真实访问的活了。有业务价值的是 F → K → G 这条线。**
-F 已经不再是瓶颈（作用域参数补上之后，要发的帖按需翻即可）；
-**G1 已经不再是"零"了** —— 用户 2026-09-01 真实录到两份 dump，
-其中一份 24 条覆盖了 Business Suite composer 的完整发帖路径
-（见上面「🎬 G1 现在到底走到哪了」）。**代码侧现在有活可干：回填 `selectors.py`。**
-剩下卡在用户手上的只有两件：**装计划任务**、**K9 图片费用确认**。
-⛔ **这两件不要替用户按。**
+**2026-09-01（第三轮）：这条线第一次整段打通到"提交前一步"。**
+
+- **F** 不再是瓶颈（作用域参数补上之后，要发的帖按需翻即可）；
+- **K** 真跑过两张；第一张用户确认完全可用，第二张待复核；
+- **G** 的 `selectors.py` 已按真实 dump 回填，G2–G5/G7 已实现，
+  `scripts\run_publish_post.bat` 能把一篇德语帖填进 Business Suite 并停在提交前。
+
+**唯一还断着的一环是「提交那一下」**，缺的是提交按钮与成功信号——
+补法与整条自动链路的剩余任务写在
+**「🔭 自动定时发布链路：还差什么」**（本文件下半部分）。
+
+卡在用户手上的三件：**跑一次真实准备**、**装计划任务**、
+**重录探查走到提交**。⛔ **这三件不要替用户按。**
 
 两份任务书分别是 `docs/IMAGE_PLAN.md` 与 `docs/PUBLISH_PLAN.md`，
 任务项在 `IMPLEMENTATION_PLAN.md` 的 K 组 / G 组。
@@ -491,9 +611,13 @@ F 已经不再是瓶颈（作用域参数补上之后，要发的帖按需翻即
 | **L 组**（已在 `main`） | ✅ **L0b `pipeline status`**（只读对账，`scripts
 un_pipeline.bat`）与 ✅ **L0c 死人开关**（独立计划任务 `FBScraperAlive`）已完成。⬅️ **L0a 装计划任务轮到用户**（第 9 步，已解锁）。L0d 价格表排在 G1 之后（`PIPELINE_PLAN` 10.1）。⚠️ `[pipeline]` 里 `autonomy` 与两个 budget 键**目前仍没有代码读**，`status` 会如实打印"还没接上" | 自动化程度 |
 | **F 组**     | 新接口已跑通。**2026-08-31 补了作用域参数**（`--post-id` / `--latest-posts`，CR-47）——待译队列是最老优先的，此前 `--limit` 根本够不到最新几篇，K9 与 G8 都因此卡死。已用它真实翻译点名的三篇（成功 3 / 失败 0，**实际费用上界 US$0.1799**；⚠️ 离线外推给的是 US$0.038，**实际高 4.7 倍**，差在 44 327 reasoning tok——CR-40 那条教训又验证了一次）。仍待**懂德语的人审校**；全量预算已不在关键路径（不补发历史，按需翻即可） | — |
-| **K 组**（已在 `main`） | **代码完成、合并态 18 套 1108 项全绿、真实预演通过；GPT-Image-2 一次都没调过。** K0/K2/K4/K5/K6/K10 已验收；K1/K7/K8/K9 全卡在同一件事——**图片费用确认**。K 队列现在排出 **11 张**（FB 5 + IG 5 + IG 1）。⚠️ **必须用 `--post-id`，`--latest-posts 3` 会漏掉 FB**（第 3 新的帖子是纯视频，占掉名额把 FB 挤到第 4，两篇只差 4 秒）。下一步：`MANUAL_STEPS.md` **第 10b 步**，11 张 × high ≈ **US$2.4** | 用户确认图片费用 → K1/K7/K8/K9 → G8 |
+| **K 组**（已在 `main`） | 🟢 **2026-09-01：GPT-Image-2 已完成两张 high 真实产出。** `3975547640610092585[0]`（dHash=9）已由用户确认完全可用；较新的文字图 `3973012230169803390[0]`（dHash=6）已生成并进入 `review.md`，待用户复核。两张 `images_de.jsonl` 均有完整 usage。其余 9 张未跑，无文字图按最新决定人工跳过。单图必须用 `--post-id + --media-index`；`--limit 1` 不是稳定选择器 | 用户复核第二张；后续仅按需选择文字图 |
 | **G0 / G0b / G0c**（已在 `main`） | **三项全部完成并验收**（合并态已复现：3 篇全部组装、零拦下）。G0 实机验过 9222/9223 并存且会话隔离；**G0b 的「最新 3 篇组装成功」现已通过**——三篇全部组装、零拦下，金额硬闸在真实正文的 `$219.99` / `$100` 上通过。新增 `tools/compose_publish.py` + `scripts\run_publish.bat`（CR-58），这条验收终于有命令可以复跑 | — |
-| **G1**       | 🟡 **已录到真实 dump，尚未收口**。2026-09-01 用户跑通两次：63 条（旧版后台）+ **24 条（`business.facebook.com/latest/composer`，含上传/文案/标签/`Set date and time` 全套）**。⚠️ 那份 24 条 `finished_at=null` 且序号不连续（被 CR-66 死锁中断），**过不了严格校验，但完全够人工读来回填 `selectors.py`**。`selectors.py` 仍是 8 行 TODO。详见「🎬 G1 现在到底走到哪了」。⚠️ CR-60 仍成立：`ZoneInfo("Europe/Berlin")` 靠 `tzdata` 兜住，**别写死 UTC 偏移** | G2–G7 全部 |
+| **G1**       | 🟡 **dump 已录到，`selectors.py` 已回填，观察项与提交那一段仍缺**。2026-09-01 第二轮：把那份 24 条 dump 人工读完，回填出 **12 条 composer 定位**（+2 条旁证、8 条缺口登记），并新增 `publish/evidence.py` **逐条回查 dump**（本机 14/14 命中）——红线 5 从此是可执行的检查。⚠️ 那份 24 条 `finished_at=null` 且序号不连续，**仍然过不了 `--strict`**，⛔ 不许手工改序号 | 只剩 G6 与「同时发」 |
+| **G2–G5 / G7** | ✅ **已实现**，链路跑到**提交前一步**：`scripts\run_publish_post.bat --post-id <id> --at <ISO>`。⛔ **一项都没勾选**——只在仿真 page 上验过，**真实 Business Suite 上一次都没跑过**。挡住真跑的是一个值：`[publish].ui_timezone`（留空即失败闭合，不拿 `[publish].timezone` 顶上）| 用户填时区 |
+| **G6**       | ⛔ **故意没实现**：dump 里既没有提交按钮也没有成功信号。`submit()` 在碰 `page` 前抛 `ProbeRequired` 并逐条打出缺口。**最后那一下由人点**，点完用 `--mark-scheduled` 把幂等闭上。**补法见「🔭 自动定时发布链路：还差什么」** | 用户重录探查 |
+| ~~渠道勾选~~ | ✅ **已消解**：用户 2026-09-01 确认，**进 composer 时 FB 与 IG 两个渠道默认全勾选**，本来就不需要点。缺的只剩「程序读不出勾了哪几个」，已降级为提交前人眼扫一下 | — |
+| **G6b**      | ✅ `publish/journal.py` + `state/published.jsonl`。关键设计：**`prepared` 不算已排期**——它意味着可能留着草稿，重跑前先让人去看（退出码 3）；只有 `scheduled` 才幂等跳过 | — |
 | ~~DE 账号~~  | **已提供**：`facebook_page_name = "Neakasa Deutschland"`（⚠️ **显示名，不是 URL 段**）、`instagram_account = "neakasa.de"`。`facebook_page_slug` 留空不阻塞 | — |
 
 ### ✅ Instagram 合作帖：2026-08-31 真实验收通过，这一条已经结束
@@ -812,18 +936,33 @@ FacebookScraper/
     backfill.py            登录态回填
     delta.py               每日增量。上半＝登出实现（保留备用）；下半＝登录态（C2–C7）
     fb_graph.py            API 只读通道，保留但未接入（缺 Token）
-  publish/                 G 组。⚠️ 在 `feat/business-suite-publish` 上，尚未进 main
+  pipeline.py              L 组：对账 / activate / run / approve / status
+  pipeline_assisted.py     L 组：assisted 的真正实现（跨平台对账、预算、排槽、
+                           待确认清单、approve 逐篇提交）
+  publish/                 G 组
     compose.py             组装「译文 + 德语图 + 排期时刻」并跑完离线硬闸。
                            **不碰浏览器**。G0b 已验收（最新 3 篇真实组装通过）
-    business_suite.py      UI 自动化发布（G2–G7）。**五个函数在碰 page 前抛
-                           ProbeRequired，这是设计不是没写完**
-    selectors.py           ⛔ **现在是空的（只有 TODO），这是对的。**
-                           G1 探查之后才填；凭猜写的选择器一定是错的（红线 5）
+    business_suite.py      UI 自动化（G2–G6c、G7）。**submit() 现在会真的点**，
+                           前提是三道证据闸全开（见 probe_signals.py --status）
+    workflow.py            G6/G6c 浏览器状态机：五态 journal + 提交前 Planner 基线
+                           + 单击提交 + 成功等待 + 回读。**click 前先耐久写 intent**
+    selectors.py           **带证据的登记表**：12 条 composer 定位（来自 24 条 v1
+                           dump）+ 2 条旁证 + 缺口登记。末尾会装载 signals_backfilled
+    signals_backfilled.py  ⛔ **生成文件**，由 `probe_signals.py --emit` 从 v2 dump
+                           推导 + 回查后写出。**不要手工编辑**，下次 --emit 会覆盖
+    evidence.py            把每条定位/信号回查到它自称的 dump；`verify_publish_chain`
+                           验同页因果顺序。dump 不在时"跳过"，**跳过不等于通过**
+    journal.py             state/published.jsonl 的留痕与幂等（G6b）。
+                           **prepared 不算已排期**——它意味着可能留着草稿
   tools/（G 组新增）
-    probe_publish.py       G1 探查：只记录人工交互 + 逐步截图，**不驱动页面**
+    probe_publish.py       G1 探查：只记录人工交互 + 被动语义快照，**不驱动页面**。
+                           `--fill-notes ... --set-note K=V` 可非交互补观察项
+    probe_signals.py       ← **证据推导**：--status / --check / --report / --emit。
+                           把「录完 dump → 生产闸打开」从一次开发会话变成一条命令
     start_chrome_publish.py  起发布专用 Chrome（9223 / .fbscraper-publish）
     compose_publish.py     ← 组装预演入口（CR-58）。零浏览器/零网络/零写盘
-  tests/                   **18 套**（合并态实测 1093 项全绿）。
+    publish_post.py        ← **驱动入口**：默认停在提交前，`--submit` 才真的提交
+  tests/                   **23 套**（实测 1543 项全绿）。
                            ⚠️ 别把断言数当契约，以 setup.bat 实际跑出来的为准
   _deprecated/             已否决路线的存档
 
@@ -894,9 +1033,11 @@ High thinking、无 `max_tokens` 请求体、提示词/术语表、正文与提�
 
 - **K 组**：K0/K2/K4/K5/K6/K10 已验收；**K1/K7/K8/K9 全卡在图片费用确认**
   （GPT-Image-2 一次都没调过，`images_de.jsonl` 还不存在）。
-- **G 组**：G0/G0b/G0c 已验收；**G1~G9 全卡在 G1 的真实 DOM 探查**。
-  `publish/selectors.py` **故意是空的**，`business_suite.py` 的五个函数
-  在碰 `page` 前抛 `ProbeRequired` —— **这是设计，不是没写完**（红线 5）。
+- **G 组**（2026-09-01 第二轮更新）：G0/G0b/G0c 已验收；
+  **G1 已回填、G2–G5/G7 已实现，链路跑到提交前一步**；
+  `selectors.py` 不再是空的，但 `business_suite.submit()` **仍然故意抛
+  `ProbeRequired`** —— dump 里没有提交按钮也没有成功信号（红线 5）。
+  ⛔ **G 组一项都没勾选**：全部只在仿真 page 上验过，真实 UI 上没跑过。
 - **H 组**官方 API 验证缺 Token、不阻塞主路径。
 - **E 组**代码已实现并通过离线测试，但计划任务**刻意没有注册**（= L0a，仍未装）。
 - **L 组**一行代码都还没写；L0 四项不依赖任何组，随时可开工。

@@ -13,6 +13,24 @@
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 进度真相源：全部任务、验收、已完成项的实际偏差 |
 | [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)                 | 已实现代码的二次审查、修复与验证记录           |
 
+## 当前自动发布状态（2026-09-01）
+
+G6/G6c 与 G9 assisted 的代码和离线测试已经完成，但**尚未激活、尚未执行真实自动提交**。
+生产提交仍由证据闸失败闭合：需要用户用新版 `probe_publish.py` 手工完成一次未来排期，
+让一份完整 v2 dump 按因果顺序证明正确的 FB Page/IG 账号上下文、提交按钮、成功信号、
+Planner 数据就绪，以及同一张排期卡片中相互独立的时刻、完整正文、FB、IG 与图片数语义；
+还要录到 Planner 当前可见日期范围，避免把视图外占用误读成空闲。最终快照和遮罩截图
+也必须完整。经人工复核后才能把这些证据回填到登记表。
+显式 `--submit` 会强制启用严格 UI 约束，不会采用配置中的占位限制。随后用它做 G8；
+G8 通过后才运行 `pipeline activate --g8-verified`，因此不会把激活前的历史帖子送入流水线。
+FB/IG 渠道沿用 composer 默认全选，代码不点击；提交前核对目标账号上下文，提交后若结构化
+回读明确缺少任一渠道则转人工。
+
+提交状态机在任何可能点击前先耐久写入阻塞 intent；进程即使恰在 click 后崩溃也不能
+自动重试。点击前还会在独立 Planner 页确认没有同槽/同文案/同素材/同渠道旧卡；提交后
+若 success 与卡片都能读到 remote ID，则必须相等。G9 的付费真相源是独立追加式
+`state/paid_requests.jsonl`，硬闸拒绝的已计费响应也会进入预算与 status。
+
 ## 两条路径，各自承担不同的风险
 
 目标账号**没有管理员权限**，因此官方 API 与官方数据导出都不可用，只能外部抓取。
@@ -99,8 +117,10 @@ FacebookScraper/
   scripts/                 双击入口，**纯 ASCII 壳**，逻辑在 tools/ 里
     setup.bat  start_chrome.bat  run_backfill.bat  run_translate.bat
     run_delta.bat
-    start_chrome_publish.bat  发布用的专用 Chrome（端口 9223）。已实现，在 G 分支上
+    start_chrome_publish.bat  发布用的专用 Chrome（端口 9223）
     run_publish.bat           待发帖离线组装预演。零浏览器/零网络/零写盘
+    run_publish_post.bat      单帖准备；只有显式 --submit 才提交并回读
+    run_pipeline.bat          activate / run / approve / status 流水线入口
   tools/                   .bat 的真正实现（中文提示只能待在 Python 里）
     setup.py  start_chrome.py
     replay.py               用 _capture_*.json 离线重建归档，不重新下载媒体
@@ -108,8 +128,9 @@ FacebookScraper/
     dryrun_delta.py         用增量转储离线跑完 delta_once() 的**真实代码路径**，
                             零网络零写盘。改完解析器先跑它，别用真实露面去验
     schedule.py             Windows 计划任务：xml / install / status / remove
-    probe_publish.py        Business Suite 的 DOM 探查（已实现，在 G 分支上）：你手工走一遍，
-                            程序在旁边记录控件的稳定属性。**它不驱动页面**
+    probe_publish.py        Business Suite v2 探查：你手工走一遍，程序记录稳定交互、
+                            URL 变化、状态语义与最终日历卡片。**它不驱动页面**
+    publish_post.py         G2–G6c 单帖状态机与人工故障结转入口
   docs/
     IMPLEMENTATION_PLAN.md  进度真相源
     MANUAL_STEPS.md         人工操作指南
@@ -120,7 +141,8 @@ FacebookScraper/
     PUBLISH_PLAN.md         G 组任务书（Business Suite 定时发布）
     PIPELINE_PLAN.md        L 组：**唯一一份跨组文档**。把上面这些段连成一条
                             不用人管的线；自治分级、分流规则、死人开关、成本闸
-  pipeline.py               流水线编排（**待建**，L 组）。对账器，不是队列
+  pipeline.py               L 组入口；每次从各阶段真相源对账，不建立发布任务队列
+  pipeline_assisted.py      激活边界、跨平台对账、预算、needs_human 与批量审批
   prompts/
     translate_de.md         英译德提示词，可直接编辑，改它不用动 Python
     image_de.md             图片德语化提示词（已实现，在 K 分支上），同样可直接编辑
@@ -130,11 +152,12 @@ FacebookScraper/
     http.py  integrity.py  notify.py  console.py
   routes/                  抓取路径
     backfill.py  fb_graph.py  delta.py（登录态增量主流程已实现）
-  publish/                 发布路径（G 组）。⚠️ 已实现，在 `feat/business-suite-publish` 上
-                           selectors.py 现在**故意是空的**——G1 探查之后才填（红线 5）
+  publish/                 发布路径（G 组）。生产提交证据仍故意留空，等新版 G1 dump
     compose.py              组装并跑离线硬闸（不碰浏览器，不被 G1 阻塞）
-    business_suite.py       UI 自动化
-    selectors.py            ⛔ **G1 真实探查之后才填**
+    business_suite.py       UI 自动化 + 单次提交 + 内容日历回读
+    selectors.py            只登记能从 probe dump 回查的定位与成功信号
+    journal.py              追加式五态发布留痕；只有 scheduled 算已发布
+    workflow.py             G2–G6c 发布状态机
   tests/                   离线测试，setup.bat 用 glob 全跑
   _deprecated/             已否决路线的存档，不要引用、不要复活
 
