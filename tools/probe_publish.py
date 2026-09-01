@@ -78,10 +78,38 @@ _ELEMENT_BOOL_FIELDS = {
 }
 
 
+def console_text(value: str) -> str:
+    r"""修掉控制台输入里的孤立代理字符，必要时按本机编码还原中文。
+
+    ⚠️ **不修就会丢数据**：Windows 上 ``input()`` 遇到本机编码解不出的字节会走
+    ``surrogateescape``，留下 ``\udcaf`` 这类孤立代理字符。它们
+    ``json.dumps`` 之后 ``write_text(encoding="utf-8")`` **直接抛
+    UnicodeEncodeError** —— 也就是说，你在观察项里**输入中文就可能整条写不进去**
+    （2026-09-01 实测到）。这些框本来就是让人写中文说明的。
+
+    先原样试；不行就把代理字符还原成原始字节，按 UTF-8 / GBK 依次重解；
+    都不行才退到替换字符——**宁可看到几个 U+FFFD，也不能让整份 dump 写不进去**。
+    """
+    if not isinstance(value, str):
+        return ""
+    try:
+        value.encode("utf-8")
+        return value
+    except UnicodeEncodeError:
+        pass
+    raw = value.encode("utf-8", "surrogateescape")
+    for encoding in ("utf-8", "gbk", "cp936"):
+        try:
+            return raw.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
 def _safe_text(value: object, limit: int) -> str:
     if not isinstance(value, str):
         return ""
-    return " ".join(value.split())[:limit]
+    return " ".join(console_text(value).split())[:limit]
 
 
 def _safe_url(value: object) -> str:
@@ -441,9 +469,13 @@ class ProbeRecorder:
 
     def _write(self) -> None:
         temporary = self.output_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(self.data, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8")
+        payload = json.dumps(self.data, ensure_ascii=False, indent=2) + "\n"
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+        except UnicodeEncodeError:
+            # 兜底：真有编不出来的字符时，宁可把那几个字符换掉，
+            # 也不能让整份 dump 写不进去（上游 console_text 已经先修过一道）。
+            temporary.write_text(payload, encoding="utf-8", errors="replace")
         temporary.replace(self.output_path)
 
     async def record(self, page, payload: object, session=None) -> bool:
@@ -505,7 +537,7 @@ class ProbeRecorder:
 
 async def _read_line(prompt: str) -> str:
     try:
-        return (await asyncio.to_thread(input, prompt)).strip()
+        return console_text(await asyncio.to_thread(input, prompt)).strip()
     except EOFError:
         return ""
 
@@ -648,7 +680,101 @@ async def cdp_page_targets(port: int) -> list[dict]:
         return []
 
 
-async def run_probe(*, collect_notes: bool = True) -> Path:
+# 观察项的问法集中在这里，录制和事后补填共用同一份，免得两处漂移。
+OBSERVATION_PROMPTS = {
+    "business_suite_entry_url": "创建帖入口最终 URL：",
+    "facebook_page_slug": "FB Page 地址栏 slug（只填账号名段）：",
+    "ui_timezone": "日期/时间控件原样显示的时区字符串：",
+    "schedule_min_ahead": "UI 实测最早可排多久之后：",
+    "schedule_max_ahead": "UI 实测最晚可排多远：",
+    "schedule_min_ahead_seconds": "同一下限换算成整数秒：",
+    "schedule_max_ahead_seconds": "同一上限换算成整数秒：",
+    "schedule_input_behavior": "日期/时间能直接输入还是必须点选：",
+    "success_signal": "提交成功的明确信号（toast/跳转/列表项）：",
+    "instagram_min_aspect_ratio": "IG 实测最小宽高比（小数）：",
+    "instagram_max_aspect_ratio": "IG 实测最大宽高比（小数）：",
+    "instagram_max_images": "IG 实测单帖图片数上限（整数）：",
+    "instagram_max_caption_length": "IG 实测正文长度上限（整数）：",
+    "instagram_caption_length_mode": (
+        "UI 计数方式（codepoints/utf16_units/utf8_bytes）："),
+    "instagram_max_hashtags": "IG 实测标签数上限（整数）：",
+    "instagram_aspect_ratio_rejection": "超出画幅边界时 UI 的实际拒绝行为：",
+    "instagram_image_count_rejection": "超出图片数时 UI 的实际拒绝行为：",
+    "instagram_caption_length_rejection": "超出正文长度时 UI 的实际拒绝行为：",
+    "instagram_hashtag_rejection": "超出标签数时 UI 的实际拒绝行为：",
+    "extra_notes": "其它观察：",
+}
+
+
+async def _ask_observations(apply, current: dict | None = None) -> None:
+    """逐项问观察值。已有值会显示出来，直接回车＝保留原值。"""
+    current = current or {}
+    print("\n下面只记你亲眼看到的结果；不知道就直接按 Enter 跳过，绝不猜。")
+    print("（随时 Ctrl+C 退出，已经填的会保留。）")
+    values = {}
+    for key, prompt in OBSERVATION_PROMPTS.items():
+        old = current.get(key) or ""
+        shown = "%s[当前 %s] " % (prompt, old) if old else prompt
+        answer = await _read_line(shown)
+        values[key] = answer or old
+    await apply(values)
+
+
+def _print_notes_hint(dump_path: Path) -> None:
+    """没填观察项时说清楚：不影响这份 dump，但严格发布需要，而且随时能补。"""
+    print("\n观察项（时区 / 排期窗口 / IG 四类上限）这一轮**没有填**。")
+    print("  · 不影响这份交互 dump —— 回填 selectors.py 靠的是上面那些交互记录；")
+    print("  · 但 `--strict` 真实发布**需要**它们：那几个数字只能你亲眼看 UI 得到，")
+    print("    程序不许照抄网上流传的值（PUBLISH_PLAN 第 5 节第 4 条）。")
+    print("  · 什么时候想填都行，不用重录：")
+    print("      .venv\\Scripts\\python.exe tools\\probe_publish.py --fill-notes %s"
+          % dump_path)
+
+
+async def fill_notes(dump_path: Path) -> int:
+    """只补填某份已有 dump 的观察项，不连浏览器、不录制。
+
+    把"录交互"和"记数值"拆开：前者要对着浏览器一步步走，后者要去 UI 上试边界，
+    本来就是两件事、两个时间点。**捆在一起问只会逼人一路回车跳过**，
+    那样填出来的是假数据，比空着更糟。
+    """
+    if not dump_path.is_file():
+        print("[!] 找不到这份 dump：%s" % dump_path)
+        return 1
+    try:
+        data = json.loads(dump_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print("[!] 这份 dump 读不出来：%s" % exc)
+        return 1
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        print("[!] 不是 record-only v1 契约的 dump，拒绝改动。")
+        return 1
+
+    recorder = ProbeRecorder.__new__(ProbeRecorder)   # 只借它的校验与原子写
+    recorder.output_path = dump_path
+    recorder.data = data
+    recorder._lock = asyncio.Lock()
+    print("dump：%s（%d 条交互）"
+          % (dump_path, len(data.get("interactions") or [])))
+    await _ask_observations(recorder.set_observations,
+                            current=data.get("observations") or {})
+    observations = recorder.data.get("observations") or {}
+    print("\n已写回：%s" % dump_path)
+    # 必填清单直接问 compose 要，不在这里抄第二份 —— 抄了就会漂
+    # （CR-48 就是两组对同一件事各写一套判据的代价）。
+    from publish.compose import _PROBE_REQUIRED_OBSERVATIONS   # noqa: E402
+    missing = [key for key in _PROBE_REQUIRED_OBSERVATIONS
+               if not str(observations.get(key) or "").strip()]
+    if missing:
+        print("⚠️ `--strict` 真实发布还缺这 %d 项（缺任一都会失败闭合）：" % len(missing))
+        for key in missing:
+            print("     - %s　%s" % (key, OBSERVATION_PROMPTS.get(key, "")))
+    else:
+        print("✅ `--strict` 需要的必填项已经齐了。")
+    return 0
+
+
+async def run_probe(*, collect_notes: bool = False) -> Path:
     c = cfg()
     c.assert_publish_chrome_isolated()
     port = c.publish_debug_port
@@ -663,7 +789,15 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
             start_script=r"scripts\start_chrome_publish.bat",
             login_hint="DE 发布账号")
 
+        # ⚠️ 「按 Enter 停止记录」以前**并没有真的停下来**：它只停了巡检，
+        # 页面上的监听器和 CDP 会话都还在，于是问答期间的每一次点击仍然排队进
+        # record()，而 record() 是**持锁**的、单条最坏要十几秒。
+        # 结果 set_observations() 在同一把锁上排到队尾，看起来就是卡死（CR-66）。
+        recording = {"on": True}
+
         async def receive(page, payload):
+            if not recording["on"]:
+                return
             try:
                 if await recorder.record(page, payload,
                                          session=installed.get(page)):
@@ -794,6 +928,16 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
         sweeper.cancel()
         # 让最后一次 input 的 700ms 去抖有机会落盘；不触碰页面状态。
         await asyncio.sleep(0.9)
+        # **到这里才是真的停。** 顺序不能反：先给去抖留时间，再关闸、断会话，
+        # 否则最后一次输入会丢。断开会话之后浏览器不再回送事件，
+        # 后面无论问不问观察项，都不会再有人跟 set_observations 抢那把锁。
+        recording["on"] = False
+        for session in list(installed.values()):
+            try:
+                await asyncio.wait_for(session.detach(), timeout=5)
+            except Exception:
+                pass
+        print("已停止记录，共 %d 条交互。" % len(recorder.data["interactions"]))
 
         # ⚠️ 空 dump 必须当场说清楚。用户上一次就是走完整个流程才发现是空的。
         if not recorder.data["interactions"]:
@@ -805,34 +949,9 @@ async def run_probe(*, collect_notes: bool = True) -> Path:
                 print("    本轮挂载失败原因：%s" % failures[0])
 
         if collect_notes:
-            print("\n下面只记你亲眼看到的结果；不知道就直接按 Enter，绝不猜。")
-            prompts = {
-                "business_suite_entry_url": "创建帖入口最终 URL：",
-                "facebook_page_slug": "FB Page 地址栏 slug（只填账号名段）：",
-                "ui_timezone": "日期/时间控件原样显示的时区字符串：",
-                "schedule_min_ahead": "UI 实测最早可排多久之后：",
-                "schedule_max_ahead": "UI 实测最晚可排多远：",
-                "schedule_min_ahead_seconds": "同一下限换算成整数秒：",
-                "schedule_max_ahead_seconds": "同一上限换算成整数秒：",
-                "schedule_input_behavior": "日期/时间能直接输入还是必须点选：",
-                "success_signal": "提交成功的明确信号（toast/跳转/列表项）：",
-                "instagram_min_aspect_ratio": "IG 实测最小宽高比（小数）：",
-                "instagram_max_aspect_ratio": "IG 实测最大宽高比（小数）：",
-                "instagram_max_images": "IG 实测单帖图片数上限（整数）：",
-                "instagram_max_caption_length": "IG 实测正文长度上限（整数）：",
-                "instagram_caption_length_mode": (
-                    "UI 计数方式（codepoints/utf16_units/utf8_bytes）："),
-                "instagram_max_hashtags": "IG 实测标签数上限（整数）：",
-                "instagram_aspect_ratio_rejection": "超出画幅边界时 UI 的实际拒绝行为：",
-                "instagram_image_count_rejection": "超出图片数时 UI 的实际拒绝行为：",
-                "instagram_caption_length_rejection": "超出正文长度时 UI 的实际拒绝行为：",
-                "instagram_hashtag_rejection": "超出标签数时 UI 的实际拒绝行为：",
-                "extra_notes": "其它观察：",
-            }
-            values = {}
-            for key, prompt in prompts.items():
-                values[key] = await _read_line(prompt)
-            await recorder.set_observations(values)
+            await _ask_observations(recorder.set_observations)
+        else:
+            _print_notes_hint(recorder.output_path)
         return recorder.output_path
     finally:
         await recorder.finish()
@@ -853,15 +972,24 @@ def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="记录发布专用 Chrome 里的人工交互（不驱动页面）")
     parser.add_argument(
+        "--notes", action="store_true",
+        help="录完就地问那 20 个观察项。**默认不问** —— "
+             "录交互和量 UI 边界是两件事，捆在一起只会逼人一路回车跳过")
+    parser.add_argument(
+        "--fill-notes", metavar="DUMP",
+        help="只给某份已有 dump 补填观察项，不连浏览器、不录制")
+    parser.add_argument(
         "--no-notes", action="store_true",
-        help="结束时不询问时区/窗口等人工观察（交互 dump 仍照常保存）")
+        help=argparse.SUPPRESS)      # 兼容旧写法；现在本来就是默认行为
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     force_utf8()
     args = _parse_args(argv)
-    asyncio.run(run_probe(collect_notes=not args.no_notes))
+    if args.fill_notes:
+        return asyncio.run(fill_notes(Path(args.fill_notes)))
+    asyncio.run(run_probe(collect_notes=args.notes and not args.no_notes))
     return 0
 
 

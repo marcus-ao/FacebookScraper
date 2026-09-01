@@ -1100,5 +1100,87 @@ check("timeout=2.0" in run_src,
       "巡检间隔 2 秒：这是用户走流程时能忍的'掉了多久会自己回来'")
 
 
+print("\n[8][CR-66] 「按 Enter 停止记录」要真的停；观察项不再挡在出口")
+
+# 用户实测：按 Enter 之后事件还在往里记（#18..#24 边问边冒），
+# 而 set_observations 和 record 抢同一把锁 —— 于是问答期间每点一次就多排一个，
+# 看起来就是卡死。这里钉的是"停止必须真的停"。
+check('recording["on"] = False' in run_src,
+      "按 Enter 之后**真的关闸**：receive 直接丢弃后续事件")
+check("session.detach()" in run_src,
+      "并且断开各页面的 CDP 会话，浏览器不再回送事件")
+check(run_src.index("await asyncio.sleep(0.9)")
+      < run_src.index('recording["on"] = False'),
+      "顺序不能反：先给最后一次 input 的 700ms 去抖留时间，再关闸，否则会丢最后一条")
+check(run_src.index('recording["on"] = False') < run_src.index("if collect_notes:"),
+      "关闸发生在问观察项**之前** —— 这正是死锁的来源")
+
+sig = inspect.signature(probe_module.run_probe)
+check(sig.parameters["collect_notes"].default is False,
+      "**默认不问那 20 个观察项**：录交互和量 UI 边界是两件事、两个时间点，"
+      "捆在一起只会逼人一路回车跳过，填出来的是假数据，比空着更糟")
+argsrc = inspect.getsource(probe_module._parse_args)
+check("--fill-notes" in argsrc and "--notes" in argsrc,
+      "给出两条路：--notes 就地问，--fill-notes 事后补填")
+
+# 事后补填：不连浏览器，改完交互记录一条不少
+with tempfile.TemporaryDirectory() as d:
+    dump = Path(d) / "publish_probe_x.json"
+    asyncio.run(make_completed_probe(Path(d), Path(d) / "prof"))
+    made = sorted(Path(d).glob("publish_probe_*.json"))[0]
+    dump.write_text(made.read_text(encoding="utf-8"), encoding="utf-8")
+    # 清空观察项，才测得到"缺必填项要如实列出来"那条
+    _blank = json.loads(dump.read_text(encoding="utf-8"))
+    _blank["observations"] = {}
+    dump.write_text(json.dumps(_blank, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+    before = json.loads(dump.read_text(encoding="utf-8"))
+    answers = iter(["https://ok.invalid/x"] + [""] * 40)
+
+    async def fake_read(prompt):
+        return next(answers, "")
+
+    real_read = probe_module._read_line
+    probe_module._read_line = fake_read
+    try:
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = asyncio.run(probe_module.fill_notes(dump))
+    finally:
+        probe_module._read_line = real_read
+    after = json.loads(dump.read_text(encoding="utf-8"))
+    check(rc == 0, "fill_notes 正常返回，不挂住")
+    check(after["interactions"] == before["interactions"],
+          "**只动 observations，交互记录一条不改** —— 补填不该有机会毁掉录制成果")
+    check(after["observations"].get("business_suite_entry_url")
+          == "https://ok.invalid/x", "填进去的值确实写回了")
+    check("还缺" in buf.getvalue(),
+          "缺必填项时如实列出来，而不是让人以为可以 --strict 了")
+    rc2 = asyncio.run(probe_module.fill_notes(Path(d) / "nope.json"))
+    check(rc2 == 1, "dump 不存在时返回 1，不抛裸异常")
+
+missing_required = [k for k in compose_module._PROBE_REQUIRED_OBSERVATIONS
+                    if k not in probe_module.OBSERVATION_PROMPTS]
+check(not missing_required,
+      "问答覆盖 compose 要求的**全部**必填观察项——"
+      "少问一个，用户就会在 --strict 那一步才发现（缺 %s）" % missing_required)
+
+# 中文观察项曾经直接把整份 dump 写崩（孤立代理字符）
+check(probe_module.console_text("直接输入可以") == "直接输入可以",
+      "正常中文原样通过")
+broken = "拒绝".encode("gbk").decode("utf-8", "surrogateescape")
+check(probe_module.console_text(broken) == "拒绝",
+      "**控制台留下的孤立代理字符能按本机编码还原**——"
+      "不修的话，观察项里写中文会让 json 写盘直接 UnicodeEncodeError")
+check(probe_module.console_text(broken).encode("utf-8"),
+      "还原之后必须是能 utf-8 编码的字符串，否则写盘还是会炸")
+with tempfile.TemporaryDirectory() as d:
+    rec = ProbeRecorder(Path(d), port=1, profile=Path(d))
+    rec.data["observations"] = {"extra_notes": "\udcaf"}   # 强行塞一个坏字符
+    rec._write()
+    check(rec.output_path.is_file() and rec.output_path.stat().st_size > 0,
+          "**兜底**：真有编不出来的字符时也要写得出文件，"
+          "宁可换掉那几个字符，也不能让整份 dump 丢掉")
+
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 raise SystemExit(1 if fails else 0)
