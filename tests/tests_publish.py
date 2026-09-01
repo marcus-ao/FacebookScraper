@@ -9,8 +9,12 @@ import io
 import json
 import sys
 import tempfile
+import threading
+import time
+import tokenize
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
@@ -23,14 +27,20 @@ force_utf8()
 
 from core.config import cfg  # noqa: E402
 from core.store import post_dirname  # noqa: E402
-from publish.business_suite import (ProbeRequired, ensure_logged_in,  # noqa: E402
-                                    fill_caption, set_schedule, submit,
-                                    upload_images)
+from publish.business_suite import (ProbeRequired, PublishStepError,  # noqa: E402
+                                    ensure_logged_in, fill_caption,
+                                    set_schedule, submit, upload_images)
 from publish.compose import (ComposeError, InstagramConstraints,  # noqa: E402
                              ScheduleWindow, compose_post)
+from publish.evidence import verify_all  # noqa: E402
 from tools.probe_publish import ProbeRecorder, install_script  # noqa: E402
 from translate import PROMPT_VERSION, source_text_sha256  # noqa: E402
+import publish.business_suite as bs  # noqa: E402
 import publish.compose as compose_module  # noqa: E402
+import publish.journal as journal  # noqa: E402
+import publish.selectors as selectors  # noqa: E402
+import tools.probe_publish as probe_module  # noqa: E402
+import tools.publish_post as publish_entry  # noqa: E402
 import tools.start_chrome_publish as start_publish  # noqa: E402
 
 
@@ -209,6 +219,22 @@ async def make_completed_probe(state_dir: Path, profile: Path):
         })
         if not accepted:
             raise AssertionError("fixture trusted event was rejected")
+    final_shot = recorder.screenshot_dir / "semantic_001_final.png"
+    Image.new("RGB", (24, 16), (4, 5, 6)).save(final_shot, format="PNG")
+    recorder.data["snapshots"] = [{
+        "sequence": 1,
+        "recorded_at": "2026-08-31T19:01:00Z",
+        "reason": "final",
+        "page_url": "https://business.example.invalid/create",
+        "document_title": "Create post",
+        "semantic_items": [{"tag": "div", "role": "status",
+                            "accessible_name": "fixture final",
+                            "visible_text": "fixture final", "aria_live": "polite",
+                            "href": ""}],
+        "screenshot": str(final_shot),
+        "screenshot_error": None,
+    }]
+    recorder._write()
     await recorder.set_observations(PROBE_OBSERVATIONS)
     await recorder.finish()
     return recorder, page
@@ -302,6 +328,25 @@ with tempfile.TemporaryDirectory() as d:
         warning_sink=emitted.append)
     check(post.text_de.startswith("Das Angebot"),
           "正文取自 translated.jsonl 的当前德语译文")
+    mapped_post = compose_post(
+        "fixture-post", WHEN, archive_root=root,
+        price_map={"$10": "9,99 €"}, warning_sink=None)
+    check("9,99 €" in mapped_post.text_de and "$10" not in mapped_post.text_de,
+          "流水线价格表只改最终发布文案，不把美元价原样发到德国站")
+    normalized_mapped = compose_post(
+        "fixture-post", WHEN, archive_root=root,
+        price_map={"$ 10": "9,99 €"}, warning_sink=None)
+    check("9,99 €" in normalized_mapped.text_de,
+          "价格预检与实际替换共用金额空白归一化，不会前后判据漂移")
+    check("$10" in mapped_post.original_text_de,
+          "价格映射不回写/伪装原始德语译文，journal 可分别留两份指纹")
+    check(raises(
+              ComposeError,
+              lambda: compose_post(
+                  "fixture-post", WHEN, archive_root=root,
+                  price_map={}, warning_sink=None),
+              "未映射金额"),
+          "价格表缺项在浏览器前失败闭合")
     check(post.image_sources == ("media_de", "original"),
           "每张按序优先 media_de；缺一张时只回退对应原图")
     check([path.name for path in post.image_paths] == ["01.png", "02.jpg"],
@@ -680,6 +725,9 @@ with tempfile.TemporaryDirectory() as d:
     state_dir = temp / "state"
     profile = temp / "publish-profile"
     make_fixture(root)
+    make_fixture(
+        root, platform="facebook", post_id="fixture-fb-too-many",
+        image_count=6)
     recorder, _page = asyncio.run(make_completed_probe(state_dir, profile))
     limits = InstagramConstraints(
         probe_dump=str(recorder.output_path),
@@ -701,10 +749,23 @@ with tempfile.TemporaryDirectory() as d:
             "fixture-post", WHEN, archive_root=root,
             instagram_constraints=limits, schedule_window=window, now=NOW,
             require_verified_ui_constraints=True, warning_sink=None)
+        auto_post = compose_post(
+            "fixture-post", WHEN, archive_root=root, now=NOW,
+            require_verified_ui_constraints=True, warning_sink=None)
+        fb_target_ig_blocked = raises(
+            ComposeError,
+            lambda: compose_post(
+                "fixture-fb-too-many", WHEN, archive_root=root, now=NOW,
+                require_verified_ui_constraints=True, warning_sink=None),
+            "图片数")
     finally:
         compose_module.cfg = original_cfg
     check(len(post.image_paths) == 2,
           "审核过且数值一致的完整 probe 才能严格组装，空白可选 FB slug 不阻塞")
+    check(len(auto_post.image_paths) == 2,
+          "生产 strict 会从 config 审核的 dump 自动构造窗口/IG 约束，不再要求 CLI 手工注入")
+    check(fb_target_ig_blocked,
+          "FB canonical 仍会同时发到 IG，因此严格发布不能按来源平台绕过 IG 图片上限")
     check(not any("尚无 G1" in item or "只是 API 占位" in item
                   for item in post.warnings),
           "严格组装不再携带『约束未知』假绿警告")
@@ -826,42 +887,130 @@ with tempfile.TemporaryDirectory() as d:
           "真正发布模式下缺 G1 约束会失败闭合")
 
 
-print("\n[5] G2–G6 只有会先失败的函数骨架；G7 仍仅有任务书契约")
-selector_path = ROOT / "publish" / "selectors.py"
-tree = ast.parse(selector_path.read_text(encoding="utf-8"))
-assignments = [node for node in ast.walk(tree)
-               if isinstance(node, (ast.Assign, ast.AnnAssign))]
-check(not assignments,
-      "publish/selectors.py 没有任何未经 G1 验证的定位常量")
+print("\n[5] G1 回填：每一条定位都能回查到真实 dump（红线 5 的机器校验）")
+# ⚠️ 这一节以前断言的是"selectors.py 里一个常量都没有"——那是 G1 之前的正确状态。
+# 用户 2026-09-01 录到真实 dump 之后，那条断言反过来会挡住回填，
+# 于是换成**更强**的守法：不是"不许有定位"，而是"每一条都必须查得到出处"。
+selector_source = (ROOT / "publish" / "selectors.py").read_text(encoding="utf-8")
+check(bool(selectors.REGISTRY), "publish/selectors.py 已按 G1 dump 回填")
+missing_source = [key for key, spec in selectors.REGISTRY.items()
+                  if not (spec.source_dump and spec.sequences
+                          and spec.step and spec.breaks_when)]
+check(not missing_source,
+      "每条定位都写清了「对应哪一步 / 出自哪份 dump 的第几条 / 什么信号说明它失效」"
+      "（缺的：%s）" % missing_source)
+check(all(spec.name or spec.attributes for spec in selectors.REGISTRY.values()),
+      "没有既没有可访问名、也没有其它稳定属性的空壳定位")
+
+verdicts = verify_all(cfg().state_dir)
+bad_evidence = {key: why for key, (ok, why) in verdicts.items() if ok is False}
+skipped = [key for key, (ok, _) in verdicts.items() if ok is None]
+check(not bad_evidence,
+      "逐条回查 dump：没有一条是编出来的（编出来的：%s）" % bad_evidence)
+if skipped:
+    print("  ..   %d 条无法回查（dump 不进版本库，本机没有）：%s"
+          % (len(skipped), "、".join(sorted(skipped))))
+else:
+    print("  ..   %d 条全部回查到真实 dump" % len(verdicts))
+
+def code_only(source: str) -> str:
+    """去掉注释与字符串常量再查。
+
+    说明文字里**引用**反面写法（"不要写 div > div:nth-child(3)"）是有意的，
+    项目里已有同款做法（tests_publish 末尾对 ProbeRecorder 那条）。
+    这里连字符串一起去掉，是因为反面例子写在模块 docstring 里。
+    """
+    pieces = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type in (tokenize.COMMENT, tokenize.STRING):
+            continue
+        pieces.append(token.string)
+    return "\n".join(pieces)
+
+
+selector_code = code_only(selector_source)
+for token in ("nth-child", "querySelector", "className", "cssPath"):
+    check(token not in selector_code,
+          "selectors.py 的**代码**里没有 %s 这类随构建期混淆漂移的东西" % token)
+check("nth-child" in selector_source,
+      "但文档里保留着那个反面例子——下一个人要看得见为什么不这么写")
+
+suite_source = (ROOT / "publish" / "business_suite.py").read_text(encoding="utf-8")
+# 唯一允许出现的原始选择器是截图用的凭据遮罩，它不是流程定位器。
+raw_locators = suite_source.count("page.locator(")
+check(raw_locators >= 1
+      and suite_source.count("page.locator(SENSITIVE_INPUT_SELECTOR)") == raw_locators,
+      "business_suite.py 里的原始 locator 全部只用于截图遮罩，流程定位走证据登记表")
+check("password" in bs.SENSITIVE_INPUT_SELECTOR
+      and "contenteditable" in probe_module._SENSITIVE_INPUT_SELECTOR
+      and "textarea" in probe_module._SENSITIVE_INPUT_SELECTOR,
+      "发布截图遮凭据；probe 的无输入值契约额外遮正文/日期/时间等有值控件")
+
+
+print("\n[5b] 没录到的东西必须失败闭合，不许猜一个顶上")
 
 
 class UntouchablePage:
     def __getattr__(self, name):
-        raise AssertionError("骨架不应接触 page.%s" % name)
+        raise AssertionError("不该接触 page.%s" % name)
 
 
-async def skeleton_errors():
-    calls = [
-        ensure_logged_in(UntouchablePage()),
-        upload_images(UntouchablePage(), [Path("01.jpg")]),
-        fill_caption(UntouchablePage(), "äöüß"),
-        set_schedule(UntouchablePage(), WHEN),
-        submit(UntouchablePage()),
-    ]
+async def gated_errors():
+    """⚠️ 这一段必须在**证据被清空**的条件下跑。
+
+    2026-09-01 起本机 `publish/signals_backfilled.py` 已经落地、
+    `[publish].ui_probe_dump` 也签了字，三道闸是**开着**的 ——
+    那时 `submit()` 本来就该往下走去碰页面。
+    要验的是"证据缺失时不碰浏览器"，所以先把登记表清空再验，
+    验完原样放回去。**不清就跑，等于把闸打开当成了测试通过。**
+    """
+    saved_signals = dict(selectors.SIGNALS)
+    saved_composer = dict(selectors.COMPOSER)
+    selectors.SIGNALS.clear()
+    selectors.COMPOSER.pop("composer_submit_button", None)
     messages = []
-    for call in calls:
-        try:
-            await call
-        except ProbeRequired as exc:
-            messages.append(str(exc))
+    try:
+        for call in (submit(UntouchablePage()),
+                     set_schedule(UntouchablePage(), WHEN, ui_timezone="")):
+            try:
+                await call
+            except ProbeRequired as exc:
+                messages.append(str(exc))
+    finally:
+        selectors.SIGNALS.clear()
+        selectors.SIGNALS.update(saved_signals)
+        selectors.COMPOSER.clear()
+        selectors.COMPOSER.update(saved_composer)
     return messages
 
 
-messages = asyncio.run(skeleton_errors())
-check(len(messages) == 5 and all("probe_publish.py" in item for item in messages),
-      "G2–G6 每个签名都在接触页面前明确要求先做 G1")
-check(all("不得猜选择器" in item for item in messages),
-      "骨架错误信息不会让维护者误以为可以临时猜一个定位")
+gated = asyncio.run(gated_errors())
+check(len(gated) == 2,
+      "证据登记表被清空时，G6 提交与「UI 时区未实测」都在接触页面前失败闭合")
+check(any("红线 5" in item or "不得凭截图" in item for item in gated),
+      "至少一条失败信息点明这是红线，不会让维护者误以为可以临时猜一个")
+check("composer_submit_button" in gated[0]
+      and "composer_success_signal" in gated[0],
+      "submit() 明确点名它缺的是提交按钮与成功信号两样")
+check(bs.submission_evidence_ready() and bs.readback_evidence_ready(),
+      "而在**本机当前状态**下（signals_backfilled.py 已落地 + ui_probe_dump "
+      "已签字）三道闸是开着的 —— 上面那两条验的是缺证据时的行为，不是常态")
+check("ui_timezone" in gated[1] and "怎么补上" in gated[1],
+      "缺 UI 时区时给出可照做的补录命令，而不是拿 [publish].timezone 顶上")
+
+check(raises(KeyError, lambda: bs.locator_for(object(), "dashboard_page_switcher"),
+             "composer"),
+      "旧版后台那几条定位拿不到 composer 上用（两份 dump 是两个界面）")
+check(raises(KeyError, lambda: bs.locator_for(object(), "no_such_key")),
+      "没登记过的 key 直接报错，不会静默回退到某个默认定位")
+
+for key in ("composer_submit_button", "composer_success_signal",
+            "composer_placement_toggles", "composer_account_context",
+            "composer_hours_spinbutton", "composer_upload_thumbnails",
+            "composer_file_input", "ui_timezone"):
+    gap = selectors.GAPS.get(key)
+    check(gap is not None and gap.why_missing and gap.blocks and gap.how_to_close,
+          "缺口 %s 写清了「为什么没有 / 挡住了谁 / 怎么补上」" % key)
 
 
 print("\n[6] G1 recorder 记录稳定属性并逐步截图，但没有驱动页面代码")
@@ -880,8 +1029,11 @@ check("isTrusted" in script and "sensitiveTarget" in script,
 check("className" not in script and "cssPath" not in script,
       "dump 不记录混淆 class 或脆 CSS path")
 check(all(forbidden not in script for forbidden in (
-    ".click(", ".fill(", ".goto(", "setInputFiles(", "querySelector(")),
+    ".click(", ".fill(", ".goto(", "setInputFiles(",
+    "document.querySelector(", "document.querySelectorAll(")),
     "监听脚本没有点击/填写/导航/上传等页面驱动")
+check("createTreeWalker" in script and "isVisible(parent)" in script,
+      "交互祖先文本只遍历真实可见且非 editable 的 text node，隐藏 Boost 不会提前泄漏")
 with tempfile.TemporaryDirectory() as d:
     temp = Path(d)
     recorder, page = asyncio.run(make_completed_probe(
@@ -902,11 +1054,14 @@ with tempfile.TemporaryDirectory() as d:
     check(item["page_url"] == "https://business.example.invalid/create"
           and item["target"]["href"] == "https://business.example.invalid/action",
           "页面 URL 与 href 只保留稳定的 scheme/host/path")
-    check(bool(page.mask_selectors) and all("password" in value
-                                           for value in page.mask_selectors),
-          "每步截图都请求遮罩密码/登录类敏感输入")
-    check(data["mode"] == "record-only" and data["finished_at"],
-          "dump 明确标记只记录模式，并在正常收尾时写完成时间")
+    check(bool(page.mask_selectors) and all(
+              "contenteditable" in value and "input" in value
+              for value in page.mask_selectors),
+          "probe 每步截图遮罩正文、日期/时间和全部输入控件")
+    check(data["schema_version"] == 2
+          and data["mode"] == "record-and-passive-evidence"
+          and data["finished_at"],
+          "dump 明确标记 v2 交互+被动证据模式，并在正常收尾时写完成时间")
 
 
 async def rejected_probe_payloads(state_dir: Path):
@@ -962,12 +1117,18 @@ class FakeCDPSession:
     def on(self, event, handler):
         self.handlers[event] = handler
 
+    def remove_listener(self, event, handler):
+        if self.handlers.get(event) is handler:
+            self.handlers.pop(event, None)
+
     async def send(self, method, params=None):
         self.sent.append((method, params or {}))
         if method in self.fail_on:
             raise RuntimeError("boom:%s" % method)
         if method == "Runtime.evaluate":
             expr = (params or {}).get("expression", "")
+            if "filter:blur" in expr:
+                return {"result": {"value": True}}
             if "typeof window." in expr and "Handlers" in expr:
                 return {"result": {"value": self.verify}}
             return {"result": {"value": None}}
@@ -976,6 +1137,8 @@ class FakeCDPSession:
             buf = io.BytesIO()
             Image.new("RGB", (8, 6), (4, 5, 6)).save(buf, format="PNG")
             return {"data": _b64.b64encode(buf.getvalue()).decode()}
+        if method == "Page.addScriptToEvaluateOnNewDocument":
+            return {"identifier": "probe-script-1"}
         return {}
 
     async def detach(self):
@@ -1009,7 +1172,7 @@ check("Runtime.addBinding" in methods,
       "用 CDP 的 Runtime.addBinding 做通路，不依赖 Playwright 的 expose_binding —— "
       "后者在坏掉的 page 对象上是 undefined")
 check("Page.addScriptToEvaluateOnNewDocument" in methods,
-      "覆盖后续文档与新建 frame")
+      "覆盖后续顶层文档；子 frame 由 top-frame 闸跳过")
 check(any(m == "Runtime.evaluate" and p.get("expression") == "SCRIPT"
           for m, p in sess.sent),
       "**同时对当前文档注入一次**：SPA 客户端路由不产生新文档，只靠 init script 会漏")
@@ -1030,6 +1193,8 @@ check("except Exception: continue" not in src,
       "install_on_page 的代码里不许再出现吞掉一切的 except: continue")
 check("JSON.stringify" in probe_module.INSTALL_FUNCTION,
       "页面侧传 JSON 字符串 —— CDP 的 addBinding 只接受 string 参数")
+check("window !== window.top" in probe_module.INSTALL_FUNCTION,
+      "DOM listener 只装顶层文档；iframe 整体遮罩，停止时不会遗留跨源 frame timer")
 check(probe_module._safe_payload(json.dumps(
         {"session_id": "s", "is_trusted": True, "event_type": "click",
          "target": {"tag": "button"}}), "s") is not None,
@@ -1041,17 +1206,17 @@ check(probe_module._safe_payload(json.dumps(
          "target": {"tag": "button"}}), "s") is None,
       "session_id 对不上仍然拒收 —— 换了通路，这道闸不能松")
 
-# 截图：Playwright 挂住时的 CDP 回退，隐私边界必须一起带过去
+# 截图：CDP 是真实录制主路径，隐私边界必须一起带过去
 with tempfile.TemporaryDirectory() as d:
     shot = Path(d) / "s.png"
     sess4 = FakeCDPSession()
     okk, det = asyncio.run(probe_module._cdp_screenshot(sess4, shot))
     exprs = [p.get("expression", "") for m, p in sess4.sent if m == "Runtime.evaluate"]
     check(okk and shot.is_file() and shot.stat().st_size > 0,
-          "CDP 截图回退能真的写出 PNG")
+          "CDP 截图能真的写出 PNG")
     check(any("blur" in e for e in exprs),
           "**回退路径也要遮罩敏感输入**：Playwright 的 mask= 用不了，"
-          "改成临时插一条 CSS 把密码/邮箱/OTP 模糊掉")
+          "改成临时插一条 CSS 把正文、日期/时间与输入控件模糊掉")
     check(any("remove()" in e for e in exprs), "截完把临时样式撤掉，不留痕迹")
 
     sess5 = FakeCDPSession(fail_on=("Runtime.evaluate",))
@@ -1060,13 +1225,211 @@ with tempfile.TemporaryDirectory() as d:
     check(not ok5 and not shot2.exists(),
           "**遮罩插不进去就不截图** —— 宁可没有截图，也不能把敏感输入拍进去")
 
+
+class MaskExceptionSession(FakeCDPSession):
+    async def send(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "filter:blur" in expression:
+            self.sent.append((method, params or {}))
+            return {"exceptionDetails": {"text": "documentElement unavailable"}}
+        return await super().send(method, params)
+
+
+with tempfile.TemporaryDirectory() as d:
+    mask_exception_session = MaskExceptionSession()
+    mask_exception_ok, _mask_exception_detail = asyncio.run(
+        probe_module._cdp_screenshot(
+            mask_exception_session, Path(d) / "exception.png"))
+    check(not mask_exception_ok
+          and not any(method == "Page.captureScreenshot"
+                      for method, _params in mask_exception_session.sent),
+          "Runtime.evaluate 以 exceptionDetails 返回时按遮罩失败闭合，不拍未遮罩页面")
+    check("iframe" in probe_module._SENSITIVE_INPUT_SELECTOR
+          and "plaintext-only" in probe_module._SENSITIVE_INPUT_SELECTOR,
+          "截图整体遮住跨域 iframe，并覆盖标准 contenteditable=plaintext-only")
+
+
+class CancelDuringMaskSession(FakeCDPSession):
+    def __init__(self):
+        super().__init__()
+        self.mask_present = False
+        self.add_started = asyncio.Event()
+
+    async def send(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        self.sent.append((method, params or {}))
+        if method == "Runtime.evaluate" and "filter:blur" in expression:
+            # 模拟浏览器已执行插入，但 Python 还在等 CDP response 时被 cancel。
+            self.mask_present = True
+            self.add_started.set()
+            await asyncio.Event().wait()
+        if method == "Runtime.evaluate" and "let s; let n" in expression:
+            self.mask_present = False
+            return {"result": {"value": 1}}
+        return await super().send(method, params)
+
+
+async def _cancel_during_mask(folder: Path):
+    session = CancelDuringMaskSession()
+    task = asyncio.create_task(
+        probe_module._cdp_screenshot(session, folder / "cancelled.png"))
+    await session.add_started.wait()
+    task.cancel()
+    cancelled = False
+    try:
+        await task
+    except asyncio.CancelledError:
+        cancelled = True
+    return cancelled, session.mask_present, session.sent
+
+
+with tempfile.TemporaryDirectory() as d:
+    mask_cancelled, mask_left, mask_calls = asyncio.run(
+        _cancel_during_mask(Path(d)))
+    check(mask_cancelled and not mask_left
+          and any("let s; let n" in params.get("expression", "")
+                  for method, params in mask_calls if method == "Runtime.evaluate"),
+          "cancel 落在遮罩插入 await 中也会先撤掉页面遮罩，再保留取消语义")
+
 page = FakePage()
 _rec = ProbeRecorder(Path(tempfile.mkdtemp()), port=1, profile=Path("."))
 asyncio.run(_rec.record(page, {"session_id": _rec.session_id, "is_trusted": True,
                                "event_type": "click", "target": {"tag": "b"}}))
 check(page.screenshot_timeouts and page.screenshot_timeouts[0] is not None,
-      "record() 给截图显式超时：坏页面上 Playwright 截图会一直挂着，"
-      "而 record 持锁，一次挂住就把后面所有事件堵死")
+      "没有 CDP session 时 Playwright 后备截图仍有短超时，不会无限挂住")
+
+with tempfile.TemporaryDirectory() as d:
+    page_cdp = FakePage()
+    session_cdp = FakeCDPSession()
+    recorder_cdp = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    accepted_cdp = asyncio.run(recorder_cdp.record(
+        page_cdp,
+        {"session_id": recorder_cdp.session_id, "is_trusted": True,
+         "event_type": "click", "target": {"tag": "button"}},
+        session=session_cdp))
+    cdp_row = recorder_cdp.data["interactions"][0]
+    check(accepted_cdp and not page_cdp.screenshot_timeouts
+          and any(method == "Page.captureScreenshot"
+                  for method, _params in session_cdp.sent)
+          and Path(cdp_row["screenshot"]).is_file(),
+          "有 CDP session 时直接截图，不再先耗满 Playwright 超时导致画面排队错位")
+
+
+class SemanticCDPSession(FakeCDPSession):
+    async def send(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "semantic_items" in expression:
+            self.sent.append((method, params or {}))
+            return {"result": {"value": {
+                "page_url": "https://business.facebook.com/latest/content_calendar",
+                "document_title": "Planner",
+                "semantic_items": [{
+                    "tag": "div", "role": "dialog",
+                    "accessible_name": "Boost your scheduled post",
+                    "visible_text": "Boost your scheduled post",
+                }],
+            }}}
+        return await super().send(method, params)
+
+
+with tempfile.TemporaryDirectory() as d:
+    recorder_semantic = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    semantic_session = SemanticCDPSession()
+    changed = asyncio.run(recorder_semantic.snapshot(
+        semantic_session, reason="periodic", page_id="page-boost"))
+    duplicate = asyncio.run(recorder_semantic.snapshot(
+        semantic_session, reason="periodic", page_id="page-boost"))
+    semantic_row = recorder_semantic.data["snapshots"][0]
+    check(changed and not duplicate and Path(semantic_row["screenshot"]).is_file(),
+          "URL/语义首次变化自动截图，能留下落地主页与 Boost 建议；完全相同快照仍去重")
+
+
+class DynamicButtonSession(FakeCDPSession):
+    def __init__(self):
+        super().__init__()
+        self.label = "Button A"
+
+    async def send(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "semantic_items" in expression:
+            self.sent.append((method, params or {}))
+            return {"result": {"value": {
+                "page_url": "https://business.facebook.com/latest/home",
+                "document_title": "Home",
+                "semantic_items": [{"tag": "button", "role": "button",
+                                    "accessible_name": self.label,
+                                    "visible_text": self.label}],
+            }}}
+        return await super().send(method, params)
+
+
+with tempfile.TemporaryDirectory() as d:
+    dynamic_recorder = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    dynamic_session = DynamicButtonSession()
+    asyncio.run(dynamic_recorder.snapshot(
+        dynamic_session, reason="periodic", page_id="page-dynamic"))
+    dynamic_session.label = "Button B"
+    asyncio.run(dynamic_recorder.snapshot(
+        dynamic_session, reason="periodic", page_id="page-dynamic"))
+    dynamic_rows = dynamic_recorder.data["snapshots"]
+    check(len(dynamic_rows) == 2 and dynamic_rows[0]["screenshot"]
+          and not dynamic_rows[1]["screenshot"],
+          "普通动态 button/link 变化仍落语义但不反复截图；URL/dialog/status/Planner 才触发视觉证据")
+
+with tempfile.TemporaryDirectory() as d:
+    fallback_recorder = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    fallback_session = SemanticCDPSession(fail_on=("Page.captureScreenshot",))
+    fallback_page = FakePage()
+    fallback_changed = asyncio.run(fallback_recorder.snapshot(
+        fallback_session, reason="periodic", page_id="page-fallback",
+        page=fallback_page))
+    fallback_row = fallback_recorder.data["snapshots"][0]
+    check(fallback_changed and fallback_page.screenshot_timeouts == [3000]
+          and Path(fallback_row["screenshot"]).is_file(),
+          "被动 URL/Boost/Planner 的 CDP 图失败时也走 3 秒 Playwright 隐私遮罩后备")
+
+with tempfile.TemporaryDirectory() as d:
+    retry_recorder = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    retry_session = SemanticCDPSession(fail_on=("Page.captureScreenshot",))
+    first_failed = asyncio.run(retry_recorder.snapshot(
+        retry_session, reason="periodic", page_id="page-retry"))
+    second_retry = asyncio.run(retry_recorder.snapshot(
+        retry_session, reason="periodic", page_id="page-retry"))
+    capture_attempts = sum(
+        method == "Page.captureScreenshot" for method, _params in retry_session.sent)
+    check(first_failed and second_retry and capture_attempts == 2
+          and len(retry_recorder.data["snapshots"]) == 2,
+          "视觉截图失败不推进已捕获指纹；相同 Boost/toast 状态下一轮会自动重试")
+
+
+class QueuedSemanticSession(FakeCDPSession):
+    def __init__(self):
+        super().__init__()
+        self.semantic_calls = 0
+
+    async def send(self, method, params=None):
+        expression = (params or {}).get("expression", "")
+        if method == "Runtime.evaluate" and "semantic_items" in expression:
+            self.semantic_calls += 1
+            name = "OLD Boost" if self.semantic_calls == 1 else "Planner card scheduled"
+            role = "dialog" if self.semantic_calls == 1 else "status"
+            return {"result": {"value": {
+                "page_url": "https://business.facebook.com/latest/content_calendar",
+                "document_title": "Planner",
+                "semantic_items": [{"tag": "div", "role": role,
+                                    "accessible_name": name, "visible_text": name}],
+            }}}
+        return await super().send(method, params)
+
+
+with tempfile.TemporaryDirectory() as d:
+    queued_recorder = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    queued_session = QueuedSemanticSession()
+    asyncio.run(queued_recorder.snapshot(
+        queued_session, reason="periodic", page_id="page-queued"))
+    queued_text = json.dumps(queued_recorder.data["snapshots"], ensure_ascii=False)
+    check("Planner card scheduled" in queued_text and "OLD Boost" not in queued_text,
+          "语义在锁内紧邻截图重采：排队前的旧状态不会配到稍后的新页面图片")
 
 check(inspect.iscoroutinefunction(probe_module.cdp_page_targets),
       "有一条直接问 CDP 要 page 目标的路 —— 用来核对 Playwright 有没有漏页")
@@ -1077,6 +1440,99 @@ sessN, (_sn, okN, _dn) = asyncio.run(_install())
 check(okN and "Page.frameNavigated" in sessN.handlers,
       "装完注册 Page.frameNavigated：主帧一导航就**立刻**补注入一次，"
       "不用等巡检那 2 秒")
+
+
+async def _exercise_callback_boundaries():
+    session = FakeCDPSession()
+    accept = {"on": True}
+    stop = {"on": False}
+    seen = []
+    payload_tasks = set()
+    navigation_tasks = set()
+    sessions = set()
+    callbacks = {}
+    instrumentation = {}
+
+    async def receive(_page, payload):
+        seen.append(payload)
+
+    _session, installed_ok, _detail = await probe_module.install_on_page(
+        FakeCtx(session), FakePage(), "SCRIPT", receive,
+        task_tracker=payload_tasks,
+        navigation_task_tracker=navigation_tasks,
+        session_tracker=sessions,
+        callback_tracker=callbacks,
+        instrumentation_tracker=instrumentation,
+        accepting=lambda: accept["on"],
+        stopping=lambda: stop["on"])
+    binding = session.handlers["Runtime.bindingCalled"]
+    binding({"name": probe_module.BINDING_NAME, "payload": "before-enter"})
+    accept["on"] = False
+    binding({"name": probe_module.BINDING_NAME, "payload": "after-enter"})
+    await asyncio.sleep(0)
+    before_navigation = len([
+        1 for method, params in session.sent
+        if method == "Runtime.evaluate" and params.get("expression") == "SCRIPT"])
+    stop["on"] = True
+    session.handlers["Page.frameNavigated"]({"frame": {"id": "main"}})
+    await asyncio.sleep(0)
+    after_navigation = len([
+        1 for method, params in session.sent
+        if method == "Runtime.evaluate" and params.get("expression") == "SCRIPT"])
+    probe_module._remove_tracked_callbacks(callbacks, session)
+    await probe_module._disable_probe_instrumentation(
+        session, instrumentation.pop(session, None))
+    removal_methods = [method for method, _params in session.sent]
+    return (installed_ok, seen, sessions == {session}, not session.handlers,
+            before_navigation, after_navigation, removal_methods)
+
+
+(callback_ok, callback_seen, callback_session_tracked, callbacks_removed,
+ nav_before, nav_after, removal_methods) = asyncio.run(
+     _exercise_callback_boundaries())
+check(callback_ok and callback_seen == ["before-enter"],
+      "binding 到达 Python 时同步 admission：Enter 前事件进入 drain，Enter 后事件当场拒绝")
+check(callback_session_tracked and callbacks_removed,
+      "半初始化起就登记 session/callback，停止时能统一移除而不是只管成功安装表")
+check(nav_before == nav_after,
+      "停止闸关闭后 frameNavigated 不会重新注入页面 listener")
+check("Page.removeScriptToEvaluateOnNewDocument" in removal_methods
+      and "Runtime.removeBinding" in removal_methods,
+      "停止会撤销 init-script 与 CDP binding，之后再导航也不会复活 listener")
+
+
+class DisableNavigationRaceSession(FakeCDPSession):
+    def __init__(self):
+        super().__init__()
+        self.init_script = True
+        self.binding = True
+        self.listener = True
+
+    async def send(self, method, params=None):
+        if method == "Page.removeScriptToEvaluateOnNewDocument":
+            # 模拟撤注册前那一瞬间发生导航：只要 init 仍有效，新 DOM 就会装监听。
+            if self.init_script:
+                self.listener = True
+            self.init_script = False
+            return {}
+        if method == "Runtime.removeBinding":
+            self.binding = False
+            return {}
+        if method == "Runtime.evaluate" and "removeEventListener" in (
+                (params or {}).get("expression", "")):
+            self.listener = False
+            return {"result": {"value": True}}
+        return await super().send(method, params)
+
+
+race_session = DisableNavigationRaceSession()
+asyncio.run(probe_module._disable_probe_instrumentation(race_session, {
+    "binding_name": probe_module.BINDING_NAME,
+    "new_document_ids": ["probe-script-1"],
+}))
+check(not race_session.init_script and not race_session.binding
+      and not race_session.listener,
+      "先撤 init-script/binding、最后清 DOM，导航夹在停止两步之间也不会遗留 listener")
 
 sess_re = FakeCDPSession()
 asyncio.run(probe_module._reinject(sess_re, "SCRIPT"))
@@ -1090,30 +1546,226 @@ check(True, "_reinject 失败时不抛异常 —— 巡检那一层还会再兜�
 run_src = inspect.getsource(probe_module.run_probe)
 check("repair_if_lost" in run_src and "REGISTRY_NAME" in run_src,
       "**巡检会回读监听器标记并就地补装**：不管因为什么丢的（跨进程导航、"
-      "装到一半页面跳走、page 对象本身是坏的），最多两秒就自己回来")
+      "装到一半页面跳走、page 对象本身是坏的），每 4 个采样 tick 发起自愈")
 check("installed[page]" in run_src and "installed[id(" not in run_src
       and "installed.get(id(" not in run_src,
       "已装表用 page 对象本身做键 —— id() 会在对象回收后重用，"
       "那会让一个新页面被误当成'已经装过了'而跳过"
       "（注释里提到 id(page) 是有意的，所以只查真正的取值写法）")
-check("timeout=2.0" in run_src,
-      "巡检间隔 2 秒：这是用户走流程时能忍的'掉了多久会自己回来'")
+check("installation_tasks" in run_src and "start_install" in run_src
+      and "all_sessions" in run_src and "session_callbacks" in run_src,
+      "新页回调与 sweep 共用每页安装单飞，且所有成功/失败 session 统一归属")
+check("next_tick += 0.5" in run_src and "cycle % 4 == 0" in run_src
+      and "observation_tasks" in run_src and "start_observation" in run_src,
+      "语义观察按单调时钟每 0.5 秒发起且每页单飞合并；监听修复每 4 个 tick 发起")
 
 
 print("\n[8][CR-66] 「按 Enter 停止记录」要真的停；观察项不再挡在出口")
 
-# 用户实测：按 Enter 之后事件还在往里记（#18..#24 边问边冒），
-# 而 set_observations 和 record 抢同一把锁 —— 于是问答期间每点一次就多排一个，
-# 看起来就是卡死。这里钉的是"停止必须真的停"。
+# 两次真机教训：第一次 Enter 后还继续收事件；第二次每张 Playwright 图先耗满
+# 8 秒，积压任务挡在 final/finished_at 前，Enter 虽被读到却像没有停止。
 check('recording["on"] = False' in run_src,
       "按 Enter 之后**真的关闸**：receive 直接丢弃后续事件")
 check("session.detach()" in run_src,
       "并且断开各页面的 CDP 会话，浏览器不再回送事件")
-check(run_src.index("await asyncio.sleep(0.9)")
-      < run_src.index('recording["on"] = False'),
-      "顺序不能反：先给最后一次 input 的 700ms 去抖留时间，再关闸，否则会丢最后一条")
+check("_wait_for_stop_enter" in run_src and "_read_line(" not in
+      run_src[run_src.index("按 Enter 停止记录：") - 100:
+              run_src.index("按 Enter 停止记录：") + 100],
+      "停止键走独立守护 stdin 线程，不再依赖 executor 里的 input() 收尾")
+release_stdin = threading.Event()
+
+
+def _blocked_readline():
+    release_stdin.wait(1)
+    return "\n"
+
+
+stdin_done, stdin_thread = probe_module._stdin_stop_waiter(
+    readline=_blocked_readline)
+check(stdin_thread.daemon and not stdin_done.is_set(),
+      "Enter 等待线程是 daemon；等待期间不会误报已停止")
+release_stdin.set()
+stdin_thread.join(timeout=1)
+check(stdin_done.is_set(), "读到 Enter 后停止信号立即置位")
+
+check("await asyncio.sleep(0.9)" not in run_src
+      and run_src.index('recording["on"] = False')
+      < run_src.index("stop_sweep.set()"),
+      "Enter 后先关接收闸门，不再额外开放 0.9 秒让截图继续排队")
+check("_disable_probe_instrumentation" in run_src and "_drain_tasks" in run_src
+      and "timeout=5.0" in run_src,
+      "页面 listener/timer/init-script/binding 会拆除，Enter 前任务最多再等 5 秒")
+check("latest_page_id" in run_src and "capture_finals(), timeout=10" in run_src,
+      "final 优先最近活动页面，全部旧标签页合计最多等待 10 秒")
+check("last_admitted_page" in run_src
+      and run_src.index('if last_admitted_page["page"] is not None')
+      < run_src.index("elif evidence_rows:"),
+      "final 主页面取最后一条获准真人交互，不会被后台周期快照抢走优先级")
+check("detach_session" in run_src and "pw.stop(), timeout=5" in run_src,
+      "CDP sessions 并行限时断开，Playwright 自身停止也有 5 秒上限")
 check(run_src.index('recording["on"] = False') < run_src.index("if collect_notes:"),
       "关闸发生在问观察项**之前** —— 这正是死锁的来源")
+
+
+async def _exercise_stop_drain():
+    finished = {"fast": False}
+
+    async def fast():
+        await asyncio.sleep(0)
+        finished["fast"] = True
+
+    async def stuck():
+        await asyncio.Event().wait()
+
+    tasks = {asyncio.create_task(fast()), asyncio.create_task(stuck())}
+    done_count, cancelled_count = await probe_module._drain_tasks(
+        tasks, timeout=0.02)
+    return finished["fast"], done_count, cancelled_count, all(t.done() for t in tasks)
+
+
+fast_finished, done_count, cancelled_count, all_done = asyncio.run(
+    _exercise_stop_drain())
+check(fast_finished and done_count == 1 and cancelled_count == 1 and all_done,
+      "停止收尾保留已经能完成的事件，并取消挂住任务，不阻塞 final/finished_at")
+
+
+async def _exercise_cancel_resistant_drain():
+    release = asyncio.Event()
+
+    async def resistant():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    task = asyncio.create_task(resistant())
+    started = asyncio.get_running_loop().time()
+    done_count, cancelled_count = await probe_module._drain_tasks(
+        {task}, timeout=0.04)
+    elapsed = asyncio.get_running_loop().time() - started
+    still_running = not task.done()
+    release.set()
+    await task
+    return done_count, cancelled_count, elapsed, still_running
+
+
+(resistant_done, resistant_cancelled, resistant_elapsed,
+ resistant_was_running) = asyncio.run(_exercise_cancel_resistant_drain())
+check(resistant_done == 0 and resistant_cancelled == 1 and resistant_was_running
+      and resistant_elapsed < 0.12,
+      "抗拒第一次 cancel 的任务也受同一绝对 deadline 约束，不再进入无界 gather")
+
+
+async def _exercise_hard_wait():
+    release = asyncio.Event()
+
+    async def resistant():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    started = asyncio.get_running_loop().time()
+    completed, _value = await probe_module._hard_wait(
+        resistant(), timeout=0.02)
+    elapsed = asyncio.get_running_loop().time() - started
+    release.set()
+    await asyncio.sleep(0)
+    return completed, elapsed
+
+
+hard_completed, hard_elapsed = asyncio.run(_exercise_hard_wait())
+check(not hard_completed and hard_elapsed < 0.1,
+      "final/detach/pw.stop 的硬 deadline 不等待吞掉 CancelledError 的第三方 coroutine")
+
+stop_session = FakeCDPSession()
+asyncio.run(probe_module._stop_page_listeners(stop_session))
+stop_expressions = [params.get("expression", "") for method, params in stop_session.sent
+                    if method == "Runtime.evaluate"]
+check(any("removeEventListener" in expression and "clearTimeout" in expression
+          and probe_module._MASK_STYLE_ID in expression
+          for expression in stop_expressions),
+      "Enter 会移除 listener/input debounce 并防御性清残留遮罩，不改变业务页面")
+
+with tempfile.TemporaryDirectory() as d:
+    closing_recorder = ProbeRecorder(Path(d), port=1, profile=Path("."))
+    closing_recorder.close_admission()
+    late_accepted = asyncio.run(closing_recorder.record(
+        FakePage(), {"session_id": closing_recorder.session_id,
+                     "is_trusted": True, "event_type": "click",
+                     "target": {"tag": "button"}}))
+    asyncio.run(closing_recorder.finish(timeout=0.02))
+    check(not late_accepted and closing_recorder.data["finished_at"]
+          and not closing_recorder.data["interactions"],
+          "final 后关闭 recorder admission，迟到 task 不能在 finished_at 后追加 evidence")
+
+
+class DelayedCaptureSession(FakeCDPSession):
+    def __init__(self):
+        super().__init__()
+        self.capture_started = asyncio.Event()
+        self.release_capture = asyncio.Event()
+
+    async def send(self, method, params=None):
+        if method == "Page.captureScreenshot":
+            self.capture_started.set()
+            await self.release_capture.wait()
+        return await super().send(method, params)
+
+
+async def _close_while_capture_in_flight(folder: Path):
+    recorder = ProbeRecorder(folder, port=1, profile=Path("."))
+    session = DelayedCaptureSession()
+    task = asyncio.create_task(recorder.record(
+        FakePage(), {"session_id": recorder.session_id, "is_trusted": True,
+                     "event_type": "click", "target": {"tag": "button"}},
+        session=session))
+    await session.capture_started.wait()
+    recorder.close_admission()
+    session.release_capture.set()
+    accepted = await task
+    return accepted, recorder.data["interactions"]
+
+
+with tempfile.TemporaryDirectory() as d:
+    in_flight_accepted, in_flight_rows = asyncio.run(
+        _close_while_capture_in_flight(Path(d)))
+    check(not in_flight_accepted and not in_flight_rows,
+          "final 边界在截图 await 期间关闭时，迟到恢复的任务也不会追加 evidence")
+
+
+async def _finish_with_stuck_lock(folder: Path):
+    recorder = ProbeRecorder(folder, port=1, profile=Path("."))
+    await recorder._lock.acquire()
+    normal_lock_path = await recorder.finish(timeout=0.01)
+    recorder._lock.release()
+    on_disk = json.loads(recorder.output_path.read_text(encoding="utf-8"))
+    return normal_lock_path, on_disk.get("finished_at")
+
+
+with tempfile.TemporaryDirectory() as d:
+    finish_normal, forced_finished_at = asyncio.run(
+        _finish_with_stuck_lock(Path(d)))
+    check(not finish_normal and forced_finished_at,
+          "recorder 锁异常未释放时 finished_at 仍在有限时间内原子落盘")
+
+
+async def _runner_leaves_resistant_task():
+    async def resistant():
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.Event().wait()
+    asyncio.create_task(resistant())
+    await asyncio.sleep(0)
+    return "done"
+
+
+runner_started = time.monotonic()
+runner_value = probe_module._run_with_bounded_shutdown(
+    _runner_leaves_resistant_task())
+check(runner_value == "done" and time.monotonic() - runner_started < 1.2,
+      "probe runner 关环最多再等 0.5 秒，不被遗留抗取消 task 拖住进程")
 
 sig = inspect.signature(probe_module.run_probe)
 check(sig.parameters["collect_notes"].default is False,
@@ -1217,6 +1869,40 @@ check(seqs == list(range(1, len(seqs) + 1)),
       "compose._validated_probe_dump 要求连续，空一个号整份 dump 就永远用不了" % seqs)
 check(len(seqs) == 4,
       "截图失败不丢交互本身：4 次事件仍然记下 4 条（失败那条带 screenshot_error）")
+orders = [i["evidence_order"] for i in rec_seq.data["interactions"]]
+check(orders == list(range(1, len(orders) + 1)),
+      "交互与快照共用的 evidence_order 在普通截图失败后也连续")
+
+
+class CancelledScreenshotPage(FakePage):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def screenshot(self, *, path, full_page, mask, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise asyncio.CancelledError()
+        Image.new("RGB", (8, 6), (1, 2, 3)).save(path, format="PNG")
+
+
+async def _cancelled_order_probe():
+    rec = ProbeRecorder(Path(tempfile.mkdtemp()), port=1, profile=Path("."))
+    payload = {
+        "session_id": rec.session_id, "is_trusted": True,
+        "event_type": "click", "target": {"tag": "button"},
+    }
+    try:
+        await rec.record(CancelledScreenshotPage(), payload)
+    except asyncio.CancelledError:
+        pass
+    await rec.record(FakePage(), payload)
+    return rec
+
+
+cancelled_rec = asyncio.run(_cancelled_order_probe())
+check([row["evidence_order"] for row in cancelled_rec.data["interactions"]] == [1],
+      "Ctrl+C/任务取消落在截图 await 上也不能永久占掉一个 evidence_order")
 # 去掉注释行再查：说明文字里**引用**旧写法是有意的，不能当成还在用它。
 rec_code = "\n".join(
     line for line in inspect.getsource(ProbeRecorder.record).splitlines()
@@ -1224,6 +1910,608 @@ rec_code = "\n".join(
 check("self._counter +=" not in rec_code
       and 'len(self.data["interactions"]) + 1' in rec_code,
       "record() 不再用只增不减的计数器取号，改由已落盘条数推出")
+
+
+print("\n[10] G2–G5 在一个仿真 composer 上的真实行为")
+# ⚠️ 这一节是 mock，**它证明的是逻辑，不是真实 UI**。
+# CODE_REVIEW 18.9 的教训就是「mock 掉的边界就是没被测到的边界」：
+# 真实 Business Suite 上还没跑过一次，所以 G2–G5 一项都不勾。
+# 但下面这些恰恰是 mock **能**证明的部分：时区换算、12 小时制换算、
+# 回读比对会不会真的拦住、排除法定位在个数变化时会不会失败闭合。
+
+
+class FakeKeyboard:
+    def __init__(self, page):
+        self.page = page
+
+    async def press(self, key):
+        target = self.page.focused
+        if key == "Control+A":
+            self.page.select_all = True
+            return
+        if target is None:
+            return
+        if key == "Delete":
+            target.text = ""
+            target.value = ""
+            self.page.select_all = False
+            return
+        if key == "Shift+Enter":
+            target.text += "\n"
+
+    async def type(self, text):
+        target = self.page.focused
+        if target is None:
+            return
+        if self.page.select_all:
+            target.text = ""
+            target.value = ""
+            self.page.select_all = False
+        target.text += text
+        target.value += text
+        if target.on_type is not None:
+            target.on_type(target)
+
+
+class FakeElement:
+    def __init__(self, role, name="", *, aria_label=None, value="", text="",
+                 checked=None, children=(), on_type=None, render=None):
+        self.role = role
+        self.name = name
+        self.aria_label = aria_label
+        self.value = value
+        self.text = text
+        self.checked = checked
+        self.children = list(children)
+        self.on_type = on_type
+        self.render = render
+        self.clicks = 0
+
+    def accessible_name(self):
+        return self.aria_label if self.aria_label is not None else self.name
+
+    def inner_text(self):
+        return self.render(self) if self.render is not None else self.text
+
+
+class FakeLocator:
+    def __init__(self, page, elements):
+        self.page = page
+        self.elements = list(elements)
+
+    @property
+    def first(self):
+        return FakeLocator(self.page, self.elements[:1])
+
+    def _one(self):
+        if not self.elements:
+            raise AssertionError("定位没有命中任何元素")
+        return self.elements[0]
+
+    async def count(self):
+        return len(self.elements)
+
+    async def all(self):
+        return [FakeLocator(self.page, [item]) for item in self.elements]
+
+    async def wait_for(self, state=None, timeout=None):
+        self._one()
+
+    async def click(self, timeout=None):
+        element = self._one()
+        element.clicks += 1
+        self.page.focused = element
+        self.page.select_all = False
+        if element.role == "switch":
+            element.checked = not element.checked
+
+    async def is_checked(self):
+        return bool(self._one().checked)
+
+    async def input_value(self):
+        return self._one().value
+
+    async def inner_text(self):
+        return self._one().inner_text()
+
+    async def get_attribute(self, name):
+        if name == "aria-label":
+            return self._one().aria_label
+        return None
+
+    async def fill(self, value, timeout=None):
+        element = self._one()
+        element.value = value
+        element.text = value
+        # fill() 和逐字输入走同一个"页面会不会改写我填的值"的钩子——
+        # 只在 type 那条路上模拟改写，等于给 fill 开了后门。
+        if element.on_type is not None:
+            element.on_type(element)
+
+    def get_by_role(self, role, name=None, exact=True):
+        found = []
+        for element in self.elements:
+            found.extend(_walk_role(element.children, role, name, exact))
+        return FakeLocator(self.page, found)
+
+
+def _walk_role(elements, role, name, exact):
+    hits = []
+    for element in elements:
+        if element.role == role and _name_ok(element.accessible_name(), name, exact):
+            hits.append(element)
+        hits.extend(_walk_role(element.children, role, name, exact))
+    return hits
+
+
+def _name_ok(actual, wanted, exact):
+    if wanted is None:
+        return True
+    return actual == wanted if exact else wanted.lower() in (actual or "").lower()
+
+
+class FakeChooser:
+    def __init__(self, multiple):
+        self.multiple = multiple
+        self.files = None
+
+    def is_multiple(self):
+        return self.multiple
+
+    async def set_files(self, files):
+        self.files = list(files)
+
+
+class FakeComposer:
+    url = "https://business.facebook.com/latest/composer/"
+
+    def __init__(self, elements, *, texts=(), chooser=None, hang=False):
+        self.elements = list(elements)
+        self.texts = list(texts)
+        self.chooser = chooser
+        self.hang = hang
+        self.focused = None
+        self.select_all = False
+        self.keyboard = FakeKeyboard(self)
+        self.settled = 0
+
+    async def evaluate(self, expr):
+        if self.hang:
+            await asyncio.sleep(3600)
+        return 2
+
+    def get_by_role(self, role, name=None, exact=True):
+        return FakeLocator(self, _walk_role(self.elements, role, name, exact))
+
+    def get_by_text(self, text, exact=False):
+        hits = [item for item in self.texts if text.lower() in item.lower()]
+        return FakeLocator(self, [FakeElement("text", item) for item in hits])
+
+    async def wait_for_load_state(self, state, timeout=None):
+        self.settled += 1
+
+    def expect_file_chooser(self, timeout=None):
+        page = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            @property
+            def value(self):
+                async def _get():
+                    if page.chooser is None:
+                        raise TimeoutError("没有文件选择器")
+                    return page.chooser
+                return _get()
+
+        return _Ctx()
+
+
+CAPTION_NAME = selectors.COMPOSER["caption_box"].name
+
+
+def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
+                  caption_hook=None, chooser=None, date_hook=None):
+    caption = FakeElement("combobox", aria_label=CAPTION_NAME, on_type=caption_hook)
+    add_media = FakeElement("button", "Add photo/video")
+    switch = FakeElement("switch", aria_label="Set date and time", checked=False)
+    date = FakeElement("textbox", name="Date picker", on_type=date_hook)
+    labels = [None, "minutes", "meridiem"][:spinbuttons]
+    spins = [FakeElement("spinbutton", aria_label=label) for label in labels]
+
+    def render_time(element):
+        values = [item.value for item in element.children]
+        while len(values) < 3:
+            values.append("")
+        return "%s : %s %s" % (values[0], values[1], values[2])
+
+    group = FakeElement("application", name="Time input", children=spins,
+                        render=render_time)
+    root = FakeElement("none", "",
+                       children=[caption, add_media, switch, date, group])
+    page = FakeComposer([root], texts=list(page_texts), chooser=chooser)
+    return page, {"caption": caption, "add_media": add_media, "switch": switch,
+                  "date": date, "group": group, "spins": spins}
+
+
+CAPTION_TEXT = ("Neuer Frühling für Straßenkatzen 🐾\n"
+                "\n"
+                "Größe zählt: 219,99 $ statt $219.99\n"
+                "#Neakasa #Katzenklo")
+
+
+async def caption_ok():
+    page, parts = make_composer()
+    await fill_caption(page, CAPTION_TEXT)
+    return parts["caption"].text
+
+
+check(asyncio.run(caption_ok()) == CAPTION_TEXT,
+      "G4 逐行输入 + Shift+Enter：换行/空行/emoji/变音/#标签/$金额 原样填进去")
+
+
+async def caption_mangled():
+    # 模拟话题标签自动补全把 #Neakasa 改写成别的：回读闸必须当场拦住
+    def hook(element):
+        if element.text.endswith("#Katzenklo"):
+            element.text = element.text[:-len("#Katzenklo")] + "#Katzenklos"
+    page, _ = make_composer(caption_hook=hook)
+    try:
+        await fill_caption(page, CAPTION_TEXT)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+mangled = asyncio.run(caption_mangled())
+check("回读与要填的不一致" in mangled and "自动补全" in mangled,
+      "G4 正文被自动补全改写时**当场停下**，并指出第一处不同")
+
+
+async def schedule(when, *, zone="Europe/Berlin", **kwargs):
+    page, parts = make_composer(**kwargs)
+    # verify_device=False：这几条测的是**换算**，与跑测试这台机器的时区无关。
+    # 设备核对本身另有专门断言（见下面 [10c]）。
+    readback = await set_schedule(page, when, ui_timezone=zone,
+                                  verify_device=False)
+    return readback, parts
+
+
+# 2026-09-08 08:00Z = 柏林夏令时 10:00（UTC+2）→ 10 AM
+readback, parts = asyncio.run(schedule(
+    datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc)))
+check(parts["date"].value == "09/08/2026",
+      "G5 日期按 dump 里 placeholder 实测的 mm/dd/yyyy 填（实得 %r）"
+      % parts["date"].value)
+check([item.value for item in parts["spins"]] == ["10", "00", "AM"],
+      "G5 时刻显式换算到 UI 时区，并按录到的 12 小时制 + meridiem 填")
+check(parts["switch"].checked is True and parts["switch"].clicks == 1,
+      "G5 定时开关只点一次，并回读确认真的开了")
+check("Europe/Berlin" in readback and "10 : 00 AM" in readback
+      and "2026-09-08T08:00:00+00:00" in readback,
+      "G5 回读**同时**给出 UI 显示的时刻与目标时刻——"
+      "只给一个的话，人要么核对不了屏幕、要么以为排错了（实得 %r）" % readback)
+
+# 跨日 + 跨月：柏林时间比 UTC 早，23:30Z 已经是次日
+readback_cross, parts_cross = asyncio.run(schedule(
+    datetime(2026, 9, 30, 23, 30, tzinfo=timezone.utc)))
+check(parts_cross["date"].value == "10/01/2026"
+      and [item.value for item in parts_cross["spins"]] == ["1", "30", "AM"],
+      "G5 跨日跨月：UTC 09-30 23:30 → 柏林 10-01 01:30 AM（实得 %s %s）"
+      % (parts_cross["date"].value,
+         [item.value for item in parts_cross["spins"]]))
+
+# 夏令时切换日：2026-03-29 柏林 02:00 跳到 03:00（UTC+1 → UTC+2）
+_, parts_dst_on = asyncio.run(schedule(
+    datetime(2026, 3, 29, 1, 30, tzinfo=timezone.utc)))
+check([item.value for item in parts_dst_on["spins"]] == ["3", "30", "AM"],
+      "G5 夏令时开始日：01:30Z → 柏林 03:30（不是 02:30）")
+# 2026-10-25 柏林 03:00 退回 02:00；02:30 在无 offset 的 UI 中出现两次。
+async def schedule_dst_off_ambiguous():
+    page, parts = make_composer()
+    try:
+        await set_schedule(
+            page, datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc),
+            ui_timezone="Europe/Berlin", verify_device=False)
+    except PublishStepError as exc:
+        return str(exc), parts
+    return "", parts
+
+
+dst_off_error, parts_dst_off = asyncio.run(schedule_dst_off_ambiguous())
+check("重复的墙上时间" in dst_off_error
+      and parts_dst_off["switch"].clicks == 0,
+      "G5 夏令时结束日：无 offset 的 02:30 有两种绝对时刻，"
+      "必须在任何 UI 操作前失败闭合")
+
+
+# ---- [10c] 用户 2026-09-01 实测：UI 跟**发帖者设备的本机时间**走 ----
+# 于是「受众那边几点」与「屏幕上填几点」是两个不同的钟，而且两地夏令时切换日
+# **不是同一天**：本机(美西) 03-08 / 11-01，柏林 03-29 / 10-25。
+# 一年因此有两段约一周的窗口，时差从 9 小时变成 8 小时。
+# ⛔ 这几条钉住的就是"手算时差"必然踩的那个坑。
+DEVICE_TZ = "America/Los_Angeles"
+BERLIN = ZoneInfo("Europe/Berlin")
+
+for label, target, want_date, want_time in [
+        ("常规（时差 9 小时）", datetime(2026, 9, 8, 10, 0, tzinfo=BERLIN),
+         "09/08/2026", ["1", "00", "AM"]),
+        ("⚠️ 柏林已回冬令时、本机还在夏令时（时差 8 小时）",
+         datetime(2026, 10, 28, 10, 0, tzinfo=BERLIN),
+         "10/28/2026", ["2", "00", "AM"]),
+        ("两地都回冬令时之后（又变回 9 小时）",
+         datetime(2026, 11, 3, 10, 0, tzinfo=BERLIN),
+         "11/03/2026", ["1", "00", "AM"]),
+        ("⚠️ 本机已进夏令时、柏林还没（时差 8 小时）",
+         datetime(2027, 3, 20, 10, 0, tzinfo=BERLIN),
+         "03/20/2027", ["2", "00", "AM"])]:
+    _, got = asyncio.run(schedule(target, zone=DEVICE_TZ))
+    check(got["date"].value == want_date
+          and [item.value for item in got["spins"]] == want_time,
+          "G5 %s：柏林 %s → UI 填 %s %s（实得 %s %s）"
+          % (label, target.strftime("%m-%d %H:%M"), want_date,
+             " ".join(want_time), got["date"].value,
+             [item.value for item in got["spins"]]))
+
+
+async def device_mismatch():
+    # 拿一个**必然**与本机不同的时区：本机是什么都不影响这条断言。
+    other = "Etc/GMT+11" if datetime.now().astimezone().utcoffset() != (
+        timedelta(hours=-11)) else "Etc/GMT+3"
+    page, _ = make_composer()
+    try:
+        await set_schedule(page, WHEN, ui_timezone=other)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+mismatch = asyncio.run(device_mismatch())
+check("与**这台机器**的时区对不上" in mismatch and "本机偏移" in mismatch,
+      "G5 配置时区与本机对不上时**失败闭合**——UI 跟设备走，"
+      "配置和设备不一致就等于排错时刻，而这种错没人会立刻发现")
+check("手算必错" in mismatch,
+      "错误信息劝住「我自己减几小时就行」——两地切换日不同，手算在那两段窗口里必错")
+
+# 设备核对比的是**目标时刻**的偏移，不是"今天"的偏移。
+# 拿今天去判，会在上面那两段窗口里把正确的配置判成错的。
+_src = inspect.getsource(bs.assert_ui_timezone_is_device)
+check("when.astimezone(zone).utcoffset()" in _src
+      and "when.astimezone().utcoffset()" in _src
+      and "datetime.now()" not in _src,
+      "设备核对用目标时刻的偏移，不用当下的偏移")
+
+
+async def schedule_two_spins():
+    try:
+        await schedule(WHEN, spinbuttons=2)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+two = asyncio.run(schedule_two_spins())
+check("composer_hours_spinbutton" in two and "不去猜哪个是小时" in two,
+      "G5 时间控件个数一变就失败闭合：小时那个本来就是靠排除法定位的")
+
+
+async def schedule_bad_date():
+    def hook(element):
+        element.value = "08/09/2026"        # 模拟 UI 换成了 dd/mm/yyyy
+    try:
+        await schedule(datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc),
+                       date_hook=hook)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+bad_date = asyncio.run(schedule_bad_date())
+check("日期回读对不上" in bad_date and "mm/dd/yyyy" in bad_date,
+      "G5 日期回读对不上时点名「先怀疑日期格式变了」——静默排到别的日子是最贵的错")
+
+check(raises(ValueError,
+             lambda: asyncio.run(set_schedule(
+                 UntouchablePage(), datetime(2026, 9, 8, 10, 0),
+                 ui_timezone="Europe/Berlin")),
+             "显式带时区"),
+      "G5 naive datetime 在接触页面之前就被拒")
+
+
+async def login_ok():
+    page, _ = make_composer()
+    return await ensure_logged_in(page, page_name="Neakasa Deutschland",
+                                  instagram_account="neakasa.de")
+
+
+context = asyncio.run(login_ok())
+check(context.logged_in and context.page_name_seen,
+      "G2 页面上出现目标主页显示名时通过")
+check(context.selection_verified is False and context.notes,
+      "G2 **不谎称**已确认选中：composer 上没录到主页切换器，所以只给弱结论")
+check(any("neakasa.de" in note for note in context.notes),
+      "G2 没看到 IG 帐号时明说，让人提交前重点看那一项")
+check(any("默认全勾选" in note and "提交后" in note for note in context.notes),
+      "G2 沿用默认全勾选且不点击渠道控件；自动路径改由提交后结构化卡片回读")
+
+
+# ⚠️ **2026-09-01 按真实 composer 重写：提交前只核对 Facebook。**
+# 实测（`docs/PROBE_FINDINGS_20260901.md`）composer 上从头到尾没有 IG 帐号名，
+# 只有 `img 'Instagram'` 一个图标。FB 主页名出现在预览抬头那条 `heading h2`。
+# IG 改由提交后从 Planner 详情弹窗回读证明，少了会转人工。
+async def strict_login(facebook_value):
+    caption = FakeElement("combobox", aria_label=CAPTION_NAME)
+    heading = FakeElement("heading", aria_label=facebook_value,
+                          text=facebook_value)
+    root = FakeElement("none", "", children=[caption, heading])
+    page = FakeComposer([root], texts=[facebook_value, "neakasa.de"])
+    spec = selectors.EvidenceSignal(
+        key="composer_account_context", step="G2", kind="semantic",
+        surface=selectors.SURFACE_COMPOSER, source_dump="fixture.json",
+        sequences=(1,), breaks_when="fixture", role="heading",
+        name="Neakasa Deutschland", attributes={
+            "facebook_account_token": "Neakasa Deutschland",
+            "facebook_account_regex": r"@?(?P<account>.+)",
+        })
+    return await ensure_logged_in(
+        page, page_name="Neakasa Deutschland",
+        instagram_account="neakasa.de", account_spec=spec)
+
+
+strict_context = asyncio.run(strict_login("Neakasa Deutschland"))
+check(strict_context.selection_verified,
+      "生产账号闸从 composer 预览抬头提取**完整值**后通过")
+check(any("IG" in note and "回读" in note for note in strict_context.notes),
+      "并且**明说** IG 在 composer 上不显示、由提交后回读证明，不是悄悄跳过")
+try:
+    asyncio.run(strict_login("Neakasa Deutschland Test"))
+except PublishStepError:
+    strict_near_collision_blocked = True
+else:
+    strict_near_collision_blocked = False
+check(strict_near_collision_blocked,
+      "生产账号闸拒绝 FB 同名前缀 Page（完整值比较，多一个词就是另一个主页）")
+
+
+async def login_wrong_page():
+    page, _ = make_composer(page_texts=("Neakasa Official",))
+    try:
+        await ensure_logged_in(page, page_name="Neakasa Deutschland")
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+wrong = asyncio.run(login_wrong_page())
+check("比没登录严重" in wrong,
+      "G2 找不到目标主页显示名时拦住，并说清这比没登录更严重")
+
+
+async def upload(multiple, count):
+    with tempfile.TemporaryDirectory() as folder:
+        paths = []
+        for index in range(count):
+            item = Path(folder) / ("%02d.jpg" % (index + 1))
+            Image.new("RGB", (64, 64), (7, 8, 9)).save(item, format="JPEG")
+            paths.append(item)
+        chooser = FakeChooser(multiple)
+        page, _ = make_composer(chooser=chooser)
+        notes = await upload_images(page, paths)
+        return chooser, notes
+
+
+chooser, notes = asyncio.run(upload(True, 5))
+check(chooser.files is not None and len(chooser.files) == 5,
+      "G3 走 file chooser 通道交 5 张图，全程没有写死 input[type=file] 选择器")
+check(any("缩略图数量没有被程序核对过" in note for note in notes),
+      "G3 **不假装**验过缩略图：那个容器没进 dump，如实交回给人复核")
+check(raises(PublishStepError, lambda: asyncio.run(upload(False, 5)),
+             "只收 1 个文件"),
+      "G3 控件只收单文件却要传 5 张时停下，不默默只传一张")
+
+
+async def no_chooser():
+    page, _ = make_composer(chooser=None)
+    try:
+        await upload_images(page, [Path(__file__)])
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+no_fc = asyncio.run(no_chooser())
+check("拖拽区" in no_fc and "重录一次 G1" in no_fc,
+      "G3 等不到文件选择器时区分「是拖拽区」与「定位失效」两种情况")
+
+
+async def hung_page():
+    page, _ = make_composer()
+    page.hang = True
+    try:
+        await bs.assert_page_usable(page, timeout=0.05)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+hung = asyncio.run(hung_page())
+check("CR-64" in hung and "F5" in hung,
+      "坏页（page.evaluate 超时）当场点名 CR-64，而不是 except: 吞掉后静默什么都不做")
+
+
+print("\n[11] G6b 留痕与幂等：state/published.jsonl")
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    base = dict(post_id="122123185335379375", platform="facebook",
+                scheduled_at="2026-09-08T10:00:00+02:00",
+                recorded_at="2026-09-01T12:00:00+02:00",
+                text_de_sha256=journal.text_sha256("hallo"),
+                images=("01.jpg",), image_sources=("original",))
+    journal.append(state, journal.PublishRecord(
+        status=journal.STATUS_PREPARED, **base))
+    check(journal.scheduled_record(state, base["post_id"], "facebook") is None,
+          "「已准备」不算已排期——它意味着可能留着草稿，不能当幂等跳过的理由")
+    pending = journal.pending_draft_record(state, base["post_id"], "facebook")
+    check(pending is not None and pending["status"] == journal.STATUS_PREPARED,
+          "「已准备」会被认出来，重跑前先提醒人去看有没有草稿残留")
+    journal.append(state, journal.PublishRecord(
+        status=journal.STATUS_SCHEDULED, **base))
+    check(journal.scheduled_record(state, base["post_id"], "facebook") is not None,
+          "结转成「已排期」之后幂等生效")
+    check(journal.pending_draft_record(state, base["post_id"], "facebook") is None,
+          "已排期之后不再提示草稿残留")
+    check(journal.scheduled_record(state, base["post_id"], "instagram") is None,
+          "幂等按 post_id + 平台判，FB 排过了不影响 IG 那一路")
+    check(len(journal.load(state)) == 2,
+          "留痕只追加不重写：两次操作两行")
+    check(raises(ValueError,
+                 lambda: journal.PublishRecord(
+                     status=journal.STATUS_PREPARED,
+                     **{**base, "scheduled_at": "2026-09-08T10:00:00"}),
+                 "必须显式带时区"),
+          "排期时刻不带时区的留痕直接拒收")
+    check(raises(ValueError,
+                 lambda: journal.PublishRecord(
+                     status="published", **base), "未知发布状态"),
+          "只认发布状态机定义的五个状态，不许自造状态")
+
+
+print("\n[12] 发布入口：默认准备，显式 --submit 才进入证据门禁后的 G6")
+entry = (ROOT / "tools" / "publish_post.py").read_text(encoding="utf-8")
+workflow_entry = (ROOT / "publish" / "workflow.py").read_text(encoding="utf-8")
+check("force_utf8()" in entry,
+      "入口调 force_utf8()（本机代码页 936，输出一被重定向就炸在 ß/⚠ 上）")
+check("--submit" in entry and "bs.submit" in workflow_entry,
+      "单帖默认仍停在提交前；只有显式 --submit 才进入 G6")
+with contextlib.redirect_stdout(io.StringIO()) as captured:
+    submit_gate_code = publish_entry.main([
+        "--post-id", "does-not-matter", "--at", "2026-09-08T10:00",
+        "--submit", "--assume-yes"])
+check(submit_gate_code == 2 and "ui_constraints_verified" in captured.getvalue(),
+      "--submit 自动隐含 strict；当前 G1 未审核时在查归档/浏览器之前失败闭合")
+check("publish_debug_port" in workflow_entry and "publish_profile_dir" in workflow_entry
+      and "assert_publish_chrome_isolated" in workflow_entry,
+      "入口只附着发布专用 profile/端口，且启动前核对与抓取小号隔离")
+check("await pw.stop()" in workflow_entry and "browser.close()" not in workflow_entry,
+      "收尾只断开 Playwright，不关用户的 Chrome，也不关那个待提交的标签页")
+check("--mark-scheduled" in entry and "--mark-not-scheduled" in entry
+      and "manual_evidence=True" in entry,
+      "模糊状态可人工结转为已排期/未排期，且明确标记为人工证据")
+
+entry_bat = ROOT / "scripts" / "run_publish_post.bat"
+raw_entry = entry_bat.read_bytes() if entry_bat.exists() else b""
+check(bool(raw_entry) and all(byte <= 127 for byte in raw_entry),
+      "scripts\\run_publish_post.bat 存在且纯 ASCII")
+check(bool(raw_entry) and raw_entry.replace(b"\r\n", b"").count(b"\n") == 0
+      and not raw_entry.startswith(b"\xef\xbb\xbf"),
+      "run_publish_post.bat 只有 CRLF、无 BOM")
+check(b"PYTHONIOENCODING=utf-8" in raw_entry
+      and b"tools\\publish_post.py" in raw_entry,
+      "run_publish_post.bat 设了 UTF-8 并只转交 Python 入口")
 
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))

@@ -10,7 +10,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -22,9 +22,10 @@ from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)
-from translate import (PROMPT_VERSION, account_dirs, extract_hashtags,
+from translate import (PROMPT_VERSION, account_dirs, apply_money_mapping,
+                       extract_hashtags, extract_money_tokens,
                        hashtags_preserved, load_translated, money_preserved,
-                       translation_is_current)
+                       normalize_money_token, translation_is_current)
 
 Platform = Literal["facebook", "instagram"]
 CaptionLengthMode = Literal["codepoints", "utf16_units", "utf8_bytes"]
@@ -147,6 +148,7 @@ class DePost:
     platform: Platform
     account: str
     source_text: str
+    original_text_de: str
     text_de: str
     scheduled_at: datetime
     image_paths: tuple[Path, ...]
@@ -268,8 +270,11 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
         raise ComposeError("G1 probe 无法读取：%s" % exc) from exc
     if not isinstance(data, dict):
         raise ComposeError("G1 probe 顶层不是对象")
-    if data.get("schema_version") != 1 or data.get("mode") != "record-only":
-        raise ComposeError("G1 probe schema/mode 不符合 record-only v1 契约")
+    contract = (data.get("schema_version"), data.get("mode"))
+    if contract not in {
+            (1, "record-only"),
+            (2, "record-and-passive-evidence")}:
+        raise ComposeError("G1 probe schema/mode 不符合受支持的 v1/v2 契约")
     _parse_probe_time(data.get("started_at"), "started_at")
     _parse_probe_time(data.get("finished_at"), "finished_at")
     if data.get("cdp_port") != c.publish_debug_port:
@@ -327,7 +332,75 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
         event_types.add(event_type)
     if "click" not in event_types or not event_types.intersection({"input", "change"}):
         raise ComposeError("G1 probe 必须同时覆盖点击与输入/变更事件")
+    if data.get("schema_version") == 2:
+        snapshots = data.get("snapshots")
+        if not isinstance(snapshots, list) or not snapshots:
+            raise ComposeError("G1 probe v2 缺少被动语义快照")
+        for sequence, item in enumerate(snapshots, 1):
+            if not isinstance(item, dict) or item.get("sequence") != sequence:
+                raise ComposeError("G1 probe v2 的语义快照序号不连续")
+            if not isinstance(item.get("semantic_items"), list):
+                raise ComposeError("G1 probe v2 第 %d 条缺少 semantic_items" % sequence)
+        finals = [item for item in snapshots if item.get("reason") == "final"]
+        if not finals:
+            raise ComposeError("G1 probe v2 缺少停止录制时的 final 语义快照")
+        final = finals[-1]
+        if final.get("screenshot_error") not in {None, ""}:
+            raise ComposeError("G1 probe v2 的 final 遮罩截图失败")
+        raw_final_shot = final.get("screenshot")
+        if not isinstance(raw_final_shot, str) or not raw_final_shot.strip():
+            raise ComposeError("G1 probe v2 的 final 语义快照缺少遮罩截图")
+        final_shot = Path(raw_final_shot).resolve(strict=False)
+        try:
+            assert_physical_direct_path(
+                screenshot_dir, final_shot, kind="file", label="G1 final 截图")
+        except ArchivePathError as exc:
+            raise ComposeError("G1 probe v2 final 截图路径不安全：%s" % exc) from exc
+        if not final_shot.is_file() or final_shot.stat().st_size <= 0:
+            raise ComposeError("G1 probe v2 的 final 遮罩截图不存在/为空")
     return data
+
+
+def verified_constraints_from_config(
+        platform: Platform) -> tuple[InstagramConstraints, ScheduleWindow]:
+    """从唯一一份人工审核过的 G1 dump 构造严格发布约束。
+
+    发布 CLI 不再要求调用方手工复制这些数字。复制既容易漏传，也可能让
+    ``--submit`` 在没有真正执行严格闸时继续；这里直接解析 config 指向的
+    dump，后续仍由 :func:`_match_probe_measurements` 逐项复核。
+    """
+    if platform not in {"facebook", "instagram"}:
+        raise ComposeError("未知发布平台：%r" % platform)
+    data = _validated_probe_dump(())
+    observations = data["observations"]
+    configured = str(cfg().get("publish", "ui_probe_dump", ""))
+    window = ScheduleWindow(
+        configured,
+        timedelta(seconds=_parse_probe_number(
+            observations, "schedule_min_ahead_seconds", integer=True)),
+        timedelta(seconds=_parse_probe_number(
+            observations, "schedule_max_ahead_seconds", integer=True)),
+    )
+    # ``platform`` 是来源平台，不是发布目标。当前 composer 默认同时勾选 FB+IG，
+    # 代码也故意不操作渠道控件；所以即使 canonical 来源是 Facebook，真实提交仍
+    # 必须满足 Instagram 的限制。跨平台精确合并还会优先选 FB，若按来源平台跳过
+    # 这里，恰好会让最常见的合并路径绕过 IG 硬闸。
+    limits = InstagramConstraints(
+        probe_dump=configured,
+        min_aspect_ratio=_parse_probe_number(
+            observations, "instagram_min_aspect_ratio", integer=False),
+        max_aspect_ratio=_parse_probe_number(
+            observations, "instagram_max_aspect_ratio", integer=False),
+        max_images=_parse_probe_number(
+            observations, "instagram_max_images", integer=True),
+        max_caption_length=_parse_probe_number(
+            observations, "instagram_max_caption_length", integer=True),
+        caption_length_mode=str(
+            observations["instagram_caption_length_mode"]),
+        max_hashtags=_parse_probe_number(
+            observations, "instagram_max_hashtags", integer=True),
+    )
+    return limits, window
 
 
 def _match_probe_measurements(data: dict,
@@ -486,6 +559,29 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     if violations:
         raise _fail(post_id, "话题标签硬闸未通过：%s" % "；".join(violations))
     return text_de
+
+
+def _apply_publish_price_map(source_text: str, text_de: str,
+                             price_map: Mapping[str, str]) -> str:
+    """只生成最终发布文案；译文真相源保持原金额不动。"""
+    amounts = extract_money_tokens(source_text)
+    mapped_tokens = {
+        normalize_money_token(str(token)) for token in price_map
+    }
+    missing = tuple(dict.fromkeys(token for token in amounts
+                                  if normalize_money_token(token)
+                                  not in mapped_tokens))
+    if missing:
+        raise ComposeError("最终发布文案存在未映射金额：%s" % "、".join(missing))
+    try:
+        mapped = apply_money_mapping(text_de, price_map)
+    except ValueError as exc:
+        raise ComposeError("[publish.price_map] 无效：%s" % exc) from exc
+    # 价格表只能改金额，不能借机增删话题标签。
+    violations = hashtags_preserved(source_text, mapped)
+    if violations:
+        raise ComposeError("价格映射破坏话题标签硬闸：%s" % "；".join(violations))
+    return mapped
 
 
 def _validate_image(path: Path, post_id: str) -> tuple[int, int]:
@@ -735,6 +831,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
                  archive_root: Path | str | None = None,
                  account: str | None = None,
                  platform: Platform | None = None,
+                 price_map: Mapping[str, str] | None = None,
                  instagram_constraints: InstagramConstraints | None = None,
                  schedule_window: ScheduleWindow | None = None,
                  now: datetime | None = None,
@@ -766,38 +863,49 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
         raise _fail(post_id, "post.json 的 platform/account 与账号归档目录不一致")
 
     if require_verified_ui_constraints:
-        if schedule_window is None:
+        if schedule_window is None or instagram_constraints is None:
+            configured_limits, configured_window = (
+                verified_constraints_from_config(source_platform))
+            schedule_window = schedule_window or configured_window
+            instagram_constraints = instagram_constraints or configured_limits
+        if schedule_window is None:  # 类型与失败闭合的双保险
             raise _fail(post_id, "严格发布缺少 G1 实测定时窗口")
         probe_sources = [schedule_window.probe_dump]
-        verified_limits = None
-        if source_platform == "instagram":
-            if instagram_constraints is None or not instagram_constraints.complete():
-                raise _fail(post_id, "严格发布缺少 G1 的四类完整 IG 实测约束")
-            verified_limits = instagram_constraints
-            probe_sources.append(instagram_constraints.probe_dump)
+        if instagram_constraints is None or not instagram_constraints.complete():
+            raise _fail(post_id, "严格发布缺少 G1 的四类完整 IG 实测约束")
+        verified_limits = instagram_constraints
+        probe_sources.append(instagram_constraints.probe_dump)
         probe_data = _validated_probe_dump(tuple(probe_sources))
         _match_probe_measurements(probe_data, verified_limits, schedule_window)
 
     text_de = _load_current_translation(arc, source)
+    original_text_de = text_de
+    if price_map is not None:
+        text_de = _apply_publish_price_map(source["text"], text_de, price_map)
     warnings: list[str] = []
     image_paths, image_sources, dimensions = _choose_images(
         arc, source, post_dir, warnings)
 
-    if source_platform == "instagram":
-        if instagram_constraints is None:
-            message = ("IG 画幅/图片数/正文长度/标签数尚无 G1 实测值；"
-                       "当前只完成离线组装，禁止进入浏览器发布")
-            if require_verified_ui_constraints:
-                raise _fail(post_id, message)
-            warnings.append(message)
-        else:
-            if require_verified_ui_constraints and not instagram_constraints.complete():
-                raise _fail(post_id, "IG 约束不完整；必须补齐 G1 的四类实测值")
-            _validate_instagram(post_id, text_de, dimensions, instagram_constraints)
+    # 当前发布目标固定包含 Instagram；来源为 Facebook 也不能跳过这道限制。
+    if instagram_constraints is None:
+        message = ("IG 画幅/图片数/正文长度/标签数尚无 G1 实测值；"
+                   "非严格模式会照常往下走，composer 可能自己拒。"
+                   "要在碰浏览器之前拦住，用 --strict")
+        if require_verified_ui_constraints:
+            raise _fail(post_id, message)
+        warnings.append(message)
+    else:
+        if require_verified_ui_constraints and not instagram_constraints.complete():
+            raise _fail(post_id, "IG 约束不完整；必须补齐 G1 的四类实测值")
+        _validate_instagram(post_id, text_de, dimensions, instagram_constraints)
 
     if schedule_window is None:
+        # 同上：这条**仍然成立且没有松动** —— 那两个数是 Graph API 的值，
+        # 不是 Business Suite UI 的值，代码任何地方都不许拿它们当 UI 事实。
+        # 只是把"禁止"的对象说准：禁止的是**采信这两个数**，不是禁止发布。
         message = ("定时窗口尚无 G1 实测值；config.toml 的 10 分钟/75 天只是 API 占位，"
-                   "当前禁止把它当 Business Suite UI 事实")
+                   "代码不会拿它们当 Business Suite UI 事实 —— "
+                   "排的时刻是否落在 UI 允许的窗口内，目前只能你自己看")
         if require_verified_ui_constraints:
             raise _fail(post_id, message)
         warnings.append(message)
@@ -834,6 +942,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
         platform=source_platform,
         account=source_account,
         source_text=source["text"],
+        original_text_de=original_text_de,
         text_de=text_de,
         scheduled_at=scheduled_at,
         image_paths=image_paths,

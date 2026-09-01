@@ -392,9 +392,8 @@ instagram_account = "neakasa.de"
 profile_dir = "~/.fbscraper-publish"
 debug_port = 9223
 
-# 排期时区。Business Suite 显示的时间跟 **Page 的时区设置**走，
-# 不一定是本机时区，也不一定是这里填的值 —— 三者可能各不相同。
-# 代码必须显式转换并**回读 UI 上显示的时间比对**（G5），不依赖本地时区隐式生效。
+# 德国受众的业务排期时区。Business Suite UI 按下方 ``ui_timezone``（本机）
+# 显示，代码必须显式转换并**回读 UI 上显示的时间比对**（G5）。
 # ⚠️ 每年两次夏令时切换日是最容易出错的，G5 的验收专门要测那两天。
 timezone = "Europe/Berlin"
 
@@ -405,9 +404,47 @@ schedule_max_days_ahead = 75
 
 # 只有完成 G1、人工复核真实 dump 与四类 IG/UI 限制后才能改 true 并填路径。
 # 严格组装会解析这份 dump、核对 9223/profile/交互/截图/观察与注入数值；
-# 上面两个 API 占位值不会被拿来给 Business Suite 真实发布放行。
+# 显式 `--submit` 会强制走这道严格组装，因此上面两个 API 占位值不会被拿来给
+# Business Suite 真实发布放行。
+#
+# ✅ 2026-09-01：ui_probe_dump 已填。那份 dump 是首份完整通过 v2 契约的录制
+#    （56 交互 / 71 快照 / 117 截图），G6/G6c 的五件生产证据已由
+#    `tools/probe_signals.py --emit` 从它机械推导并逐条回查，
+#    落在 `publish/signals_backfilled.py`。判读见 docs/PROBE_FINDINGS_20260901.md。
+#
+# ⛔ ui_constraints_verified 仍然是 false，**这是对的**：那一位管的是
+#    「IG 画幅/图片数/正文长度/标签数这四类 UI 限制有没有人亲眼量过」，
+#    而这份 dump 的 observations 是空的（20 个观察项一个都没填）。
+#    补法：`tools\probe_publish.py --fill-notes state\publish_probe_<时间戳>.json`
+#    —— 不用重录，填完再把这一位改 true。
 ui_constraints_verified = false
-ui_probe_dump = ""
+ui_probe_dump = "publish_probe_20260901_054226_378622.json"
+
+# ✅ **用户 2026-09-01 实测确认：Business Suite 上那个时刻跟发帖者设备的
+#    本机时间走**（不是 Page 的时区设置，也不是受众所在时区）。
+#
+# 所以这一项 = **这台机器的时区**。当前机器是 Pacific（Windows 显示
+# "(UTC-08:00) Pacific Time (US & Canada)"），IANA 名即下面这个。
+#
+# 上面的 `timezone` 是「我们想让德国受众在几点看到」，这一项是「UI 认哪个时区」，
+# **两者本来就不一样**，代码显式换算，不靠本机时区隐式生效。
+#
+# ⚠️ **换机器、或者改了 Windows 时区，就必须改这里。**
+# `publish/business_suite.py` 会在每次排期前核对这一项与本机在**目标时刻**的
+# 偏移是否一致，对不上直接失败闭合 —— 因为这类错只表现为「帖子早/晚一小时
+# 发出去」，没有人会立刻发现。
+#
+# ⚠️ **不要自己心算时差。** 柏林与本机的夏令时切换日**不是同一天**
+# （2026：柏林 03-29 / 10-25，本机 03-08 / 11-01），
+# 于是一年里有两段约一周的窗口时差从 9 小时变成 8 小时
+# （2026-10-25~11-01、2027-03-14~03-28）。手算必然在那两段里错。
+ui_timezone = "America/Los_Angeles"
+
+# UI 操作的通用超时（秒）。⚠️ **这个数没有在真机上标定过。**
+# CR-63 的教训：profile 归属核对写了 5 秒而本机实际要 7–9 秒，于是每次都超时，
+# 一个完全正确的环境被报成"你开错了浏览器"。所以这里宁可偏大——
+# 偏大只是慢，偏小是把对的环境判成错的。真机跑过之后按实测调。
+ui_timeout_seconds = 30
 
 # ⚠️ **自动发布到品牌主页是不可回滚的对外行为。**
 # 抓错了可以重抓、译错了可以重译，**发出去了只能删帖，而删帖在粉丝侧是可见的**。
@@ -421,21 +458,37 @@ require_confirmation = true
 # TOML 规则要求子表必须在段的最后 —— 子表头之后的键会全部归属子表，
 # 不再属于 [publish]。[translate.glossary] 已经为这条规则写过一次警告。
 
+[publish.price_map]
+# 金额必须先由业务明确映射，assisted 才会花钱处理该帖。
+# 例（仅示意，未获业务确认前不要照抄）："$219.99" = "199,99 €"
+# 当前留空，因此任何带金额的新帖都会进入 needs_human，而不是自行换算。
+
+[publish.trusted_owners]
+# 目标账号自己的原创允许自动进入付费阶段；合作作者默认一律待人工确认。
+facebook = ["neakasaofficial"]
+instagram = ["neakasa.tech"]
+
+[publish.schedule_rule]
+# 德国受众时间，全年每天固定两个槽。代码按 Europe/Berlin 生成，
+# 再换算为上面的 America/Los_Angeles UI 时刻，并在提交后回读。
+times = ["10:00", "17:00"]
+
 [pipeline]
 # ---- L 组：流水线编排与自治级别。总体规划见 docs/PIPELINE_PLAN.md ----
-# ⚠️ 2026-08-31 新增。这一段现在**还没有代码在读**，它是 L 组的配置骨架；
-#    L 组落地时必须做配置项审计（CR-40 立的规矩：不许有改了不生效的死旋钮）。
+# 2026-09-01 起由 pipeline run 全量消费。manual 只对账；assisted 会在每个
+# 付费请求前后按真实 usage 检查预算，并生成待确认项，但不会自行打开发布浏览器。
 
 # 自治级别。**不要在"全手动"和"全自动"之间二选一** ——
 # 这个项目的风险是不对称的：抓取被封不可恢复、发布不可回滚，
 # 而翻译和调图错了只是重跑。所以按阶段分别放开。
 #
-#   manual      抓取/翻译/调图/发布全部手工触发（**今天就在这一档**）
+#   manual      只做本地对账，不触发增量/翻译/调图/发布（**今天就在这一档**）
 #   assisted    抓取、翻译、调图自动；发布停在"待确认"，人批量点头
 #   supervised  发布也自动，但只发"零风险帖"，命中分流规则的进人工队列
 #   autonomous  全自动，只有硬闸拦
 #
-# 建议路径：manual →（装计划任务）assisted →（跑够两周 + G8 通过）supervised。
+# 固定路径：先通过 G8 并 activate，再切 assisted；计划任务仍由用户显式安装。
+# supervised / autonomous 本轮故意失败闭合，后续分流规则验收后再开放。
 # ⚠️ 不建议直接跳到 autonomous。理由和 [delta] 那七条缓解措施一样：
 #    这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
 autonomy = "manual"
