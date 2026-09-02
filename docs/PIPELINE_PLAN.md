@@ -387,6 +387,69 @@ daily_budget_usd   = 5
 - [ ] **L0d 价格表 `[publish.price_map]`** —— 第 4.2 ① 。
       用现有归档的 46 种金额串生成初稿，交给业务填德国站定价。
       ⚠️ **改成排在 G1 之后**（原文写的是"可以完全先于 G 组完成"），理由见 10.1。
+      ✅ **2026-09-01：初稿不用再手抄了。** `pipeline preflight` 直接从真实归档
+      按 TOML 格式打出缺的行（左边是真实金额串 + 出现篇数，右边留空给业务填）。
+      `--days` 控制回看窗口。**程序仍然不做汇率换算**（全局红线：发错价格是商业事故）。
+
+- [x] **L0e 上线预检 `pipeline preflight`** —— ✅ **2026-09-01 新增**。
+      `docs/GO_LIVE.md` 那张手维护的表**会过期，而预检是算出来的**。
+      它覆盖三道发布证据闸、14 个 UI 观察项、G8 真机证据、激活边界、
+      autonomy、三个计划任务，最后用**生产同一套判据**
+      （`load_sources` → `reconcile` → `prepaid_issue`）在真实归档上预演
+      "若此刻激活，最近 N 天会怎么走"。
+      ⚠️ **它存在的理由是一个真实的盲区**：三道闸全开、G8 也过了，
+      流水线照样可能"跑起来但什么都不产出" —— 因为 `[publish.price_map]`
+      是空的、`[publish.trusted_owners]` 少一个自家兄弟账号。
+      那两张表和 14 个 UI 上限一样承重，但它们**不在任何闸上**，
+      不填只表现为"每篇都进人工队列"，没有任何东西会喊。
+
+### 10.0c 2026-09-01 全链路串跑（I1 离线半段）
+
+`tests/tests_pipeline_e2e.py`：在临时归档上把
+`delta → reconcile → 翻译 → 调图 → 离线硬闸 → ready_to_publish` **真的跑一遍**，
+另加幂等复跑（零重复付费，翻译和**调图**都覆盖）与"人工改坏译文后转人工"。
+
+⚠️ **为什么必须新开一套而不是往 `tests_pipeline_assisted.py` 里加**：那一套的夹具
+建在临时目录，而 `_run_unlocked` 里 `compose_post(archive_root=cfg().archive_dir)`
+读的是**真实 config 的归档**，于是它的用例**全都停在 `offline_gate`** ——
+"翻译+调图做完之后会怎样"这一段在这次之前**一条断言都没有**。
+新套把 `A.cfg` 也换掉，整条链才真的被执行。
+
+⚠️ **造夹具时踩到的三条，写下来免得下次再试一遍**：
+
+| 现象 | 真因 |
+|---|---|
+| 两篇独立帖被判成 `similar_cross_platform` | **纯色图在 dHash 下全部相等**（dHash 比相邻像素梯度，纯色一律 0）。换颜色没用，必须有真实结构 |
+| `帖子目录不存在` | 自己拼的时间戳 `20260901_1300_<id>`，真实是 `2026-09-01_1300_<id>`。**用 `core.store.post_dirname`，不要照抄别处的拼法** |
+| `translated.jsonl 中没有译文` | 少写 `model` 字段。`load_translated` 会**静默丢掉**缺 `model`/`prompt_version` 的行 |
+
+另外钉住了**四个跨进程 argv 契约**（`routes.delta` / `translate` /
+`localize_images` / `tools.publish_post`）。那四处是纯字符串拼接，桩 runner
+不校验参数名，拼错了只会在真跑时炸 —— 而"真跑"意味着钱已经花了、
+或者浏览器已经开着了。
+
+### 10.0b 2026-09-01 补的两处主干（L 组）
+
+**① 非图文帖不再进人工队列。** `load_sources` 之前把**所有**激活边界后的帖
+都变成候选，于是视频帖走到 `_prepaid_issue` 被判 `material_gate` 排进
+`needs_human`。实测最近 90 天 125 篇归档里 **62 篇不是图文帖**（57 篇纯视频、
+2 篇图+视频、2 篇无媒体、1 篇无正文），而两个账号都在日更 ——
+**队列每天都会多出谁也处理不掉的项，直到没人再看它**。
+现在 `out_of_scope_reason()` 在入口就把它们分出去，`load_sources` 返回第三个值
+`(ref, 原因)` 并由 `run` 报数。
+⛔ **跳过不等于静默丢弃**（CR-19 那 263 篇），所以条数和原因必须打出来。
+⚠️ **不要把 `material_gate` 合并进来**：那道闸判的是"本该可发但素材不齐"
+（漏下载 / 0 字节 / 轮播缺图），**那类人是能处理的**，必须继续进队列。
+
+**② `activate --g8-verified` 从自觉变成机检。** 原来那个 flag 只要求用户
+"显式确认"，不核对任何东西。而激活早了不是顺序问题，是**真花钱**：
+`assisted` 的 run 会先付费翻译、再付费调图，最后才在 `compose_post` 的
+`require_verified_ui_constraints` 上逐篇失败闭合，每天一次。
+现在 `activation_blockers()` 检两条**本来就可机检**的证据：
+`[publish].ui_constraints_verified is True`，以及
+`state/published.jsonl` 里至少一条 `status=scheduled`
+（只有 `prepared` 不算 —— 那可能只留下一个草稿）。
+已激活的流水线不受影响（边界只写一次）。
 
 ### 10.1 L0 顺序为什么改（2026-08-31 第七轮，K/G 合并落地之后实测）
 

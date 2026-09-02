@@ -37,20 +37,48 @@
 | 渠道指示 | `img 'Facebook'` + `img 'Instagram'` —— **图标，不带账号名** | 快照 24 #2/#3 |
 | 「发到哪」标题 | `heading 'Post to'` | 快照 24 #1 |
 | FB 目标主页 | 只在 FB 预览里：`article` → `heading h2 'Neakasa Deutschland'` | 快照 24 #43/#44 |
-| **IG 目标账号** | **⛔ 整个 composer 一次都没出现过** | 全部 46 张 composer 快照 |
+| **IG 目标账号** | **⛔ 46 张 composer 快照里命中 0 次** （⚠️ 2026-09-01 更正：界面上其实有，见下） | 全部 46 张 composer 快照 |
 | 加图入口 | `button 'Add photo/video'` | 交互 #12 |
 | 正文框 | `combobox`（富文本，`is_contenteditable`） | 交互 #14–21 |
 | 定时开关 | `switch`（`input type=checkbox`） | 交互 #34 |
-| 日期框 | `textbox` 名 `'mm/dd/yyyy'` | 交互 #37/#44 |
+| 日期框 | `textbox` 名 `'mm/dd/yyyy'` —— ⚠️ **每个渠道一个，共两个** | 交互 #37（FB）/ #44（IG） |
 | 日期选择 | `button 'Tuesday, 15 September 2026'` | 交互 #39/#45 |
-| 时/分 | `spinbutton` | 交互 #40–43、#46–49 |
+| 时/分 | `spinbutton` —— ⚠️ **每个渠道一组** | 交互 #40–43（FB）、#46–49（IG） |
 | **提交按钮** | **`button 'Schedule'`** | 交互 #50（ord=96）候选 1 |
 | **成功信号** | `dialog 'Your post is scheduled …'` + 子 `heading 'Your post is scheduled'` | 快照 50（ord=100） |
 | 其它出口 | `button 'Publish'`（立即发）、`button 'Finish later'`、`button 'Cancel'` | 快照 24 #37–39 |
 
+⚠️ **2026-09-01 更正两处（CR-70）：**
+
+**① IG 账号名在界面上是有的，只是没被采样到。** 真机失败截图显示
+`Post to` 下拉框的值是 **"Neakasa Deutschland and neakasa.de"** ——
+一个控件同时带 FB 主页与 IG 帐号。probe 只采样带 role 的元素，
+这个控件的值没进可访问名，所以 dump 里查不到。
+**结论不变：不能拿它当定位**（红线 5，截图证明文本存在、不证明 role 与 DOM）。
+想用它得重录一份能录到它的 dump。
+
+**② `heading 'Neakasa Deutschland'` 要等 FB 预览有内容才渲染。**
+它第一次出现在 `evidence_order=31`，紧跟 `Add photo/video`（交互 #12，ord=29）。
+**空 composer 上不存在** —— 第一次 G8 真机跑就是在这里超时的。
+所以严格账号核对必须放在图片上传**之后**、点提交**之前**。
+⛔ 拿这条定位做"上传前的闸"是做不到的，别再挪回去。
+
 ⚠️ **提交按钮的候选表第 0 条 `role` 是空的**，第 1 条才是 `role=button`。
 空 role 能通过 dump 回查（回查对空 role 放行），但运行时
 `page.get_by_role("", …)` 是废的。`probe_signals.py` 已改成优先取带真实 role 的候选。
+
+⚠️ **2026-09-01 第三处更正（CR-73）：排期控件是每个渠道一套，不是一套。**
+真机截图上 `Schedule` 下面有 `heading 'Facebook'` 和 `heading 'Instagram'`
+两行，**各带一个日期框和一个时间控件**。上面那两行"交互 #37/#44"
+此前被读成"人改了一次时间"，**真相是两个渠道各设一次**。
+
+⛔ 只设第一组的后果：Facebook 排到目标时刻，**Instagram 停在默认值
+（当天 + 当前时刻）等于立刻发出去**。这是这条链上唯一一种
+"内容全对、主页全对、时刻悄悄错"的失败。
+
+⚠️ 那两组控件**一张快照都没采样到**（46 张 composer 快照里
+`textbox 'mm/dd/yyyy'` 与 `spinbutton` 各出现 0 次），
+**证据只存在于交互的时序里** —— 想找排期相关的事实，别只翻快照。
 
 ⚠️ **`Schedule` 与 `Publish` 是两个不同的按钮。** 打开定时开关后点的是 `Schedule`。
 自动化只能点 `Schedule`，点错就是立即发布。
@@ -141,6 +169,14 @@ dialog  'Post details ID: 4378984725697354 Close ​ Post overview This view of 
 3. **IG 渠道**：`dialog` 名匹配 `Post details ID: (?P<remote_id>\d+)` 且含
    `Instagram feed` 与 `[publish].instagram_account` —— 快照 68。
 
+⚠️ **2026-09-01 第四处更正（CR-75）：这条"数据就绪"判据不成立。**
+真机实测：`heading 'September'` 属于**页面外壳**，在日历数据还在转圈的时候
+就已经渲染好了（失败截图上标题、月份、Week/Month 全在，中间一个大转圈）。
+契约自己写着"必须是 React 数据完成后的语义"，但从这份 dump 机械推导出来的
+这一条**并不满足它自己的要求**。
+现在的做法是等到**真的出现能解析出时刻的条目**（判据用已录证的
+`datetime_regex`），不再把月份 heading 当成数据就绪。
+
 **Planner 数据就绪** → `heading 'Planner'` 出现即视为壳已渲染；
 真正的"数据就绪"用月份 heading（`heading 'September'`）。
 
@@ -152,7 +188,7 @@ dialog  'Post details ID: 4378984725697354 Close ​ Post overview This view of 
 
 ---
 
-## 五、这次测试帖的实际参数（**还挂在远端，记得取消**）
+## 五、这次测试帖的实际参数（✅ **用户已于 2026-09-01 取消**）
 
 | 项 | 值 |
 |---|---|
@@ -163,8 +199,9 @@ dialog  'Post details ID: 4378984725697354 Close ​ Post overview This view of 
 | IG post ID | `4378984725697354` |
 | 渠道 | FB + IG **都排上了**（印证"进 composer 默认全勾选"） |
 
-**去 Business Suite 内容日历把它取消掉。** 留着不会造成技术问题，
-但 9 月 15 日它会真的发出去。
+✅ **已取消（2026-09-01，用户在 Business Suite 内容日历上手工取消）。**
+远端不再有任何由本项目排出的待发帖。
+⛔ 这条记录保留是为了说明这份 dump 的证据是怎么来的，**不要再当成待办**。
 
 ---
 
@@ -217,12 +254,48 @@ dialog  'Post details ID: 4378984725697354 Close ​ Post overview This view of 
 |---|---|
 | 五件生产证据 | ✅ 已推导、已回查、已落 `publish/signals_backfilled.py` |
 | `[publish].ui_probe_dump` | ✅ 已填 |
-| 20 个观察项 | 🟡 **4 项已按 dump 证据填**（入口 URL / 成功信号 / 日期时间输入方式 / 时区），**14 项仍需你亲眼量** |
-| `[publish].ui_constraints_verified` | ⛔ 仍为 `false` —— 14 项填完才能改 true |
-| 远端那条测试排期 | ⛔ **还挂着，2026-09-15 会真的发出去，去取消** |
+| 20 个观察项 | ✅ **全部填完**（4 项按 dump 证据推、14 项用户亲眼量） |
+| `[publish].ui_constraints_verified` | ✅ **已改 `true`**（2026-09-01） |
+| 远端那条测试排期 | ✅ **已取消** |
 
-那 14 项是 IG 的画幅/图片数/正文长度/标签数四类上限与各自的拒绝行为，
-加上排期窗口的上下限。**这些 dump 里没有，也不该由程序猜**（全局红线 5）。
+**剩下的唯一机检阻塞项是 G8：`state/published.jsonl` 里还没有任何
+`status=scheduled` 记录。** 随时跑 `scripts\run_pipeline.bat preflight` 复核。
 
-填法见 `docs/GO_LIVE.md` 第 3b 步 —— 现在支持 `--set-note` 一条命令填完，
-不用再走 20 问的交互。
+---
+
+## 九、那 14 个 UI 上限的实测值（2026-09-01，用户在真实 composer 上量的）
+
+原文在 dump 的 `observations` 里，下面是判读。
+
+| 项 | 实测 | UI 怎么拒 |
+|---|---|---|
+| **单帖图片数** | **≤ 10** | `10 photo limit on Instagram posts` —— 并提示要么删图、要么取消勾选 Instagram |
+| **画幅比** | **4:5 ~ 1.91:1**（即 0.8 ~ 1.91） | 范围已确认；⚠️ 超限时的具体文案没记到 |
+| **正文长度** | **≤ 2200** | `Post text too long / The text in an Instagram post can't be longer than 2,200 characters.` |
+| **话题标签数** | **≤ 30** | `Hashtag limit exceeded / A post can't include more than 30 hashtags.` |
+| **定时下限** | **当前时刻**（没有最小提前量） | —— |
+| **定时上限** | ⚠️ **本月最后一天** | 日期选择器**不允许跨月**，翻不过去 |
+
+### ⚠️ 两条"照直觉写就会错"的
+
+**① 定时上限不是一个时长，是一个日历边界。** 9 月 1 日能排 29 天，
+9 月 28 日只剩 2 天 —— **同一个 `max_ahead` 在月初太松、在月末太紧**，
+`ScheduleWindow` 那种固定 `timedelta` 根本表达不了它。
+所以 `schedule_max_ahead_seconds` 只填了 31 天这个**绝对天花板**，
+真正的判据是 `publish/compose.py::_validate_schedule_month` 那道
+"必须落在同一自然月"的闸，两道都要过。
+⛔ 不要看到 31 天就以为可以排 31 天。
+
+**② 月份必须在 UI 时区里判，不是柏林、也不是 UTC。**
+日期选择器画的是发帖设备本机（`[publish].ui_timezone` = `America/Los_Angeles`）
+的日历。**柏林 10-01 06:00 在美西还是 09-30** —— 那一篇是可以排的，
+按柏林判就会误拒；反过来柏林 09-30 深夜的某些时刻在美西已经是 10-01，
+按柏林判就会误放。`tests_publish.py` 两个方向都有断言。
+
+### 一个刻意保守的选择：`instagram_caption_length_mode = utf8_bytes`
+
+UI 报错只说 "characters"，而 emoji 到底算 1 / 2 / 4 从界面上确定不了。
+用户判断这一项不重要（真实正文远达不到 2200），所以**没有实测**。
+选 `utf8_bytes` 是因为它对任何字符串都 ≥ 另外两种算法，
+**只可能多拦、不可能漏放** —— 符合红线 5 的方向（宁可挡住，不许放行一个错的）。
+要精确化：去 composer 粘一串 emoji 看计数器跳几，再改这一项。
