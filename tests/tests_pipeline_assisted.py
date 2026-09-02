@@ -86,7 +86,7 @@ with tempfile.TemporaryDirectory() as folder:
     account = make_account(root, "fa_acme", [
         row("old", "facebook", "2026-08-31T11:00:00Z", "old", "acme"),
         row("new", "facebook", "2026-09-01T13:00:00Z", "new", "acme")])
-    sources, _ = A.load_sources(
+    sources, _, _ = A.load_sources(
         [account], datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     check([source.post_id for source in sources] == ["new"],
           "激活前历史候选为零，只处理边界之后的新帖")
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory() as folder:
         row("same", "facebook", boundary.isoformat(), "same", "acme"),
         row("after", "facebook", "2026-09-01T12:00:00.123457+00:00",
             "after", "acme")])
-    sources, _ = A.load_sources([account], boundary)
+    sources, _, _ = A.load_sources([account], boundary)
     check([source.post_id for source in sources] == ["after"],
           "激活边界保留微秒并使用严格大于，不把同一时刻的历史帖纳入")
 
@@ -116,7 +116,7 @@ with tempfile.TemporaryDirectory() as folder:
     source_image = next((fb / "posts").rglob("01.jpg"))
     target_image = next((ig / "posts").rglob("01.jpg"))
     target_image.write_bytes(source_image.read_bytes())
-    sources, _ = A.load_sources(
+    sources, _, _ = A.load_sources(
         [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
     result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
     check(len(result.candidates) == 1
@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory() as folder:
     ig_row["owner"] = "mystery.creator"
     ig_row["coauthors"] = ["acme"]
     (ig / "manifest.jsonl").write_text(json.dumps(ig_row) + "\n", encoding="utf-8")
-    sources, _ = A.load_sources(
+    sources, _, _ = A.load_sources(
         [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
     merged = A.reconcile(
         sources, account_pairs=TEST_ACCOUNT_PAIRS).candidates[0]
@@ -177,7 +177,7 @@ with tempfile.TemporaryDirectory() as folder:
     ig = make_account(root, "in_acme", [ig_row])
     next((ig / "posts").rglob("01.jpg")).write_bytes(
         next((fb / "posts").rglob("01.jpg")).read_bytes())
-    sources, _ = A.load_sources(
+    sources, _, _ = A.load_sources(
         [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
     result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
     item = result.human_items[0]
@@ -200,7 +200,7 @@ print("\n[3] 真实 8 月 27 日 FB/IG 配对：CTA 不同，必须待确认")
 archive = cfg().archive_dir
 real_dirs = [archive / "fa_neakasaofficial", archive / "in_neakasa.tech"]
 if all(path.is_dir() for path in real_dirs):
-    sources, _ = A.load_sources(
+    sources, _, _ = A.load_sources(
         real_dirs, datetime(2026, 8, 27, tzinfo=timezone.utc))
     real = A.reconcile(sources)
     matching = [item for item in real.human_items
@@ -478,10 +478,31 @@ for when, want_hour in [
     check(slot.hour == 10 and shown.hour == want_hour,
           "德国槽始终 10:00；%s 的美西 UI 正确显示 %02d:00"
           % (slot.date(), want_hour))
+# ⚠️ now 必须与目标槽落在**同一个 UI 自然月**，否则先被跨月闸挡掉，
+# 测不到这里真正要测的 DST 歧义回退。原来那个 now（柏林 11-01 00:00）
+# 在美西还是 10-31，composer 的日历根本翻不到 11 月。
 fallback = A.next_slots(
-    datetime.fromisoformat("2026-11-01T00:00:00+01:00"), (), 1, rules)[0]
+    datetime.fromisoformat("2026-11-01T00:30:00-07:00"), (), 1, rules)[0]
 check(fallback.date().isoformat() == "2026-11-01" and fallback.hour == 17,
       "美西回拨日 10:00 槽无法在 UI 无歧义表达时，自动改用当天 17:00 安全槽")
+
+# composer 的日期选择器不允许跨月（2026-09-01 实测）。
+month_end = A.next_slots(
+    datetime.fromisoformat("2026-09-30T20:00:00-07:00"), (), 3, rules)
+check(month_end == (),
+      "UI 月末之后没有可排的槽：返回空而不是无上界地翻到下个月")
+plenty = A.next_slots(
+    datetime.fromisoformat("2026-09-02T08:00:00-07:00"), (), 3, rules)
+check(len(plenty) == 3 and all(
+          item.astimezone(A.ZoneInfo("America/Los_Angeles")).month == 9
+          for item in plenty),
+      "月中照常给满 count 个槽，且每个在 UI 时区里都还在本月")
+crossing = A.next_slots(
+    datetime.fromisoformat("2026-09-29T08:00:00-07:00"), (), 20, rules)
+check(0 < len(crossing) < 20 and all(
+          item.astimezone(A.ZoneInfo("America/Los_Angeles")).month == 9
+          for item in crossing),
+      "月底槽位不够时返回**少于** count 个，由调用方决定怎么办（整批不提交）")
 
 
 print("\n[7] 批量首个不明确失败立即停止，后续零调用")
@@ -581,6 +602,101 @@ with tempfile.TemporaryDirectory() as folder:
         scheduled_blocked = False
     check(scheduled_blocked,
           "approve 每次重查所有 source_refs 的 scheduled 交集，已排来源不会重复提交")
+
+
+print("\n[9] 非图文帖不进人工队列；激活闸是机检不是自觉")
+check(A.out_of_scope_reason(
+    {"text": "x", "media": [{"kind": "image"}]}) is None,
+    "纯图文帖在范围内")
+check("video" in (A.out_of_scope_reason(
+    {"text": "x", "media": [{"kind": "video"}]}) or ""),
+    "视频帖判为不在范围（它永远不会变得可发）")
+check("video" in (A.out_of_scope_reason(
+    {"text": "x", "media": [{"kind": "image"}, {"kind": "video"}]}) or ""),
+    "图片+视频混合帖同样出局：只发其中的图会丢内容")
+check(A.out_of_scope_reason({"text": "  ", "media": [{"kind": "image"}]})
+      == "无正文", "无正文出局")
+check(A.out_of_scope_reason({"text": "x", "media": []}) == "无媒体",
+      "无媒体出局")
+check(A.out_of_scope_reason(
+    {"text": "x", "media": [{"kind": "image"}], "media_complete": False})
+    is None,
+    "素材不齐**不算**出局：那是人能处理的 material_gate，必须继续进队列")
+
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder)
+    picture = row("pic", "facebook", "2026-09-01T14:00:00Z", "photo", "acme")
+    video_row = row("vid", "facebook", "2026-09-01T13:00:00Z", "clip", "acme")
+    account = make_account(root, "fa_acme", [picture, video_row])
+    # 视频在归档里只有 manifest 记录（从不下载），所以改的是 kind，不是文件。
+    video_row["media"] = [{"kind": "video", "url": "https://x.invalid/v"}]
+    (account / "manifest.jsonl").write_text(
+        "".join(json.dumps(item) + "\n" for item in (picture, video_row)),
+        encoding="utf-8")
+    sources, _issues, skipped = A.load_sources(
+        [account], datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
+    check([source.post_id for source in sources] == ["pic"],
+          "load_sources 只放图文帖过去")
+    check(skipped and skipped[0][0] == "facebook:vid"
+          and "video" in skipped[0][1],
+          "跳过的帖子必须带 ref 和原因返回 —— 跳过不等于静默丢弃（CR-19）")
+    result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
+    check(len(result.candidates) == 1
+          and result.candidates[0].canonical.post_id == "pic",
+          "视频帖不产生候选，因此也不会每天在 needs_human 里堆一条处理不掉的项")
+
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    verified = cfg().get("publish", "ui_constraints_verified", False) is True
+    blockers = A.activation_blockers(state)
+    check(any("published.jsonl" in item for item in blockers),
+          "没有任何 scheduled 记录时，激活闸拦住（G8 从未真机通过）")
+    check(verified != any("ui_constraints_verified" in item
+                          for item in blockers),
+          "ui_constraints_verified 与激活闸的判断一致，不会两边各说各话")
+    A.journal.append(state, A.journal.PublishAttempt(
+        post_id="g8", platform="facebook", status=A.journal.STATUS_SCHEDULED,
+        scheduled_at="2026-09-10T10:00:00+02:00",
+        recorded_at="2026-09-01T13:00:00+00:00",
+        text_de_sha256="abc", source_refs=("facebook:g8",)))
+    after = A.activation_blockers(state)
+    check(not any("published.jsonl" in item for item in after),
+          "有了 scheduled 记录，G8 那条闸放行")
+    prepared_only = Path(folder + "-prepared")
+    prepared_only.mkdir()
+    A.journal.append(prepared_only, A.journal.PublishAttempt(
+        post_id="g8", platform="facebook", status=A.journal.STATUS_PREPARED,
+        scheduled_at="2026-09-10T10:00:00+02:00",
+        recorded_at="2026-09-01T13:00:00+00:00",
+        text_de_sha256="abc", source_refs=("facebook:g8",)))
+    check(any("published.jsonl" in item
+              for item in A.activation_blockers(prepared_only)),
+          "只有 prepared 不算 G8 通过 —— prepared 可能只留下一个草稿")
+
+
+print("\n[10] needs_human.html 给的是可复制的命令，不是让人手抄哈希 ID")
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    A.append_human_item(state, A.HumanItem(
+        "ready-a", "ready_to_publish", ("facebook:a",), "ready", {}))
+    A.append_human_item(state, A.HumanItem(
+        "ready-b", "ready_to_publish", ("facebook:b",), "ready", {}))
+    A.append_human_item(state, A.HumanItem(
+        "sim-1", "similar_cross_platform",
+        ("facebook:c", "instagram:d"), "两个版本有差异", {}))
+    A.append_human_item(state, A.HumanItem(
+        "price-1", "unmapped_price", ("instagram:e",), "金额未映射",
+        {"amounts": ["$219.99"]}))
+    page = A.build_human_html(state).read_text(encoding="utf-8")
+    check("--item-id ready-a --item-id ready-b" in page,
+          "多个 ready 合成一条命令：稳态里人每天做的就是这一下")
+    check("--select-source sim-1=facebook:c" in page
+          and "instagram:d" in page,
+          "选版本项给出填好的 --select-source，并把另一个 ref 也列出来")
+    check("不能" in page and "price_map" in page,
+          "硬闸类明说不能 approve，并写清怎么才能消掉它")
+    check("ready-a" in page and "price-1" in page,
+          "明细表仍然完整，命令区只是入口不是替代")
 
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))

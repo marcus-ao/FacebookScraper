@@ -216,6 +216,30 @@ def activation_time(state_dir: Path) -> datetime | None:
     return _parse_aware(load_pipeline_state(state_dir).get("activated_at"))
 
 
+def activation_blockers(state_dir: Path) -> tuple[str, ...]:
+    """G8 通过与否是**可机检的**，不必靠 `--g8-verified` 那句自觉。
+
+    激活早了不是"顺序不好看"，是**真花钱**：``assisted`` 的 run 会先付费
+    翻译、再付费调图，最后才在 ``compose_post`` 的
+    ``require_verified_ui_constraints`` 上失败闭合 —— 每一篇都这样，
+    而且每天跑一次。所以这两条在激活那一刻就要拦住。
+
+    返回空元组表示可以激活；否则每条是一句"缺什么、怎么补"。
+    """
+    blockers: list[str] = []
+    if cfg().get("publish", "ui_constraints_verified", False) is not True:
+        blockers.append(
+            "[publish].ui_constraints_verified 仍是 false —— assisted 会先花钱"
+            "翻译/调图，再逐篇卡在离线硬闸上。先按 docs/GO_LIVE.md 第 3b 步"
+            "量完 14 个 UI 上限。")
+    if not journal.scheduled_source_refs(state_dir):
+        blockers.append(
+            "state/published.jsonl 里没有任何 status=scheduled 记录 —— "
+            "G8 从未在真机上成功过。先跑 run_publish_post.bat --post-id <id> "
+            "--at <ISO> --submit；若排期是你手工点的，用 --mark-scheduled 结转。")
+    return tuple(blockers)
+
+
 def activate(state_dir: Path, *, g8_verified: bool,
              now: datetime | None = None) -> datetime:
     """原子写入一次性边界；已有边界绝不重置，避免历史内容重新入队。"""
@@ -497,6 +521,93 @@ def resolve_cleared_items(state_dir: Path, source_refs: Iterable[str], *,
     return len(matches)
 
 
+# 这些类型 **不能** 用 approve 结转：它们是硬闸，靠改配置/补素材再 run 才会消失。
+# 页面必须明说，否则人会对着一个 unmapped_price 反复敲 approve 然后被顶回来。
+_GATE_ITEM_KINDS = {
+    "material_gate": "补齐素材（重跑增量把图下全）后重跑 pipeline run",
+    "unknown_owner": "确认归属后重跑 pipeline run",
+    "unknown_collaborator": "确认二次使用授权，把作者加进 config.toml 的 "
+                            "[publish.trusted_owners]，再重跑 pipeline run",
+    "unmapped_price": "在 config.toml 的 [publish.price_map] 补上这几个金额串的"
+                      "德国站定价，再重跑 pipeline run",
+    "offline_gate": "按说明修好离线硬闸点名的问题后重跑 pipeline run",
+    "budget_stopped": "预算到顶：调 [pipeline] 的预算或等下个周期",
+    "paid_request_unresolved": "查 state/paid_requests.jsonl 人工结转",
+    "publish_unresolved": "去 Business Suite 确认远端到底排上没有，再用 "
+                          "run_publish_post.bat --mark-scheduled 结转",
+}
+
+
+def _approve_hints(open_rows: list[dict]) -> str:
+    """把「读 ID → 手抄进命令行」变成「复制一行」。
+
+    这是稳态里人**每天**都要做的那一下。ID 是内容哈希，手抄必然出错，
+    出错的表现又是"命令报错"而不是"发错帖"，于是只会让人越来越不想看这个页面。
+    """
+    ready = [row for row in open_rows if row.get("kind") == "ready_to_publish"]
+    similar = [row for row in open_rows
+               if row.get("kind") == "similar_cross_platform"]
+    gates = [row for row in open_rows if row.get("kind") in _GATE_ITEM_KINDS]
+    blocks = []
+    if ready:
+        # item_id 是 `kind-hash20`、ref 是 `platform:post_id`，都只含
+        # [a-z0-9.:-]，cmd.exe 下不需要引号 —— 加了反而会被 html.escape 成 &quot;。
+        command = ("python pipeline.py approve"
+                   + "".join(" --item-id %s" % row["item_id"] for row in ready))
+        cards = []
+        for row in ready:
+            details = row.get("details") or {}
+            author = str(details.get("source_author") or "")
+            notes = [str(item) for item in (details.get("warnings") or [])]
+            cards.append(
+                "<div style='border:1px solid #ccc;padding:.7rem;margin:.5rem 0'>"
+                "<div><b>%s</b> · %s · %d 张图（%s）%s</div>"
+                "<pre>%s</pre>%s</div>"
+                % (html.escape(str(details.get("post_id") or "")),
+                   html.escape(str(details.get("platform") or "")),
+                   int(details.get("image_count") or 0),
+                   html.escape("、".join(details.get("image_sources") or [])),
+                   ("　<span style='color:#a60'>合作帖原作者：%s</span>"
+                    % html.escape(author)) if author else "",
+                   html.escape(str(details.get("text_de_preview") or "")),
+                   ("<div style='color:#a60'>%s</div>"
+                    % "<br>".join(html.escape(item) for item in notes))
+                   if notes else ""))
+        blocks.append(
+            "<h2>① 可以直接批准的 %d 项（会真的提交到 Business Suite）</h2>"
+            "%s"
+            "<p>确认过上面的正文/图片之后，复制整行执行"
+            "（排期时刻由 approve 读远端空槽后分配）：</p><pre>%s</pre>"
+            % (len(ready), "".join(cards), html.escape(command)))
+    if similar:
+        lines = []
+        for row in similar:
+            refs = list(row.get("source_refs") or [])
+            lines.append(
+                "python pipeline.py approve --item-id %s --select-source %s=%s"
+                % (row["item_id"], row["item_id"], refs[0] if refs else "平台:帖子ID"))
+            if len(refs) > 1:
+                lines.append("#   另一个版本是：%s" % refs[1])
+        blocks.append(
+            "<h2>② 需要先选版本的 %d 项</h2>"
+            "<p>跨平台两个版本有差异，必须指定用哪一个（下面默认选了第一个，"
+            "要换就把 <code>=</code> 后面换成另一个 ref）：</p><pre>%s</pre>"
+            % (len(similar), html.escape("\n".join(lines))))
+    if gates:
+        rows = "".join(
+            "<tr><td>%s</td><td>%s</td></tr>"
+            % (html.escape(str(row.get("kind"))),
+               html.escape(_GATE_ITEM_KINDS[str(row.get("kind"))]))
+            for row in {str(row.get("kind")): row for row in gates}.values())
+        blocks.append(
+            "<h2>③ 这 %d 项 <b>不能</b> 用 approve 结转</h2>"
+            "<p>它们是硬闸，处理掉它点名的问题、重跑 "
+            "<code>pipeline run</code> 之后会自己消失：</p>"
+            "<table><thead><tr><th>类型</th><th>怎么消掉</th></tr></thead>"
+            "<tbody>%s</tbody></table>" % (len(gates), rows))
+    return "".join(blocks)
+
+
 def build_human_html(state_dir: Path) -> Path:
     latest = latest_human_items(state_dir)
     open_rows = [row for row in latest.values() if row.get("status") == "open"]
@@ -509,10 +620,15 @@ def build_human_html(state_dir: Path) -> Path:
                 "、".join(row.get("source_refs") or []), row.get("summary") or "")))
     document = ("<!doctype html><meta charset='utf-8'><title>Needs human</title>"
                 "<style>body{font-family:system-ui;margin:2rem}table{border-collapse:collapse}"
-                "td,th{border:1px solid #ccc;padding:.45rem;vertical-align:top}</style>"
+                "td,th{border:1px solid #ccc;padding:.45rem;vertical-align:top}"
+                "pre{background:#f4f4f4;padding:.7rem;white-space:pre-wrap;"
+                "word-break:break-all}</style>"
                 "<h1>待确认项</h1><p>共 %d 项；真相源是 needs_human.jsonl。</p>"
+                "%s"
+                "<h2>全部明细</h2>"
                 "<table><thead><tr><th>ID</th><th>类型</th><th>来源</th><th>说明</th>"
-                "</tr></thead><tbody>%s</tbody></table>" % (len(open_rows), "".join(body)))
+                "</tr></thead><tbody>%s</tbody></table>"
+                % (len(open_rows), _approve_hints(open_rows), "".join(body)))
     path = Path(state_dir) / NEEDS_HUMAN_HTML
     temporary = path.with_suffix(".html.tmp")
     temporary.write_text(document, encoding="utf-8")
@@ -541,10 +657,47 @@ def _open_items_intersecting(state_dir: Path, source_refs: Iterable[str], *,
     ]
 
 
+def out_of_scope_reason(row: Mapping[str, Any]) -> str | None:
+    """这篇帖子**本来就不该**进发布流水线吗？在范围内返回 None。
+
+    ⚠️ **这与 ``material_gate`` 是两件事，不要合并。**
+
+    - 本函数判的是「永远不会变得可发」：视频帖、纯文字帖、无媒体帖。
+      本项目的范围是**图文帖**（视频只在 manifest 里留记录，从不下载）。
+      把它们排进 ``needs_human`` 是纯噪声 —— 实测最近 90 天 125 篇里
+      **59 篇是视频帖**，账号还在日更，队列每天都会多出谁也处理不掉的项。
+      队列一旦失去信号，人就不看了，那比没有队列更糟。
+    - ``material_gate`` 判的是「本该可发，但素材现在不齐」：漏下载、0 字节、
+      轮播缺图。**那类是人能处理的**，必须继续进队列。
+
+    ⛔ 跳过 ≠ 静默丢弃（CR-19 那 263 篇的教训）：调用方**必须**把条数和原因
+    报出来，`load_sources` 的第三个返回值就是为此存在的。
+    """
+    if not isinstance(row, Mapping):
+        return "不是合法归档行"
+    if not isinstance(row.get("text"), str) or not row["text"].strip():
+        return "无正文"
+    media = row.get("media")
+    if not isinstance(media, list) or not media:
+        return "无媒体"
+    kinds = sorted({
+        str(item.get("kind") or "?") if isinstance(item, Mapping) else "?"
+        for item in media
+    })
+    if kinds != ["image"]:
+        # 图片 + 视频的混合帖同样出局：只发其中的图会**丢内容**，
+        # 而 compose 的硬闸本来就要求媒体项全是 image。
+        return "非纯图文帖（媒体：%s）" % "、".join(kinds)
+    return None
+
+
 def load_sources(account_dirs: Iterable[Path], activated_at: datetime
-                 ) -> tuple[list[SourcePost], list[HumanItem]]:
+                 ) -> tuple[list[SourcePost], list[HumanItem],
+                            list[tuple[str, str]]]:
+    """返回 (激活边界后的图文帖, 边界人工项, 被判为不在范围内的 (ref, 原因))。"""
     sources: list[SourcePost] = []
     issues: list[HumanItem] = []
+    out_of_scope: list[tuple[str, str]] = []
     for account_dir in account_dirs:
         rows = Archive(account_dir.parent, account_dir.name).rows()
         for row in rows:
@@ -558,11 +711,17 @@ def load_sources(account_dirs: Iterable[Path], activated_at: datetime
                 continue
             if created <= activated_at.astimezone(timezone.utc):
                 continue
+            ref = journal.source_ref(platform, post_id)
+            reason = out_of_scope_reason(row)
+            if reason is not None:
+                out_of_scope.append((ref, reason))
+                continue
             sources.append(SourcePost(
                 platform=platform, account_dir=Path(account_dir), row=row,
-                created_at=created, ref=journal.source_ref(platform, post_id)))
+                created_at=created, ref=ref))
     sources.sort(key=lambda item: (item.created_at, item.ref))
-    return sources, issues
+    out_of_scope.sort()
+    return sources, issues, out_of_scope
 
 
 def reconcile(sources: list[SourcePost], *,
@@ -736,6 +895,15 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
                 % (priced_source.ref, "、".join(unmapped)),
                 {"source_ref": priced_source.ref, "amounts": unmapped})
     return None
+
+
+def prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | None:
+    """`_prepaid_issue` 的公开名字。
+
+    给 `pipeline preflight` 这类**只读预演**用：预检必须用生产同一套判据，
+    否则"预检说能跑"和"真跑起来"会分叉 —— 那正是本项目一再吃亏的形状。
+    """
+    return _prepaid_issue(candidate, rules)
 
 
 def _jsonl(path: Path):
@@ -935,18 +1103,35 @@ def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
 
 def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
                rules: PublishRules) -> tuple[datetime, ...]:
+    """分配还没被占的德国 10:00/17:00 槽。
+
+    ⚠️ **可能返回少于 ``count`` 个，调用方必须自己判断。**
+    composer 的日期选择器**不允许跨月**（2026-09-01 实测），所以可排的槽在
+    每个月末会真的用完 —— 那不是异常，是 UI 的事实。以前这里是
+    ``while len(found) < count`` 的无上界循环，加了月末边界就必须给它一个出口，
+    否则要么死循环、要么在月末把整次 run 抛崩。
+    """
     # 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
     from publish import business_suite as bs
 
     zone = ZoneInfo(rules.timezone)
+    ui_zone = bs.resolve_ui_timezone(rules.ui_timezone)
     local_now = now.astimezone(zone)
+    ui_now = now.astimezone(ui_zone)
+    ui_month = (ui_now.year, ui_now.month)
     busy = {item.astimezone(zone).replace(second=0, microsecond=0)
             for item in occupied}
     found: list[datetime] = []
     day = local_now.date()
-    while len(found) < count:
+    exhausted = False
+    while len(found) < count and not exhausted:
         for slot in rules.slots:
             candidate = datetime.combine(day, slot, tzinfo=zone)
+            # 月份在 **UI 时区**里判：德国 10-01 00:00 在美西还是 09-30。
+            in_ui = candidate.astimezone(ui_zone)
+            if (in_ui.year, in_ui.month) != ui_month:
+                exhausted = True
+                break
             if (candidate <= local_now or candidate in busy
                     or bs.ui_time_is_ambiguous(candidate, rules.ui_timezone)):
                 continue
@@ -969,7 +1154,21 @@ def _ready_item(candidate: Candidate, post) -> HumanItem:
          "platform": source.platform,
          "account_dir": source.account_dir.name,
          "relation": candidate.relation,
-         "publish_fingerprint": fingerprint})
+         "publish_fingerprint": fingerprint,
+         # ⬇️ 以下只为让人**在批准之前**能判断，不参与任何判据。
+         # 稳态里人每天只做一件事：看一眼待确认清单然后 approve。
+         # 清单上只有 item_id / kind / 一句通用说明的话，那一眼**什么也判断不了**，
+         # 人只能盲批 —— 而这是整条链上唯一一次人工复核。
+         "text_de_preview": _preview(post.text_de),
+         "image_count": len(post.image_paths),
+         "image_sources": list(post.image_sources),
+         "source_author": post.source_author_name or post.source_author or "",
+         "warnings": list(post.warnings)})
+
+
+def _preview(text: str, limit: int = 400) -> str:
+    value = (text or "").strip()
+    return value if len(value) <= limit else value[:limit] + " …"
 
 
 def _publish_fingerprint(post) -> str:
@@ -1023,11 +1222,27 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
     else:
         report("[pipeline] manual：只做本地对账，不抓取、不翻译、不调图。")
 
-    sources, boundary_issues = load_sources(account_dirs, activated)
+    sources, boundary_issues, out_of_scope = load_sources(
+        account_dirs, activated)
     result = reconcile(sources, selected=_resolved_selections(state_dir))
     added = _queue(state_dir, (*boundary_issues, *result.human_items), now)
     report("[pipeline] 激活后来源 %d 条；候选 %d；新增待确认 %d。"
            % (result.source_count, len(result.candidates), added))
+    if result.source_count == 0 and not out_of_scope:
+        # 刚 activate 完的第一次 run 必然是这个样子（边界之后还没有新帖）。
+        # 不说清楚的话，联调时很容易把"设计如此"读成"没接上"。
+        report("[pipeline] 激活边界（%s）之后还没有新帖 —— **这是正常的**："
+               "流水线不补发历史，要等下一次增量抓到新帖才会有事做。"
+               % activated.isoformat())
+    if out_of_scope:
+        # 跳过必须留声：静默丢弃正是这个项目丢过 263 篇合作帖的方式。
+        tally: dict[str, int] = {}
+        for _ref, reason in out_of_scope:
+            tally[reason] = tally.get(reason, 0) + 1
+        report("[pipeline] 另有 %d 篇不在图文发布范围内，已跳过（不进人工队列）：%s"
+               % (len(out_of_scope),
+                  "；".join("%s×%d" % (reason, count) for reason, count
+                           in sorted(tally.items(), key=lambda kv: -kv[1]))))
     if autonomy == "manual":
         mark_run_success(state_dir, now)
         return 0
@@ -1157,7 +1372,15 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
             return 5
 
         # 仅用于离线硬闸的未来占位槽；真正槽位在 approve 前读取远端后重分配。
-        placeholder = next_slots(now, (), 1, rules)[0]
+        placeholder_slots = next_slots(now, (), 1, rules)
+        if not placeholder_slots:
+            # 月末：composer 不允许跨月，本月已经没有可排的槽了。翻译/调图的
+            # 产物不会作废，只是这一轮排不出 ready 项。**这不是错误**，
+            # 所以照常 mark_run_success，不要让死人开关误报。
+            report("[pipeline] 本月已无可排槽位（composer 不允许跨月）；"
+                   "本轮不生成待确认项，进入下个月后重跑即可。")
+            break
+        placeholder = placeholder_slots[0]
         try:
             post = compose_post(
                 source.post_id, placeholder, archive_root=cfg().archive_dir,
@@ -1286,7 +1509,8 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     # canonical 与完整 source_refs 仍是同一个候选；旧配对不能直接拿来发。
     rules = publish_rules()
     all_dirs = translation.account_dirs(cfg().archive_dir)
-    latest_sources, boundary_issues = load_sources(all_dirs, activated)
+    latest_sources, boundary_issues, _out_of_scope = load_sources(
+        all_dirs, activated)
     if boundary_issues:
         raise PipelineRunError("最新激活边界对账存在未决来源；请先 pipeline run")
     latest_result = reconcile(
@@ -1370,6 +1594,11 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     from publish import business_suite as bs
     # 在任何浏览器读取之前先把整批严格离线硬闸重做一遍。
     provisional = next_slots(now, (), len(ready_rows), rules)
+    if len(provisional) < len(ready_rows):
+        raise PipelineRunError(
+            "本月只剩 %d 个可排槽位，而本批有 %d 篇 —— composer 的日期选择器"
+            "不允许跨月。本批零提交：请减少 --item-id 数量，或等进入下个月再批。"
+            % (len(provisional), len(ready_rows)))
     prepared = []
     for row, slot in zip(ready_rows, provisional):
         details = row.get("details") or {}
@@ -1426,6 +1655,13 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     except Exception as exc:
         raise PipelineRunError("读取远端已占用槽位失败：%s" % exc) from exc
     slots = next_slots(now, inventory.occupied, len(prepared), rules)
+    if len(slots) < len(prepared):
+        # 远端已占槽位读回来之后本月剩余槽位可能不够。**整批不提交** ——
+        # 这里已经开过浏览器，但一个提交都还没点。
+        raise PipelineRunError(
+            "扣掉远端已占用的槽位后，本月只剩 %d 个可排槽位，而本批有 %d 篇；"
+            "composer 不允许跨月。本批零提交。"
+            % (len(slots), len(prepared)))
     if not inventory.covers(slots):
         rendered = "%s 至 %s" % (
             inventory.visible_start or "未知", inventory.visible_end or "未知")

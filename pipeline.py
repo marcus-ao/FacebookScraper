@@ -1,6 +1,7 @@
 r"""L 组：把四个阶段的真相源重新对账。**不建立发布任务队列。**
 
     pipeline.py status        各阶段积压 + 最近一次成功 + 本月花费
+    pipeline.py preflight     上线预检：还差什么 + 激活后每天会发生什么
     pipeline.py check-alive   死人开关：太久没有成功运行就告警
     pipeline.py activate      G8 通过后原子记录“只处理此后新帖”的边界
     pipeline.py run           manual/assisted 对账并从真相源恢复中断
@@ -29,7 +30,7 @@ import json
 import math
 import sys
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -613,6 +614,192 @@ def run_status(dirs: list[Path], now: datetime | None = None,
 
 
 # ---------------------------------------------------------------------------
+# preflight（上线预检）
+# ---------------------------------------------------------------------------
+
+def _probe_observation_gaps() -> tuple[str, ...]:
+    """`ui_constraints_verified` 到底还差哪几个观察项。判据借 compose 的，不另写。"""
+    from publish.compose import _PROBE_REQUIRED_OBSERVATIONS as required
+
+    configured = cfg().get("publish", "ui_probe_dump", "")
+    if not isinstance(configured, str) or not configured.strip():
+        return ("[publish].ui_probe_dump 为空",)
+    path = cfg().state_dir / configured.strip()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return ("probe dump 读不了：%s" % exc,)
+    observations = data.get("observations")
+    if not isinstance(observations, Mapping):
+        observations = {}
+    return tuple(key for key in required
+                 if not isinstance(observations.get(key), str)
+                 or not observations[key].strip())
+
+
+def _publish_gate_states() -> list[tuple[str, bool, str]]:
+    """G6/G6c 三道生产闸。直接调 business_suite 的判据（导入不会启动浏览器）。"""
+    try:
+        from publish import business_suite as bs
+    except Exception as exc:                          # noqa: BLE001
+        return [("发布证据闸", False, "publish.business_suite 导入失败：%s" % exc)]
+    out = []
+    for label, fn in (("账号上下文", bs.require_account_context_evidence),
+                      ("提交按钮 + 成功信号", bs.require_submission_evidence),
+                      ("Planner 回读", bs.require_readback_evidence)):
+        try:
+            fn()
+        except Exception as exc:                      # noqa: BLE001
+            out.append((label, False, str(exc).splitlines()[0]))
+        else:
+            out.append((label, True, "证据齐全并已回查"))
+    return out
+
+
+def _task_states() -> list[tuple[str, str]]:
+    import subprocess
+    from tools.schedule import ALIVE_TASK, CATCHUP_TASK, DAILY_TASK
+
+    out = []
+    for name in (DAILY_TASK, CATCHUP_TASK, ALIVE_TASK):
+        try:
+            result = subprocess.run(
+                ["schtasks", "/Query", "/TN", name],
+                capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            out.append((name, "查不了（%s）" % exc))
+            continue
+        out.append((name, "已注册" if result.returncode == 0 else "未注册"))
+    return out
+
+
+def run_preflight(days: int = 90, now: datetime | None = None) -> int:
+    """上线预检：把 `docs/GO_LIVE.md` 那张手维护的表变成**算出来的**。
+
+    **零网络、零费用、零写盘。** 回答两个问题：
+
+    1. 现在离"能激活"还差哪几件，每件差什么；
+    2. **激活之后每天到底会发生什么** —— 用生产同一套判据，
+       拿最近 ``days`` 天的真实归档当"假如那时就激活了"跑一遍。
+
+    第 2 问是这条命令存在的理由。三道闸全开、G8 也过了，流水线照样可能
+    "跑起来但什么都不产出" —— 因为 `[publish.price_map]` 是空的、
+    `[publish.trusted_owners]` 少一个自家兄弟账号。那两张表和 14 个 UI 上限
+    一样是承重的，但它们不在 GO_LIVE 的关键路径上，于是没人盯。
+    """
+    import pipeline_assisted as assisted
+
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    state_dir = cfg().state_dir
+    print("=== 上线预检（只读：零网络、零费用、零写盘）===\n")
+
+    ready = True
+    print("[1] G6/G6c 三道生产闸")
+    for label, ok, detail in _publish_gate_states():
+        ready = ready and ok
+        print("    %s %-22s %s" % ("[开]" if ok else "[关]", label, detail))
+
+    verified = cfg().get("publish", "ui_constraints_verified", False) is True
+    gaps = () if verified else _probe_observation_gaps()
+    ready = ready and verified
+    print("\n[2] [publish].ui_constraints_verified = %s" % str(verified).lower())
+    if not verified:
+        print("    还差 %d 个只能人亲眼量的观察项：" % len(gaps))
+        for key in gaps:
+            print("      - %s" % key)
+        print("    填法：docs/GO_LIVE.md 第 3b 步（一条 --set-note 命令填完）")
+
+    blockers = assisted.activation_blockers(state_dir)
+    scheduled_refs = len(assisted.journal.scheduled_source_refs(state_dir))
+    print("\n[3] G8 真机证据（state/published.jsonl 里的 scheduled）：%d 条"
+          % scheduled_refs)
+    activated = assisted.activation_time(state_dir)
+    print("[4] 激活边界：%s"
+          % (activated.isoformat() if activated else "未激活"))
+    settings = pipeline_settings()
+    print("[5] [pipeline].autonomy = %s" % settings["autonomy"])
+    print("[6] 计划任务")
+    for name, state in _task_states():
+        print("    %-24s %s" % (name, state))
+
+    # ---- 业务配置：激活后决定"每天有多少帖能自己走完" ----
+    rules = assisted.publish_rules()
+    dirs = translation.account_dirs(cfg().archive_dir)
+    horizon = now - timedelta(days=days)
+    sources, _issues, out_of_scope = assisted.load_sources(dirs, horizon)
+    result = assisted.reconcile(sources)
+    tally: dict[str, int] = {}
+    unmapped: dict[str, int] = {}
+    untrusted: dict[str, int] = {}
+    auto = 0
+    for candidate in result.candidates:
+        issue = assisted.prepaid_issue(candidate, rules)
+        if issue is None:
+            auto += 1
+            continue
+        tally[issue.kind] = tally.get(issue.kind, 0) + 1
+        if issue.kind == "unmapped_price":
+            for token in issue.details.get("amounts") or []:
+                unmapped[str(token)] = unmapped.get(str(token), 0) + 1
+        elif issue.kind == "unknown_collaborator":
+            for who in issue.details.get("collaborators") or []:
+                untrusted[str(who)] = untrusted.get(str(who), 0) + 1
+
+    scope_tally: dict[str, int] = {}
+    for _ref, reason in out_of_scope:
+        scope_tally[reason] = scope_tally.get(reason, 0) + 1
+
+    total = len(out_of_scope) + result.source_count
+    print("\n=== 若此刻激活，最近 %d 天的 %d 篇归档会怎么走 ==="
+          % (days, total))
+    print("  不在图文发布范围，直接跳过（不进人工队列）：%d 篇" % len(out_of_scope))
+    for reason, count in sorted(scope_tally.items(), key=lambda kv: -kv[1]):
+        print("      %-30s %4d" % (reason, count))
+    print("  进入对账的图文帖：%d 篇 → 归并成 %d 个候选"
+          % (result.source_count, len(result.candidates)))
+    for kind, count in sorted(tally.items(), key=lambda kv: -kv[1]):
+        print("      停在人工队列  %-24s %4d" % (kind, count))
+    if result.human_items:
+        print("      停在人工队列  %-24s %4d"
+              % ("similar_cross_platform", len(result.human_items)))
+    print("      可自动跑到待确认                  %4d" % auto)
+    denominator = len(result.candidates) + len(result.human_items)
+    if denominator:
+        print("  —— 图文帖里 %d/%d（%.0f%%）能不问人走完付费阶段"
+              % (auto, denominator, 100.0 * auto / denominator))
+
+    if untrusted:
+        print("\n[!] [publish.trusted_owners] 缺人：这些作者的帖会**逐篇**停在人工队列")
+        for who, count in sorted(untrusted.items(), key=lambda kv: -kv[1]):
+            print("    @%-28s %4d 篇" % (who, count))
+        print("    确认二次使用授权后，把它加进 config.toml 的 "
+              "[publish.trusted_owners] 对应平台数组即可。")
+
+    if unmapped:
+        print("\n[!] [publish.price_map] 缺行：带这些金额的帖会**逐篇**停在人工队列")
+        print("    把下面这段填好右侧德国站定价，贴进 config.toml 的 "
+              "[publish.price_map]：")
+        print("    ⛔ 右侧由业务定，程序不换算 —— 发错价格是商业事故。\n")
+        for token, count in sorted(unmapped.items(), key=lambda kv: (-kv[1], kv[0])):
+            print('    "%s" = ""    # 近 %d 天出现 %d 篇' % (token, days, count))
+
+    print("\n=== 下一步 ===")
+    if blockers:
+        print("  还不能 activate：")
+        for line in blockers:
+            print("    - %s" % line)
+    elif activated is None:
+        print("  可以了：python pipeline.py activate --g8-verified")
+    elif settings["autonomy"] == "manual":
+        print("  已激活。把 config.toml 的 [pipeline].autonomy 改成 assisted。")
+    else:
+        print("  已激活且 autonomy=%s。剩下的是装计划任务："
+              % settings["autonomy"])
+        print("    python -m tools.schedule install")
+    return 0 if (ready and not blockers) else 1
+
+
+# ---------------------------------------------------------------------------
 # check-alive（死人开关）
 # ---------------------------------------------------------------------------
 
@@ -701,6 +888,12 @@ def main(argv=None) -> int:
         "--no-popup", action="store_true",
         help="只写 state\\alerts.log，不弹桌面通知（自动化验收用）")
 
+    preflight_parser = sub.add_parser(
+        "preflight", help="上线预检：还差什么 + 激活后每天会发生什么（只读）")
+    preflight_parser.add_argument(
+        "--days", type=int, default=90,
+        help="拿最近 N 天归档当「假如那时就激活了」预演（默认 90）")
+
     activate_parser = sub.add_parser(
         "activate", help="G8 通过后原子记录发布边界；不会补发历史")
     activate_parser.add_argument(
@@ -730,8 +923,25 @@ def main(argv=None) -> int:
     if args.command == "check-alive":
         return run_check_alive(popup=not args.no_popup)
 
+    if args.command == "preflight":
+        try:
+            return run_preflight(days=max(1, args.days))
+        except (PipelineConfigError, ArchivePathError, OSError) as exc:
+            print("[!] 预检失败：%s" % exc)
+            return 2
+
     import pipeline_assisted as assisted
     if args.command == "activate":
+        # `--g8-verified` 曾经只是一句自觉。激活早了不是顺序不好看，是**真花钱**：
+        # assisted 会先付费翻译、再付费调图，最后逐篇卡在离线硬闸上。
+        # 这两条本来就是可机检的，所以在这里检。
+        blockers = assisted.activation_blockers(cfg().state_dir)
+        if blockers and assisted.activation_time(cfg().state_dir) is None:
+            print("[!] G8 验收证据不成立，拒绝激活：")
+            for line in blockers:
+                print("    - %s" % line)
+            print("    想看完整清单：python pipeline.py preflight")
+            return 2
         try:
             when = assisted.activate(
                 cfg().state_dir, g8_verified=args.g8_verified)

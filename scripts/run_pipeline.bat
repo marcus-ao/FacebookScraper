@@ -3,6 +3,7 @@ REM ---------------------------------------------------------------------
 REM Pipeline reconciler entry point (L group). Usage:
 REM     run_pipeline.bat                (double click; status, then pauses)
 REM     run_pipeline.bat status         (backlog per stage, zero network)
+REM     run_pipeline.bat preflight      (what is still missing before go live)
 REM     run_pipeline.bat activate --g8-verified
 REM     run_pipeline.bat run            (manual/assisted according to config)
 REM     run_pipeline.bat approve --item-id ID [--item-id ID]

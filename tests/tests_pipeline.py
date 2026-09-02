@@ -391,5 +391,24 @@ check("goto :alive" in text and "%ERRORLEVEL%" in text,
       "在解析时就展开了，拿到的是命令执行**前**的值")
 
 
+# ---------------------------------------------------------------------------
+print("\n[9] preflight 把「现在到底差什么」算出来，而不是靠手维护一张表")
+
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    code = P.run_preflight(days=7)
+text = out.getvalue()
+check("G6/G6c 三道生产闸" in text and "ui_constraints_verified" in text,
+      "预检覆盖发布证据闸与 14 个 UI 上限那一位")
+check("G8 真机证据" in text and "激活边界" in text and "计划任务" in text,
+      "预检覆盖 GO_LIVE 上剩下的每一步，不用人再去对照文档")
+check("会怎么走" in text and "不在图文发布范围" in text,
+      "预检回答的是「激活之后每天会发生什么」，不只是「配置填没填」")
+check("下一步" in text, "预检末尾必须给出下一条命令，否则读完还是不知道按哪个键")
+check(code in (0, 1), "预检是只读判断，用退出码表达通过与否，不抛异常")
+check(P.run_preflight.__doc__ and "零写盘" in P.run_preflight.__doc__,
+      "预检的只读承诺写在 docstring 里；它会在真实 archive 上跑，不许有副作用")
+
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 raise SystemExit(1 if fails else 0)
