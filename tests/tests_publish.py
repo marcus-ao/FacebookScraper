@@ -253,6 +253,9 @@ class VerifiedProbeConfig:
         values = {
             ("publish", "ui_constraints_verified"): self._verified,
             ("publish", "ui_probe_dump"): str(self._dump),
+            # 跨月上限只能在 UI 时区里判，所以严格路径要读它（见
+            # compose._validate_schedule_month）。
+            ("publish", "ui_timezone"): "America/Los_Angeles",
         }
         return values.get((section, key), default)
 
@@ -710,7 +713,8 @@ print("\n[4] G1 数值未实测时不造事实；有 dump 来源后契约可离�
 check(raises(ValueError, lambda: InstagramConstraints(probe_dump=""), "probe"),
       "IG 数值约束必须点名真实 probe dump 来源")
 check(raises(ValueError,
-             lambda: ScheduleWindow("", timedelta(minutes=1), timedelta(days=1)),
+             lambda: ScheduleWindow("", timedelta(minutes=1), timedelta(days=1),
+                                    "America/Los_Angeles"),
              "probe"),
       "定时窗口同样必须点名真实 probe dump 来源")
 check(raises(ValueError,
@@ -740,7 +744,8 @@ with tempfile.TemporaryDirectory() as d:
     window = ScheduleWindow(
         probe_dump=str(recorder.output_path),
         min_ahead=timedelta(hours=1),
-        max_ahead=timedelta(days=10))
+        max_ahead=timedelta(days=10),
+        ui_timezone="America/Los_Angeles")
     original_cfg = compose_module.cfg
     try:
         compose_module.cfg = lambda: VerifiedProbeConfig(
@@ -794,7 +799,8 @@ with tempfile.TemporaryDirectory() as d:
                     max_caption_length=1000, caption_length_mode="codepoints",
                     max_hashtags=10),
                 schedule_window=ScheduleWindow(
-                    str(missing_dump), timedelta(hours=1), timedelta(days=10)),
+                    str(missing_dump), timedelta(hours=1), timedelta(days=10),
+                    "America/Los_Angeles"),
                 now=NOW, require_verified_ui_constraints=True,
                 warning_sink=None),
             "不存在")
@@ -868,23 +874,55 @@ with tempfile.TemporaryDirectory() as d:
                      instagram_constraints=limits,
                      schedule_window=ScheduleWindow(
                          str(recorder.output_path),
-                         timedelta(hours=1), timedelta(days=2)),
+                         timedelta(hours=1), timedelta(days=2),
+                         "America/Los_Angeles"),
                      now=NOW, warning_sink=None),
                  "晚于"),
           "排期超出注入的 G1 UI 上限会被拒绝")
+    # composer 的日期选择器**不允许跨月**（2026-09-01 用户实测）。
+    # 这条闸没法用 ScheduleWindow 的固定时长表达：上限是日历边界，不是时长。
+    wide = ScheduleWindow(str(recorder.output_path), timedelta(0),
+                          timedelta(days=60), "America/Los_Angeles")
+    check(raises(ComposeError,
+                 lambda: compose_post(
+                     "fixture-post", datetime(2026, 10, 3, 12, tzinfo=timezone.utc),
+                     archive_root=root, instagram_constraints=limits,
+                     schedule_window=wide, now=NOW, warning_sink=None),
+                 "只能选当月"),
+          "跨月排期被拒 —— 固定时长窗口放行它，日历边界这道闸不放")
+    # 关键的是**在哪个时区判月份**：柏林 10-01 06:00 在美西还是 09-30，
+    # composer 画的是美西日历，所以这一篇是可以排的。写死柏林或 UTC 都会判错。
+    crosses_in_berlin_only = compose_post(
+        "fixture-post", datetime.fromisoformat("2026-10-01T06:00:00+02:00"),
+        archive_root=root, instagram_constraints=limits,
+        schedule_window=wide, now=NOW, warning_sink=None)
+    check(crosses_in_berlin_only.post_id == "fixture-post",
+          "月份在 UI 时区里判：柏林已跨月但美西仍是本月的时刻照常放行")
     check(raises(ComposeError,
                  lambda: compose_post(
                      "fixture-post", WHEN.replace(tzinfo=None), archive_root=root,
                      warning_sink=None),
                  "显式带时区"),
           "naive datetime 直接拒绝，不依赖本机时区")
-    check(raises(ComposeError,
-                 lambda: compose_post(
-                     "fixture-post", WHEN, archive_root=root,
-                     require_verified_ui_constraints=True,
-                     warning_sink=None),
-                 "G1"),
-          "真正发布模式下缺 G1 约束会失败闭合")
+    # ⚠️ 这条断言以前靠"仓库里 ui_constraints_verified 恰好是 false"成立。
+    # 2026-09-01 那一位被量完之后改成了 true，于是断言跟着失效 ——
+    # **把当时的状态写成断言，就是把"现在没上线"当成了不变量。**
+    # 现在显式构造"未复核"这个条件，与真实 config 的取值无关。
+    original_cfg = compose_module.cfg
+    try:
+        compose_module.cfg = lambda: VerifiedProbeConfig(
+            state_dir, profile, recorder.output_path, verified=False)
+        unverified_blocked = raises(
+            ComposeError,
+            lambda: compose_post(
+                "fixture-post", WHEN, archive_root=root,
+                require_verified_ui_constraints=True,
+                warning_sink=None),
+            "ui_constraints_verified")
+    finally:
+        compose_module.cfg = original_cfg
+    check(unverified_blocked,
+          "真正发布模式下 ui_constraints_verified 未复核就失败闭合")
 
 
 print("\n[5] G1 回填：每一条定位都能回查到真实 dump（红线 5 的机器校验）")
@@ -1932,14 +1970,47 @@ class FakeKeyboard:
         if target is None:
             return
         if key == "Delete":
+            if target.segmented:
+                # 分段时间输入：Ctrl+A 根本没选中这一格，Delete 也就清不掉它。
+                # 这正是 CR-72 的真机形态 —— 旧值 1 上再敲 1 得到 11。
+                self.page.select_all = False
+                return
             target.text = ""
             target.value = ""
             self.page.select_all = False
+            return
+        if key == "Backspace":
+            target.text = target.text[:-1]
+            target.value = target.value[:-1]
+            return
+        if key == "End":
             return
         if key == "Shift+Enter":
             target.text += "\n"
 
     async def type(self, text):
+        """逐字符按键。**生产代码不该再用它**（CR-71），这里保留是为了能测出
+        "改回去就会坏"——见下面 `on_key_type` 那个只在按键路径上生效的钩子。"""
+        target = self.page.focused
+        if target is None:
+            return
+        if self.page.select_all and not target.segmented:
+            target.text = ""
+            target.value = ""
+            self.page.select_all = False
+        target.text += text
+        target.value += text
+        if target.on_key_type is not None:
+            target.on_key_type(target)
+        if target.on_type is not None:
+            target.on_type(target)
+
+    async def insert_text(self, text):
+        """对应 Playwright 的 `keyboard.insert_text`（CDP Input.insertText）。
+
+        **不派发按键事件**，所以 `on_key_type`（模拟 @/# typeahead）不触发；
+        但编辑器仍收到 input 事件，所以 `on_type`（模拟编辑器重写）照常触发。
+        """
         target = self.page.focused
         if target is None:
             return
@@ -1947,6 +2018,10 @@ class FakeKeyboard:
             target.text = ""
             target.value = ""
             self.page.select_all = False
+        newline = chr(10)
+        if newline in text and self.page.block_insert_drops_newlines:
+            # 有些富文本编辑器不会把整段插入里的换行符变成真正的换行。
+            text = text.replace(newline, "")
         target.text += text
         target.value += text
         if target.on_type is not None:
@@ -1955,7 +2030,8 @@ class FakeKeyboard:
 
 class FakeElement:
     def __init__(self, role, name="", *, aria_label=None, value="", text="",
-                 checked=None, children=(), on_type=None, render=None):
+                 checked=None, children=(), on_type=None, render=None,
+                 on_key_type=None, segmented=False, deferred=False):
         self.role = role
         self.name = name
         self.aria_label = aria_label
@@ -1964,6 +2040,12 @@ class FakeElement:
         self.checked = checked
         self.children = list(children)
         self.on_type = on_type
+        # 只在**按键**路径上生效：模拟 @/# 的 typeahead 打乱正文（CR-71）。
+        self.on_key_type = on_key_type
+        # 分段输入（时/分/AM-PM）：Ctrl+A 选不中它，Delete 清不掉（CR-72）。
+        self.segmented = segmented
+        # 打开定时开关之后才异步渲染出来的元素（CR-74）。
+        self.deferred = deferred
         self.render = render
         self.clicks = 0
 
@@ -1975,18 +2057,33 @@ class FakeElement:
 
 
 class FakeLocator:
-    def __init__(self, page, elements):
+    """⚠️ **惰性解析**：每次用到时重新算命中了哪些元素。
+
+    真实 Playwright 的 locator 就是这样 —— 它是"怎么找"，不是"找到的东西"。
+    早先这里把命中结果**在构造时就冻住**，于是"等一会儿元素才渲染出来"
+    这件事在假页面上根本不可能发生，`.all()` 不等待的 bug（CR-74）
+    也就无从被测到。
+    """
+
+    def __init__(self, page, elements=None, resolver=None):
         self.page = page
-        self.elements = list(elements)
+        self._resolver = resolver if resolver is not None else (
+            lambda snapshot=list(elements or []): list(snapshot))
+
+    @property
+    def elements(self):
+        return self._resolver()
 
     @property
     def first(self):
-        return FakeLocator(self.page, self.elements[:1])
+        resolve = self._resolver
+        return FakeLocator(self.page, resolver=lambda: resolve()[:1])
 
     def _one(self):
-        if not self.elements:
+        found = self.elements
+        if not found:
             raise AssertionError("定位没有命中任何元素")
-        return self.elements[0]
+        return found[0]
 
     async def count(self):
         return len(self.elements)
@@ -1995,6 +2092,9 @@ class FakeLocator:
         return [FakeLocator(self.page, [item]) for item in self.elements]
 
     async def wait_for(self, state=None, timeout=None):
+        if not self.elements:
+            # 模拟"再等一会儿它就渲染出来了"。真实 locator 会一直轮询到超时。
+            self.page.reveal_deferred()
         self._one()
 
     async def click(self, timeout=None):
@@ -2021,6 +2121,12 @@ class FakeLocator:
 
     async def fill(self, value, timeout=None):
         element = self._one()
+        if element.segmented:
+            # ⚠️ **分段输入上 fill() 不生效**，这是照真机建模的：CR-72 那次
+            # 打字得到 "11" 之后 fill("1") 跑过了，而最终回读**仍然是 11**。
+            # 不建这一条的话，假页面里 fill() 会把 bug 掩盖掉，
+            # 这套断言就变成"测了个寂寞"。
+            return
         element.value = value
         element.text = value
         # fill() 和逐字输入走同一个"页面会不会改写我填的值"的钩子——
@@ -2029,15 +2135,19 @@ class FakeLocator:
             element.on_type(element)
 
     def get_by_role(self, role, name=None, exact=True):
-        found = []
-        for element in self.elements:
-            found.extend(_walk_role(element.children, role, name, exact))
-        return FakeLocator(self.page, found)
+        def resolve():
+            found = []
+            for element in self.elements:
+                found.extend(_walk_role(element.children, role, name, exact))
+            return found
+        return FakeLocator(self.page, resolver=resolve)
 
 
 def _walk_role(elements, role, name, exact):
     hits = []
     for element in elements:
+        if getattr(element, "deferred", False):
+            continue                      # 还没渲染出来（CR-74 的形状）
         if element.role == role and _name_ok(element.accessible_name(), name, exact):
             hits.append(element)
         hits.extend(_walk_role(element.children, role, name, exact))
@@ -2074,6 +2184,14 @@ class FakeComposer:
         self.select_all = False
         self.keyboard = FakeKeyboard(self)
         self.settled = 0
+        self.block_insert_drops_newlines = False
+        self.deferred_elements = []
+
+    def reveal_deferred(self):
+        """模拟异步渲染完成：把 deferred 的元素挂上去。"""
+        for element in self.deferred_elements:
+            element.deferred = False
+        self.deferred_elements = []
 
     async def evaluate(self, expr):
         if self.hang:
@@ -2081,7 +2199,8 @@ class FakeComposer:
         return 2
 
     def get_by_role(self, role, name=None, exact=True):
-        return FakeLocator(self, _walk_role(self.elements, role, name, exact))
+        return FakeLocator(
+            self, resolver=lambda: _walk_role(self.elements, role, name, exact))
 
     def get_by_text(self, text, exact=False):
         hits = [item for item in self.texts if text.lower() in item.lower()]
@@ -2115,13 +2234,14 @@ CAPTION_NAME = selectors.COMPOSER["caption_box"].name
 
 
 def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
-                  caption_hook=None, chooser=None, date_hook=None):
-    caption = FakeElement("combobox", aria_label=CAPTION_NAME, on_type=caption_hook)
+                  caption_hook=None, chooser=None, date_hook=None,
+                  caption_key_hook=None, drop_newlines=False,
+                  segmented_time=False, stale_hour="1", channels=1,
+                  deferred_schedule=False):
+    caption = FakeElement("combobox", aria_label=CAPTION_NAME,
+                          on_type=caption_hook, on_key_type=caption_key_hook)
     add_media = FakeElement("button", "Add photo/video")
     switch = FakeElement("switch", aria_label="Set date and time", checked=False)
-    date = FakeElement("textbox", name="Date picker", on_type=date_hook)
-    labels = [None, "minutes", "meridiem"][:spinbuttons]
-    spins = [FakeElement("spinbutton", aria_label=label) for label in labels]
 
     def render_time(element):
         values = [item.value for item in element.children]
@@ -2129,13 +2249,35 @@ def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
             values.append("")
         return "%s : %s %s" % (values[0], values[1], values[2])
 
-    group = FakeElement("application", name="Time input", children=spins,
-                        render=render_time)
-    root = FakeElement("none", "",
-                       children=[caption, add_media, switch, date, group])
+    # ⚠️ 真实 composer 上**每个渠道各有一套**日期框 + 时间控件
+    # （Facebook 一套、Instagram 一套，CR-73）。channels 就是模拟这一点。
+    dates, groups, spin_sets = [], [], []
+    for _ in range(channels):
+        date = FakeElement("textbox", name="Date picker", on_type=date_hook,
+                           deferred=deferred_schedule)
+        labels = [None, "minutes", "meridiem"][:spinbuttons]
+        spins = [FakeElement("spinbutton", aria_label=label,
+                             segmented=segmented_time) for label in labels]
+        if segmented_time and spins:
+            # 打开定时开关后 UI 会预填一个时刻；小时那格留着旧值。
+            spins[0].value = spins[0].text = stale_hour
+        group = FakeElement("application", name="Time input", children=spins,
+                            render=render_time, deferred=deferred_schedule)
+        dates.append(date)
+        groups.append(group)
+        spin_sets.append(spins)
+
+    children = [caption, add_media, switch]
+    for date, group in zip(dates, groups):
+        children.extend((date, group))
+    root = FakeElement("none", "", children=children)
     page = FakeComposer([root], texts=list(page_texts), chooser=chooser)
+    page.block_insert_drops_newlines = drop_newlines
+    if deferred_schedule:
+        page.deferred_elements = list(dates) + list(groups)
     return page, {"caption": caption, "add_media": add_media, "switch": switch,
-                  "date": date, "group": group, "spins": spins}
+                  "date": dates[0], "group": groups[0], "spins": spin_sets[0],
+                  "dates": dates, "groups": groups, "spin_sets": spin_sets}
 
 
 CAPTION_TEXT = ("Neuer Frühling für Straßenkatzen 🐾\n"
@@ -2151,7 +2293,49 @@ async def caption_ok():
 
 
 check(asyncio.run(caption_ok()) == CAPTION_TEXT,
-      "G4 逐行输入 + Shift+Enter：换行/空行/emoji/变音/#标签/$金额 原样填进去")
+      "G4 填正文：换行/空行/emoji/变音/#标签/$金额 原样填进去")
+
+
+# ---- CR-71：@/# 的 typeahead 只在**按键**路径上打乱正文 ----
+# 2026-09-01 真机实测：`keyboard.type()` 逐字符敲键把 `@ifa.berlin` 撕成
+# `@ifa.ber` + `lin` 插到了两个地方。修法是改用 `keyboard.insert_text()`
+# （CDP Input.insertText，不派发按键）。下面两条把"改回去就会坏"钉住。
+def _typeahead_scramble(element):
+    """模拟 typeahead：一看到 @ 提及就把光标挪走，后续字符落到末尾。"""
+    if "@ifa.ber" in element.text and not element.text.endswith("SCRAMBLED"):
+        element.text = element.text + "SCRAMBLED"
+
+
+async def caption_survives_typeahead():
+    page, parts = make_composer(caption_key_hook=_typeahead_scramble)
+    await fill_caption(page, "Hallo @ifa.berlin und #Neakasa")
+    return parts["caption"].text
+
+
+check(asyncio.run(caption_survives_typeahead()) == "Hallo @ifa.berlin und #Neakasa",
+      "G4 不再走按键路径：@ 提及的 typeahead 打不乱正文了"
+      "（⛔ 改回 keyboard.type 这条立刻红）")
+
+_write_src = inspect.getsource(bs._write_caption)
+# 查带 `page.` 前缀的调用形态：函数的 docstring 里**故意**写着
+# "不要改回 ``keyboard.type()``"，不带前缀地查会把那句警告本身当成违规。
+check("page.keyboard.type(" not in _write_src
+      and "page.keyboard.insert_text(" in _write_src,
+      "写正文只用 insert_text，不用 keyboard.type —— "
+      "逐字符按键会招出 @/# 的自动补全（CR-71）。"
+      "⚠️ 只查这一个函数：G5 往 mm/dd/yyyy 那个普通 textbox 里敲日期"
+      "仍然用 keyboard.type，那里没有 typeahead")
+
+
+async def caption_falls_back_per_line():
+    # 整段插入时 \n 没变成换行 → 第一种写法失配，第二种（逐行 + Shift+Enter）救回来
+    page, parts = make_composer(drop_newlines=True)
+    await fill_caption(page, CAPTION_TEXT)
+    return parts["caption"].text
+
+
+check(asyncio.run(caption_falls_back_per_line()) == CAPTION_TEXT,
+      "整段插入丢换行时自动回落到逐行 + Shift+Enter，两种写法都当场回读校验")
 
 
 async def caption_mangled():
@@ -2297,6 +2481,136 @@ async def schedule_two_spins():
 two = asyncio.run(schedule_two_spins())
 check("composer_hours_spinbutton" in two and "不去猜哪个是小时" in two,
       "G5 时间控件个数一变就失败闭合：小时那个本来就是靠排除法定位的")
+
+
+# ---- CR-72：分段时间输入上 Ctrl+A 选不中当前格 ----
+# 2026-09-01 真机实测：小时格里预填着旧值，Ctrl+A 没选中它，
+# 再敲 "1" 得到的是 "11" —— 帖子会排到 11:00 AM 而不是 1:00 AM。
+# ⚠️ 这类错**只差一个字符，而且看起来完全正常**，正是回读闸存在的理由。
+segmented_readback, segmented_parts = asyncio.run(schedule(
+    datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
+    zone="America/Los_Angeles", segmented_time=True, stale_hour="1"))
+check(segmented_parts["spins"][0].value == "1",
+      "G5 分段小时格：先把旧值真的清干净再写，不会把 1 敲成 11（实得 %r）"
+      % segmented_parts["spins"][0].value)
+check("1 : 00 AM" in segmented_readback,
+      "G5 分段输入下整组回读仍然对得上（实得 %r）" % segmented_readback)
+
+_clear_src = inspect.getsource(bs._clear_field)
+check("Backspace" in _clear_src and "input_value" in inspect.getsource(bs._field_value),
+      "清空字段必须**回读确认真的空了**，Ctrl+A 没生效时有退格兜底（CR-72）")
+
+_time_src = inspect.getsource(bs._set_one_time)
+check("逐字段当前值" in _time_src,
+      "时刻回读失败时逐字段打出当前值 —— 只报合成串看不出是哪一格坏的")
+
+
+# ---- CR-73：每个渠道各有一套排期控件，**不是一套** ----
+# 真机截图：Schedule 下面 `Facebook` 是 Sep 10 11:00 AM，
+# `Instagram` 还停在 Sep 1 06:23 PM（默认值）—— 只设第一组等于让 IG 立刻发。
+two_ch_readback, two_ch = asyncio.run(schedule(
+    datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc), channels=2))
+check(all(item.value == "09/08/2026" for item in two_ch["dates"]),
+      "G5 **两个渠道的日期都被写上**（实得 %r）"
+      % [item.value for item in two_ch["dates"]])
+check(all(spins[0].value == "10" and spins[1].value == "00"
+          and spins[2].value == "AM" for spins in two_ch["spin_sets"]),
+      "G5 两个渠道的时刻都被写上，不是只设 Facebook 那一组")
+check(two_ch_readback.count("09/08/2026") == 2,
+      "回读把每一组都打出来，人能一眼看到两个渠道排的是同一时刻（实得 %r）"
+      % two_ch_readback)
+
+
+async def schedule_unpaired():
+    """日期框和时间控件数量对不上时必须失败闭合，不去猜怎么配对。"""
+    page, parts = make_composer(channels=2)
+    parts["groups"].pop().role = "none"      # 弄掉一个时间控件
+    try:
+        await set_schedule(page, WHEN, ui_timezone="Europe/Berlin",
+                           verify_device=False)
+    except PublishStepError as exc:
+        return str(exc)
+    return ""
+
+
+unpaired = asyncio.run(schedule_unpaired())
+check("配不成对" in unpaired and "不去猜" in unpaired,
+      "G5 排期控件配不成对时失败闭合 —— 配错的后果是某个渠道被排到别的时刻")
+
+
+# ---- CR-74：排期区是**打开定时开关之后才异步渲染**的，`.all()` 不等待 ----
+deferred_readback, deferred_parts = asyncio.run(schedule(
+    datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc),
+    channels=2, deferred_schedule=True))
+check(all(item.value == "09/08/2026" for item in deferred_parts["dates"]),
+      "G5 排期区晚一拍才渲染时**先等再枚举**，两组都设上了（实得 %r）"
+      % [item.value for item in deferred_parts["dates"]])
+
+_sched_src = inspect.getsource(bs.set_schedule)
+check(_sched_src.index("wait_for") < _sched_src.index(".all()"),
+      "⛔ `.all()` 之前必须先 wait_for —— `.all()` 不等待，"
+      "排期区还没渲染出来时它返回 0 个（CR-74）")
+
+
+# ---- CR-75：Planner 的"就绪信号"在日历数据还在转圈时就已经渲染好了 ----
+# 真机截图：`Planner` 标题、`September 2026`、Week/Month 全在，中间一个大转圈。
+# 那一刻页面上的 link 全是导航和侧栏 —— 刚提交成功的帖子被判成"回读不到"。
+class LoadingPlanner:
+    """前 `ticks` 次读到的只有导航 link，之后日历条目才渲染出来。"""
+
+    def __init__(self, ticks):
+        self.ticks = ticks
+        self.reads = 0
+        self.focused = None
+        self.select_all = False
+
+    def get_by_role(self, role, name=None, exact=True):
+        self.reads += 1
+        # ⚠️ 用 aria_label / text，不是第二个位置参数（那是 name）：
+        # `_node_text` 读的是 inner_text 与 aria-label，读不到 name。
+        found = [FakeElement("link", aria_label="Create post")]
+        if self.reads > self.ticks:
+            found.append(FakeElement(
+                "link",
+                aria_label="Probe caption September 15, 2026, 10:00 AM"))
+        return FakeLocator(self, found)
+
+
+_ENTRY_SPEC = selectors.EvidenceSignal(
+    key="planner_scheduled_card", step="G6c", kind="semantic",
+    surface="content_calendar", source_dump="fixture.json", sequences=(1,),
+    breaks_when="fixture", role="link", name="Probe caption",
+    attributes={"entry_role": "link",
+                "datetime_regex": (r"(?P<date>[A-Z][a-z]{2,8} \d{1,2}, \d{4})"
+                                   r"\D{0,10}?(?P<time>\d{1,2}:\d{2} [AaPp][Mm])")})
+
+
+async def planner_waits_for_entries():
+    page = LoadingPlanner(ticks=2)          # 前两次只有导航 link
+    cards = await bs._entries_when_ready(page, _ENTRY_SPEC, "link", timeout=5)
+    texts = [await bs._node_text(item) for item in cards]
+    return page.reads, texts
+
+
+reads, texts = asyncio.run(planner_waits_for_entries())
+check(reads > 2 and any("September 15, 2026" in item for item in texts),
+      "G6c 等到**真的能解析出时刻的条目**才读，不把「还在转圈」当成零占用"
+      "（读了 %d 次）" % reads)
+
+
+async def planner_empty_stays_empty():
+    page = LoadingPlanner(ticks=10 ** 6)   # 永远只有导航 link = 真的空日历
+    cards = await bs._entries_when_ready(page, _ENTRY_SPEC, "link", timeout=1)
+    return [await bs._node_text(item) for item in cards]
+
+
+check(not any("September" in item
+              for item in asyncio.run(planner_empty_stays_empty())),
+      "真的空日历仍然读作空：等满预算后原样返回，由调用方按内容筛出零条")
+
+check("_PLANNER_ENTRY_BUDGET" in inspect.getsource(bs._entries_when_ready),
+      "等待预算是有上界的常量，不是整个 ui_timeout —— "
+      "空日历每次发布都会真的等满这一段")
 
 
 async def schedule_bad_date():
@@ -2491,8 +2805,10 @@ with contextlib.redirect_stdout(io.StringIO()) as captured:
     submit_gate_code = publish_entry.main([
         "--post-id", "does-not-matter", "--at", "2026-09-08T10:00",
         "--submit", "--assume-yes"])
-check(submit_gate_code == 2 and "ui_constraints_verified" in captured.getvalue(),
-      "--submit 自动隐含 strict；当前 G1 未审核时在查归档/浏览器之前失败闭合")
+check("ui_constraints_verified" in entry,
+      "--submit 那条路径上仍然存在 ui_constraints_verified 这道闸")
+check(submit_gate_code == 2 and "没有碰浏览器" in captured.getvalue(),
+      "--submit 自动隐含 strict；任一硬闸不过都在碰浏览器之前失败闭合")
 check("publish_debug_port" in workflow_entry and "publish_profile_dir" in workflow_entry
       and "assert_publish_chrome_isolated" in workflow_entry,
       "入口只附着发布专用 profile/端口，且启动前核对与抓取小号隔离")

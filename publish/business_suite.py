@@ -26,6 +26,7 @@ r"""Business Suite UI 自动化（G2–G7）。
 from __future__ import annotations
 
 import asyncio
+import time
 import hashlib
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,9 @@ from publish.selectors import (COMPOSER, SIGNALS, EvidenceSignal, Locator,
 # 所以这里一律取**宽松**值，并且由 `[publish].ui_timeout_seconds` 兜底可调：
 # 超时值宁可偏大——偏大只是慢，偏小是把对的环境判成错的。
 DEFAULT_UI_TIMEOUT = 30.0
+# 等日历条目渲染出来的预算（秒）。空日历会真的等满这一段，所以不设成整个
+# ui_timeout —— 那会让每次发布都先干等半分钟；20 秒是实测加载时延的富余量。
+_PLANNER_ENTRY_BUDGET = 20.0
 # 页面可用性自检要短，因为它就是用来快速判定"这一页是不是 CR-64 那种坏页"的。
 PAGE_HEALTH_TIMEOUT = 8.0
 # 上传后给 UI 的沉淀窗口。**不是固定 sleep**：到点就走，不阻塞成功路径。
@@ -322,8 +326,19 @@ async def ensure_logged_in(page, *, page_name: str, instagram_account: str = "",
     - **能**证明 composer 开着且可驱动（正文框在）；
     - **能**在页面上完全找不到目标显示名时**拦住**——那是强否定信号；
     - 准备模式没有 v2 账号证据时，只能做上述弱核对；
-    - 自动提交必须传入同一审核 dump 的 ``composer_account_context``，并在
-      上传任何素材前同时读到目标 FB Page 与 IG 帐号。
+    - 自动提交必须传入同一审核 dump 的 ``composer_account_context``，
+      读到目标 FB Page 的**完整显示名**。
+
+    ⚠️ **传 ``account_spec`` 的那一次必须发生在图片上传之后。**
+    已录证的那条定位是 FB 预览里的 `heading`，而**预览要有内容才渲染它**
+    （dump 里它首次出现在 evidence_order=31，紧跟 `Add photo/video` 的 ord=29）。
+    空 composer 上调用它只会白等到超时 —— 2026-09-01 第一次 G8 真机跑
+    就是这么失败的。调用顺序见 ``publish/workflow.py`` 的 [2/7] 与 [3/7]。
+
+    ⛔ **IG 帐号 composer 上根本不显示**（46 张 composer 快照里 `neakasa.de`
+    命中 0 次），由提交后的 Planner 详情弹窗回读证明。截图上 `Post to` 下拉框
+    虽然写着 "… and neakasa.de"，但那个值**从来没被 dump 录到**，
+    不许拿它当定位（全局红线 5）。
     """
     if not (page_name or "").strip():
         raise ValueError("[publish].facebook_page_name 为空，无法核对目标主页")
@@ -363,7 +378,10 @@ async def ensure_logged_in(page, *, page_name: str, instagram_account: str = "",
         except Exception as exc:                  # noqa: BLE001
             raise PublishStepError(
                 "找不到 v2 已录证的当前发布账号上下文；为避免发错主页，"
-                "自动提交在上传前停止：%s" % exc) from exc
+                "自动提交在点提交之前停止：%s"
+                "  ⚠️ 若这一步是在**空 composer** 上调用的，那是调用顺序错了："
+                "这条定位是 FB 预览里的 heading，预览要有内容才渲染。"
+                % exc) from exc
         # ⚠️ **只核对 Facebook。** 实测 composer 上没有 IG 帐号名
         # （`docs/PROBE_FINDINGS_20260901.md` 第一节），IG 由 G6c 提交后
         # 从 Planner 详情弹窗回读证明，少了会转人工。
@@ -380,7 +398,7 @@ async def ensure_logged_in(page, *, page_name: str, instagram_account: str = "",
                 for value in extracted)):
             raise PublishStepError(
                 "composer 上读到的目标主页**完整值**不等于 %r（读到 %s）；"
-                "自动提交在上传前停止 —— 多一个词就是另一个主页"
+                "自动提交在点提交之前停止 —— 多一个词就是另一个主页"
                 % (page_name, extracted or "空"))
         notes.append(
             "已核对 composer 目标主页 = %s；IG 帐号 composer 上不显示，"
@@ -519,6 +537,42 @@ def normalize_caption(value: str) -> str:
     return (value or "").replace(_ZWSP, "").replace("\r\n", "\n").replace("\r", "\n")
 
 
+async def _write_caption(page, box, text: str, *, per_line: bool,
+                         timeout: float) -> str:
+    """把正文写进 contenteditable，返回归一化后的回读结果。
+
+    ⛔ **不要改回 ``keyboard.type()``。** 那个 API 逐字符派发真实按键事件，
+    而 Meta 的编辑器（Lexical 形态）在 ``@`` / ``#`` 上挂着提及与话题标签的
+    typeahead。菜单一弹出来就异步改 DOM 并移动光标，后面的字符就落到别处去了。
+    2026-09-01 真机实测的破坏样子（CR-71）：
+
+        期望  … Bescheid 👇 \\n\\n#Neakasa … #PetsHome
+        实际  … Bescheid 👇 \\n@ifa.ber #Neakasa … #PetsHomelin
+
+    `@ifa.berlin` 被撕成 `@ifa.ber` + `lin` 分别插到了两个地方。
+
+    ``keyboard.insert_text()`` 走 CDP 的 ``Input.insertText``，**不派发按键事件**，
+    typeahead 因此不会被触发；编辑器仍然收到 ``beforeinput``/``input``，
+    所以标签照常被 token 化（截图里那些蓝色高亮）。
+    """
+    await box.click(timeout=_ms(timeout))
+    # 清空已有内容（重跑时 composer 里可能残留上一次的字）
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Delete")
+    if per_line:
+        # 后备策略：整段插入时若 `\n` 没有变成换行，就逐行插入 + Shift+Enter。
+        # Shift+Enter 是按键事件，但它只在**行末**按，那时 typeahead 已经因为
+        # 空格/标点关掉了，风险远小于逐字符敲。
+        for index, line in enumerate(text.split("\n")):
+            if index:
+                await page.keyboard.press("Shift+Enter")
+            if line:
+                await page.keyboard.insert_text(line)
+    else:
+        await page.keyboard.insert_text(text)
+    return normalize_caption(await box.inner_text())
+
+
 async def fill_caption(page, text: str, *,
                        timeout: float = DEFAULT_UI_TIMEOUT) -> None:
     """填正文并**逐字符回读比对**，不一致就抛错。
@@ -526,11 +580,20 @@ async def fill_caption(page, text: str, *,
     正文框是 contenteditable（dump 第 5 条：命中的是内层 div，
     第 3 层语义祖先才是那个 ``role=combobox``），所以：
 
-    - **逐行输入 + Shift+Enter**，不能一次 ``fill()``：富文本编辑器会把
-      多段挤成一段，或者把 ``\\n`` 当成提交（PUBLISH_PLAN 3.2 第 3 点）；
-    - 输入 ``#`` 会触发话题标签自动补全（dump 第 7 条那个菜单）。
-      **不去躲它**——躲它就得猜菜单的定位。改成让回读闸去抓：
-      自动补全真的改了正文，这里就会当场失配并停下。
+    - 不能一次 ``fill()``：富文本编辑器会把多段挤成一段，
+      或者把 ``\\n`` 当成提交（PUBLISH_PLAN 3.2 第 3 点）；
+    - **也不能用 ``keyboard.type()``** —— 见 :func:`_write_caption`，
+      逐字符按键会把 ``@`` / ``#`` 的自动补全招出来并打乱正文（CR-71）。
+
+    两种写法**依次试**，每种都当场回读校验：
+
+    1. 整段 ``insert_text``（零按键，最不容易被 typeahead 干扰）；
+    2. 逐行 ``insert_text`` + 行末 ``Shift+Enter``（万一整段插入时
+       ``\\n`` 没被编辑器变成换行）。
+
+    ⚠️ **回读闸一条都没有放松**：两种写法都必须**逐字符**对上才算成功，
+    两种都对不上就带着完整差异停下、绝不提交。重试是安全的 ——
+    这一步在提交之前，写坏了只是 composer 里的草稿，没有任何东西发出去。
     """
     if not isinstance(text, str) or not text.strip():
         raise ValueError("正文不能为空")
@@ -538,37 +601,43 @@ async def fill_caption(page, text: str, *,
 
     box = locator_for(page, "caption_box").first
     await box.wait_for(state="visible", timeout=_ms(timeout))
-    await box.click(timeout=_ms(timeout))
-    # 清空已有内容（重跑时 composer 里可能残留上一次的字）
-    await page.keyboard.press("Control+A")
-    await page.keyboard.press("Delete")
 
-    lines = normalize_caption(text).split("\n")
-    for index, line in enumerate(lines):
-        if index:
-            await page.keyboard.press("Shift+Enter")
-        if line:
-            await page.keyboard.type(line)
-
-    actual = normalize_caption(await box.inner_text())
     expected = normalize_caption(text)
-    if actual != expected:
-        raise PublishStepError(
-            "正文回读与要填的不一致，**没有继续**。\n%s"
-            % _diff_hint(expected, actual))
+    attempts: list[tuple[str, str]] = []
+    for label, per_line in (("整段插入", False), ("逐行插入 + Shift+Enter", True)):
+        actual = await _write_caption(
+            page, box, expected, per_line=per_line, timeout=timeout)
+        if actual == expected:
+            return
+        attempts.append((label, actual))
+
+    raise PublishStepError(
+        "正文回读与要填的不一致，**没有继续**（两种写法都试过了）。\n%s"
+        % "\n".join(_diff_hint(expected, actual, label)
+                    for label, actual in attempts))
 
 
-def _diff_hint(expected: str, actual: str) -> str:
-    """指出第一处不同，带上下文——只说事实，不猜原因。"""
+def _diff_hint(expected: str, actual: str, label: str = "") -> str:
+    """指出第一处不同，并**把两段完整打出来**——只说事实，不猜原因。
+
+    ⚠️ 上一版只打第一处差异前后各 20 个字符，结果 2026-09-01 那次真机失败
+    **把真正的破坏藏起来了**：窗口里只看到多一个 ``\\n``，而实际是
+    ``@ifa.berlin`` 被撕成两半插到了别的地方。为看清它多花了一整轮真机。
+    正文上限 2200，全打出来的代价可以忽略。
+    """
     limit = min(len(expected), len(actual))
     index = next((i for i in range(limit) if expected[i] != actual[i]), limit)
-    window = slice(max(0, index - 20), index + 20)
-    return ("  第 %d 个字符起不同（期望 %d 字 / 实际 %d 字）\n"
-            "  期望…%r…\n  实际…%r…\n"
+    window = slice(max(0, index - 30), index + 30)
+    head = ("  【%s】" % label) if label else "  "
+    return ("%s第 %d 个字符起不同（期望 %d 字 / 实际 %d 字）\n"
+            "  差异处 期望…%r…\n"
+            "  差异处 实际…%r…\n"
+            "  ── 完整期望 ──\n  %r\n"
+            "  ── 完整实际 ──\n  %r\n"
             "  常见原因：话题标签/@提及的自动补全改写了正文，"
             "或者换行被编辑器合并了。"
-            % (index, len(expected), len(actual),
-               expected[window], actual[window]))
+            % (head, index, len(expected), len(actual),
+               expected[window], actual[window], expected, actual))
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +712,27 @@ def assert_ui_timezone_is_device(zone: ZoneInfo, when: datetime) -> None:
         % (zone.key, when.isoformat(), ui_offset, device_offset))
 
 
+async def _settle_pairs(date_locator, group_locator, *, timeout: float) -> None:
+    """等到两组定位的条数**稳定且相等**。
+
+    ⚠️ 只等到"第一个可见"是不够的：Facebook 那一行先渲染、Instagram 那一行
+    晚一拍时，枚举会拿到 1 个，然后**静默地只设一个渠道** ——
+    那正是 CR-73 的后果（IG 停在默认值等于立刻发）。
+    ⛔ 这里**不抛异常**：条数最终对不上由调用方那条"配不成对"报，
+    错误信息在那里更完整。
+    """
+    deadline = time.monotonic() + timeout
+    previous = None
+    while True:
+        counts = (await date_locator.count(), await group_locator.count())
+        if previous == counts and counts[0] == counts[1] and counts[0] > 0:
+            return
+        if time.monotonic() > deadline:
+            return
+        previous = counts
+        await asyncio.sleep(0.25)
+
+
 async def set_schedule(page, when: datetime, *, ui_timezone: str,
                        timeout: float = DEFAULT_UI_TIMEOUT,
                        verify_device: bool = True) -> str:
@@ -679,22 +769,79 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
             "点了 %r 但它没有被打开（回读仍是关）。"
             % COMPOSER["schedule_switch"].name)
 
-    # ---- 日期。placeholder 是 mm/dd/yyyy（dump 第 26 条），所以是美式格式 ----
-    date_text = local.strftime("%m/%d/%Y")
-    date_input = locator_for(page, "schedule_date_input").first
-    await date_input.wait_for(state="visible", timeout=_ms(timeout))
-    await _type_into(page, date_input, date_text, timeout=timeout)
-    actual_date = (await date_input.input_value()).strip()
-    if not _same_date(actual_date, local):
+    # ---- 每个渠道一套排期控件。**不是一套。** ----
+    # ⚠️⚠️ 2026-09-01 真机实测（CR-73）：Schedule 那一块下面有
+    # `heading 'Facebook'` 和 `heading 'Instagram'` 两行，**各带一个日期框
+    # 和一个时间控件**。dump 里也是这个形状 —— 录制时人把整套流程做了两遍：
+    #
+    #     #37 点日期框 → #39 选日期 → #40-43 两个 spinbutton      （第一组）
+    #     #44 点日期框 → #45 选日期 → #46-49 两个 spinbutton      （第二组）
+    #
+    # 那不是"改了一次时间"，是两个渠道各设一次。
+    # ⛔ **原来这里取 `.first`，于是只设了 Facebook 那一组**，
+    #    Instagram 那组停在默认值（当天 + 当前时刻）——**等于立刻发出去**。
+    #    截图上是 `Sep 1, 2026 06:23 PM`，而 FB 是 `Sep 10, 2026`。
+    #    这是这条链上后果最严重的一种错：内容对、主页对、时刻悄悄错。
+    # ⛔ **先等，再枚举。`.all()` 不等待。**
+    # 排期那一块是**打开定时开关之后才异步渲染**的。原来的代码是
+    # `locator.first` + `wait_for(visible)`，它会等；换成 `.all()` 之后
+    # 少了这一步，于是在还没渲染出来的那一刻枚举，拿到 0 个
+    # ——2026-09-01 第四次真机就是这么失败的（CR-74）。
+    date_locator = locator_for(page, "schedule_date_input")
+    group_locator = locator_for(page, "schedule_time_group")
+    await date_locator.first.wait_for(state="visible", timeout=_ms(timeout))
+    await group_locator.first.wait_for(state="visible", timeout=_ms(timeout))
+    await _settle_pairs(date_locator, group_locator, timeout=timeout)
+    date_inputs = await date_locator.all()
+    groups = await group_locator.all()
+    if not date_inputs or not groups or len(date_inputs) != len(groups):
         raise PublishStepError(
-            "日期回读对不上：期望 %s，UI 上是 %r。\n"
-            "  ⚠️ 先怀疑**日期格式变了**（placeholder 应当仍是 mm/dd/yyyy）；"
-            "格式变了而代码照旧 strftime，会静默地排到**另一个日子**。"
-            % (date_text, actual_date))
+            "排期控件配不成对：日期框 %d 个、时间控件 %d 个。"
+            "\n  每个渠道应当各有一套（Facebook 一套、Instagram 一套）。"
+            "\n  **在这里停下**，不去猜哪个日期框配哪个时间控件 ——"
+            "配错的后果是某个渠道被排到别的时刻，而那种错没人会立刻发现。"
+            % (len(date_inputs), len(groups)))
 
-    # ---- 时刻。三个 spinbutton：minutes / meridiem 有名字，小时靠排除法 ----
-    group = locator_for(page, "schedule_time_group").first
-    await group.wait_for(state="visible", timeout=_ms(timeout))
+    date_text = local.strftime("%m/%d/%Y")
+    hour12 = local.hour % 12 or 12
+    meridiem = "AM" if local.hour < 12 else "PM"
+    readbacks: list[str] = []
+    for index, (date_input, group) in enumerate(zip(date_inputs, groups), 1):
+        await date_input.wait_for(state="visible", timeout=_ms(timeout))
+        await group.wait_for(state="visible", timeout=_ms(timeout))
+        where = "第 %d/%d 组排期控件" % (index, len(groups))
+
+        # ---- 日期。placeholder 是 mm/dd/yyyy（dump 第 26 条），所以是美式格式 ----
+        await _type_into(page, date_input, date_text, timeout=timeout)
+        actual_date = (await date_input.input_value()).strip()
+        if not _same_date(actual_date, local):
+            raise PublishStepError(
+                "%s的日期回读对不上：期望 %s，UI 上是 %r。"
+                "\n  ⚠️ 先怀疑**日期格式变了**（placeholder 应当仍是 mm/dd/yyyy）；"
+                "格式变了而代码照旧 strftime，会静默地排到**另一个日子**。"
+                % (where, date_text, actual_date))
+
+        rendered = await _set_one_time(
+            page, group, hour12, local.minute, meridiem,
+            timeout=timeout, where=where)
+        readbacks.append("%s %s" % (actual_date, rendered))
+
+    # ⚠️ **两个时刻必须一起打。** UI 上显示的是本机时间，而人心里想的是受众那边
+    # 的时间——只打前者，他会以为排错了；只打后者，他核对不了屏幕上那一行。
+    return "UI 显示 %s（%s）＝ 目标 %s" % (
+        " ／ ".join(readbacks), zone.key, when.isoformat())
+
+
+async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
+                        *, timeout: float, where: str) -> str:
+    """把一组「时 : 分 AM/PM」写好并回读。返回 UI 渲染出来的那一行。
+
+    ⛔ **小时用两种写法依次试**（``1`` 和 ``01``）：分段时间输入通常按
+    **固定两位**消化数字并自动跳到下一格，只给一位时它可能还在等第二位，
+    也可能把新数字追加到旧值后面（CR-72 就是这么把 1 变成 11 的）。
+    哪种对只有真机知道，所以两种都试，**每种都当场回读**。
+    """
+    # ---- 三个 spinbutton：minutes / meridiem 有名字，小时靠排除法 ----
     spins = await group.get_by_role("spinbutton").all()
     labels = [(await item.get_attribute("aria-label") or "").strip()
               for item in spins]
@@ -706,49 +853,90 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
     # 然后在 labels.index("meridiem") 上抛 ValueError —— 那是个看不懂的错。
     if len(spins) != 3 or len(unnamed) != 1 or not known.issubset(set(labels)):
         raise PublishStepError(
-            "时间控件里的 spinbutton 不是「小时 + minutes + meridiem」三个"
-            "（实际 %d 个，aria-label = %r）。\n"
-            "  小时那个 G1 没录到名字，本来是靠排除法定位的"
-            "（缺口 composer_hours_spinbutton）；\n"
-            "  个数一变这条推断就不成立，**所以在这里停下**，"
-            "不去猜哪个是小时。" % (len(spins), labels))
+            "%s里的 spinbutton 不是「小时 + minutes + meridiem」三个"
+            "（实际 %d 个，aria-label = %r）。"
+            "\n  小时那个 G1 没录到名字，本来是靠排除法定位的"
+            "（缺口 composer_hours_spinbutton）；"
+            "\n  个数一变这条推断就不成立，**所以在这里停下**，"
+            "不去猜哪个是小时。" % (where, len(spins), labels))
 
-    hour12 = local.hour % 12 or 12
-    meridiem = "AM" if local.hour < 12 else "PM"
-    await _type_into(page, unnamed[0], str(hour12), timeout=timeout)
-    minutes = spins[labels.index(COMPOSER["schedule_minutes"].name)]
-    await _type_into(page, minutes, "%02d" % local.minute, timeout=timeout)
+    hours = unnamed[0]
+    minutes_input = spins[labels.index(COMPOSER["schedule_minutes"].name)]
     meridiem_input = spins[labels.index(COMPOSER["schedule_meridiem"].name)]
-    await _type_into(page, meridiem_input, meridiem, timeout=timeout)
+    rendered = ""
+    for hour_text in (str(hour12), "%02d" % hour12):
+        await _type_into(page, hours, hour_text, timeout=timeout)
+        await _type_into(page, minutes_input, "%02d" % minute, timeout=timeout)
+        await _type_into(page, meridiem_input, meridiem, timeout=timeout)
+        rendered = (await group.inner_text() or "").replace(_ZWSP, "").strip()
+        if _same_time(rendered, hour12, minute, meridiem):
+            return rendered
 
-    rendered = (await group.inner_text() or "").replace(_ZWSP, "").strip()
-    if not _same_time(rendered, hour12, local.minute, meridiem):
-        raise PublishStepError(
-            "时刻回读对不上：期望 %d : %02d %s，UI 上是 %r。"
-            % (hour12, local.minute, meridiem, rendered))
-    # ⚠️ **两个时刻必须一起打。** UI 上显示的是本机时间，而人心里想的是受众那边
-    # 的时间——只打前者，他会以为排错了；只打后者，他核对不了屏幕上那一行。
-    return "UI 显示 %s %s（%s）＝ 目标 %s" % (
-        actual_date, rendered, zone.key, when.isoformat())
+    # 只报合成串看不出是哪一格坏的（CR-72 就为此多花了一轮真机），
+    # 所以把三个 input 各自的当前值一并打出来。
+    detail = []
+    for name, item in (("小时", hours), ("分钟", minutes_input),
+                       ("AM/PM", meridiem_input)):
+        detail.append("%s=%r" % (name, await _field_value(item)))
+    raise PublishStepError(
+        "%s的时刻回读对不上：期望 %d : %02d %s，UI 上是 %r（1 位与 2 位写法都试过了）。"
+        "\n  逐字段当前值：%s"
+        % (where, hour12, minute, meridiem, rendered, "、".join(detail)))
 
 
-async def _type_into(page, target, value: str, *,
-                     timeout: float = DEFAULT_UI_TIMEOUT) -> None:
-    """选中全部再逐字符输入；对不上就退而用 fill() 再试一次。
+async def _field_value(target) -> str | None:
+    """读受控输入的当前值；不是 input 元素就返回 None（表示"读不到"）。"""
+    try:
+        return (await target.input_value()).strip()
+    except Exception:                             # noqa: BLE001 - 非 input 元素
+        return None
 
-    为什么不直接 ``fill()``：这些是 React 受控输入，实测形态未知。
-    为什么要有退路：两条路都试过还不对，才是真的不对——
-    **单一手段失败就报错，会把"手段不合适"报成"环境坏了"。**
+
+async def _clear_field(page, target, *, timeout: float) -> None:
+    """把字段真的清空。
+
+    ⛔ **不要退回"只按 Ctrl+A 然后直接打字"。** 那等于假设 Ctrl+A 一定选中
+    当前字段的内容 —— Business Suite 的分段时间输入上**这个假设不成立**
+    （CR-72：旧值 `1` 上再敲 `1`，得到的是 `11`，排到了 11:00 AM）。
+    所以这里清完要**回读确认真的空了**，不空就按 End + 退格兜底。
     """
     await target.click(timeout=_ms(timeout))
     await page.keyboard.press("Control+A")
-    await page.keyboard.type(value)
-    try:
-        if (await target.input_value()).strip().upper() == value.strip().upper():
-            return
-    except Exception:                             # noqa: BLE001 - 非 input 元素
+    await page.keyboard.press("Delete")
+    current = await _field_value(target)
+    if current is None or not current:
         return
+    # Ctrl+A 被页面自己的快捷键吃掉时的退路：光标移到末尾逐个退格。
+    await page.keyboard.press("End")
+    for _ in range(12):
+        current = await _field_value(target)
+        if current is None or not current:
+            return
+        await page.keyboard.press("Backspace")
+
+
+async def _type_into(page, target, value: str, *,
+                     timeout: float = DEFAULT_UI_TIMEOUT) -> str | None:
+    """把值写进 React 受控输入。返回最终读到的值（不是 input 元素则 ``None``）。
+
+    两条路依次试：**清空 → 打字 → 回读**；对不上再 ``fill()`` → 回读。
+    为什么不直接 ``fill()``：这些是 React 受控输入，实测形态未知。
+    为什么要有退路：**单一手段失败就报错，会把"手段不合适"报成"环境坏了"。**
+
+    ⛔ **这里不做对错判定**，只负责"尽力写进去并把结果如实交出来"。
+    判定留给调用方的**语义**检查（日期用 :func:`_same_date`、
+    时刻用 :func:`_same_time`）—— UI 合法地把 ``9`` 显示成 ``09``
+    并不是错误，用裸字符串相等去判会把它误报成故障。
+    """
+    want = value.strip().upper()
+    await _clear_field(page, target, timeout=timeout)
+    await page.keyboard.type(value)
+    got = await _field_value(target)
+    if got is None or got.upper() == want:
+        # None = 不是 input，读不到值。这里不假装验过，交给调用方的回读闸。
+        return got
     await target.fill(value, timeout=_ms(timeout))
+    return await _field_value(target)
 
 
 def _same_date(rendered: str, local: datetime) -> bool:
@@ -1078,6 +1266,45 @@ async def _readback_screenshot(page, path: Path | None,
     return str(path)
 
 
+async def _entries_when_ready(page, spec: EvidenceSignal, role: str, *,
+                              timeout: float) -> list:
+    """等到日历里**真的出现能解析出时刻的条目**再返回。
+
+    ⛔ **不要退回"就绪信号一出现就立刻读一次"。**
+    2026-09-01 真机实测（CR-75）：``planner_loaded_signal`` 是**月份 heading**，
+    它在日历数据**还在转圈**的时候就已经渲染好了 —— 失败截图上
+    `Planner` 标题、`September 2026`、`Week`/`Month` 全在，中间一个大转圈。
+    那一刻页面上的 ``link`` 全是导航和侧栏（下游那句注释早就写着这件事），
+    于是刚刚提交成功的帖子被判成"回读不到"，落成 ``submitted_unverified``。
+
+    ⚠️ **同一个函数也给提交前的基线用，那一侧更危险**：把"还在加载"误读成
+    "远端没有同槽卡片"，等于把防重复发布的那道闸悄悄打开。
+
+    判据用的是**已录证的 ``datetime_regex``**，不是新的选择器：
+    能从可访问名里解析出时刻的 link 才算日历条目。超时后原样返回当下读到的
+    （通常是纯导航 link），由调用方按内容筛出零条 —— 空日历仍然读作空。
+    """
+    try:
+        pattern = re.compile(spec.attributes.get("datetime_regex") or "")
+    except re.error:
+        pattern = None
+    budget = min(float(timeout), _PLANNER_ENTRY_BUDGET)
+    deadline = time.monotonic() + budget
+    cards: list = []
+    while True:
+        cards = await page.get_by_role(role).all()
+        if pattern is None:
+            if cards:
+                return cards
+        else:
+            for card in cards:
+                if pattern.search(await _node_text(card) or ""):
+                    return cards
+        if time.monotonic() >= deadline:
+            return cards
+        await asyncio.sleep(0.5)
+
+
 async def _planner_cards(page, spec: EvidenceSignal, *, timeout: float,
                          loaded_spec: EvidenceSignal | None,
                          empty_spec: EvidenceSignal | None):
@@ -1094,7 +1321,7 @@ async def _planner_cards(page, spec: EvidenceSignal, *, timeout: float,
     if loaded_spec is not None:
         await _wait_for_signal(page, loaded_spec, timeout)
     role = spec.attributes.get("entry_role") or spec.role
-    cards = await page.get_by_role(role).all()
+    cards = await _entries_when_ready(page, spec, role, timeout=timeout)
     if cards:
         return cards
     if empty_spec is not None:

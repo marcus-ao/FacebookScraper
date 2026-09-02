@@ -127,6 +127,9 @@ class ScheduleWindow:
     probe_dump: str
     min_ahead: timedelta
     max_ahead: timedelta
+    # UI 时区。**跨月判定只能在这个时区里做**，所以它属于"窗口"本身，
+    # 不能在校验时临时去读全局 config —— 注入窗口的调用方必须把它一起说清。
+    ui_timezone: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.probe_dump, str) or not self.probe_dump.strip():
@@ -138,6 +141,8 @@ class ScheduleWindow:
             raise ValueError("定时窗口下限不得为负数")
         if self.max_ahead < self.min_ahead:
             raise ValueError("定时窗口上限不得早于下限")
+        if not isinstance(self.ui_timezone, str) or not self.ui_timezone.strip():
+            raise ValueError("定时窗口必须写明 UI 时区；跨月上限只能在 UI 时区里判")
 
 
 @dataclass(frozen=True)
@@ -374,12 +379,18 @@ def verified_constraints_from_config(
     data = _validated_probe_dump(())
     observations = data["observations"]
     configured = str(cfg().get("publish", "ui_probe_dump", ""))
+    ui_timezone = str(cfg().get("publish", "ui_timezone", "") or "").strip()
+    if not ui_timezone:
+        raise ComposeError(
+            "[publish].ui_timezone 为空；跨月排期上限只能在 UI 时区里判，"
+            "不填就没法确定排期落在 composer 日历的哪个月")
     window = ScheduleWindow(
         configured,
         timedelta(seconds=_parse_probe_number(
             observations, "schedule_min_ahead_seconds", integer=True)),
         timedelta(seconds=_parse_probe_number(
             observations, "schedule_max_ahead_seconds", integer=True)),
+        ui_timezone,
     )
     # ``platform`` 是来源平台，不是发布目标。当前 composer 默认同时勾选 FB+IG，
     # 代码也故意不操作渠道控件；所以即使 canonical 来源是 Facebook，真实提交仍
@@ -816,6 +827,33 @@ def _validate_instagram(post_id: str, text: str,
                            limits.probe_dump))
 
 
+def _validate_schedule_month(post_id: str, scheduled_at: datetime,
+                             now: datetime, ui_timezone: str) -> None:
+    """composer 的日期选择器**不允许跨月**（2026-09-01 用户在真实 UI 上实测）。
+
+    ⚠️ **这条闸没法用 ``ScheduleWindow`` 的固定时长表达**，所以它单独存在：
+    上限不是"多少天以内"，而是一个**日历边界**。9 月 1 日能排 29 天，
+    9 月 28 日只剩 2 天 —— 同一个 ``max_ahead`` 在月初太松、在月末太紧。
+    dump 里那个 31 天只是绝对天花板，真正的判据是这里。
+
+    ⚠️ **必须在 UI 时区里判**，不是柏林、也不是 UTC。日期选择器画的是
+    发帖设备本机（``[publish].ui_timezone``）的日历；德国 10-01 00:00 在
+    美西还是 09-30，两边**分属不同的月**。
+    """
+    from publish.business_suite import resolve_ui_timezone
+
+    zone = resolve_ui_timezone(ui_timezone)
+    target = scheduled_at.astimezone(zone)
+    today = now.astimezone(zone)
+    if (target.year, target.month) != (today.year, today.month):
+        raise _fail(
+            post_id,
+            "排期在 UI 时区 %s 下落在 %04d-%02d，而 composer 的日期选择器只能选"
+            "当月 %04d-%02d —— 跨月排期在 UI 上根本点不出来。"
+            "改排到本月内，或等进入目标月份再发。"
+            % (zone.key, target.year, target.month, today.year, today.month))
+
+
 def _validate_schedule(post_id: str, scheduled_at: datetime,
                        window: ScheduleWindow, now: datetime) -> None:
     _aware(now, "now")
@@ -825,6 +863,7 @@ def _validate_schedule(post_id: str, scheduled_at: datetime,
         raise _fail(post_id, "排期早于 G1 实测 UI 下限（%s）" % window.probe_dump)
     if delta > window.max_ahead:
         raise _fail(post_id, "排期晚于 G1 实测 UI 上限（%s）" % window.probe_dump)
+    _validate_schedule_month(post_id, scheduled_at, now, window.ui_timezone)
 
 
 def compose_post(post_id: str, scheduled_at: datetime, *,

@@ -116,11 +116,13 @@ async def _execute_unlocked(
 
         step = "G2 登录态与目标主页"
         print("[2/7] 核对登录态与目标主页 …")
+        # ⚠️ **这里故意不传 account_spec。** 见下面 [3/7] 之后那一段：
+        # 已录证的那条 heading 要等 FB 预览渲染出内容才存在，空 composer 上没有。
         account = await bs.ensure_logged_in(
             page,
             page_name=str(c.get("publish", "facebook_page_name", "") or ""),
             instagram_account=str(c.get("publish", "instagram_account", "") or ""),
-            account_spec=account_spec,
+            account_spec=None,
             timeout=timeout)
         notes.extend(account.notes)
         for note in account.notes:
@@ -132,6 +134,35 @@ async def _execute_unlocked(
         notes.extend(upload_notes)
         for note in upload_notes:
             print("    " + note)
+
+        if account_spec is not None:
+            # ⚠️⚠️ **严格账号核对必须放在上传之后，这不是随手挪的。**
+            #
+            # 已录证的 `composer_account_context` 是 FB 预览里那条
+            # `heading 'Neakasa Deutschland'`，而**预览面板要有内容才渲染它**：
+            # dump 里它第一次出现在 evidence_order=31，紧跟在
+            # `Add photo/video`（交互 #12，ord=29）之后。空 composer 上
+            # 等 30 秒也等不到 —— 2026-09-01 第一次 G8 真机跑就是这样失败的。
+            #
+            # 挪到上传之后**没有放松这道闸**：
+            #   - 上传素材到 composer **不会发布任何东西**；
+            #   - 闸仍然在**点提交之前**，发错主页依旧发不出去；
+            #   - 而且此刻读到的就是"即将提交的这一屏"，比空屏时更有说服力。
+            # ⛔ 不要为了"更早拦住"把它挪回上传前 —— 那里没有证据可读。
+            step = "G2b 严格核对目标主页（预览渲染后）"
+            print("    核对目标主页（FB 预览渲染后才读得到）…")
+            strict = await bs.ensure_logged_in(
+                page,
+                page_name=str(c.get("publish", "facebook_page_name", "") or ""),
+                instagram_account=str(
+                    c.get("publish", "instagram_account", "") or ""),
+                account_spec=account_spec,
+                timeout=timeout)
+            account = strict
+            for note in strict.notes:
+                if note not in notes:
+                    notes.append(note)
+                    print("    " + note)
 
         step = "G4 文案填写"
         print("[4/7] 填正文并逐字符回读 …")
