@@ -2031,7 +2031,8 @@ class FakeKeyboard:
 class FakeElement:
     def __init__(self, role, name="", *, aria_label=None, value="", text="",
                  checked=None, children=(), on_type=None, render=None,
-                 on_key_type=None, segmented=False, deferred=False):
+                 on_key_type=None, segmented=False, deferred=False,
+                 checked_lag=0):
         self.role = role
         self.name = name
         self.aria_label = aria_label
@@ -2046,6 +2047,9 @@ class FakeElement:
         self.segmented = segmented
         # 打开定时开关之后才异步渲染出来的元素（CR-74）。
         self.deferred = deferred
+        # 开关状态回来之前要被读几次（CR-76）。0 = 立刻翻（旧夹具的假设）。
+        self.checked_lag = checked_lag
+        self.pending_checked = None
         self.render = render
         self.clicks = 0
 
@@ -2103,10 +2107,21 @@ class FakeLocator:
         self.page.focused = element
         self.page.select_all = False
         if element.role == "switch":
-            element.checked = not element.checked
+            # ⚠️ React 受控开关的状态是**异步**回来的（CR-76）：点击返回时
+            # aria-checked 往往还没翻。`checked_lag` 就是"还要读几次才翻"。
+            if element.checked_lag > 0:
+                element.pending_checked = not element.checked
+            else:
+                element.checked = not element.checked
 
     async def is_checked(self):
-        return bool(self._one().checked)
+        element = self._one()
+        if element.pending_checked is not None:
+            element.checked_lag -= 1
+            if element.checked_lag <= 0:
+                element.checked = element.pending_checked
+                element.pending_checked = None
+        return bool(element.checked)
 
     async def input_value(self):
         return self._one().value
@@ -2237,11 +2252,12 @@ def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
                   caption_hook=None, chooser=None, date_hook=None,
                   caption_key_hook=None, drop_newlines=False,
                   segmented_time=False, stale_hour="1", channels=1,
-                  deferred_schedule=False):
+                  deferred_schedule=False, switch_lag=0):
     caption = FakeElement("combobox", aria_label=CAPTION_NAME,
                           on_type=caption_hook, on_key_type=caption_key_hook)
     add_media = FakeElement("button", "Add photo/video")
-    switch = FakeElement("switch", aria_label="Set date and time", checked=False)
+    switch = FakeElement("switch", aria_label="Set date and time", checked=False,
+                         checked_lag=switch_lag)
 
     def render_time(element):
         values = [item.value for item in element.children]
@@ -2275,6 +2291,7 @@ def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
     page.block_insert_drops_newlines = drop_newlines
     if deferred_schedule:
         page.deferred_elements = list(dates) + list(groups)
+    page.switch = switch
     return page, {"caption": caption, "add_media": add_media, "switch": switch,
                   "date": dates[0], "group": groups[0], "spins": spin_sets[0],
                   "dates": dates, "groups": groups, "spin_sets": spin_sets}
@@ -2607,6 +2624,43 @@ async def planner_empty_stays_empty():
 check(not any("September" in item
               for item in asyncio.run(planner_empty_stays_empty())),
       "真的空日历仍然读作空：等满预算后原样返回，由调用方按内容筛出零条")
+
+# ---- CR-76：React 受控开关的 aria-checked 是异步翻的，点击返回 ≠ 已打开 ----
+lag_readback, lag_parts = asyncio.run(schedule(
+    datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc), switch_lag=3))
+check(lag_parts["switch"].checked and lag_parts["switch"].clicks == 1,
+      "G5 定时开关状态晚几拍才翻时**等它翻**，不是立刻判失败；"
+      "而且只点了 %d 次 —— 连点会把已经打开的又关回去"
+      % lag_parts["switch"].clicks)
+
+
+async def switch_never_turns_on():
+    page, parts = make_composer()
+    parts["switch"].checked = False
+
+    async def dead_click(timeout=None):
+        parts["switch"].clicks += 1        # 点了，但永远不翻
+    original = FakeLocator.click
+    try:
+        FakeLocator.click = lambda self, timeout=None: dead_click(timeout)
+        await set_schedule(page, WHEN, ui_timezone="Europe/Berlin",
+                           verify_device=False)
+    except PublishStepError as exc:
+        return str(exc), parts["switch"].clicks
+    finally:
+        FakeLocator.click = original
+    return "", parts["switch"].clicks
+
+
+dead_msg, dead_clicks = asyncio.run(switch_never_turns_on())
+check("没有被打开" in dead_msg and "aria-checked" in dead_msg,
+      "G5 开关真的打不开时失败闭合，并把 aria-checked 一起打出来供排查")
+check(dead_clicks == 2,
+      "开关打不开时**只补点一次**就放弃（实得 %d 次）——"
+      "无限重试会在别的变体上把开关来回拨" % dead_clicks)
+
+check("_SWITCH_ON_BUDGET" in inspect.getsource(bs._switch_is_on),
+      "开关等待预算是有上界的常量，不是整个 ui_timeout")
 
 check("_PLANNER_ENTRY_BUDGET" in inspect.getsource(bs._entries_when_ready),
       "等待预算是有上界的常量，不是整个 ui_timeout —— "

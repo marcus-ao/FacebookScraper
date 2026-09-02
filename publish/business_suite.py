@@ -48,6 +48,9 @@ DEFAULT_UI_TIMEOUT = 30.0
 # 等日历条目渲染出来的预算（秒）。空日历会真的等满这一段，所以不设成整个
 # ui_timeout —— 那会让每次发布都先干等半分钟；20 秒是实测加载时延的富余量。
 _PLANNER_ENTRY_BUDGET = 20.0
+# 定时开关点下去之后，等它的 aria-checked 真的翻过来的预算（秒）。
+# React 受控开关的状态是异步回来的；点击返回 ≠ 已经打开。
+_SWITCH_ON_BUDGET = 8.0
 # 页面可用性自检要短，因为它就是用来快速判定"这一页是不是 CR-64 那种坏页"的。
 PAGE_HEALTH_TIMEOUT = 8.0
 # 上传后给 UI 的沉淀窗口。**不是固定 sleep**：到点就走，不阻塞成功路径。
@@ -712,6 +715,30 @@ def assert_ui_timezone_is_device(zone: ZoneInfo, when: datetime) -> None:
         % (zone.key, when.isoformat(), ui_offset, device_offset))
 
 
+async def _switch_is_on(switch, *, timeout: float, attempts: int = 2) -> bool:
+    """把定时开关打开，并**等到回读真的变成开**。
+
+    ⛔ **不要退回"点一下就立刻 is_checked()"。** 2026-09-01 真机实测（CR-76）：
+    那样写在同一台机器上有时过、有时不过 —— 它是个竞态，之前只是撞对了。
+    React 受控开关的 `aria-checked` 是状态回来之后才翻的，点击返回时往往还没翻。
+
+    ⚠️ **先等再补点，顺序不能反。** 直接连点两下会把已经打开的开关又关回去，
+    而"关回去"的表现和"根本没打开"一模一样 —— 那种错最难查。
+    """
+    for attempt in range(max(1, attempts)):
+        if await switch.is_checked():
+            return True
+        await switch.click(timeout=_ms(timeout))
+        deadline = time.monotonic() + min(float(timeout), _SWITCH_ON_BUDGET)
+        while True:
+            if await switch.is_checked():
+                return True
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.25)
+    return await switch.is_checked()
+
+
 async def _settle_pairs(date_locator, group_locator, *, timeout: float) -> None:
     """等到两组定位的条数**稳定且相等**。
 
@@ -762,12 +789,15 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
 
     switch = locator_for(page, "schedule_switch").first
     await switch.wait_for(state="visible", timeout=_ms(timeout))
-    if not await switch.is_checked():
-        await switch.click(timeout=_ms(timeout))
-    if not await switch.is_checked():
+    if not await _switch_is_on(switch, timeout=timeout, attempts=2):
         raise PublishStepError(
-            "点了 %r 但它没有被打开（回读仍是关）。"
-            % COMPOSER["schedule_switch"].name)
+            "点了 %r 但它没有被打开（等了 %.0f 秒，回读仍是关，重试过一次）。"
+            "\n  aria-checked=%r"
+            "\n  ⚠️ 先怀疑**点到的不是那个开关**：Business Suite 的 composer "
+            "有多个变体，`Schedule` 这一块下面还有 `Share to`（Facebook story / "
+            "Threads）等别的开关。确认 role=switch 且名字仍是这一个。"
+            % (COMPOSER["schedule_switch"].name, _SWITCH_ON_BUDGET,
+               await switch.get_attribute("aria-checked")))
 
     # ---- 每个渠道一套排期控件。**不是一套。** ----
     # ⚠️⚠️ 2026-09-01 真机实测（CR-73）：Schedule 那一块下面有
