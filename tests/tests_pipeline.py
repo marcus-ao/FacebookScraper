@@ -20,7 +20,7 @@ from core import paid_requests  # noqa: E402
 
 force_utf8()
 
-import pipeline as P  # noqa: E402
+from pipeline import cli as P  # noqa: E402
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK, DAILY_TASK,  # noqa: E402
                             NS, plan)
 

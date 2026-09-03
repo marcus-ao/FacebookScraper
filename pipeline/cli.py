@@ -1,11 +1,11 @@
 r"""L 组：把四个阶段的真相源重新对账。**不建立发布任务队列。**
 
-    pipeline.py status        各阶段积压 + 最近一次成功 + 本月花费
-    pipeline.py preflight     上线预检：还差什么 + 激活后每天会发生什么
-    pipeline.py check-alive   死人开关：太久没有成功运行就告警
-    pipeline.py activate      G8 通过后原子记录“只处理此后新帖”的边界
-    pipeline.py run           manual/assisted 对账并从真相源恢复中断
-    pipeline.py approve       批量确认待处理项，并在确认后逐篇提交
+    python -m pipeline status        各阶段积压 + 最近一次成功 + 本月花费
+    python -m pipeline preflight     上线预检：还差什么 + 激活后每天会发生什么
+    python -m pipeline check-alive   死人开关：太久没有成功运行就告警
+    python -m pipeline activate      G8 通过后原子记录“只处理此后新帖”的边界
+    python -m pipeline run           manual/assisted 对账并从真相源恢复中断
+    python -m pipeline approve       批量确认待处理项，并在确认后逐篇提交
 
 前两个只读子命令**零网络、零费用、零写盘**（`check-alive` 唯一的副作用是
 `core.notify` 那条告警，它本来就要落 `state/alerts.log`）。
@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                         # noqa: E402
@@ -42,7 +42,7 @@ from core.console import force_utf8                 # noqa: E402
 from core.notify import notify                      # noqa: E402
 from core.store import Archive, ArchivePathError    # noqa: E402
 import translate as translation                     # noqa: E402
-from pipeline_settings import (AUTONOMY_LEVELS,      # noqa: E402
+from pipeline.settings import (AUTONOMY_LEVELS,      # noqa: E402
                                PIPELINE_CONFIG_KEYS,
                                PipelineConfigError,
                                pipeline_settings)
@@ -52,8 +52,8 @@ from publish.compose import (                        # noqa: E402
     _PROBE_REQUIRED_OBSERVATIONS as required)
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
                             DAILY_TASK)
-import pipeline_assisted                             # noqa: E402
-import pipeline_assisted as assisted                 # noqa: E402
+from pipeline import engine as pipeline_assisted     # noqa: E402
+from pipeline import engine as assisted              # noqa: E402
 
 
 
@@ -274,7 +274,7 @@ def month_spend(dirs: list[Path], month: str,
         problems.append("[translate] 配置不可用，翻译花费未计入（%s）" % exc)
         ts = None
     try:
-        # 延迟导入：它会拉起 Pillow。`pipeline.py status` 是零网络的只读命令，
+        # 延迟导入：它会拉起 Pillow。`python -m pipeline status` 是零网络的只读命令，
         # 常用来"看一眼积压"，不该为此付 Pillow 的启动开销。
         import localize_images as image_de
         isettings = image_de.Settings()
@@ -729,7 +729,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         for line in blockers:
             print("    - %s" % line)
     elif activated is None:
-        print("  可以了：python pipeline.py activate --g8-verified")
+        print("  可以了：python -m pipeline activate --g8-verified")
     elif settings["autonomy"] == "manual":
         print("  已激活。把 config.toml 的 [pipeline].autonomy 改成 assisted。")
     else:
@@ -879,7 +879,7 @@ def main(argv=None) -> int:
             print("[!] G8 验收证据不成立，拒绝激活：")
             for line in blockers:
                 print("    - %s" % line)
-            print("    想看完整清单：python pipeline.py preflight")
+            print("    想看完整清单：python -m pipeline preflight")
             return 2
         try:
             when = assisted.activate(

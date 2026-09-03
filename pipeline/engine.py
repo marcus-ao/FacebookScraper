@@ -24,7 +24,7 @@ import translate as translation
 from core.paid_model import FileLock
 from core import paid_model
 from core import imagehash
-from pipeline_settings import pipeline_settings
+from pipeline.settings import pipeline_settings
 import localize_images
 import localize_images as image_de
 from core import paid_requests
@@ -504,7 +504,7 @@ def _approve_hints(open_rows: list[dict]) -> str:
     if ready:
         # item_id 是 `kind-hash20`、ref 是 `platform:post_id`，都只含
         # [a-z0-9.:-]，cmd.exe 下不需要引号 —— 加了反而会被 html.escape 成 &quot;。
-        command = ("python pipeline.py approve"
+        command = ("python -m pipeline approve"
                    + "".join(" --item-id %s" % row["item_id"] for row in ready))
         cards = []
         for row in ready:
@@ -536,7 +536,7 @@ def _approve_hints(open_rows: list[dict]) -> str:
         for row in similar:
             refs = list(row.get("source_refs") or [])
             lines.append(
-                "python pipeline.py approve --item-id %s --select-source %s=%s"
+                "python -m pipeline approve --item-id %s --select-source %s=%s"
                 % (row["item_id"], row["item_id"], refs[0] if refs else "平台:帖子ID"))
             if len(refs) > 1:
                 lines.append("#   另一个版本是：%s" % refs[1])

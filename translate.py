@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 # `run_translate.bat` 用的是 `python translate.py`，于是本文件的模块名是
-# `__main__`。上层模块（pipeline_assisted 等）写的是 `import translate`，
+# `__main__`。上层模块（pipeline.engine 等）写的是 `import translate`，
 # 那会**再加载一份**本文件：两份 Settings、两份模块级常量、两份锁对象。
 # 先把自己登记成正规名字，让后来的 import 拿到同一个对象。
 if __name__ == "__main__":                         # pragma: no cover
@@ -1018,7 +1018,7 @@ def main(argv=None) -> int:
 
     # 组装根：预算策略住在 pipeline_assisted（它才同时知道账本与两边的计价
     # 公式）。core/ 不许知道这件事，所以由这里注入 —— 见 RequestController。
-    from pipeline_assisted import budget_preflight   # noqa: PLC0415
+    from pipeline.engine import budget_preflight   # noqa: PLC0415
 
     s = Settings()
     if a.check:

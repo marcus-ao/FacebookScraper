@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from core import paid_requests as P
 from core.console import force_utf8
-import pipeline_assisted as A
+from pipeline import engine as A
 import translate as T
 
 force_utf8()

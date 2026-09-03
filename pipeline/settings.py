@@ -2,11 +2,11 @@ r"""`[pipeline]` 配置的严格读取。**这个模块只认识 config.toml，�
 
 它被单独拆出来，是因为有三个不同高度的调用方都要它：
 
-- ``pipeline.py``（L 组 CLI）—— 最顶层，读 autonomy / dead_man_days；
-- ``pipeline_assisted.py``（执行引擎）—— 预算判据要读日/月上限；
+- ``pipeline/cli.py``（L 组 CLI）—— 最顶层，读 autonomy / dead_man_days；
+- ``pipeline/engine.py``（执行引擎）—— 预算判据要读日/月上限；
 - 各阶段 CLI 的 ``main()`` 组装 ``RequestController`` 时经由上面那条。
 
-放回 ``pipeline.py`` 会让引擎反过来 import CLI，那就是一条环。
+放回 ``cli.py`` 会让引擎反过来 import CLI，那就是一条环。
 放进 ``core/config.py`` 又不合适：那里是通用配置层，不该知道 `[pipeline]`
 这一段的业务语义。所以它自己成一层：**只依赖 core.config，谁都能用。**
 """
@@ -23,7 +23,7 @@ from core.config import cfg
 # 表外的键报错，表里标 False 的键在 status 里显式说明"还没接上"。
 PIPELINE_CONFIG_KEYS: dict[str, bool] = {
     "autonomy": True,
-    "dead_man_days": True,         # ← pipeline.py 的 check-alive 就在消费它
+    "dead_man_days": True,         # ← cli.py 的 check-alive 就在消费它
     "monthly_budget_usd": True,
     "daily_budget_usd": True,
 }
@@ -50,7 +50,7 @@ def pipeline_settings(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         raise PipelineConfigError(
             "[pipeline] 有代码不认识的键：" + "、".join(unknown)
             + "\n    （拼错的键会静默失效，所以这里直接拒绝；"
-              "真要加新键，请同时改 pipeline_settings.py 的 PIPELINE_CONFIG_KEYS）")
+              "真要加新键，请同时改 pipeline/settings.py 的 PIPELINE_CONFIG_KEYS）")
     missing = sorted(set(PIPELINE_CONFIG_KEYS) - set(raw))
     if missing:
         raise PipelineConfigError(

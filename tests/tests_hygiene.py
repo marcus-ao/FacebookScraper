@@ -45,9 +45,8 @@ def check(cond, msg):
 
 
 # 生产代码（不含测试、不含一次性脚手架）
-PROD_DIRS = ("core", "routes", "publish")
-PROD_ROOT_FILES = ("pipeline.py", "pipeline_assisted.py",
-                   "translate.py", "localize_images.py")
+PROD_DIRS = ("core", "routes", "publish", "pipeline")
+PROD_ROOT_FILES = ("translate.py", "localize_images.py")
 
 
 def python_files(*, include_tests: bool, include_scaffolding: bool) -> list[Path]:
@@ -445,7 +444,7 @@ for label, kwargs in (
 # 目前允许的两类理由：
 #   - 组装根（main/_cli）；
 #   - 明写 `# 延迟导入：`  开头的注释，说明晚绑定的**代价原因**
-#     （例如 pipeline.py 不想为了看一眼积压就把 Pillow 拉起来）。
+#     （例如 pipeline/cli.py 不想为了看一眼积压就把 Pillow 拉起来）。
 LAZY_REASON = re.compile(r"#\s*延迟导入[：:]")
 
 

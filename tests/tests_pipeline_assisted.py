@@ -13,7 +13,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import pipeline_assisted as A
+from pipeline import engine as A
 from core.config import cfg
 from core.console import force_utf8
 

@@ -37,7 +37,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import pipeline_assisted as A          # noqa: E402
+from pipeline import engine as A          # noqa: E402
 import translate as translation        # noqa: E402
 from core.config import cfg            # noqa: E402
 from core.store import post_dirname    # noqa: E402
@@ -231,7 +231,7 @@ with tempfile.TemporaryDirectory() as folder:
           "每条 ready 都绑定了正文+逐张图片的指纹，排期槽变化不使内容审批失效")
 
     page = (state / A.NEEDS_HUMAN_HTML).read_text(encoding="utf-8")
-    check("pipeline.py approve" in page
+    check("python -m pipeline approve" in page
           and all(item["item_id"] in page for item in ready),
           "needs_human.html 直接给出把这两条一起批准的命令")
     check("Deutscher Text" in page and "e2e-fb" in page and "e2e-ig" in page,
@@ -334,7 +334,7 @@ check(accepts(publish_module.main, submit_argv),
       "approve 的 submit_one 拼的全部参数（含被 SUPPRESS 隐藏的 "
       "--apply-price-map/--source-ref）能被 publish_post.py 接受")
 
-source = (ROOT / "pipeline_assisted.py").read_text(encoding="utf-8")
+source = (ROOT / "pipeline" / "engine.py").read_text(encoding="utf-8")
 check('"--apply-price-map"' in source and '"--source-ref"' in source,
       "submit_one 仍然传 --apply-price-map（否则德语帖会带着美元价发出去）")
 

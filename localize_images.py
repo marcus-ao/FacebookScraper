@@ -1718,7 +1718,7 @@ def main(argv=None) -> int:
         parser.error("--confirm-all-history-cost 只能与 --all-history 同时使用")
     # 组装根：预算策略由 pipeline_assisted 提供，core/ 不许知道 —— 同
     # translate.py::main，理由见 RequestController 的 docstring。
-    from pipeline_assisted import budget_preflight   # noqa: PLC0415
+    from pipeline.engine import budget_preflight   # noqa: PLC0415
 
     settings = Settings()
     if args.check:
