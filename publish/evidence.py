@@ -13,6 +13,20 @@ r"""把 :mod:`publish.selectors` 的每一条定位**回查**到它自称的 pro
 - dump 不在（别人的机器 / CI）→ 只能做结构检查（来源字段填了没）。
 
 **跳过不等于通过**，调用方要把两种结果分开打印。
+
+## 这带来一条刻意接受的边界：自动发布是单机工具
+
+`business_suite.py` 的三道闸一律要求 `passed is True`，而 dump 缺失时本模块
+返回 `None`（跳过）。两者相加的结果是：**换一台机器、或这份 1.97 MB 的 dump
+丢了，`--submit` 就永久失效。**
+
+这是 2026-09-03 用户明确拍板接受的：dump 含真实 Business Suite 的语义快照与
+117 张截图（134 MB），把它连同截图塞进版本库既撑爆仓库、又有截图漏内容的风险；
+而导出脱敏摘要虽然能跨机，却证明不了 final 截图存在，等于把闸调松一档。
+
+代价写在明面上，不留给下一个人自己撞：
+- 错误信息直接给出重录命令（见下面 `validate_v2_dump` / `verify` 的返回文案）；
+- `README.md` 与 `docs/MANUAL_STEPS.md` 都记了"换机 = 必须重录探查"。
 """
 from __future__ import annotations
 
@@ -76,7 +90,11 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
         return None, "没有来源 dump"
     path = Path(dumps_dir) / source_dump
     if not path.is_file():
-        return None, "本机没有 %s（dump 不进版本库）" % source_dump
+        return None, (
+            "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
+            "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+        ) % source_dump
     try:
         stat = path.stat()
         cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
@@ -182,7 +200,11 @@ def verify(spec: Locator, dumps_dir: Path) -> tuple[bool | None, str]:
         return False, "没写来源 dump 或来源交互序号"
     path = Path(dumps_dir) / spec.source_dump
     if not path.is_file():
-        return None, "本机没有 %s（dump 不进版本库）" % spec.source_dump
+        return None, (
+            "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
+            "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+        ) % spec.source_dump
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
