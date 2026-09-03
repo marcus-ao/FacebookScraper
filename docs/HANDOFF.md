@@ -601,8 +601,8 @@ Composer 准备 → 单击提交 → 成功信号 → Planner 回读 → schedul
 | 20 个观察项 | ✅ **全部填完**（2026-09-01 用户实测 14 项） | — |
 | `ui_constraints_verified` | ✅ `true`；`--latest 3 --strict` 实测 2 篇组装成功 | — |
 | 两张业务表 | ✅ 都已填（`price_map` 是**恒等映射**，见 `config.toml` 里的说明） | — |
-| 远端测试排期 | ✅ **用户已手工删除，零残留** | — |
-| **G8** | 🟡 **提交成功、回读没证明**（`submitted_unverified`） | 先 `--mark-not-scheduled` 结转，再重跑一次 |
+| 远端测试排期 | ⚠️ **2026-09-01 22:39 又排了一条**（演示用，见下方 CR-77） | 人工去 Planner 确认后删除，再结转留痕 |
+| **G8** | 🟡 **第八次：提交成功、成功信号不匹配**（`submit_ambiguous`） | 见下方 CR-77；先按事实结转，再重跑 |
 | 幂等复跑 | ⬜ | 拿到 `scheduled` 之后，同项原样重跑，必须零浏览器 |
 | G9 / 计划任务 | ⬜ 仍 `manual`、未激活、未安装 | 拿到 `scheduled` → activate → assisted → 用户决定装不装 |
 
@@ -633,6 +633,41 @@ locator 是惰性的、页面有"骨架好了但数据没好"的中间态。
 每一条都按规矩**先拿掉修复跑一遍确认它真的红**才留下。
 详见 `CODE_REVIEW.md` 第 20~25 节。
 
+### 🧨 CR-77：成功信号**至少有两种变体**，G1 只录到了一种（2026-09-01 22:39 第八次真机）
+
+第八次 G8 跑在另一篇帖子上（`3965025107383038890`，IG），
+`attempt_id = d9853906-57d9-437c-9f71-4ed72d103a81`，排期 `2026-09-09T10:00+02:00`。
+离线闸、G2–G5 回读全过，提交点下去了，然后：
+
+```
+submit_ambiguous · 点击后没有等到已录证的成功信号；绝不自动重试：
+Locator.wait_for: Timeout 30000ms exceeded.
+  - waiting for get_by_role("heading", name="Your post is scheduled").first
+```
+
+**但截图证明帖子其实排上了。** `..._submitted.png` 上是另一个弹窗：
+
+| | |
+|---|---|
+| 代码在等（G1 录到的） | heading `"Your post is scheduled"`（带 Boost 推广模块） |
+| 这一次实际弹出 | heading `"Save time by scheduling another post now"`，按钮 `Maybe later` / `Schedule another post` |
+
+同一张截图上：Facebook 与 Instagram 两栏都停在 `Sep 9, 2026 01:00 AM`，
+`Schedule` 按钮已置灰。**Meta 的提交后弹窗不止一种**，
+`publish_probe_20260901_054226_378622.json` 只录到了其中一种。
+
+⚠️ **不要把这条当成"信号选择器写错了"去修。** 现在的行为是对的 ——
+信号不匹配就报 `submit_ambiguous` 并停止，没有谎报成功。
+要做的是**补录第二种变体**：按 G1 流程再录一次提交，把这个弹窗
+录进 dump，然后让 `probe_signals.py` 从 dump 机械推导出"多选一"的成功信号。
+⛔ 在补录进 dump 之前，不许手写第二个选择器 —— 那就绕过了证据闸。
+
+⚠️ 这条同时说明 **`submit_ambiguous` 的设计是对的**：
+它不是"失败"，是"我不知道"。远端此刻**很可能已经排上**，
+所以既不能自动重试（会排两遍），也不能记成功（可能没排上）。
+只能人工去 Planner 看一眼，然后
+`--mark-scheduled` 或 `--mark-not-scheduled` 结转。
+
 ### ⚠️ 定时上限不是"多少天"，是"本月最后一天"（2026-09-01 实测）
 
 composer 的日期选择器**不允许跨月**。所以：
@@ -646,6 +681,28 @@ composer 的日期选择器**不允许跨月**。所以：
   09-30 —— 写死柏林两个方向都会判错，两边都有断言。
 
 ⛔ 不替用户提交/取消测试排期，不激活，不安装任务。
+
+### 📽 工作区里多了一个 `Demo/`（2026-09-01，客户现场演示用）
+
+`D:\VSCodeWorkspace\Facebook\Demo\` —— **在本仓库之外**，不在 git 里，
+不参与本仓库的任何测试。它只做一件事：**按顺序调用生产命令**，
+一行生产逻辑都没有复制过去。`git status` 不会因为它变脏。
+
+```
+demo.bat <步骤>     00 系统现状 / 01 抓取 / 02 翻译 / 03 起图片任务 /
+                    04 硬闸 / 05 图片揭晓 / 06 组装 / 07 定时发帖 / 08 留痕
+demo.bat board      本地看板（只读归档字节，客户那块屏用）
+demo.bat clear|99   清演示视图 / 连产物一起退回演示前
+```
+
+对本仓库有影响的只有两点，接手时要知道：
+
+1. **第 07 步会真的排帖子**，用的就是 `run_publish_post.bat --submit` 那条路径。
+   上面 CR-77 就是它跑出来的。
+2. **演示会在归档里留下真实产物**：`translated.jsonl` / `images_de.jsonl` /
+   `posts/<帖>/text_de.txt` / `media_de/` 各多几条。
+   `demo.bat 99` 会把演示帖的这些退回去（先备份），
+   但**它不碰 `state/published.jsonl`** —— 留痕只能按事实结转，不能删。
 
 ⚠️ **生产闸现在是开的**：`run_publish_post.bat ... --submit` 会**真的点提交**。
 `scripts\run_probe_signals.bat --status` 一眼看清。

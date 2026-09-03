@@ -42,11 +42,6 @@ def normalized_image_content_type(value: str | None) -> str | None:
     return _IMAGE_MIME_ALIASES.get(value.split(";", 1)[0].strip().lower())
 
 
-def is_image_content_type(value: str | None) -> bool:
-    """兼容旧调用：判断声明的 MIME 是否在静态光栅图片白名单内。"""
-    return normalized_image_content_type(value) is not None
-
-
 def _detected_image_content_type(data: bytes) -> str | None:
     """用文件签名识别允许的图片，避免 CDN/登录墙伪造 Content-Type。"""
     if data.startswith(b"\xff\xd8\xff"):
@@ -108,7 +103,6 @@ class Collector:
         self.hits = 0
         self.statuses: list[tuple[int, str]] = []   # 非 200 的 (状态码, URL)
         self.sources: list[str] = []                # 出过 payload 的接口，供排查
-        self.embedded = 0                           # 其中来自页面内嵌 JSON 的段数
         self._tasks: set[asyncio.Task] = set()
 
     def submit(self, response) -> None:
@@ -164,52 +158,6 @@ class Collector:
             if status in (401, 403, 429):
                 return status, url
         return None
-
-
-# 页面内嵌 JSON 的取用边界。太小的是配置/埋点，取了只是噪声；
-# 总量设上限是因为它会原样进转储文件，而增量每天都跑。
-EMBEDDED_MIN_CHARS = 200
-EMBEDDED_MAX_TOTAL_CHARS = 4 * 1024 * 1024
-
-
-async def harvest_embedded_json(page, limit: int = EMBEDDED_MAX_TOTAL_CHARS) -> list[dict]:
-    """把页面里内嵌的 JSON 数据块也收进来，和拦到的响应放在一起解析。
-
-    **为什么必须有这一步（2026-08-30 实测得来的教训）**：
-    Instagram 主页时间线的**首屏是随 HTML 一起下发的，不走 XHR**。
-    只拦响应的话，增量能看到的全是推荐位——那次实测 39 个候选里只有 1 篇
-    属于本账号，而且比归档里最新的一篇还旧。**而增量要的恰恰是最新那几篇。**
-    这也意味着"多滚几屏"解决不了：往下滚只会拿到更旧的分页。
-
-    这是**纯读已经加载好的 DOM，不发任何额外请求**，
-    与"被动拦截浏览器自己的流量"是同一性质的动作。
-    解析层的 `walk()` 全树搜索 + `partition_by_owner()` 归属过滤本来就能处理
-    这种"结构未知、混着别人内容"的输入，不需要为它写第二套解析。
-    """
-    try:
-        blobs = await page.evaluate(
-            """() => Array.from(document.querySelectorAll(
-                   'script[type="application/json"]'))
-                 .map(s => s.textContent || '')""")
-    except Exception:
-        # 页面已关闭、evaluate 被 CSP 拦下等等。取不到就算了，
-        # 它是补充来源，不该让整次抓取失败。
-        return []
-    out: list[dict] = []
-    total = 0
-    for blob in blobs or []:
-        if not isinstance(blob, str) or len(blob) < EMBEDDED_MIN_CHARS:
-            continue
-        total += len(blob)
-        if total > limit:
-            break
-        try:
-            data = json.loads(blob)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(data, dict):
-            out.append(data)
-    return out
 
 
 async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:

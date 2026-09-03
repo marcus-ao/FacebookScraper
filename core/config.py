@@ -53,10 +53,6 @@ class Config:
     def get(self, section: str, key: str, default=None):
         return self._d.get(section, {}).get(key, default)
 
-    def get_platform(self, section: str, key: str, platform: str, default=None):
-        """按平台取值。写成一个数时两平台通用，写成内联表时各取各的。"""
-        return per_platform(self.get(section, key, None), platform, default)
-
     # ---- 派生路径 ----
     @property
     def archive_dir(self) -> Path:
@@ -117,10 +113,6 @@ class Config:
             "未找到 Chrome。请在 config.toml 的 [chrome].exe 填写完整路径，"
             "或设置环境变量 CHROME_EXE。\n已尝试：\n  " + "\n  ".join(CHROME_CANDIDATES)
         )
-
-
-def is_windows() -> bool:
-    return sys.platform.startswith("win")
 
 
 _cfg: Config | None = None

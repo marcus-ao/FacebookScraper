@@ -62,8 +62,6 @@ class Media:
     local_path: str | None = None
     width: int | None = None
     height: int | None = None
-    # 图内文字，留给下游 OCR 阶段回填
-    ocr_text: str | None = None
 
 
 @dataclass
@@ -673,7 +671,3 @@ class Archive:
         return (new_media >= old_media and new_local >= old_local
                 and (new_media > old_media or new_local > old_local))
 
-    @staticmethod
-    def fingerprint(data: bytes) -> str:
-        """媒体去重用。US/DE 两站同一张图只需处理一次。"""
-        return hashlib.sha256(data).hexdigest()[:16]

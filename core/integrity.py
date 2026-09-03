@@ -80,33 +80,6 @@ def check_continuity(rows: list[dict], gap_days: int) -> list[dict]:
     return gaps
 
 
-def check_quiet(state: dict, platform: str, alert_after: int) -> bool:
-    """连续 alert_after 天零新增即返回 True。
-
-    目标账号日均约 1 帖，长期零新增本身就是异常信号——
-    最可能的解释不是"他们没发"，而是增量路径已经被登录墙挡住了。
-
-    ⚠️ 阈值需要按真实发帖节奏重设：2026-08-30 实测该账号**连续一个多月
-    没发新帖**，而 config 里的 4 天是按"日均约 1 帖"定的。不改会天天误报，
-    误报多了真报警就没人看了。
-
-    state 里没有该平台的记录时返回 False：那说明增量还没跑过，
-    属于"没数据"而不是"安静"，该由调用方按 last_success 另行判断。
-    """
-    entry = state.get(platform)
-    if not isinstance(entry, dict):
-        return False
-    quiet = entry.get("consecutive_quiet_days")
-    if not isinstance(quiet, (int, float)) or isinstance(quiet, bool):
-        return False
-    return quiet >= alert_after
-
-
-def check_incomplete(arc: "Archive") -> list[dict]:
-    """媒体不全的帖子（源响应只给封面、或图片没下全的那些）。"""
-    return arc.needs_media()
-
-
 # --------------------------------------------------------------------------
 # 第四项：归属判定漏判（CR-19 那一类失败的"下次能被发现"版本）
 # --------------------------------------------------------------------------
