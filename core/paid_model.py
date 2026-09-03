@@ -22,7 +22,6 @@ import json
 import math
 import os
 import sys
-import time
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -322,19 +321,3 @@ def append_jsonl(path: Path, row: Mapping[str, Any], *, guard=None) -> None:
             (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
-
-
-class Pacer:
-    """请求之间的最小间隔。付费调用不需要随机化，只需要不打爆对面。"""
-
-    def __init__(self, gap: float) -> None:
-        self.gap = max(0.0, float(gap))
-        self._last = 0.0
-
-    def wait(self) -> None:
-        if self.gap <= 0:
-            return
-        elapsed = time.monotonic() - self._last
-        if elapsed < self.gap:
-            time.sleep(self.gap - elapsed)
-        self._last = time.monotonic()

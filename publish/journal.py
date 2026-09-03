@@ -336,14 +336,6 @@ def last_resolvable(state_dir: Path, post_id: str) -> dict | None:
     return None
 
 
-def last_prepared(state_dir: Path, post_id: str) -> dict | None:
-    """旧入口兼容；只返回字面上的 prepared。"""
-    for row in reversed(history_for(state_dir, post_id)):
-        if row.get("status") == STATUS_PREPARED:
-            return row
-    return None
-
-
 def scheduled_record(state_dir: Path, post_id: str,
                      platform: str) -> dict | None:
     return scheduled_record_for_refs(
@@ -422,11 +414,6 @@ def transition(record: PublishAttempt, status: str, *, recorded_at: str,
     values.update(changes)
     values.update({"status": status, "recorded_at": recorded_at})
     return PublishAttempt(**values)
-
-
-def refs_intersect(rows: Iterable[dict], refs: Iterable[str]) -> bool:
-    wanted = set(refs)
-    return any(_row_refs(row) & wanted for row in rows)
 
 
 def attempt_from_row(row: dict) -> PublishAttempt:

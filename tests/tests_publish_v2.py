@@ -715,5 +715,61 @@ check(_pending_blocks_force({"status": journal.STATUS_SUBMIT_AMBIGUOUS})
       "--force 也不能绕过模糊/未回读/自动 pre-submit 失败状态")
 
 
+
+print("\n[5] dump 校验结果缓存：命中要快，内容变了要失效")
+
+# 一次 --submit 会沿 compose / workflow / business_suite 三条路径反复要同一份
+# dump（实测 38 次、72 MB）。缓存按 (路径, mtime_ns, 大小) 命中。
+# 这一段盯的是**失效**而不是命中：缓存住一份已经被换掉的 dump，等于让证据闸
+# 对着旧事实放行。
+import time as _time
+from publish import evidence as _ev
+
+with tempfile.TemporaryDirectory() as folder:
+    dumps = Path(folder)
+    name = "publish_probe_20260901_010101_000001.json"
+    shots = dumps / (Path(name).stem + "_screenshots")
+    shots.mkdir(parents=True)
+    shot = shots / "semantic_001_final.png"
+    shot.write_bytes(bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b"0" * 64)
+
+    def dump_payload(session):
+        return {
+            "schema_version": 2, "mode": "record-and-passive-evidence",
+            "session_id": session,
+            "started_at": "2026-09-01T01:01:00+00:00",
+            "finished_at": "2026-09-01T01:02:00+00:00",
+            "interactions": [],
+            "snapshots": [{
+                "sequence": 1, "page_id": "page-001", "evidence_order": 1,
+                "recorded_at": "2026-09-01T01:01:30+00:00",
+                "reason": "final", "semantic_items": [],
+                "screenshot": str(shot), "screenshot_error": None,
+            }],
+        }
+
+    target = dumps / name
+    target.write_text(json.dumps(dump_payload("first")), encoding="utf-8")
+
+    _ev.clear_dump_cache()
+    first, _ = _ev.validate_v2_dump(name, dumps)
+    check(first is not None and first["session_id"] == "first", "首次校验通过")
+
+    cached, _ = _ev.validate_v2_dump(name, dumps)
+    check(cached is first, "第二次直接命中缓存（返回同一个对象）")
+
+    # 换内容 + 换 mtime：缓存必须失效
+    _time.sleep(0.01)
+    target.write_text(json.dumps(dump_payload("second")), encoding="utf-8")
+    refreshed, _ = _ev.validate_v2_dump(name, dumps)
+    check(refreshed is not None and refreshed["session_id"] == "second",
+          "dump 内容变了之后重新校验，不会拿旧结论放行")
+
+    # 把 dump 改坏：不缓存失败结论，且每次都要重新报出原因
+    target.write_text("{}", encoding="utf-8")
+    broken, detail = _ev.validate_v2_dump(name, dumps)
+    check(broken is None and detail, f"坏 dump 每次都失败闭合，实得 {detail[:30]!r}")
+
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 raise SystemExit(1 if fails else 0)

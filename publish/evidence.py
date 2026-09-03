@@ -592,5 +592,3 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
                    "Planner 就绪 → 卡片 → final")
 
 
-def verify_all_signals(dumps_dir: Path) -> dict[str, tuple[bool | None, str]]:
-    return {key: verify_signal(spec, dumps_dir) for key, spec in SIGNALS.items()}

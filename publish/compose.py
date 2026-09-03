@@ -229,16 +229,6 @@ def _parse_probe_number(observations: dict, key: str, *, integer: bool):
         raise ComposeError("G1 probe 的 %s 不是有效实测数字：%r" % (key, raw)) from exc
 
 
-def _parse_probe_time(value: object, label: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ComposeError("G1 probe 缺少 %s" % label)
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ComposeError("G1 probe 的 %s 不是 ISO 时间：%r" % (label, value)) from exc
-    _aware(parsed, "G1 probe %s" % label)
-
-
 def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
     """严格发布只接受 config 明确审核过的真实、完整 G1 记录。"""
     c = cfg()
