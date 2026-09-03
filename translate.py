@@ -1025,16 +1025,25 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
     if flagged:
         print(f"  ⚠ {flagged} 篇含金额/尺码/英制单位，需人工确认——"
               f"审校清单里会逐篇标出来。")
-    if money_violated:
-        print(f"  ❗ {money_violated} 篇的金额没有原样保留，已全部拒绝写盘并计为失败。")
-        print(f"     金额必须原封不动（数值/小数点/符号/符号位置都不许改），"
-              f"由人工替换成德国站定价。")
-        print("     修正提示词/模型后直接重跑即可；这些 post_id 没被记成已完成。")
-    if hashtag_violated:
-        print(f"  ❗ {hashtag_violated} 篇的话题标签与原帖不完全一致，"
-              "已全部拒绝写盘并计为失败。")
-        print("     标签必须保持相同数量、内容、大小写与顺序；不得翻译、删减、新增或调序。")
-        print("     直接重跑即可；这些 post_id 没被记成已完成。")
+    if money_violated or hashtag_violated:
+        if money_violated:
+            print(f"  ❗ {money_violated} 篇的金额没有原样保留，已全部拒绝写盘并计为失败。")
+            print("     金额必须原封不动（数值/小数点/符号/符号位置都不许改），"
+                  "由人工替换成德国站定价。")
+        if hashtag_violated:
+            print(f"  ❗ {hashtag_violated} 篇的话题标签与原帖不完全一致，"
+                  "已全部拒绝写盘并计为失败。")
+            print("     标签必须保持相同数量、内容、大小写与顺序；"
+                  "不得翻译、删减、新增或调序。")
+        # ⚠️ 别再写"直接重跑即可"。这些 post_id 确实没被记成已完成，但**钱已经花了**，
+        # 付费账本给每个 job_key 记了一条 output_rejected。同一个 job_key 只允许被拒
+        # REJECTED_RETRY_BUDGET 次，之后 _assert_startable 会拒绝再发请求 ——
+        # 那是刻意的：反复重跑同一条只是重复扣费碰运气。
+        print(f"     这些 post_id 没被记成已完成，**但钱已经花了**。"
+              f"同一条最多再重试 {paid_requests.REJECTED_RETRY_BUDGET - 1} 次；")
+        print("     若是提示词的问题，改完提示词并把 PROMPT_VERSION +1，"
+              "重试计数随之重置。")
+        print("     查看当前被拒次数：python -m core.paid_requests --status")
     return ok, bad
 
 

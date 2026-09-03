@@ -22,6 +22,7 @@ from publish import journal
 from publish.compose import ComposeError, compose_post
 import translate as translation
 from core.paid_model import FileLock
+from core import imagehash
 
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
@@ -311,22 +312,17 @@ def _image_paths(source: SourcePost) -> tuple[Path, ...]:
 
 
 def dhash(path: Path) -> int:
-    with Image.open(path) as image:
-        # BILINEAR 是本项目配对标定使用的 dHash 采样；真实 2026-08-27
-        # FB/IG 五张素材在这一路径上的逐图距离均为 0。
-        gray = image.convert("L").resize((9, 8), Image.Resampling.BILINEAR)
-        pixels = list(gray.getdata())
-    value = 0
-    for row in range(8):
-        offset = row * 9
-        for column in range(8):
-            value = (value << 1) | int(
-                pixels[offset + column] > pixels[offset + column + 1])
-    return value
+    """素材配对用的 dHash。实现在 core/imagehash，与图片德语化共用同一份。
+
+    ⚠️ 2026-09-02 之前这里独立实现，而 localize_images 另有一份用不同滤波器
+    的同名实现——对同一张图给出不同的值。现在两边共用一份（BILINEAR，
+    依据见 core/imagehash 的模块说明）。
+    """
+    return imagehash.dhash_file(path)
 
 
 def dhash_distance(left: int, right: int) -> int:
-    return (left ^ right).bit_count()
+    return imagehash.hamming(left, right)
 
 
 def _media_relation(left: SourcePost, right: SourcePost,

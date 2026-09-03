@@ -56,6 +56,19 @@ def _parse_aware(value: object) -> datetime | None:
     return parsed
 
 
+# 校验结果缓存。**键含 mtime 与大小**，dump 在进程存活期间被换掉会重新校验。
+#
+# 一次 `--submit` 全程会沿 compose / workflow / business_suite 三条路径反复
+# 要同一份 dump：实测约 38 次解析、约 72 MB 读盘，每次得出完全相同的结论。
+# 这里只缓存"校验通过的结果"，失败路径照旧每次重算（失败是要给人看原因的）。
+_DUMP_CACHE: dict[tuple, tuple[dict, str]] = {}
+
+
+def clear_dump_cache() -> None:
+    """测试用：换了 dump 文件内容后强制重新校验。"""
+    _DUMP_CACHE.clear()
+
+
 def validate_v2_dump(source_dump: str, dumps_dir: Path
                      ) -> tuple[dict | None, str]:
     """验证新版证据契约完整性；部分录制绝不能解锁生产提交。"""
@@ -64,6 +77,13 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
     path = Path(dumps_dir) / source_dump
     if not path.is_file():
         return None, "本机没有 %s（dump 不进版本库）" % source_dump
+    try:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        cache_key = None
+    if cache_key is not None and cache_key in _DUMP_CACHE:
+        return _DUMP_CACHE[cache_key]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -119,6 +139,8 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
             break
     if not valid_final:
         return None, "v2 dump 没有位于本轮截图目录内的有效 final 遮罩截图"
+    if cache_key is not None:
+        _DUMP_CACHE[cache_key] = (data, "")
     return data, ""
 
 

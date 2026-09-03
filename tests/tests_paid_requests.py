@@ -63,13 +63,26 @@ with tempfile.TemporaryDirectory() as folder:
     check(not snapshot.unknown and abs(snapshot.daily_usd - .25) < 1e-9,
           "独立账本按响应 usage 计费，不依赖业务产物是否可读")
 
-    # 产出硬闸失败仍保留费用；同一 job 禁止自动重花，别的 job 可继续。
-    _, rejected = controller.run(
-        stage="translation", job_key="job-rejected",
-        source_ref="instagram:p2", media_index=None, model="fixture",
-        request=lambda: "bad", usage_getter=lambda: GOOD,
-        usage_errors=usage_errors, usage_cost=cost)
-    controller.finalize(rejected, accepted=False, reason="immutable gate")
+    # 产出硬闸失败仍保留费用。同一 job 允许有界重试（模型偶发抖动和"提示词
+    # 真的有问题"长得一样），但用满预算就停——反复重跑只是重复扣费碰运气。
+    def reject_once(key="job-rejected"):
+        _, receipt = controller.run(
+            stage="translation", job_key=key,
+            source_ref="instagram:p2", media_index=None, model="fixture",
+            request=lambda: "bad", usage_getter=lambda: GOOD,
+            usage_errors=usage_errors, usage_cost=cost)
+        controller.finalize(receipt, accepted=False, reason="immutable gate")
+
+    reject_once()
+    retry_allowed = True
+    try:
+        reject_once()          # 第 2 次：预算 2，仍应放行
+    except P.PaidRequestBlocked:
+        retry_allowed = False
+    check(retry_allowed,
+          f"被拒 1 次后仍可重试（预算 {P.REJECTED_RETRY_BUDGET} 次）——"
+          "偶发抖动不该逼用户改 PROMPT_VERSION")
+
     try:
         controller.run(
             stage="translation", job_key="job-rejected",
@@ -81,7 +94,7 @@ with tempfile.TemporaryDirectory() as folder:
     else:
         same_job_blocked = False
     check(same_job_blocked,
-          "output_rejected 的已付费任务在人工处理前禁止自动重试")
+          f"被拒满 {P.REJECTED_RETRY_BUDGET} 次后禁止继续自动重试")
 
 print("\n[2] crash/未知 usage 最多留下一个在途请求，并阻断全部后续付费")
 with tempfile.TemporaryDirectory() as folder:

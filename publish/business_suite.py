@@ -56,8 +56,18 @@ PAGE_HEALTH_TIMEOUT = 8.0
 # 上传后给 UI 的沉淀窗口。**不是固定 sleep**：到点就走，不阻塞成功路径。
 UPLOAD_SETTLE_TIMEOUT = 15.0
 
-# 截图时遮罩凭据类输入。**与 tools/probe_publish.py 里那条保持一致**
-# （`tests_publish.py` 有断言钉住两者相同，防止一边改了另一边忘了）。
+# 截图时遮罩凭据类输入。**与 tools/probe_publish.py 里那条故意不同，不要"同步"。**
+#
+# 这里遮的是登录凭据：发布截图要能看清正文和排期，那正是出事时要复盘的东西。
+# probe 那条遮的是**所有有值控件**（input/textarea/select/contenteditable/
+# role=textbox…），因为 dump 的契约是"不保存任何输入值"，正文、日期、账号
+# 上下文都必须遮掉。两者服务于两个不同的契约。
+#
+# ⚠️ 2026-09-02 之前这里写的是"与 probe 保持一致，测试有断言钉住两者相同"——
+# 那句话是错的：tests_publish.py 那条断言的措辞恰恰是"probe **额外**遮正文/
+# 日期/时间等有值控件"，它断言的是两者**不同**。照那句注释去同步两个常量，
+# 会把 probe 的遮罩削成只遮凭据，dump 截图里就会漏出正文和账号。
+#
 # 它是通用 HTML 凭据遮罩，不是 Business Suite 的流程定位器。
 SENSITIVE_INPUT_SELECTOR = (
     'input[type="password"], input[type="email"], '

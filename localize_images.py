@@ -45,6 +45,7 @@ from core.store import (Archive, ArchivePathError,  # noqa: E402
                         assert_physical_direct_path, post_dirname)
 import translate as translation                    # noqa: E402
 from core.paid_model import FileLock
+from core import imagehash                          # noqa: E402
 
 
 TEMPLATE_PATH = ROOT / "prompts" / "image_de.md"
@@ -839,20 +840,10 @@ def _open_loaded_image(data: bytes) -> Image.Image:
         raise ValueError("产出字节不是 Pillow 可完整解码的图片") from exc
 
 
-def _dhash_value(image: Image.Image) -> int:
-    """64 位 dHash；只依赖 Pillow，避免为一个距离再引入 numpy。"""
-    grayscale = image.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
-    pixels = list(grayscale.getdata())
-    value = 0
-    for row in range(8):
-        start = row * 9
-        for column in range(8):
-            value = (value << 1) | int(pixels[start + column] > pixels[start + column + 1])
-    return value
-
-
 def dhash_distance(left: Image.Image, right: Image.Image) -> int:
-    return (_dhash_value(left) ^ _dhash_value(right)).bit_count()
+    """两张已打开的图之间的 dHash 距离。实现在 core/imagehash，与配对侧共用。"""
+    return imagehash.hamming(
+        imagehash.dhash_value(left), imagehash.dhash_value(right))
 
 
 def _reject_placeholder(image: Image.Image) -> None:
