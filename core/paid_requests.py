@@ -173,26 +173,24 @@ def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
     }
 
 
-def default_budget_preflight() -> None:
-    """在 paid lock 内按全账号真相源重算日/月预算。"""
-    from core.config import cfg
-    import translate
-    from pipeline import pipeline_settings
-    from pipeline_assisted import assert_budget
-
-    c = cfg()
-    assert_budget(
-        translate.account_dirs(c.archive_dir), pipeline_settings(),
-        now=datetime.now(timezone.utc), state_dir=c.state_dir)
-
-
 class RequestController:
-    """把一次真实 API 调用包进 started→usage 的耐久临界区。"""
+    """把一次真实 API 调用包进 started→usage 的耐久临界区。
+
+    ``preflight`` 是**必填**的，而且这里故意不提供默认值。
+
+    预算判据要同时读 `[pipeline]` 配置、付费账本、以及翻译/调图两边的计价
+    公式 —— 那是应用层的知识。core/ 一旦替它兜底，就会反过来 import
+    ``translate`` / ``pipeline`` / ``pipeline_assisted``，让最底层的模块依赖
+    最顶层的三个（这正是本次重构要拆掉的那条边）。
+
+    所以策略由**组装根**（各 CLI 的 ``main()``）注入：
+    ``pipeline_assisted.budget_preflight`` 是生产实现，测试传 ``lambda: None``。
+    """
 
     def __init__(self, state_dir: Path, *,
-                 preflight: Callable[[], None] | None = None) -> None:
+                 preflight: Callable[[], None]) -> None:
         self.state_dir = Path(state_dir)
-        self.preflight = preflight or default_budget_preflight
+        self.preflight = preflight
 
     def run(self, *, stage: str, job_key: str, source_ref: str,
             media_index: int | None, model: str,

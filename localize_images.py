@@ -37,6 +37,11 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+# 同 translate.py 顶部那段：`python localize_images.py` 会让本文件叫
+# `__main__`，而上层写的是 `import localize_images`。不登记就会加载两份。
+if __name__ == "__main__":                          # pragma: no cover
+    sys.modules.setdefault("localize_images", sys.modules[__name__])
+
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
 from core import paid_model
@@ -1707,13 +1712,18 @@ def main(argv=None) -> int:
         parser.error(f"--latest-posts 必须在 1..{MAX_LATEST_POSTS}（只用于 K9 验收）")
     if args.confirm_all_history_cost and not args.all_history:
         parser.error("--confirm-all-history-cost 只能与 --all-history 同时使用")
+    # 组装根：预算策略由 pipeline_assisted 提供，core/ 不许知道 —— 同
+    # translate.py::main，理由见 RequestController 的 docstring。
+    from pipeline_assisted import budget_preflight   # noqa: PLC0415
+
     settings = Settings()
     if args.check:
         return run_check(
             settings,
             ImageEditor(
                 settings,
-                paid_controller=paid_requests.RequestController(cfg().state_dir)))
+                paid_controller=paid_requests.RequestController(
+                    cfg().state_dir, preflight=budget_preflight)))
 
     root = cfg().archive_dir
     dirs = translation.account_dirs(root, args.account)
@@ -1768,7 +1778,8 @@ def main(argv=None) -> int:
 
     editor = (None if args.dry_run else ImageEditor(
         settings,
-        paid_controller=paid_requests.RequestController(cfg().state_dir)))
+        paid_controller=paid_requests.RequestController(
+            cfg().state_dir, preflight=budget_preflight)))
     total = RunStats()
     remaining = args.limit
     lock = nullcontext() if args.dry_run else ImageRunLock(cfg().state_dir / "images.lock")

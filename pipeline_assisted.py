@@ -24,6 +24,7 @@ import translate as translation
 from core.paid_model import FileLock
 from core import paid_model
 from core import imagehash
+from pipeline_settings import pipeline_settings
 
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
@@ -981,6 +982,20 @@ def assert_budget(account_dirs: Iterable[Path], settings: Mapping[str, Any], *,
             % (snapshot.daily_usd, daily_limit,
                snapshot.monthly_usd, monthly_limit))
     return snapshot
+
+
+def budget_preflight() -> None:
+    """在 paid lock 内按全账号真相源重算日/月预算。
+
+    这是 :class:`core.paid_requests.RequestController` 的生产 ``preflight``。
+    它住在这里而不是 core/，是因为它要同时知道 `[pipeline]` 预算、付费账本、
+    以及翻译/调图两边的计价公式 —— 三样都在 core/ 之上。各 CLI 的 ``main()``
+    负责把它注入进去。
+    """
+    c = cfg()
+    assert_budget(
+        translation.account_dirs(c.archive_dir), pipeline_settings(),
+        now=datetime.now(timezone.utc), state_dir=c.state_dir)
 
 
 def assert_budget_after(snapshot: BudgetSnapshot,

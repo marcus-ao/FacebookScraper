@@ -37,6 +37,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+# `run_translate.bat` 用的是 `python translate.py`，于是本文件的模块名是
+# `__main__`。上层模块（pipeline_assisted 等）写的是 `import translate`，
+# 那会**再加载一份**本文件：两份 Settings、两份模块级常量、两份锁对象。
+# 先把自己登记成正规名字，让后来的 import 拿到同一个对象。
+if __name__ == "__main__":                         # pragma: no cover
+    sys.modules.setdefault("translate", sys.modules[__name__])
+
 from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
 from core import paid_model                        # noqa: E402
@@ -1557,10 +1564,15 @@ def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
 
+    # 组装根：预算策略住在 pipeline_assisted（它才同时知道账本与两边的计价
+    # 公式）。core/ 不许知道这件事，所以由这里注入 —— 见 RequestController。
+    from pipeline_assisted import budget_preflight   # noqa: PLC0415
+
     s = Settings()
     if a.check:
         return run_check(
-            s, paid_controller=paid_requests.RequestController(cfg().state_dir))
+            s, paid_controller=paid_requests.RequestController(
+                cfg().state_dir, preflight=budget_preflight))
 
     root = cfg().archive_dir
     dirs = account_dirs(root, a.account)
@@ -1624,7 +1636,8 @@ def main(argv=None) -> int:
     translator = Translator(
         s, paid_controller=(
             None if a.dry_run
-            else paid_requests.RequestController(cfg().state_dir)))
+            else paid_requests.RequestController(
+                cfg().state_dir, preflight=budget_preflight)))
     ok = bad = 0
     remaining = a.limit
     lock = nullcontext() if a.dry_run else TranslationRunLock(cfg().state_dir / "translate.lock")
