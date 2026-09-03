@@ -307,7 +307,7 @@ def ledger_snapshot(state_dir: Path, *, now: datetime,
         event = row.get("event")
         if event in _GLOBAL_BLOCKING:
             unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
-        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+        elif event == EVENT_ACCEPTED and request_id not in usage_rows:
             unknown.append("request_id=%s 完成态缺 usage" % request_id)
 
     zone = ZoneInfo(zone_name)
@@ -369,7 +369,7 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
         event = row.get("event")
         if event in _GLOBAL_BLOCKING:
             unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
-        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+        elif event == EVENT_ACCEPTED and request_id not in usage_rows:
             unknown.append("request_id=%s 完成态缺 usage" % request_id)
 
     text_cost = image_cost = 0.0
