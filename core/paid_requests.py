@@ -17,6 +17,7 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from core.paid_model import FileLock
 
 LEDGER_NAME = "paid_requests.jsonl"
 LOCK_NAME = "paid_requests.lock"
@@ -41,49 +42,10 @@ class PaidRequestBlocked(RuntimeError):
     """账本/预算不能证明下一次请求安全，失败闭合。"""
 
 
-class PaidRequestLock(AbstractContextManager):
+def PaidRequestLock(path: Path) -> FileLock:   # noqa: N802（保留原名，调用点不变）
     """所有文本与图片付费入口共用的一把跨进程锁。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(
-                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as exc:
-            self._file.close()
-            self._file = None
-            raise PaidRequestBlocked(
-                "另一个翻译/调图付费请求正在进行；本次未发请求") from exc
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=PaidRequestBlocked,
+                    busy_message="另一个翻译/调图付费请求正在进行；本次未发请求")
 
 
 @dataclass(frozen=True)

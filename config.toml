@@ -136,6 +136,13 @@ timeout_seconds = 120
 max_retries = 2                    # SDK 自带指数退避，重试 429/5xx/连接错误
 request_gap_seconds = 1.0          # 相邻两次调用的最小间隔，避免短时间请求过密
 
+# 连续失败多少条就停止本批。**不是总失败数，是连续失败数。**
+# 单条失败（429、超时、单条被审核拒）只跳过这一条继续（CR-53），
+# 但连续失败说明问题不在素材而在链路——1051 篇待译，断网时空转
+# 一千次既没意义又会把限流坐实。形状与 [image].failure_budget、
+# [delta].failure_budget 一致。
+failure_budget = 3
+
 # thinking 始终显式开启；默认用模型官方的 high 档位。
 reasoning_effort = "high"          # low | high | max
 # 不配置、也不发送 max_tokens / max_completion_tokens 等输出限制；

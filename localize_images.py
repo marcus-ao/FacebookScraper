@@ -39,10 +39,12 @@ sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
+from core import paid_model
 from core import paid_requests                      # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
                         assert_physical_direct_path, post_dirname)
 import translate as translation                    # noqa: E402
+from core.paid_model import FileLock
 
 
 TEMPLATE_PATH = ROOT / "prompts" / "image_de.md"
@@ -201,9 +203,9 @@ class Settings:
             raise SystemExit("[image].quality 可选值：low, medium, high（不得使用 auto）")
         if self.output_format not in {"jpeg", "png", "webp"}:
             raise SystemExit("[image].output_format 可选值：jpeg, png, webp")
-        if self.timeout <= 0 or self.max_retries < 0 or self.gap < 0:
-            raise SystemExit("[image] 的 timeout_seconds 必须 > 0，"
-                             "max_retries/request_gap_seconds 必须 >= 0")
+        paid_model.validate_endpoint(
+            "image", timeout=self.timeout,
+            max_retries=self.max_retries, gap=self.gap)
         try:
             parsed_cutoff = datetime.strptime(
                 self.incremental_since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -222,61 +224,28 @@ class Settings:
                 "不是缩小线）")
         if self.failure_budget < 1:
             raise SystemExit("[image].failure_budget 必须 >= 1")
-        if set(self.cost_rates) != IMAGE_RATE_KEYS:
-            raise SystemExit("[image].cost_rates_usd_per_million 必须且只能包含 "
-                             "text_input/image_input/image_output")
-        if any(not _non_bool_number(v) or float(v) < 0
-               or not math.isfinite(float(v)) for v in self.cost_rates.values()):
-            raise SystemExit("[image].cost_rates_usd_per_million 的费率必须是非负有限数字")
+        paid_model.validate_cost_rates("image", self.cost_rates, IMAGE_RATE_KEYS)
         if any(not isinstance(k, str) or not isinstance(v, str)
                or not k.strip() or not v.strip() for k, v in self.glossary.items()):
             raise SystemExit("[translate.glossary] 的键和值都必须是非空字符串")
 
-    def _raw_key(self) -> tuple[str, str]:
-        """返回密钥与来源；调用方不得打印第一个值。"""
-        key = os.environ.get(self.api_key_env, "").strip()
-        if key:
-            return key, f"环境变量 {self.api_key_env}"
-        env_file = ROOT / ".env"
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#") or "=" not in stripped:
-                    continue
-                name, _, value = stripped.partition("=")
-                if name.strip() == self.api_key_env:
-                    return value.strip().strip('"').strip("'"), f"{env_file.name} 文件"
-        return "", ""
+    @property
+    def credentials(self) -> paid_model.ModelCredentials:
+        return paid_model.ModelCredentials(self.api_key_env, what="图片 API 密钥")
 
     def api_key(self) -> str:
-        key, _ = self._raw_key()
-        if not key:
-            raise SystemExit(
-                f"没找到图片 API 密钥（变量名 {self.api_key_env}）。\n\n"
-                "  先在项目根目录执行：\n"
-                "      Copy-Item .env.example .env\n"
-                "  再把 .env 中的占位值替换成真实密钥：\n"
-                f"      {self.api_key_env}=你的密钥\n\n"
-                "  .env 已被 gitignore；不要把密钥写进 config.toml。"
-            )
-        return key
+        return self.credentials.api_key()
 
     def credential_status(self) -> str:
         """只报告是否存在与来源，不暴露密钥片段、长度或值。"""
-        key, source = self._raw_key()
-        return f"已设置（来源：{source}）" if key else "未设置"
+        return self.credentials.status()
 
 
 def build_client(settings: Settings):
-    """构造 OpenAI 兼容客户端；Bearer 鉴权、429/5xx 重试交给 SDK。"""
-    from openai import OpenAI
-
-    return OpenAI(
-        api_key=settings.api_key(),
-        base_url=settings.base_url,
-        timeout=settings.timeout,
-        max_retries=settings.max_retries,
-    )
+    """构造 OpenAI 兼容客户端。实现在 core/paid_model，与 F 组共用。"""
+    return paid_model.build_client(
+        api_key=settings.api_key(), base_url=settings.base_url,
+        timeout=settings.timeout, max_retries=settings.max_retries)
 
 
 class ModelMismatchError(RuntimeError):
@@ -1072,63 +1041,14 @@ def load_image_state(path: Path) -> ImageState:
 
 def append_image_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     """追加一条付费结果；坏尾补换行，写后 flush+fsync。"""
-    payload = (json.dumps(dict(row), ensure_ascii=False) + "\n").encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    assert_physical_direct_path(path.parent, path, kind="file", label="images_de.jsonl")
-    with path.open("a+b") as handle:
-        end = handle.seek(0, os.SEEK_END)
-        if end:
-            handle.seek(-1, os.SEEK_END)
-            if handle.read(1) != b"\n":
-                handle.seek(0, os.SEEK_END)
-                handle.write(b"\n")
-        handle.seek(0, os.SEEK_END)
-        handle.write(payload)
-        handle.flush()
-        os.fsync(handle.fileno())
+    paid_model.append_jsonl(path, dict(row), guard=lambda p: assert_physical_direct_path(
+        p.parent, p, kind="file", label="images_de.jsonl"))
 
 
-class ImageRunLock(AbstractContextManager):
+def ImageRunLock(path: Path) -> FileLock:      # noqa: N802（保留原名）
     """整个付费图片批次单实例，防止重复双击造成重复收费。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError):
-            self._file.close()
-            self._file = None
-            raise SystemExit("另一个图片德语化批次正在运行。请勿重复双击；等它结束后再试。")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=SystemExit,
+                    busy_message="另一个图片德语化批次正在运行。请勿重复双击；等它结束后再试。")
 
 
 def sha256_file(path: Path) -> str:
@@ -1416,37 +1336,15 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    """只有"整批都会重复犯"的错误才算致命（CR-53）。
+    """整批性错误的判据。实现在 core/paid_model，与 F 组共用同一份（CR-53）。
 
-    旧实现用 ``isinstance(exc, openai.APIError)``，而那是
-    ``RateLimitError``(429)、``APITimeoutError`` / ``APIConnectionError``
-    和 ``BadRequestError``(400，含内容审核拒绝) 的**共同基类**。
-    结果是：SDK 重试用尽后的一次 429、一次网络抖动、或某一张图被审核拒掉，
-    都会掀掉剩余全部图片，而且没有跳过这张继续的办法 —— 一张有问题的图
-    可以永久堵住队列。
-
-    现在只有鉴权 / 权限 / 端点不存在 / 模型不匹配 / 响应契约破裂算致命：
-    这几类**每一张都会同样失败**，继续跑只是重复花钱。
-    瞬时错误与单图 400 计为单张失败，由 ``failure_budget``
-    的连续失败计数兜住（形状照抄 ``[delta].failure_budget``）。
+    K 组特有的整批性错误（模型目录预检失败、模型不匹配、模型不可用、
+    响应契约破裂）通过 ``extra_fatal`` 补进去。
     """
-    if isinstance(exc, (
-            ModelCatalogPreflightError, ModelMismatchError,
-            ModelUnavailableError, ResponseContractError,
-            paid_requests.PaidRequestBlocked)):
-        return True
-    try:
-        import openai
-    except ImportError:
-        return False
-    fatal = tuple(
-        candidate for candidate in (
-            getattr(openai, "AuthenticationError", None),
-            getattr(openai, "PermissionDeniedError", None),
-            getattr(openai, "NotFoundError", None),
-            getattr(openai, "APIResponseValidationError", None),
-        ) if isinstance(candidate, type))
-    return bool(fatal) and isinstance(exc, fatal)
+    return paid_model.is_fatal_api_error(exc, extra_fatal=(
+        ModelCatalogPreflightError, ModelMismatchError,
+        ModelUnavailableError, ResponseContractError,
+        paid_requests.PaidRequestBlocked))
 
 
 def _scale_mark(job: ImageJob, settings: Settings) -> str:

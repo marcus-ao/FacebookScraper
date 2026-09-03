@@ -43,6 +43,7 @@ from core.integrity import parse_ts
 from core.notify import notify
 from core.parse import extract, partition_by_owner
 from core.store import Archive, Post
+from core.paid_model import FileLock
 
 PLATFORMS = ("facebook", "instagram")
 
@@ -129,53 +130,15 @@ class DeltaRunAlreadyActive(RuntimeError):
     """另一个每日/补跑实例已经持有全局增量锁。"""
 
 
-class DeltaRunLock:
+def DeltaRunLock(path: Path) -> FileLock:      # noqa: N802（保留原名，调用点不变）
     """跨两个 Task Scheduler 任务的进程锁。
 
     ``MultipleInstancesPolicy=IgnoreNew`` 只约束同一个计划任务；每日任务与
     登录/解锁补跑是两个不同任务，醒机时仍可能同时进入这里。锁覆盖 stale
     判定、随机延迟、浏览器和状态写入，保证整个增量主干并发恒为 1。
     """
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError):
-            self._file.close()
-            self._file = None
-            raise DeltaRunAlreadyActive(
-                "另一个增量实例正在运行；本次不再附着浏览器或写状态。") from None
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=DeltaRunAlreadyActive,
+                    busy_message="另一个增量实例正在运行；本次不再附着浏览器或写状态。")
 
 
 # ---- C5：运行状态 -------------------------------------------------------

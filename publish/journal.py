@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
+from core.paid_model import FileLock
 
 JOURNAL_NAME = "published.jsonl"
 
@@ -52,12 +53,18 @@ _HELD_PUBLISH_LOCKS: ContextVar[frozenset[str]] = ContextVar(
 
 
 class PublishOperationLock(AbstractContextManager):
-    """单帖 CLI 与 pipeline approve 共用的跨进程发布互斥。"""
+    """单帖 CLI 与 pipeline approve 共用的跨进程发布互斥。
+
+    OS 层的文件锁交给 :class:`core.paid_model.FileLock`；这里只加发布侧
+    特有的那一层——**同一执行上下文内的显式重入**。
+    """
 
     def __init__(self, path: Path, *, allow_reentrant: bool = False) -> None:
         self.path = Path(path)
         self.allow_reentrant = allow_reentrant
-        self._file = None
+        self._lock = FileLock(
+            self.path, error_type=RuntimeError,
+            busy_message="另一个单帖/批量发布正在运行；本次没有接触浏览器")
         self._context_token: Token | None = None
         self._reentrant = False
 
@@ -71,27 +78,8 @@ class PublishOperationLock(AbstractContextManager):
             self._reentrant = True
             return self
         if key in held:
-            raise RuntimeError(
-                "同一执行上下文已经持有发布锁；未显式授权重入")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(
-                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as exc:
-            self._file.close()
-            self._file = None
-            raise RuntimeError(
-                "另一个单帖/批量发布正在运行；本次没有接触浏览器") from exc
+            raise RuntimeError("同一执行上下文已经持有发布锁；未显式授权重入")
+        self._lock.__enter__()
         self._context_token = _HELD_PUBLISH_LOCKS.set(held | {key})
         return self
 
@@ -99,18 +87,7 @@ class PublishOperationLock(AbstractContextManager):
         if self._reentrant:
             self._reentrant = False
             return False
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
+        self._lock.__exit__(exc_type, exc, tb)
         if self._context_token is not None:
             _HELD_PUBLISH_LOCKS.reset(self._context_token)
             self._context_token = None

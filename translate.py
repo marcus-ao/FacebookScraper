@@ -41,9 +41,11 @@ sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
+from core import paid_model                        # noqa: E402
 from core import paid_requests                     # noqa: E402
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)              # noqa: E402
+from core.paid_model import FileLock                # noqa: E402
 
 # 提示词模板。放在独立文件里，改翻译行为不用改 Python，营销同事也能改。
 TEMPLATE_PATH = ROOT / "prompts" / "translate_de.md"
@@ -80,6 +82,7 @@ class Settings:
         self.timeout: float = float(g("timeout_seconds", 120))
         self.max_retries: int = int(g("max_retries", 2))
         self.gap: float = float(g("request_gap_seconds", 1.0))
+        self.failure_budget: int = int(g("failure_budget", 3))
         # 官方 OpenAI 兼容接口的 thinking 档位。业务默认 high；代码会同时发送
         # thinking.enabled，避免依赖端点默认值。
         self.reasoning_effort = str(g("reasoning_effort", "high") or "high").strip().lower()
@@ -112,86 +115,39 @@ class Settings:
                              "deepseek-v4-flash；旧 deepseek-chat/reasoner 已停用")
         if not self.api_key_env:
             raise SystemExit("[translate].api_key_env 不能为空")
-        if self.timeout <= 0 or self.max_retries < 0 or self.gap < 0:
-            raise SystemExit("[translate] 的 timeout_seconds 必须 > 0，"
-                             "max_retries/request_gap_seconds 必须 >= 0")
+        paid_model.validate_endpoint(
+            "translate", timeout=self.timeout,
+            max_retries=self.max_retries, gap=self.gap)
         if self.style_examples < 0:
             raise SystemExit("[translate].style_examples 不能为负数")
+        if self.failure_budget < 1:
+            raise SystemExit("[translate].failure_budget 必须 >= 1")
         if self.reasoning_effort not in {"low", "high", "max"}:
             raise SystemExit("[translate].reasoning_effort 可选值：low, high, max")
-        if (set(self.cost_rates) != {"input", "cache_read", "output"}
-                or any(not isinstance(value, (int, float))
-                       or isinstance(value, bool)
-                       or not math.isfinite(float(value)) or float(value) < 0
-                       for value in self.cost_rates.values())):
-            raise SystemExit(
-                "[translate].cost_rates_usd_per_million 必须且只能包含"
-                " input/cache_read/output，且费率是非负有限数字")
+        paid_model.validate_cost_rates(
+            "translate", self.cost_rates, {"input", "cache_read", "output"})
 
-    def _raw_key(self) -> tuple[str, str]:
-        """返回 (密钥, 来源)。环境变量优先，其次项目内的 .env。
-
-        支持 .env 是因为 setx 会把密钥写进用户注册表、对所有进程可见；
-        放项目里的 .env 收敛得多（已在 .gitignore 中）。不引入 python-dotenv：
-        只需要 KEY=value 这一种形态，十行够了，不值得多一个依赖。
-        """
-        key = os.environ.get(self.api_key_env, "").strip()
-        if key:
-            return key, f"环境变量 {self.api_key_env}"
-        env_file = ROOT / ".env"
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, value = line.partition("=")
-                if name.strip() == self.api_key_env:
-                    return value.strip().strip('"').strip("'"), f"{env_file.name} 文件"
-        return "", ""
+    @property
+    def credentials(self) -> paid_model.ModelCredentials:
+        return paid_model.ModelCredentials(self.api_key_env, what="翻译 API 密钥")
 
     def api_key(self) -> str:
-        key, _ = self._raw_key()
-        if not key:
-            raise SystemExit(
-                f"没找到 API 密钥（变量名 {self.api_key_env}）。两种设法任选其一：\n"
-                f"\n"
-                f"  【推荐】先复制项目里的 .env.example 为 .env，再把占位值替换成密钥：\n"
-                f"      Copy-Item .env.example .env\n"
-                f"  .env 内容应为一行：\n"
-                f"      {self.api_key_env}=你的密钥\n"
-                f"      （.env 已在 .gitignore 里，不会进版本库）\n"
-                f"\n"
-                f"  【或者】设系统环境变量：\n"
-                f"      setx {self.api_key_env} \"你的密钥\"\n"
-                f"      设完必须**重开终端 / 重新双击 .bat** 才生效\n"
-                f"\n"
-                f"  ❌ 不要写进 config.toml —— 那个文件会进版本库。"
-            )
-        return key
+        return self.credentials.api_key()
 
-    def redacted(self) -> str:
-        """给 --check 打印用。只露头尾各 4 位，中间打码。"""
-        key, source = self._raw_key()
-        if not key:
-            return "(未设置)"
-        shown = f"{key[:4]}...{key[-4:]}" if len(key) > 12 else "(已设置)"
-        return f"{shown}　长度 {len(key)}　来源：{source}"
+    def credential_status(self) -> str:
+        """给 --check 打印用。**只报告是否存在与来源**，不露密钥片段或长度。
+
+        （2026-09-02 之前这里叫 redacted()，会打印头尾各 4 位和密钥长度。
+        图片侧从一开始就没这么做，两边现在统一到更严的那个口径。）
+        """
+        return self.credentials.status()
 
 
 def build_client(s: Settings):
-    """构造 DeepSeek 官方 OpenAI 兼容客户端。
-
-    OpenAI SDK 会按官方约定使用 ``Authorization: Bearer``，并负责连接错误、
-    429 与 5xx 的退避重试；业务代码只负责请求与结果契约。
-    """
-    from openai import OpenAI
-
-    return OpenAI(
-        api_key=s.api_key(),
-        base_url=s.base_url,
-        timeout=s.timeout,
-        max_retries=s.max_retries,
-    )
+    """构造 DeepSeek 官方 OpenAI 兼容客户端。实现在 core/paid_model，与 K 组共用。"""
+    return paid_model.build_client(
+        api_key=s.api_key(), base_url=s.base_url,
+        timeout=s.timeout, max_retries=s.max_retries)
 
 
 # --------------------------------------------------------------------------
@@ -595,13 +551,15 @@ def _usage_values(usage) -> dict[str, int]:
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    if isinstance(exc, (ModelMismatchError, paid_requests.PaidRequestBlocked)):
-        return True
-    try:
-        import openai
-        return isinstance(exc, openai.APIError)
-    except (ImportError, AttributeError):
-        return False
+    """整批性错误的判据。实现在 core/paid_model，与 K 组共用同一份。
+
+    ⚠️ 2026-09-02 之前这里是 ``isinstance(exc, openai.APIError)``——那是
+    429/超时/单条 400 的共同基类，一次限流就会掀掉整批 1051 篇。
+    CR-53 早已在 localize_images.py 里查清并修掉，但修复没有同步过来。
+    现在两边走同一个函数，不会再各自漂移。
+    """
+    return paid_model.is_fatal_api_error(
+        exc, extra_fatal=(ModelMismatchError, paid_requests.PaidRequestBlocked))
 
 
 class Translator:
@@ -800,47 +758,10 @@ def _approx_tokens(text: str) -> int:
     return max(1, round(cjk * 0.6 + other * 0.3))
 
 
-class TranslationRunLock(AbstractContextManager):
+def TranslationRunLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
     """整个付费批次单实例运行，防止双击两次造成同一帖子重复付费。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError):
-            self._file.close()
-            self._file = None
-            raise SystemExit("另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=SystemExit,
+                    busy_message="另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
 
 
 # --------------------------------------------------------------------------
@@ -893,21 +814,8 @@ def load_translated(path: Path) -> dict[str, dict]:
 
 def append_jsonl(path: Path, row: dict) -> None:
     """把付费结果安全追加成独立一行；坏尾/缺换行不能吞掉新结果。"""
-    payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    assert_physical_direct_path(
-        path.parent, path, kind="file", label="translated.jsonl")
-    with path.open("a+b") as f:
-        end = f.seek(0, os.SEEK_END)
-        if end:
-            f.seek(-1, os.SEEK_END)
-            if f.read(1) != b"\n":
-                f.seek(0, os.SEEK_END)
-                f.write(b"\n")
-        f.seek(0, os.SEEK_END)
-        f.write(payload)
-        f.flush()
-        os.fsync(f.fileno())
+    paid_model.append_jsonl(path, row, guard=lambda p: assert_physical_direct_path(
+        p.parent, p, kind="file", label="translated.jsonl"))
 
 
 def pending(rows: list[dict], done: dict[str, dict], force: bool,
@@ -1032,6 +940,7 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
           f"称呼 {s.address_form} / 术语表 {len(s.glossary)} 条")
 
     ok = bad = flagged = money_violated = hashtag_violated = 0
+    consecutive_failures = 0
     for i, r in enumerate(todo, 1):
         pid = r.get("post_id", "?")
         text = (r.get("text") or "").strip()
@@ -1054,13 +963,22 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         except Exception as e:
             print(f"  [{i}/{len(todo)}] {pid}  失败：{type(e).__name__}: {e}")
             bad += 1
+            consecutive_failures += 1
             if _is_fatal_api_error(e):
                 raise FatalBatchError(
-                    "API 鉴权/端点/模型或请求配置属于整批共享错误，已立刻停止，"
+                    "鉴权/权限/端点不存在/响应契约破裂属于整批共享错误，已立刻停止，"
                     "避免对剩余帖子重复无意义请求") from e
+            if consecutive_failures >= s.failure_budget:
+                raise FatalBatchError(
+                    f"连续 {consecutive_failures} 篇失败，已达 "
+                    f"[translate].failure_budget={s.failure_budget}，停止本批。"
+                    "\n    单条失败不再掀掉整批（CR-53），但连续失败说明问题不在"
+                    "素材而在链路 —— 先看上面每条的原因，修掉后重跑即可"
+                    "（已成功的不会重复付费）。") from e
             # 内容级输出错误只跳过这一条，保留批处理的断点续跑能力。
             continue
 
+        consecutive_failures = 0
         money_violations = money_preserved(text, de)
         hashtag_violations = hashtags_preserved(text, de)
         violations = money_violations + hashtag_violations
@@ -1451,7 +1369,7 @@ def run_check(s: Settings,
     print(f"  base_url    : {s.base_url}")
     print("  API 格式    : DeepSeek 官方 OpenAI 兼容 Chat Completions")
     print("  鉴权        : Authorization: Bearer（由 SDK 设置）")
-    print(f"  密钥环境变量: {s.api_key_env} = {s.redacted()}")
+    print(f"  密钥环境变量: {s.api_key_env} = {s.credential_status()}")
     print(f"  model       : {s.model}")
     print(f"  thinking    : enabled / effort={s.reasoning_effort}")
     print("  输出上限    : 未发送 max_tokens 或同类限制")

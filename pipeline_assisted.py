@@ -24,6 +24,7 @@ from core.store import Archive, post_dirname
 from publish import journal
 from publish.compose import ComposeError, compose_post
 import translate as translation
+from core.paid_model import FileLock
 
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
@@ -49,50 +50,10 @@ class BudgetStopped(PipelineRunError):
     pass
 
 
-class PipelineOperationLock(AbstractContextManager):
+def PipelineOperationLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
     """让 daily/catch-up/手工 run/approve 共用同一把跨进程锁。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(
-                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as exc:
-            self._file.close()
-            self._file = None
-            raise PipelineRunError(
-                "另一个 pipeline run/approve/activate 正在运行；"
-                "为防重复付费或重复提交，本次没有开始") from exc
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=PipelineRunError,
+                    busy_message="另一个流水线实例正在运行；本次不做任何改动。")
 
 
 @dataclass(frozen=True)
