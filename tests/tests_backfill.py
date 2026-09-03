@@ -163,22 +163,39 @@ with tempfile.TemporaryDirectory() as d:
     check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
           "成功写入得到完整合法 JSON")
 
-    original_dump = capture.json.dump
+    # 原子写现在实现在 core/paid_model（此前全仓 6 份各写一遍）。
+    # 注入点随之改到那一层，并且测得比原来更强：序列化中断和**提交中断**
+    # 两种都不许截断上一份可用文件。
+    from core import paid_model
 
-    def interrupted_dump(_value, handle, **_kwargs):
-        handle.write('{"partial":')
-        raise OSError("simulated interruption")
-
+    original_dumps = paid_model.json.dumps
     try:
-        capture.json.dump = interrupted_dump
+        paid_model.json.dumps = lambda *a, **k: (_ for _ in ()).throw(
+            OSError("simulated interruption"))
         try:
             capture.atomic_write_json(target, [{"lost": True}])
         except OSError:
             pass
     finally:
-        capture.json.dump = original_dump
+        paid_model.json.dumps = original_dumps
     check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
-          "中断不会截断上一份可用 capture")
+          "序列化中断不会截断上一份可用 capture")
+
+    original_replace = paid_model.os.replace
+    try:
+        paid_model.os.replace = lambda *a, **k: (_ for _ in ()).throw(
+            OSError("simulated commit failure"))
+        try:
+            capture.atomic_write_json(target, [{"lost": True}])
+        except OSError:
+            pass
+    finally:
+        paid_model.os.replace = original_replace
+    check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
+          "提交（os.replace）失败也不会截断上一份可用 capture")
+    leftovers = [q.name for q in target.parent.iterdir()
+                 if q.name.startswith(".") and q.name.endswith(".tmp")]
+    check(not leftovers, f"失败后不留临时文件，实得 {leftovers}")
     check(not list(Path(d).glob("._capture_1.json.*.tmp")),
           "中断留下的同目录临时文件已清理")
 

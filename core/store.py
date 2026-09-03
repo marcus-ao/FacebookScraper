@@ -53,6 +53,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from core import paid_model
 
 
 @dataclass
@@ -248,31 +249,17 @@ def _archive_row_error(row: object) -> str | None:
 
 
 def _atomic_write_text(path: Path, text: str, *, label: str) -> None:
-    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。"""
-    path = assert_physical_direct_path(
-        path.parent, path, kind="file", label=label)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", newline="", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as fh:
-            temporary = Path(fh.name)
-            assert_physical_direct_path(
-                path.parent, temporary, kind="file", label=f"{label} 临时文件")
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        # 规划与替换前各验一次，避免目标在写临时文件期间被换成链接。
+    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。
+
+    实现在 core/paid_model；路径安全断言通过 guard 传进去，包括**替换前
+    再验一次目标**（防目标在写临时文件期间被换成链接）。
+    """
+    def guard(candidate: Path, role: str) -> None:
         assert_physical_direct_path(
-            path.parent, path, kind="file", label=label)
-        os.replace(temporary, path)
-        temporary = None
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
+            candidate.parent, candidate, kind="file",
+            label=label if role == "target" else "%s 临时文件" % label)
+
+    paid_model.atomic_write_text(path, text, guard=guard, newline="")
 
 
 def post_dirname(post_id: str, created_at: str | None) -> str:

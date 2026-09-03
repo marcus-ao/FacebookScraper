@@ -262,26 +262,43 @@ def is_fatal_api_error(exc: BaseException, *,
 # 曾经原子写在仓库里有 6 份实现，临时文件清理写了三种不同的写法。
 # ==========================================================================
 
-def atomic_write_text(path: Path, text: str, *,
-                      before_replace=None) -> None:
+def atomic_write_text(path: Path, text: str, *, guard=None,
+                      newline: str = "\n") -> None:
     """同目录临时文件 → flush → fsync → ``os.replace``。
 
-    临时文件必须和目标同目录：跨卷时 ``os.replace`` 不是原子的。
-    ``before_replace`` 给调用方在提交前做最后一次校验（比如路径安全断言）。
+    临时文件必须和目标**同目录**：跨卷时 ``os.replace`` 不是原子的。
+
+    ``guard(path, role)`` 让调用方插入路径安全断言，``role`` 是
+    ``"target"`` 或 ``"temp"``。它会被调用三次：写之前验目标、写之后验
+    临时文件、**替换之前再验一次目标**——最后那次是防目标在写临时文件
+    期间被换成链接（core/store.py 原本就这么做，合并时保留了）。
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
+    if guard is not None:
+        guard(path, "target")
+    temporary = path.with_name("." + path.name + ".tmp")
     try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        with temporary.open("w", encoding="utf-8", newline=newline) as handle:
+            if guard is not None:
+                guard(temporary, "temp")
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        if before_replace is not None:
-            before_replace(temporary)
+        if guard is not None:
+            guard(path, "target")
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def atomic_write_json(path: Path, value: Any, *, guard=None,
+                      indent: int | None = None, sort_keys: bool = False) -> None:
+    """:func:`atomic_write_text` 的 JSON 版。"""
+    text = json.dumps(value, ensure_ascii=False, indent=indent,
+                      sort_keys=sort_keys)
+    atomic_write_text(path, text + ("\n" if indent is not None else ""),
+                      guard=guard)
 
 
 def append_jsonl(path: Path, row: Mapping[str, Any], *, guard=None) -> None:

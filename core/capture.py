@@ -19,6 +19,7 @@ import tempfile
 from pathlib import Path
 
 from core.store import Archive, Post
+from core import paid_model
 
 # 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
 INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
@@ -69,25 +70,12 @@ def validated_image_content_type(value: str | None, data: bytes) -> str | None:
 
 
 def atomic_write_json(path: Path, value) -> None:
-    """把不可替代的 capture JSON 在同目录完整落盘后再原子替换。"""
-    path = Path(path)
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temp_path = Path(handle.name)
-            json.dump(value, handle, ensure_ascii=False)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-        temp_path = None
-    finally:
-        if temp_path is not None:
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
+    """把不可替代的 capture JSON 在同目录完整落盘后再原子替换。
+
+    实现在 core/paid_model；此前全仓有 6 份各写一遍的原子写，
+    临时文件清理写了三种不同的写法。
+    """
+    paid_model.atomic_write_json(path, value)
 
 
 class Collector:

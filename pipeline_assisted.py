@@ -22,6 +22,7 @@ from publish import journal
 from publish.compose import ComposeError, compose_post
 import translate as translation
 from core.paid_model import FileLock
+from core import paid_model
 from core import imagehash
 
 STATE_NAME = "pipeline_state.json"
@@ -134,12 +135,8 @@ class BudgetSnapshot:
 
 
 def _atomic_json(path: Path, data: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(dict(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
-    os.replace(temporary, path)
+    """实现在 core/paid_model。**顺带补上了原本缺失的 fsync。**"""
+    paid_model.atomic_write_json(path, dict(data), indent=2, sort_keys=True)
 
 
 def _parse_aware(value: Any) -> datetime | None:
