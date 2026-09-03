@@ -223,8 +223,19 @@ async def make_completed_probe(state_dir: Path, profile: Path):
             raise AssertionError("fixture trusted event was rejected")
     final_shot = recorder.screenshot_dir / "semantic_001_final.png"
     Image.new("RGB", (24, 16), (4, 5, 6)).save(final_shot, format="PNG")
+    # ⚠️ 这条快照必须满足**完整的 v2 契约**（page_id / evidence_order /
+    # recorded_at 都要有），因为 compose 现在委托 evidence.validate_v2_dump
+    # 判定，和生产走同一份校验。此前两边各有一份校验、这个夹具只满足较松的
+    # 那份——正是双份实现漂移的典型现场。
+    #
+    # evidence_order 在真实 dump 里是全局单调的（interactions 与 snapshots
+    # 共用一个序列），所以这里接在已录交互之后。
+    last_order = max((row.get("evidence_order") or 0)
+                     for row in recorder.data["interactions"])
     recorder.data["snapshots"] = [{
         "sequence": 1,
+        "page_id": "page-001",
+        "evidence_order": last_order + 1,
         "recorded_at": "2026-08-31T19:01:00Z",
         "reason": "final",
         "page_url": "https://business.example.invalid/create",

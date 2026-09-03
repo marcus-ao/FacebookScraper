@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 
 from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
+from publish import evidence
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)
 from translate import (PROMPT_VERSION, account_dirs, apply_money_mapping,
@@ -269,19 +270,22 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
             raise ComposeError(
                 "注入的 UI 约束必须全部来自 config 已审核的同一份 G1 probe：%s"
                 % expected)
-    try:
-        data = json.loads(expected.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ComposeError("G1 probe 无法读取：%s" % exc) from exc
-    if not isinstance(data, dict):
-        raise ComposeError("G1 probe 顶层不是对象")
-    contract = (data.get("schema_version"), data.get("mode"))
-    if contract not in {
-            (1, "record-only"),
-            (2, "record-and-passive-evidence")}:
-        raise ComposeError("G1 probe schema/mode 不符合受支持的 v1/v2 契约")
-    _parse_probe_time(data.get("started_at"), "started_at")
-    _parse_probe_time(data.get("finished_at"), "finished_at")
+    # v2 的结构契约（schema/mode、started_at/finished_at、interactions 与
+    # snapshots 的序号连续、page_id / evidence_order / recorded_at 齐全、
+    # final 快照带有效遮罩截图）由 evidence.validate_v2_dump 统一判定。
+    #
+    # ⚠️ 2026-09-03 之前这里另写了一份，与那边逐条重叠（started/finished 是
+    # 带时区 ISO、序号从 1 严格连续、必须有 reason=final 快照、final 截图
+    # 存在且非空且在本轮截图目录内）。两份改一份不会红，是典型的漂移温床。
+    # 委托过去还顺带吃到那边的解析缓存——一次 --submit 原本要重复解析
+    # 这份 1.97 MB 的 dump 约 38 次。
+    #
+    # 同时去掉了 v1 (1, "record-only") 的受理：全仓没有任何生产者或测试用它，
+    # 而 signals_backfilled 只认 v2，v1 dump 过了这道闸也会死在证据闸上。
+    data, detail = evidence.validate_v2_dump(expected.name, state_dir)
+    if data is None:
+        raise ComposeError("G1 probe 不满足 v2 契约：%s" % detail)
+
     if data.get("cdp_port") != c.publish_debug_port:
         raise ComposeError("G1 probe 不是从 [publish] 调试端口记录的")
     raw_profile = data.get("profile_dir")

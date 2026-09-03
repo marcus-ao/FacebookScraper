@@ -546,32 +546,48 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
             return False
         return shot.is_file() and shot.stat().st_size > 0
 
-    for before in account_rows:
-        for clicked in button_rows:
-            for confirmed in success_rows:
-                for ready in loaded_rows:
-                    for card in planner_rows:
-                        page_ids = {
-                            before.get("page_id"), clicked.get("page_id"),
-                            confirmed.get("page_id"), ready.get("page_id"),
-                            card.get("page_id")}
-                        orders = (before.get("evidence_order"),
-                                  clicked.get("evidence_order"),
-                                  confirmed.get("evidence_order"),
-                                  ready.get("evidence_order"),
-                                  card.get("evidence_order"))
-                        if (len(page_ids) == 1
-                                and all(isinstance(value, int) for value in orders)
-                                and not _signal_hits(before, success)
-                                and orders[0] < orders[1] < orders[2] <= orders[3]
-                                <= orders[4]
-                                and any(
-                                    final.get("page_id") == card.get("page_id")
-                                    and int(final.get("evidence_order") or 0)
-                                    >= int(card.get("evidence_order") or 0)
-                                    and valid_final(final)
-                                    for final in finals)):
-                            return True, ""
+    # 逐 page_id 按 evidence_order 贪心串一次链。
+    #
+    # ⚠️ 2026-09-03 之前这里是五层嵌套循环（O(n⁵)，82 行）。要证明的命题只是
+    # 「这五条证据来自同一页，且 evidence_order 按 账号 < 提交 < 成功 ≤ 就绪
+    # ≤ 卡片 排列，之后还有一张同页的有效 final 截图」。按序贪心取每一步
+    # **最小可行**的那条即可：链是单调的，早选不会挡住后面任何可行解。
+    def orders_on(rows: list[dict], page: str) -> list[int]:
+        return sorted(
+            row["evidence_order"] for row in rows
+            if row.get("page_id") == page
+            and isinstance(row.get("evidence_order"), int)
+            and not isinstance(row.get("evidence_order"), bool))
+
+    def first_at_least(values: list[int], bound: int, *, strict: bool) -> int | None:
+        for value in values:
+            if value > bound or (not strict and value == bound):
+                return value
+        return None
+
+    pages = {row.get("page_id") for row in account_rows if row.get("page_id")}
+    for page in pages:
+        # 账号上下文那一条本身不能已经命中成功信号——否则"提交前不可见"就没证到。
+        account_orders = orders_on(
+            [row for row in account_rows if not _signal_hits(row, success)], page)
+        if not account_orders:
+            continue
+        chain_orders = [account_orders[0]]
+        for rows, strict in ((button_rows, True), (success_rows, True),
+                             (loaded_rows, False), (planner_rows, False)):
+            nxt = first_at_least(orders_on(rows, page), chain_orders[-1],
+                                 strict=strict)
+            if nxt is None:
+                break
+            chain_orders.append(nxt)
+        if len(chain_orders) != 5:
+            continue
+        card_order = chain_orders[-1]
+        if any(final.get("page_id") == page
+               and int(final.get("evidence_order") or 0) >= card_order
+               and valid_final(final)
+               for final in finals):
+            return True, ""
     return False, ("证据不在同一页面，或顺序不是账号 → 提交 → 成功 → "
                    "Planner 就绪 → 卡片 → final")
 
