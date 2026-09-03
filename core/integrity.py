@@ -14,10 +14,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:                       # 仅为类型标注，避免运行时多一次 import
-    from core.store import Archive
 
 
 def _parse_ts(value) -> datetime | None:

@@ -26,7 +26,7 @@ import statistics
 import sys
 import tempfile
 import time
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath

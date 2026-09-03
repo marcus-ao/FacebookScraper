@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
-import os
 import re
 import statistics
 import sys
@@ -31,7 +29,7 @@ import time
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any

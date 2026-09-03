@@ -42,7 +42,7 @@ from core import integrity
 from core.integrity import parse_ts
 from core.notify import notify
 from core.parse import extract, partition_by_owner
-from core.store import Archive, Post
+from core.store import Archive
 from core.paid_model import FileLock
 
 PLATFORMS = ("facebook", "instagram")
