@@ -18,6 +18,7 @@ from core.console import force_utf8  # noqa: E402
 force_utf8()
 
 import localize_images as L  # noqa: E402
+from core import translated as translated_contract  # noqa: E402
 
 
 fails = []
@@ -491,11 +492,11 @@ def make_image_archive(base: Path, account="in_acme", *, translated=True,
     if translated:
         trans = {
             "post_id": post_id,
-            "source_text_sha256": L.translation.source_text_sha256(row["text"]),
+            "source_text_sha256": translated_contract.source_text_sha256(row["text"]),
             "text_de": "Kostenloser Versand für Neakasa #Tag",
             "translated_at": "2026-08-31T12:30:00Z",
             "model": "deepseek-v4-pro",
-            "prompt_version": L.translation.PROMPT_VERSION,
+            "prompt_version": translated_contract.PROMPT_VERSION,
         }
         (arc / "translated.jsonl").write_text(
             json.dumps(trans, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -616,13 +617,13 @@ with tempfile.TemporaryDirectory() as pipeline_tmp:
     first_text_sha = source_changed_row["text_de_sha256"]
     changed_translation = {
         "post_id": "p100",
-        "source_text_sha256": L.translation.source_text_sha256(row["text"]),
+        "source_text_sha256": translated_contract.source_text_sha256(row["text"]),
         "text_de": "Versandkostenfrei für Neakasa #Tag",
         "translated_at": "2026-08-31T13:00:00Z",
         "model": "deepseek-v4-pro",
-        "prompt_version": L.translation.PROMPT_VERSION,
+        "prompt_version": translated_contract.PROMPT_VERSION,
     }
-    L.translation.append_jsonl(arc / "translated.jsonl", changed_translation)
+    translated_contract.append_translated(arc / "translated.jsonl", changed_translation)
     text_changed_editor = FakePipelineEditor()
     text_changed = L.run_localize(
         settings, text_changed_editor, arc, [row], None, False, False)

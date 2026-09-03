@@ -47,8 +47,12 @@ from core.console import force_utf8                 # noqa: E402
 from core import paid_model
 from core import paid_requests                      # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
-                        assert_physical_direct_path, post_dirname)
-import translate as translation                    # noqa: E402
+                        account_dirs, assert_physical_direct_path,
+                        post_dirname)
+# 这四个名字曾经是 `import translate`：为了判「这张图的译文还算不算数」，
+# 调图这一路要把翻译执行器整个拉起来。契约下沉到 core/ 之后就没这回事了。
+from core.translated import (load_translated,       # noqa: E402
+                             render_glossary, translation_is_current)
 from core.paid_model import FileLock
 from core import imagehash                          # noqa: E402
 
@@ -774,7 +778,7 @@ def build_image_prompt(settings: Settings, text_de: str) -> str:
     # 不可信正文必须最后插入；否则正文中的字面 ``{{KEEP_VERBATIM}}`` 会被后续
     # 替换成真实规则，等于让外部数据改变了提示词结构。
     substitutions = (
-        ("{{GLOSSARY}}", translation.render_glossary(settings.glossary)),
+        ("{{GLOSSARY}}", render_glossary(settings.glossary)),
         ("{{KEEP_VERBATIM}}", render_keep_verbatim(settings.keep_verbatim)),
         ("{{TEXT_DE}}", _untrusted_text_de(text_de.strip())),
     )
@@ -1151,7 +1155,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
     """
     # 只读边界校验；不新建任何目录（CR-50）。
     readonly_archive(arc_base)
-    translated = translation.load_translated(arc_base / "translated.jsonl")
+    translated = load_translated(arc_base / "translated.jsonl")
     state = load_image_state(arc_base / "images_de.jsonl")
     stats = RunStats()
     jobs: list[ImageJob] = []
@@ -1163,7 +1167,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
             raise ValueError("manifest 帖子记录不满足 post_id/text 最小契约")
         post_id = row["post_id"].strip()
         trans = translated.get(post_id)
-        if not translation.translation_is_current(row, trans):
+        if not translation_is_current(row, trans):
             image_count = sum(
                 1 for index, media in enumerate(row.get("media") or [])
                 if (media_index_filter is None or index == media_index_filter)
@@ -1639,14 +1643,14 @@ def run_show_prompt(settings: Settings,
     """对选中范围内每个账号展示一篇真实当前译文的完整图片提示词。"""
     shown = 0
     for arc_base, rows in scoped_rows.items():
-        translated = translation.load_translated(arc_base / "translated.jsonl")
+        translated = load_translated(arc_base / "translated.jsonl")
         for row in sorted(
                 rows,
                 key=lambda value: str(value.get("created_at") or ""),
                 reverse=True):
             post_id = row.get("post_id")
             entry = translated.get(post_id) if isinstance(post_id, str) else None
-            if not translation.translation_is_current(row, entry):
+            if not translation_is_current(row, entry):
                 continue
             print("\n" + "=" * 72)
             print(f"账号：{arc_base.name} / post_id={post_id} / 零 API 调用")
@@ -1726,9 +1730,9 @@ def main(argv=None) -> int:
                     cfg().state_dir, preflight=budget_preflight)))
 
     root = cfg().archive_dir
-    dirs = translation.account_dirs(root, args.account)
+    dirs = account_dirs(root, args.account)
     if args.account and not dirs:
-        available = [path.name for path in translation.account_dirs(root)]
+        available = [path.name for path in account_dirs(root)]
         print(f"[!] archive/ 下没有账号目录 {args.account!r}。")
         print("    现有：" + ("、".join(available) if available else "（无）"))
         return 1

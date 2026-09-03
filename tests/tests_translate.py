@@ -18,6 +18,9 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 import translate as T
+# K8 审校清单搬去 tools/ 了：它要同时读译文与调图两边的产物，
+# 留在 translate.py 里就得让翻译执行器 import 调图执行器。
+import tools.review_report as R   # noqa: E402
 
 fails = []
 
@@ -408,7 +411,7 @@ with tempfile.TemporaryDirectory() as tmp:
     stale_post_dir = stale_arc / "posts" / T.post_dirname(
         stale_source["post_id"], stale_source["created_at"])
     stale_post_dir.mkdir(parents=True, exist_ok=True)
-    T.run_review(stale_arc)
+    R.run_review(stale_arc)
     old_de_copy = stale_post_dir / "text_de.txt"
     check(old_de_copy.read_text(encoding="utf-8") == "DE::OLD price $10",
           "正文变更前审校流程确实生成旧版派生副本")
@@ -417,7 +420,7 @@ with tempfile.TemporaryDirectory() as tmp:
     with (stale_arc / "manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(corrected, ensure_ascii=False) + "\n")
 
-    stale_count = T.run_review(stale_arc)
+    stale_count = R.run_review(stale_arc)
     stale_md = (stale_arc / "review.md").read_text(encoding="utf-8")
     check(stale_count == 0 and "旧版英文正文" in stale_md,
           "旧正文译文列为过期且不计入审校完成数")
@@ -435,7 +438,7 @@ with tempfile.TemporaryDirectory() as tmp:
     latest = T.load_translated(stale_arc / "translated.jsonl")["same"]
     check(latest["source_text_sha256"] == T.source_text_sha256("NEW price $20"),
           "同 post_id 后写记录用新正文指纹胜出")
-    check(T.run_review(stale_arc) == 1
+    check(R.run_review(stale_arc) == 1
           and "DE::NEW price $20" in (stale_arc / "review.md").read_text(encoding="utf-8"),
           "重译后新正文和新译文一起进入审校清单")
 
@@ -524,12 +527,12 @@ with tempfile.TemporaryDirectory() as tmp:
         if item["text"]:
             (arc / "posts" / T.post_dirname(item["post_id"], item["created_at"])).mkdir(
                 parents=True, exist_ok=True)
-    n = T.run_review(arc)
+    n = R.run_review(arc)
     md = (arc / "review.md").read_text(encoding="utf-8")
     check(n == 3, f"3 篇进清单，实得 {n}")
     check("Free shipping on all orders over $50" in md, "含英文原文")
     check("DE::Free shipping" in md, "含德语译文")
-    fenced = T.markdown_text_block("caption\n```\n# not a review heading")
+    fenced = R.markdown_text_block("caption\n```\n# not a review heading")
     check(fenced[0] == "````text" and fenced[-1] == "````",
           "外部正文自带三反引号时使用更长围栏，不破坏审校清单结构")
     check("![a1](media/a1_0.jpg)" in md, "图片用相对路径引用，预览器能直接显示")
@@ -584,7 +587,7 @@ with tempfile.TemporaryDirectory() as tmp:
             (carc / "posts" / T.post_dirname(item["post_id"],
                                              item["created_at"])).mkdir(
                 parents=True, exist_ok=True)
-        T.run_review(carc)
+        R.run_review(carc)
         cmd = (carc / "review.md").read_text(encoding="utf-8")
         c1_sec = cmd[cmd.index("`c1`"):cmd.index("`c2`")]
         c2_sec = cmd[cmd.index("`c2`"):]
@@ -686,7 +689,7 @@ with tempfile.TemporaryDirectory() as tmp:
         _Image.new("RGB", (816, 816), (250, 120, 20)).save(
             manual_override, format="PNG")
 
-        k_count = T.run_review(karc)
+        k_count = R.run_review(karc)
         kmd = (karc / "review.md").read_text(encoding="utf-8")
         check(k_count == 3 and kmd.count("原图 / 德语图并排审校（K8）") == 3,
               "三篇帖子都生成原图/德语图并排表")
@@ -712,7 +715,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     print("\n[19c] 重建 review 前备份上一版，人工批注不静默消失")
     (arc / "review.md").write_text(md + "\nHUMAN_REVIEW_NOTE\n", encoding="utf-8")
-    T.run_review(arc)
+    R.run_review(arc)
     check("HUMAN_REVIEW_NOTE" in (arc / "review.previous.md").read_text(encoding="utf-8"),
           "上一版人工批注保存在 review.previous.md")
 

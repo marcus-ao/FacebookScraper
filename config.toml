@@ -572,7 +572,7 @@ times = ["10:00", "17:00"]
 # supervised / autonomous 本轮故意失败闭合，后续分流规则验收后再开放。
 # ⚠️ 不建议直接跳到 autonomous。理由和 [delta] 那七条缓解措施一样：
 #    这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
-autonomy = "manual"
+autonomy = "assisted"
 
 # ---- 死人开关（当前最大的可观测性缺口）----
 # core/integrity.py 检查的是「**账号**有没有在发新帖」，

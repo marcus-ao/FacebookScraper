@@ -282,6 +282,22 @@ def post_dirname(post_id: str, created_at: str | None) -> str:
     return f"undated_{safe_id}"
 
 
+def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
+    """archive/ 下所有含 manifest.jsonl 的账号目录。
+
+    从 `translate.py` 搬来的：翻译、调图、发布、流水线四路都要遍历账号目录，
+    却只有翻译那边有这个函数，于是另外三路都得 import 翻译执行器。
+    **archive/ 的目录布局是本模块的事。**
+    """
+    if not archive_root.exists():
+        return []
+    dirs = sorted(p for p in archive_root.iterdir()
+                  if p.is_dir() and (p / "manifest.jsonl").exists())
+    if only:
+        dirs = [p for p in dirs if p.name == only]
+    return dirs
+
+
 class Archive:
     def __init__(self, root: Path | str, account: str):
         self.root = Path(root)
