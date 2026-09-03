@@ -53,6 +53,7 @@ import stat
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from core import paid_model
 
 
 @dataclass
@@ -62,8 +63,6 @@ class Media:
     local_path: str | None = None
     width: int | None = None
     height: int | None = None
-    # 图内文字，留给下游 OCR 阶段回填
-    ocr_text: str | None = None
 
 
 @dataclass
@@ -250,31 +249,17 @@ def _archive_row_error(row: object) -> str | None:
 
 
 def _atomic_write_text(path: Path, text: str, *, label: str) -> None:
-    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。"""
-    path = assert_physical_direct_path(
-        path.parent, path, kind="file", label=label)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", newline="", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as fh:
-            temporary = Path(fh.name)
-            assert_physical_direct_path(
-                path.parent, temporary, kind="file", label=f"{label} 临时文件")
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        # 规划与替换前各验一次，避免目标在写临时文件期间被换成链接。
+    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。
+
+    实现在 core/paid_model；路径安全断言通过 guard 传进去，包括**替换前
+    再验一次目标**（防目标在写临时文件期间被换成链接）。
+    """
+    def guard(candidate: Path, role: str) -> None:
         assert_physical_direct_path(
-            path.parent, path, kind="file", label=label)
-        os.replace(temporary, path)
-        temporary = None
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
+            candidate.parent, candidate, kind="file",
+            label=label if role == "target" else "%s 临时文件" % label)
+
+    paid_model.atomic_write_text(path, text, guard=guard, newline="")
 
 
 def post_dirname(post_id: str, created_at: str | None) -> str:
@@ -295,6 +280,22 @@ def post_dirname(post_id: str, created_at: str | None) -> str:
     if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", ts):
         return f"{ts[:10]}_{ts[11:13]}{ts[14:16]}_{safe_id}"
     return f"undated_{safe_id}"
+
+
+def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
+    """archive/ 下所有含 manifest.jsonl 的账号目录。
+
+    从 `translate.py` 搬来的：翻译、调图、发布、流水线四路都要遍历账号目录，
+    却只有翻译那边有这个函数，于是另外三路都得 import 翻译执行器。
+    **archive/ 的目录布局是本模块的事。**
+    """
+    if not archive_root.exists():
+        return []
+    dirs = sorted(p for p in archive_root.iterdir()
+                  if p.is_dir() and (p / "manifest.jsonl").exists())
+    if only:
+        dirs = [p for p in dirs if p.name == only]
+    return dirs
 
 
 class Archive:
@@ -673,7 +674,3 @@ class Archive:
         return (new_media >= old_media and new_local >= old_local
                 and (new_media > old_media or new_local > old_local))
 
-    @staticmethod
-    def fingerprint(data: bytes) -> str:
-        """媒体去重用。US/DE 两站同一张图只需处理一次。"""
-        return hashlib.sha256(data).hexdigest()[:16]

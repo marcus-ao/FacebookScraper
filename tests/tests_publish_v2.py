@@ -17,7 +17,6 @@ from core.console import force_utf8
 from publish import business_suite as bs
 from publish import evidence, journal, selectors
 from publish.selectors import EvidenceSignal, Locator, SURFACE_COMPOSER
-from tools.probe_publish import ProbeRecorder, _safe_payload, _safe_snapshot
 from tools.publish_post import _pending_blocks_force
 
 force_utf8()
@@ -174,347 +173,14 @@ def account_semantics(*, facebook=TARGET_FB, instagram=TARGET_IG) -> list[dict]:
     ]
 
 
-print("[1] probe v2 白名单与被动成功证据")
-raw = {
-    "page_url": "https://business.facebook.com/latest/content_calendar?token=secret",
-    "document_title": "Planner",
-    "cookie": "do-not-keep",
-    "semantic_items": [
-        {"tag": "div", "role": "status", "accessible_name": "Post scheduled",
-         "visible_text": "Post scheduled", "aria_live": "polite",
-         "class": "hashed", "css_path": "div:nth-child(7)", "value": "secret"},
-        {"tag": "input", "role": "textbox", "accessible_name": "Email",
-         "visible_text": "private@example.com", "value": "private@example.com"},
-    ],
-}
-safe = _safe_snapshot(raw)
-serialized = json.dumps(safe, ensure_ascii=False)
-check(safe["page_url"].endswith("/latest/content_calendar")
-      and "?" not in safe["page_url"], "被动 URL 去掉 query/fragment")
-check("Post scheduled" in serialized and "private@example.com" not in serialized,
-      "保留 alert/status 语义，但不被动采样 textbox/combobox 内容")
-check(all(word not in serialized for word in ("cookie", "class", "css_path", "value")),
-      "v2 不保存 cookie/class/CSS path/value")
-editable = _safe_payload({
-    "session_id": "s", "event_type": "input", "is_trusted": True,
-    "page_url": "https://business.facebook.com/latest/composer/",
-    "target": {"tag": "div", "role": "textbox",
-               "is_contenteditable": True, "aria_label": "Write a post",
-               "visible_text": "PRIVATE DRAFT", "accessible_name": "PRIVATE DRAFT"},
-    "candidates": [{"tag": "div", "role": "textbox",
-                    "is_contenteditable": True, "aria_label": "Write a post",
-                    "visible_text": "PRIVATE DRAFT",
-                    "accessible_name": "PRIVATE DRAFT"}],
-}, "s")
-check(editable is not None and "PRIVATE DRAFT" not in json.dumps(editable)
-      and editable["target"]["accessible_name"] == "Write a post",
-      "可信 contenteditable input 也只留结构名，不把正文当可见文本保存")
-sibling = _safe_payload({
-    "session_id": "s", "event_type": "click", "is_trusted": True,
-    "page_url": "https://business.facebook.com/latest/composer/",
-    "target": {"tag": "button", "role": "button",
-               "visible_text": "Schedule", "accessible_name": "Schedule"},
-    "candidates": [
-        {"tag": "button", "role": "button", "ancestor_depth": 0,
-         "visible_text": "Schedule", "accessible_name": "Schedule"},
-        {"tag": "div", "role": "dialog", "ancestor_depth": 1,
-         "contains_editable_descendant": True,
-         "aria_label": "PRIVATE DRAFT", "visible_text": "PRIVATE DRAFT Schedule",
-         "accessible_name": "PRIVATE DRAFT Schedule"},
-    ],
-}, "s")
-check(sibling is not None
-      and sibling["target"]["accessible_name"] == "Schedule"
-      and "PRIVATE DRAFT" not in json.dumps(sibling),
-      "点击按钮时含 editable sibling 的 composer 祖先也不会泄漏正文")
-credential = _safe_payload({
-    "session_id": "s", "event_type": "input", "is_trusted": True,
-    "target": {"tag": "input", "role": "textbox", "input_type": "text",
-               "autocomplete": "username", "aria_label": "private@example.com",
-               "accessible_name": "private@example.com"},
-}, "s")
-check(credential is None,
-      "email/username/password/OTP 凭据控件即使直接注入 payload 也整项丢弃")
-from tools import probe_publish as probe_module
-check("createTreeWalker" in probe_module.SEMANTIC_SNAPSHOT_EXPRESSION
-      and "isVisible(parent)" in probe_module.SEMANTIC_SNAPSHOT_EXPRESSION
-      and "safeText(container" in probe_module.SEMANTIC_SNAPSHOT_EXPRESSION
-      and '[role="group"]' in probe_module.SEMANTIC_SNAPSHOT_EXPRESSION
-      and "cardContainer || accountContainer" in
-          probe_module.SEMANTIC_SNAPSHOT_EXPRESSION
-      and "contenteditable" in probe_module._SENSITIVE_INPUT_SELECTOR,
-      "被动祖先/卡片文本先剔除 editable 后代，截图也遮正文与有值控件")
-check("textWithoutEditableDescendants" in probe_module.INSTALL_FUNCTION
-      and "document.createTreeWalker" in probe_module.INSTALL_FUNCTION
-      and "isVisible(parent)" in probe_module.INSTALL_FUNCTION
-      and "const containsEditableDescendant =" in probe_module.INSTALL_FUNCTION
-      and "contains_editable_descendant" in probe_module.INSTALL_FUNCTION,
-      "交互候选链逐节点剔除 editable 后代，并把脱敏事实带到 Python 边界")
-
-
-async def capture_button_with_editable_sibling() -> dict:
-    """在真实 DOM 中证明 button 的 dialog 祖先不会夹带同级正文。"""
-    captured: list[str] = []
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.set_content(
-            '<div role="dialog" aria-label="Create post">'
-            '<div contenteditable="true" role="textbox">PRIVATE SIBLING DRAFT</div>'
-            '<section aria-hidden="true">HIDDEN BOOST SIBLING</section>'
-            '<button type="button">Schedule</button>'
-            '</div>')
-
-        def receive(_source, payload):
-            captured.append(payload)
-
-        await page.expose_binding("__captureProbePrivacy", receive)
-        await page.evaluate(probe_module.INSTALL_FUNCTION, {
-            "sessionId": "dom-session",
-            "bindingName": "__captureProbePrivacy",
-        })
-        await page.get_by_role("button", name="Schedule").click()
-        await page.wait_for_timeout(50)
-        await browser.close()
-    if not captured:
-        raise AssertionError("可信 click 没有触发 probe binding")
-    return json.loads(captured[-1])
-
-
-dom_click = asyncio.run(capture_button_with_editable_sibling())
-check(dom_click["target"]["accessible_name"] == "Schedule"
-      and any(row.get("contains_editable_descendant") is True
-              for row in dom_click["candidates"])
-      and "PRIVATE SIBLING DRAFT" not in json.dumps(dom_click)
-      and "HIDDEN BOOST SIBLING" not in json.dumps(dom_click),
-      "真实 DOM：Submit 点击祖先会移除 editable 与隐藏 sibling 文本")
-
-
-async def capture_visible_semantic_transitions(folder: Path):
-    """真实 Chromium：隐藏 Boost 不算证据，显示/取消分别触发截图。"""
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context()
-        page = await context.new_page()
-
-        async def route_page(route):
-            await route.fulfill(content_type="text/html", body=(
-                '<main role="main">'
-                '<div id="planner" role="status">Planner loaded</div>'
-                '<section id="boost-shell" aria-hidden="true">'
-                '<div id="boost" role="dialog">Boost your scheduled post</div>'
-                '</section>'
-                '<section style="opacity:0">'
-                '<button>HIDDEN_BY_PARENT_OPACITY</button>'
-                '</section>'
-                '</main>'))
-
-        await page.route("https://business.example.invalid/**", route_page)
-        await page.goto("https://business.example.invalid/latest/content_calendar")
-        session = await context.new_cdp_session(page)
-        recorder = ProbeRecorder(folder, port=1, profile=folder / "profile")
-        first = await recorder.snapshot(session, reason="periodic", page_id="page-boost")
-        await page.evaluate(
-            "document.getElementById('boost-shell').removeAttribute('aria-hidden')")
-        shown = await recorder.snapshot(session, reason="periodic", page_id="page-boost")
-        await page.evaluate("""() => {
-          document.getElementById('boost-shell').setAttribute('aria-hidden', 'true');
-          document.getElementById('planner').textContent = 'Planner card scheduled';
-        }""")
-        cancelled = await recorder.snapshot(
-            session, reason="periodic", page_id="page-boost")
-        duplicate = await recorder.snapshot(
-            session, reason="periodic", page_id="page-boost")
-        rows = list(recorder.data["snapshots"])
-        await browser.close()
-    return first, shown, cancelled, duplicate, rows
-
-
-with tempfile.TemporaryDirectory() as folder:
-    first, shown, cancelled, duplicate, transition_rows = asyncio.run(
-        capture_visible_semantic_transitions(Path(folder)))
-    transition_text = [
-        " ".join(item.get("accessible_name", "")
-                 for item in row.get("semantic_items", []))
-        for row in transition_rows]
-    check(first and shown and cancelled and not duplicate
-          and "Boost your scheduled post" not in transition_text[0]
-          and "Boost your scheduled post" in transition_text[1]
-          and "Boost your scheduled post" not in transition_text[2]
-          and "HIDDEN_BY_PARENT_OPACITY" not in " ".join(transition_text)
-          and all(Path(row["screenshot"]).is_file() for row in transition_rows),
-          "真实 DOM：隐藏祖先不向 main 泄漏，Boost 显示与取消后的 Planner 各自留图")
-
-
-class SnapshotSession:
-    async def send(self, method, params=None):
-        expression = (params or {}).get("expression", "")
-        if method == "Runtime.evaluate" and "semantic_items" in expression:
-            return {"result": {"value": raw}}
-        if method == "Runtime.evaluate" and "filter:blur" in expression:
-            return {"result": {"value": True}}
-        if method == "Page.captureScreenshot":
-            return {"data": (
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
-                "nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=")}
-        return {"result": {"value": 0}}
-
-
-with tempfile.TemporaryDirectory() as folder:
-    recorder = ProbeRecorder(Path(folder), port=9223, profile=Path(folder) / "profile")
-    check(recorder.data["schema_version"] == 2
-          and recorder.data["mode"] == "record-and-passive-evidence",
-          "新 probe 默认生成 v2 契约")
-    check(asyncio.run(recorder.snapshot(SnapshotSession(), reason="periodic")),
-          "v2 能被动落 URL/状态/页面语义")
-    check(not asyncio.run(recorder.snapshot(SnapshotSession(), reason="periodic")),
-          "页面语义未变化时不制造重复快照")
-
-with tempfile.TemporaryDirectory() as folder:
-    root = Path(folder)
-    write_v2(root, interactions=[], snapshots=[
-        {"evidence_order": 1,
-         "page_url": "https://business.facebook.com/latest/composer/",
-         "semantic_items": []},
-        {"evidence_order": 2,
-         "page_url": "https://business.facebook.com/latest/content_calendar",
-         "semantic_items": [{"tag": "div", "role": "status",
-                              "accessible_name": "Scheduled", "visible_text": "Scheduled"}]},
-    ])
-    check(evidence.verify_signal(success_spec(), root)[0] is True,
-          "成功信号只能从 v2 semantic snapshot 回查")
-    check(evidence.verify_signal(success_spec("url"), root)[0] is True,
-          "提交后的 URL 跳转同样可作为 v2 被动证据")
-
-with tempfile.TemporaryDirectory() as folder:
-    import core.config as config_module
-
-    root = Path(folder)
-    card = EvidenceSignal(
-        key="planner_scheduled_card", step="G6c", kind="semantic",
-        surface="business.facebook.com/latest/content_calendar",
-        source_dump="fixture.json", sequences=(4,),
-        breaks_when="fixture", role="link", name="Probe caption",
-        attributes=dict(PLANNER_ATTRIBUTES))
-    account_signal = EvidenceSignal(
-        key="composer_account_context", step="G2", kind="semantic",
-        surface=SURFACE_COMPOSER, source_dump="fixture.json", sequences=(1,),
-        breaks_when="fixture", role="heading", name=TARGET_FB,
-        attributes=dict(ACCOUNT_ATTRIBUTES))
-    loaded_signal = EvidenceSignal(
-        key="planner_loaded_signal", step="G6c", kind="semantic",
-        surface="business.facebook.com/latest/content_calendar",
-        source_dump="fixture.json", sequences=(4,), breaks_when="fixture",
-        role="heading", name="September")
-    dump_path = write_v2(root, interactions=[{
-        "evidence_order": 2, "event_type": "click", "is_trusted": True,
-        "page_url": "https://business.facebook.com/latest/composer/",
-        "target": {"tag": "button", "role": "button",
-                   "accessible_name": "Schedule", "visible_text": "Schedule"},
-        "candidates": [],
-    }], snapshots=[
-        {"evidence_order": 1,
-         "page_url": "https://business.facebook.com/latest/composer/",
-         "semantic_items": account_semantics()},
-        {"evidence_order": 3,
-         "page_url": "https://business.facebook.com/latest/content_calendar",
-         "semantic_items": [{"tag": "div", "role": "status",
-                              "accessible_name": "Scheduled", "visible_text": "Scheduled"}]},
-        {"evidence_order": 4,
-         "page_url": "https://business.facebook.com/latest/content_calendar",
-         "semantic_items": planner_semantics()},
-        {"evidence_order": 5, "reason": "final",
-         "page_url": "https://business.facebook.com/latest/content_calendar",
-         "semantic_items": planner_semantics()},
-    ])
-    original_cfg = config_module.cfg
-    original_composer = dict(selectors.COMPOSER)
-    original_signals = dict(selectors.SIGNALS)
-    try:
-        class EvidenceCfg:
-            state_dir = root
-
-            def get(self, section, key, default=None):
-                return {
-                    "ui_probe_dump": "fixture.json",
-                    "facebook_page_name": TARGET_FB,
-                    "instagram_account": TARGET_IG,
-                }.get(key, default)
-
-        config_module.cfg = lambda: EvidenceCfg()
-        selectors.COMPOSER["composer_submit_button"] = button_spec()
-        selectors.SIGNALS["composer_account_context"] = account_signal
-        selectors.SIGNALS["composer_success_signal"] = success_spec()
-        selectors.SIGNALS["planner_loaded_signal"] = loaded_signal
-        selectors.SIGNALS["planner_scheduled_card"] = card
-        verified_runtime = bool(bs.require_submission_evidence()
-                                and bs.require_readback_evidence())
-        original_dump = json.loads(dump_path.read_text(encoding="utf-8"))
-        partial = dict(original_dump)
-        partial["finished_at"] = None
-        dump_path.write_text(json.dumps(partial), encoding="utf-8")
-        try:
-            bs.require_submission_evidence()
-        except bs.ProbeRequired:
-            partial_blocked = True
-        else:
-            partial_blocked = False
-        swapped = json.loads(json.dumps(original_dump))
-        swapped["interactions"][0]["evidence_order"] = 1
-        swapped["snapshots"][0]["evidence_order"] = 2
-        dump_path.write_text(json.dumps(swapped), encoding="utf-8")
-        try:
-            bs.require_readback_evidence()
-        except bs.ProbeRequired:
-            causality_blocked = True
-        else:
-            causality_blocked = False
-        wrong_account = json.loads(json.dumps(original_dump))
-        wrong_account["snapshots"][0]["semantic_items"] = account_semantics(
-            facebook="Wrong Page", instagram="wrong.ig")
-        dump_path.write_text(json.dumps(wrong_account), encoding="utf-8")
-        try:
-            bs.require_submission_evidence()
-        except bs.ProbeRequired:
-            wrong_account_blocked = True
-        else:
-            wrong_account_blocked = False
-        near_collision = json.loads(json.dumps(original_dump))
-        near_collision["snapshots"][0]["semantic_items"] = account_semantics(
-            facebook=TARGET_FB + " Test", instagram=TARGET_IG + "als")
-        dump_path.write_text(json.dumps(near_collision), encoding="utf-8")
-        try:
-            bs.require_submission_evidence()
-        except bs.ProbeRequired:
-            near_collision_blocked = True
-        else:
-            near_collision_blocked = False
-        dump_path.write_text(json.dumps(original_dump), encoding="utf-8")
-        dump_path.unlink()
-        try:
-            bs.require_submission_evidence()
-        except bs.ProbeRequired:
-            missing_runtime_blocked = True
-        else:
-            missing_runtime_blocked = False
-    finally:
-        config_module.cfg = original_cfg
-        selectors.COMPOSER.clear()
-        selectors.COMPOSER.update(original_composer)
-        selectors.SIGNALS.clear()
-        selectors.SIGNALS.update(original_signals)
-    check(verified_runtime,
-          "生产 preflight 会现场回查提交/成功/日历三类 v2 证据")
-    check(partial_blocked, "finished_at/final 不完整的 v2 dump 不能解锁生产提交")
-    check(causality_blocked,
-          "同名证据存在但顺序不是 account→submit→success→Planner 时仍失败闭合")
-    check(wrong_account_blocked,
-          "registry 手填正确 token 不能替代 dump 里真实出现正确 FB Page 与 IG 账号")
-    check(near_collision_blocked,
-          "IG .de/.deals 与 FB 同名前缀测试页不能靠子串冒充精确目标账号")
-    check(missing_runtime_blocked,
-          "登记表仍在但本机 dump 消失时，生产提交重新失败闭合")
-
+# ==========================================================================
+# [1] 已删除（2026-09-03）：probe v2 白名单是 tools/probe_publish.py 的内部
+# 契约，且与 tests_publish.py 已删的 [6]-[9] 重叠。探针已移入
+# tools/_scaffolding/，不参与生产链路。
+#
+# 生产侧对 v2 dump 的要求由 publish/evidence.py::validate_v2_dump 表达，
+# 它的测试在 tests_publish.py [4]，保留。
+# ==========================================================================
 
 print("\n[2] submit() 只点击一次，成功/超时/跳转都返回结构化结论")
 
@@ -1047,6 +713,62 @@ check(_pending_blocks_force({"status": journal.STATUS_SUBMIT_AMBIGUOUS})
       and _pending_blocks_force({"status": journal.STATUS_FAILED_PRE_SUBMIT})
       and not _pending_blocks_force({"status": journal.STATUS_PREPARED}),
       "--force 也不能绕过模糊/未回读/自动 pre-submit 失败状态")
+
+
+
+print("\n[5] dump 校验结果缓存：命中要快，内容变了要失效")
+
+# 一次 --submit 会沿 compose / workflow / business_suite 三条路径反复要同一份
+# dump（实测 38 次、72 MB）。缓存按 (路径, mtime_ns, 大小) 命中。
+# 这一段盯的是**失效**而不是命中：缓存住一份已经被换掉的 dump，等于让证据闸
+# 对着旧事实放行。
+import time as _time
+from publish import evidence as _ev
+
+with tempfile.TemporaryDirectory() as folder:
+    dumps = Path(folder)
+    name = "publish_probe_20260901_010101_000001.json"
+    shots = dumps / (Path(name).stem + "_screenshots")
+    shots.mkdir(parents=True)
+    shot = shots / "semantic_001_final.png"
+    shot.write_bytes(bytes([137, 80, 78, 71, 13, 10, 26, 10]) + b"0" * 64)
+
+    def dump_payload(session):
+        return {
+            "schema_version": 2, "mode": "record-and-passive-evidence",
+            "session_id": session,
+            "started_at": "2026-09-01T01:01:00+00:00",
+            "finished_at": "2026-09-01T01:02:00+00:00",
+            "interactions": [],
+            "snapshots": [{
+                "sequence": 1, "page_id": "page-001", "evidence_order": 1,
+                "recorded_at": "2026-09-01T01:01:30+00:00",
+                "reason": "final", "semantic_items": [],
+                "screenshot": str(shot), "screenshot_error": None,
+            }],
+        }
+
+    target = dumps / name
+    target.write_text(json.dumps(dump_payload("first")), encoding="utf-8")
+
+    _ev.clear_dump_cache()
+    first, _ = _ev.validate_v2_dump(name, dumps)
+    check(first is not None and first["session_id"] == "first", "首次校验通过")
+
+    cached, _ = _ev.validate_v2_dump(name, dumps)
+    check(cached is first, "第二次直接命中缓存（返回同一个对象）")
+
+    # 换内容 + 换 mtime：缓存必须失效
+    _time.sleep(0.01)
+    target.write_text(json.dumps(dump_payload("second")), encoding="utf-8")
+    refreshed, _ = _ev.validate_v2_dump(name, dumps)
+    check(refreshed is not None and refreshed["session_id"] == "second",
+          "dump 内容变了之后重新校验，不会拿旧结论放行")
+
+    # 把 dump 改坏：不缓存失败结论，且每次都要重新报出原因
+    target.write_text("{}", encoding="utf-8")
+    broken, detail = _ev.validate_v2_dump(name, dumps)
+    check(broken is None and detail, f"坏 dump 每次都失败闭合，实得 {detail[:30]!r}")
 
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))

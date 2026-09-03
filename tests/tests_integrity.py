@@ -15,7 +15,7 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.integrity import (check_continuity, check_dropped_partners,
-                            check_incomplete, check_quiet, check_undated,
+                            check_undated,
                             known_partners, params, run_checks)
 from core.store import Archive, Media, Post
 
@@ -69,18 +69,7 @@ check(len(und) == 3, f"3 条无日期记录被挑出，实得 {len(und)}")
 check({r["post_id"] for r in und} == {"bad1", "bad2", "bad3"}, "挑出的正是那三条")
 check(check_continuity(dirty, gap_days=5) == [], "无日期记录不参与连续性比较，也不引发误报")
 
-print("\n[7] check_quiet")
-state = {"instagram": {"consecutive_quiet_days": 5},
-         "facebook": {"consecutive_quiet_days": 2}}
-check(check_quiet(state, "instagram", 4) is True, "5 天 >= 阈值 4 -> 告警")
-check(check_quiet(state, "facebook", 4) is False, "2 天 < 阈值 4 -> 不告警")
-check(check_quiet(state, "instagram", 5) is True, "正好等于阈值 -> 告警")
-check(check_quiet({}, "instagram", 4) is False, "无该平台记录 -> 不告警（是没数据，不是安静）")
-check(check_quiet({"instagram": None}, "instagram", 4) is False, "脏 state 不崩")
-check(check_quiet({"instagram": {"consecutive_quiet_days": True}}, "instagram", 1) is False,
-      "布尔值不被当成天数（True 会被 int 判断误收）")
-
-print("\n[8] check_incomplete 接归档层")
+print("\n[7] 媒体不全的帖子进待补清单（生产走 arc.needs_media()）")
 with tempfile.TemporaryDirectory() as d:
     arc = Archive(d, "acct")
     arc.append(Post(post_id="full", platform="instagram", account="x", text="t",
@@ -89,7 +78,7 @@ with tempfile.TemporaryDirectory() as d:
     arc.append(Post(post_id="cover_only", platform="instagram", account="x", text="t",
                     created_at="2026-08-02T00:00:00Z",
                     media=[Media(url="cover", kind="image")], media_complete=False))
-    inc = check_incomplete(arc)
+    inc = arc.needs_media()
     check(len(inc) == 1, f"1 条进待补清单，实得 {len(inc)}")
     check(inc[0]["post_id"] == "cover_only", "正是那条只有封面的轮播帖")
 

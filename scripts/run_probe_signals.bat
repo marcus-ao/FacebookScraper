@@ -31,7 +31,7 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 
-".venv\Scripts\python.exe" "tools\probe_signals.py" %*
+".venv\Scripts\python.exe" "tools\_scaffolding\probe_signals.py" %*
 set "RC=%ERRORLEVEL%"
 echo.
 pause

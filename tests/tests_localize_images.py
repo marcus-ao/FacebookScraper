@@ -18,6 +18,7 @@ from core.console import force_utf8  # noqa: E402
 force_utf8()
 
 import localize_images as L  # noqa: E402
+from core import translated as translated_contract  # noqa: E402
 
 
 fails = []
@@ -387,11 +388,24 @@ check(unknown_failed, "模板拼错占位符会在 API 调用前失败")
 
 print("\n[K5] 写盘前图片硬闸")
 def patterned_image(size=(816, 816), *, orientation="vertical", fmt="JPEG"):
+    """构造测试图。
+
+    ⚠️ **dHash 是横向梯度哈希，不是通用的"图变了没"检测器。**
+    2026-09-02 实测：``vertical``（左蓝右白，每行单调变亮）与
+    ``horizontal``（每行内部均匀）的 dHash **都是全 0**，距离为 0 ——
+    这两张图 dHash 根本分辨不了。此前这条断言能过，靠的是 LANCZOS 在
+    分界线上的振铃伪影（距离 16），不是 dHash 检出了重画。滤波器统一到
+    BILINEAR 后伪影消失，断言随之暴露。
+
+    要构造 dHash 真能分辨的差异，就得**翻转横向梯度方向**：``mirrored``
+    是左白右蓝，每行单调变暗，哈希全 1，与 ``vertical`` 距离 64。
+    """
     image = Image.new("RGB", size, "white")
     pixels = image.load()
     for y in range(size[1]):
         for x in range(size[0]):
             if ((orientation == "vertical" and x < size[0] // 2)
+                    or (orientation == "mirrored" and x >= size[0] // 2)
                     or (orientation == "horizontal" and y < size[1] // 2)):
                 pixels[x, y] = (25, 60, 180)
     buf = io.BytesIO()
@@ -435,7 +449,7 @@ with tempfile.TemporaryDirectory() as validation_tmp:
     check(pure_failed, "纯色占位图被拒绝")
 
     repaint_payload = base64.b64encode(
-        patterned_image(orientation="horizontal")).decode("ascii")
+        patterned_image(orientation="mirrored")).decode("ascii")
     measured = L.validate_output(repaint_payload, source, (816, 816), "jpeg", -1)
     check(measured.dhash_distance > 0, "阈值 -1 时只记录真实距离、不擅自拦截")
     try:
@@ -478,11 +492,11 @@ def make_image_archive(base: Path, account="in_acme", *, translated=True,
     if translated:
         trans = {
             "post_id": post_id,
-            "source_text_sha256": L.translation.source_text_sha256(row["text"]),
+            "source_text_sha256": translated_contract.source_text_sha256(row["text"]),
             "text_de": "Kostenloser Versand für Neakasa #Tag",
             "translated_at": "2026-08-31T12:30:00Z",
             "model": "deepseek-v4-pro",
-            "prompt_version": L.translation.PROMPT_VERSION,
+            "prompt_version": translated_contract.PROMPT_VERSION,
         }
         (arc / "translated.jsonl").write_text(
             json.dumps(trans, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -603,13 +617,13 @@ with tempfile.TemporaryDirectory() as pipeline_tmp:
     first_text_sha = source_changed_row["text_de_sha256"]
     changed_translation = {
         "post_id": "p100",
-        "source_text_sha256": L.translation.source_text_sha256(row["text"]),
+        "source_text_sha256": translated_contract.source_text_sha256(row["text"]),
         "text_de": "Versandkostenfrei für Neakasa #Tag",
         "translated_at": "2026-08-31T13:00:00Z",
         "model": "deepseek-v4-pro",
-        "prompt_version": L.translation.PROMPT_VERSION,
+        "prompt_version": translated_contract.PROMPT_VERSION,
     }
-    L.translation.append_jsonl(arc / "translated.jsonl", changed_translation)
+    translated_contract.append_translated(arc / "translated.jsonl", changed_translation)
     text_changed_editor = FakePipelineEditor()
     text_changed = L.run_localize(
         settings, text_changed_editor, arc, [row], None, False, False)

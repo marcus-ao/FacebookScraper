@@ -88,13 +88,12 @@ class FakeMouse:
 class FakePage:
     """goto 时把预置的响应喂给监听器，模拟首屏接口。"""
 
-    def __init__(self, responses, final_url=None, scroll_step=800, embedded=None):
+    def __init__(self, responses, final_url=None, scroll_step=800):
         self._responses = responses
         self._final_url = final_url
         self.url = ""
         self.scroll_y = 0.0
         self.scroll_step = scroll_step
-        self.embedded = embedded or []
         self.mouse = FakeMouse(self)
         self.handlers = {}
         self.closed = False
@@ -106,7 +105,7 @@ class FakePage:
         if "scrollY" in expr:
             return self.scroll_y
         if "querySelectorAll" in expr:
-            return [json.dumps(b) for b in self.embedded]
+            return []
         return None
 
     def on(self, event, fn):
@@ -220,12 +219,12 @@ print("\n[2] 抓取深度上限：只滚几屏，绝不滚到底（C7）")
 for limit in (0, 1, 3):
     page = FakePage([])
     cfg_l = test_cfg(max_scrolls=limit)
-    n, moved = asyncio.run(human_scroll(page, cfg_l, cfg_l.pacer()))
+    n, moved = asyncio.run(human_scroll(page, cfg_l))
     check(len(page.mouse.wheels) == limit == n,
           "max_scrolls=%d 时正好滚 %d 屏" % (limit, limit))
 
 page = FakePage([])
-_, moved = asyncio.run(human_scroll(page, test_cfg(max_scrolls=4), test_cfg().pacer()))
+_, moved = asyncio.run(human_scroll(page, test_cfg(max_scrolls=4)))
 deltas = {dy for _, dy in page.mouse.wheels}
 check(len(deltas) > 1, "每屏的滚动距离不相同 —— 匀速等距滚动本身是行为指纹")
 check(all(0 < dy for _, dy in page.mouse.wheels), "只向下滚")
@@ -237,7 +236,7 @@ check(page.mouse.moves and page.mouse.moves[0] == (640, 400),
 check(moved > 0, "返回值报出页面实际移动了多少像素")
 
 dead = FakePage([], scroll_step=0)
-_, moved0 = asyncio.run(human_scroll(dead, test_cfg(max_scrolls=2), test_cfg().pacer()))
+_, moved0 = asyncio.run(human_scroll(dead, test_cfg(max_scrolls=2)))
 check(moved0 == 0,
       "滚了但页面没动时返回 0 —— 这正是那次静默失败要被看见的地方")
 
@@ -331,31 +330,7 @@ with tempfile.TemporaryDirectory() as d:
 
 
 # ==========================================================================
-print("\n[3b] 2026-08-30 实测暴露的两个缺陷（这一段是回归防线，别删）")
-
-# 缺陷一：IG 主页时间线的首屏随 HTML 下发、不走 XHR。
-# 那次实测 39 个候选里只有 1 篇是本账号的，且比归档里最新的还旧。
-with tempfile.TemporaryDirectory() as d:
-    arc = Archive(Path(d), "in_acme_us")
-    page = FakePage(
-        # XHR 里只有推荐位（别人的帖子）——实测就是这个样子
-        [resp({"data": {"items": [
-            ig_payload("777", owner="other_brand")["data"]["items"][0]]}})],
-        # 本账号的时间线在页面内嵌的 JSON 里
-        embedded=[ig_payload("888", ts=1756500000, text="newest post")])
-    n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc, test_cfg()))
-    check(n.new == 1, "内嵌 JSON 里的时间线被抓到了（只拦 XHR 的话这里是 0）")
-    check(n.embedded == 1, "结果里报出有几段来自内嵌 JSON")
-    check(n.rejected == 1, "XHR 里的推荐位照常被归属过滤丢掉")
-
-with tempfile.TemporaryDirectory() as d:
-    arc = Archive(Path(d), "in_acme_us")
-    page = FakePage([resp(ig_payload())],
-                    embedded=[ig_payload("888", ts=1756500000)])
-    n = asyncio.run(delta_once(FakeCtx(page), "instagram", "acme_us", arc,
-                               test_cfg(harvest_embedded=False)))
-    check(n.embedded == 0 and n.new == 1,
-          "harvest_embedded=false 时不读内嵌 JSON（留一个可关的开关）")
+print("\n[3b] 2026-08-30 实测暴露的缺陷：抓不到时间线必须和「真没新帖」区分得开")
 
 # 缺陷二：那次 IG 只打了一句"新增 0 篇"，与"真的没新帖"完全无法区分。
 with tempfile.TemporaryDirectory() as d:

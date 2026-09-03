@@ -34,6 +34,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.config import cfg
+from publish import evidence
 from publish import selectors
 from publish.evidence import token_present as evidence_token_present
 from publish.selectors import (COMPOSER, SIGNALS, EvidenceSignal, Locator,
@@ -56,8 +58,18 @@ PAGE_HEALTH_TIMEOUT = 8.0
 # 上传后给 UI 的沉淀窗口。**不是固定 sleep**：到点就走，不阻塞成功路径。
 UPLOAD_SETTLE_TIMEOUT = 15.0
 
-# 截图时遮罩凭据类输入。**与 tools/probe_publish.py 里那条保持一致**
-# （`tests_publish.py` 有断言钉住两者相同，防止一边改了另一边忘了）。
+# 截图时遮罩凭据类输入。**与 tools/probe_publish.py 里那条故意不同，不要"同步"。**
+#
+# 这里遮的是登录凭据：发布截图要能看清正文和排期，那正是出事时要复盘的东西。
+# probe 那条遮的是**所有有值控件**（input/textarea/select/contenteditable/
+# role=textbox…），因为 dump 的契约是"不保存任何输入值"，正文、日期、账号
+# 上下文都必须遮掉。两者服务于两个不同的契约。
+#
+# ⚠️ 2026-09-02 之前这里写的是"与 probe 保持一致，测试有断言钉住两者相同"——
+# 那句话是错的：tests_publish.py 那条断言的措辞恰恰是"probe **额外**遮正文/
+# 日期/时间等有值控件"，它断言的是两者**不同**。照那句注释去同步两个常量，
+# 会把 probe 的遮罩削成只遮凭据，dump 截图里就会漏出正文和账号。
+#
 # 它是通用 HTML 凭据遮罩，不是 Business Suite 的流程定位器。
 SENSITIVE_INPUT_SELECTOR = (
     'input[type="password"], input[type="email"], '
@@ -991,14 +1003,10 @@ def _same_time(rendered: str, hour12: int, minute: int, meridiem: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _verified_locator(spec: Locator) -> tuple[bool | None, str]:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
-    from publish import evidence
     return evidence.verify(spec, cfg().state_dir)
 
 
 def _verified_signal(spec: EvidenceSignal) -> tuple[bool | None, str]:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
-    from publish import evidence
     return evidence.verify_signal(spec, cfg().state_dir)
 
 
@@ -1019,7 +1027,6 @@ def readback_evidence_ready() -> bool:
 
 
 def _require_reviewed_dump(*specs) -> None:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
     configured = str(cfg().get("publish", "ui_probe_dump", "") or "").strip()
     if not configured:
         raise ProbeRequired("[publish].ui_probe_dump 为空；生产证据没有审核边界")
@@ -1056,7 +1063,6 @@ def require_account_context_evidence() -> EvidenceSignal:
     if missing:
         raise ProbeRequired(
             "composer_account_context 缺少目标账号 token：%s" % "、".join(missing))
-    from core.config import cfg
     wanted = str(cfg().get("publish", "facebook_page_name", "") or "").strip()
     if (not wanted or spec.attributes.get(
             "facebook_account_token", "").casefold() != wanted.casefold()):
@@ -1109,15 +1115,13 @@ def require_readback_evidence() -> EvidenceSignal:
         raise ProbeRequired(
             "planner_loaded_signal 必须是数据完成后的 v2 semantic 语义，"
             "URL/页面骨架不能证明 Planner 数据已就绪")
-    from publish import evidence as _ev
-    missing = [key for key in _ev.PLANNER_REQUIRED
+    missing = [key for key in evidence.PLANNER_REQUIRED
                if not spec.attributes.get(key)]
     if missing:
         raise ProbeRequired(
             "planner_scheduled_card 缺少从 v2 dump 回填的属性：%s。"
             "\n⛔ 无法完整回读排期或远端占用槽，G6c 保持关闭。"
             % "、".join(missing))
-    from core.config import cfg
     current_targets = {
         "facebook_account_token": str(
             cfg().get("publish", "facebook_page_name", "") or "").strip(),
@@ -1152,7 +1156,6 @@ def require_readback_evidence() -> EvidenceSignal:
         passed, detail = _verified_signal(empty)
         if passed is not True:
             raise ProbeRequired("Planner 空态证据不能从 v2 dump 回查：%s" % detail)
-    from publish import evidence
     passed, detail = evidence.verify_publish_chain(
         button, account, success, loaded, spec, cfg().state_dir)
     if passed is not True:
@@ -1382,8 +1385,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
     ``'…#test September 15, 2026, 10:00 AM'``），所以这里解析的是整条名字，
     而不是"卡片内那个独立的时刻子元素"——后者在真实 UI 上不存在。
     """
-    from publish import evidence as _ev
-    return _ev.parse_entry_moment(rendered, spec.attributes)
+    return evidence.parse_entry_moment(rendered, spec.attributes)
 
 
 async def _open_channel_dialogs(

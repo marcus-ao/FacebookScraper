@@ -42,7 +42,8 @@ from core.console import force_utf8                          # noqa: E402
 from publish import business_suite as bs                     # noqa: E402
 from publish import journal                                  # noqa: E402
 from publish import workflow                                 # noqa: E402
-from publish.compose import ComposeError, compose_post       # noqa: E402
+from publish.compose import (ComposeError,                   # noqa: E402
+                             _validated_probe_dump, compose_post)
 
 
 def _now_stamp() -> str:
@@ -127,7 +128,6 @@ def _resolve_ui_timezone(strict: bool) -> str:
         raise SystemExit(bs.describe_gap("ui_timezone"))
     if not strict:
         return name
-    from publish.compose import _validated_probe_dump      # noqa: PLC0415
     data = _validated_probe_dump(())
     observed = str((data.get("observations") or {}).get("ui_timezone") or "")
     if name not in observed:

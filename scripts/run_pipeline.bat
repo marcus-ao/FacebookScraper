@@ -17,14 +17,14 @@ REM to state\alerts.log (plus a desktop toast).
 REM
 REM check-alive exit codes: 0 alive / 1 cannot check / 2 dead and alerted.
 REM Task Scheduler surfaces this as Last Result, which is a second channel
-REM independent of the toast. That is deliberate -- see pipeline.py.
+REM independent of the toast. That is deliberate -- see pipeline\cli.py.
 REM
 REM status output is NOT redirected: it is a snapshot you read right now.
 REM check-alive output IS appended to state\pipeline.log, because that one
 REM runs unattended and the previous run is often the only evidence left.
 REM
 REM Pure ASCII on purpose -- see the comment block in setup.bat.
-REM Every Chinese message lives in pipeline.py.
+REM Every Chinese message lives in pipeline\cli.py.
 REM ---------------------------------------------------------------------
 setlocal
 REM Console code page here is 936. check-alive output is redirected into a
@@ -48,23 +48,23 @@ if /i "%~1"=="check-alive" goto :alive
 if /i "%~1"=="run" goto :run
 if "%~1"=="" goto :interactive
 
-".venv\Scripts\python.exe" pipeline.py %*
+".venv\Scripts\python.exe" -m pipeline %*
 exit /b %ERRORLEVEL%
 
 :alive
-".venv\Scripts\python.exe" pipeline.py %* >> "state\pipeline.log" 2>&1
+".venv\Scripts\python.exe" -m pipeline %* >> "state\pipeline.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\pipeline.log"
 exit /b %RC%
 
 :run
-".venv\Scripts\python.exe" pipeline.py %* >> "state\pipeline.log" 2>&1
+".venv\Scripts\python.exe" -m pipeline %* >> "state\pipeline.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\pipeline.log"
 exit /b %RC%
 
 :interactive
-".venv\Scripts\python.exe" pipeline.py status
+".venv\Scripts\python.exe" -m pipeline status
 set "RC=%ERRORLEVEL%"
 echo.
 pause

@@ -14,10 +14,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:                       # 仅为类型标注，避免运行时多一次 import
-    from core.store import Archive
+from core.config import cfg, per_platform
 
 
 def _parse_ts(value) -> datetime | None:
@@ -78,33 +76,6 @@ def check_continuity(rows: list[dict], gap_days: int) -> list[dict]:
                 "gap_days": round(delta, 1),
             })
     return gaps
-
-
-def check_quiet(state: dict, platform: str, alert_after: int) -> bool:
-    """连续 alert_after 天零新增即返回 True。
-
-    目标账号日均约 1 帖，长期零新增本身就是异常信号——
-    最可能的解释不是"他们没发"，而是增量路径已经被登录墙挡住了。
-
-    ⚠️ 阈值需要按真实发帖节奏重设：2026-08-30 实测该账号**连续一个多月
-    没发新帖**，而 config 里的 4 天是按"日均约 1 帖"定的。不改会天天误报，
-    误报多了真报警就没人看了。
-
-    state 里没有该平台的记录时返回 False：那说明增量还没跑过，
-    属于"没数据"而不是"安静"，该由调用方按 last_success 另行判断。
-    """
-    entry = state.get(platform)
-    if not isinstance(entry, dict):
-        return False
-    quiet = entry.get("consecutive_quiet_days")
-    if not isinstance(quiet, (int, float)) or isinstance(quiet, bool):
-        return False
-    return quiet >= alert_after
-
-
-def check_incomplete(arc: "Archive") -> list[dict]:
-    """媒体不全的帖子（源响应只给封面、或图片没下全的那些）。"""
-    return arc.needs_media()
 
 
 # --------------------------------------------------------------------------
@@ -179,7 +150,6 @@ def params(platform: str | None = None) -> tuple[int, int]:
     不给就退回通用值。实测两个账号的节奏差一个量级，共用阈值必然一边误报、
     一边漏报——详见计划 D 组头部那张表。
     """
-    from core.config import cfg, per_platform
     c = cfg()
     gap = per_platform(c.get("integrity", "gap_flag_days", None), platform or "", 5)
     quiet = per_platform(c.get("integrity", "alert_after_quiet_days", None),

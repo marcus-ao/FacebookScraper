@@ -93,7 +93,7 @@ class FakePage:
         if "scrollY" in expr:
             return self.scroll_y
         if "querySelectorAll" in expr:
-            return []          # 内嵌 JSON：转储里没有，harvest_embedded 默认也关着
+            return []
         return None
 
     def on(self, event, fn) -> None:
@@ -136,8 +136,7 @@ def newest_delta_capture(base: Path) -> Path | None:
 def offline_cfg() -> DeltaConfig:
     """真实配置，但把所有等待清零——假页面上没有什么好等的。
 
-    ⚠️ **`min_own_posts` 与 `harvest_embedded` 保持配置里的真值**：
-    这两个正是要验的东西，改了就等于没验。
+    ⚠️ **`min_own_posts` 保持配置里的真值**：它正是要验的东西，改了就等于没验。
     """
     d = DeltaConfig.load()
     d.request_gap_seconds = 0.0

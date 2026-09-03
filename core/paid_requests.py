@@ -9,14 +9,13 @@ from __future__ import annotations
 import json
 import math
 import os
-import sys
 import uuid
-from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from core.paid_model import FileLock
 
 LEDGER_NAME = "paid_requests.jsonl"
 LOCK_NAME = "paid_requests.lock"
@@ -41,49 +40,10 @@ class PaidRequestBlocked(RuntimeError):
     """账本/预算不能证明下一次请求安全，失败闭合。"""
 
 
-class PaidRequestLock(AbstractContextManager):
+def PaidRequestLock(path: Path) -> FileLock:   # noqa: N802（保留原名，调用点不变）
     """所有文本与图片付费入口共用的一把跨进程锁。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(
-                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as exc:
-            self._file.close()
-            self._file = None
-            raise PaidRequestBlocked(
-                "另一个翻译/调图付费请求正在进行；本次未发请求") from exc
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=PaidRequestBlocked,
+                    busy_message="另一个翻译/调图付费请求正在进行；本次未发请求")
 
 
 @dataclass(frozen=True)
@@ -164,6 +124,16 @@ def _latest_by_request(rows: list[dict]) -> dict[str, dict]:
     return latest
 
 
+# 同一个 job_key 允许被拒几次。**不是无限重试，也不是一次就永久封死。**
+#
+# 拒绝写盘意味着钱已经花了但产出不合格（金额没原样保留、标签被改）。
+# 一次就永久封死的问题是：模型偶发抖动和"提示词真的有问题"长得一样，而
+# job_key 含 PROMPT_VERSION —— 用户想重试就必须先改提示词并 +1 版本号，
+# 哪怕问题只是这一次的抖动。日/月预算闸已经封住了总花费的上界，
+# 这里只需要防"同一条无限重扣"。
+REJECTED_RETRY_BUDGET = 2
+
+
 def _assert_startable(state_dir: Path, job_key: str) -> None:
     rows = load_events(state_dir)
     latest = _latest_by_request(rows)
@@ -173,15 +143,23 @@ def _assert_startable(state_dir: Path, job_key: str) -> None:
         row = blocking[0]
         raise PaidRequestBlocked(
             "付费账本存在未闭合请求 %s（%s）；为把未知超额限制在一次请求，"
-            "人工核账前已停止全部后续付费"
-            % (row.get("request_id"), row.get("event")))
+            "人工核账前已停止全部后续付费。\n"
+            "    确认那次请求的真实结果后，用以下命令闭合它再重跑：\n"
+            "        python -m core.paid_requests --status\n"
+            "        python -m core.paid_requests --resolve %s --as rejected"
+            % (row.get("request_id"), row.get("event"), row.get("request_id")))
     rejected = [row for row in latest.values()
                 if row.get("job_key") == job_key
                 and row.get("event") == EVENT_REJECTED]
-    if rejected:
+    if len(rejected) >= REJECTED_RETRY_BUDGET:
         raise PaidRequestBlocked(
-            "同一付费任务已有 output_rejected 记录（request_id=%s）；"
-            "人工处理前禁止自动重试" % rejected[-1].get("request_id"))
+            "同一付费任务已被拒 %d 次（上限 %d，最近 request_id=%s）；"
+            "这不像是偶发抖动，禁止继续自动重试。\n"
+            "    先看上面每条的拒绝原因：金额/标签闸报的是产出内容问题，"
+            "该改提示词（改完把 PROMPT_VERSION +1 即可解锁），"
+            "不是靠重跑碰运气。"
+            % (len(rejected), REJECTED_RETRY_BUDGET,
+               rejected[-1].get("request_id")))
 
 
 def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
@@ -195,26 +173,24 @@ def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
     }
 
 
-def default_budget_preflight() -> None:
-    """在 paid lock 内按全账号真相源重算日/月预算。"""
-    from core.config import cfg
-    import translate
-    from pipeline import pipeline_settings
-    from pipeline_assisted import assert_budget
-
-    c = cfg()
-    assert_budget(
-        translate.account_dirs(c.archive_dir), pipeline_settings(),
-        now=datetime.now(timezone.utc), state_dir=c.state_dir)
-
-
 class RequestController:
-    """把一次真实 API 调用包进 started→usage 的耐久临界区。"""
+    """把一次真实 API 调用包进 started→usage 的耐久临界区。
+
+    ``preflight`` 是**必填**的，而且这里故意不提供默认值。
+
+    预算判据要同时读 `[pipeline]` 配置、付费账本、以及翻译/调图两边的计价
+    公式 —— 那是应用层的知识。core/ 一旦替它兜底，就会反过来 import
+    ``translate`` / ``pipeline`` / ``pipeline_assisted``，让最底层的模块依赖
+    最顶层的三个（这正是本次重构要拆掉的那条边）。
+
+    所以策略由**组装根**（各 CLI 的 ``main()``）注入：
+    ``pipeline_assisted.budget_preflight`` 是生产实现，测试传 ``lambda: None``。
+    """
 
     def __init__(self, state_dir: Path, *,
-                 preflight: Callable[[], None] | None = None) -> None:
+                 preflight: Callable[[], None]) -> None:
         self.state_dir = Path(state_dir)
-        self.preflight = preflight or default_budget_preflight
+        self.preflight = preflight
 
     def run(self, *, stage: str, job_key: str, source_ref: str,
             media_index: int | None, model: str,
@@ -331,7 +307,7 @@ def ledger_snapshot(state_dir: Path, *, now: datetime,
         event = row.get("event")
         if event in _GLOBAL_BLOCKING:
             unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
-        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+        elif event == EVENT_ACCEPTED and request_id not in usage_rows:
             unknown.append("request_id=%s 完成态缺 usage" % request_id)
 
     zone = ZoneInfo(zone_name)
@@ -393,7 +369,7 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
         event = row.get("event")
         if event in _GLOBAL_BLOCKING:
             unknown.append("request_id=%s 未闭合(%s)" % (request_id, event))
-        elif event in {EVENT_ACCEPTED, EVENT_REJECTED} and request_id not in usage_rows:
+        elif event == EVENT_ACCEPTED and request_id not in usage_rows:
             unknown.append("request_id=%s 完成态缺 usage" % request_id)
 
     text_cost = image_cost = 0.0
@@ -421,3 +397,97 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
     return LedgerMonthSnapshot(
         text_cost, image_cost, frozenset(usage_rows),
         tuple(dict.fromkeys(unknown)))
+
+
+# ==========================================================================
+# 人工结转入口
+#
+# 发布 journal 一直有 tools/publish_post.py 做人工结转，付费账本却一个都没有：
+# 一次 Ctrl-C 留下的 started 行会让 _assert_startable 永久拒绝**全部**后续付费
+# （文本和图片一起），而唯一的出路是手改 JSONL。这条命令补上那个出路。
+# ==========================================================================
+
+def _cli(argv=None) -> int:
+    import argparse
+
+    from core.config import cfg
+    from core.console import force_utf8
+    force_utf8()
+
+    parser = argparse.ArgumentParser(
+        prog="python -m core.paid_requests",
+        description="付费账本的只读体检与人工结转。不发任何付费请求。")
+    parser.add_argument("--status", action="store_true",
+                        help="列出未闭合请求与各 job_key 的被拒次数")
+    parser.add_argument("--resolve", metavar="REQUEST_ID",
+                        help="把一个未闭合请求闭合掉")
+    parser.add_argument("--as", dest="outcome",
+                        choices=("accepted", "rejected"),
+                        help="--resolve 时必填：那次请求的真实结果")
+    parser.add_argument("--reason", default="人工结转",
+                        help="写进账本的说明")
+    args = parser.parse_args(argv)
+
+    state_dir = cfg().state_dir
+    rows = load_events(state_dir)
+    latest = _latest_by_request(rows)
+
+    if args.resolve:
+        row = latest.get(args.resolve)
+        if row is None:
+            print("账本里没有 request_id=%s" % args.resolve)
+            return 1
+        if row.get("event") not in _GLOBAL_BLOCKING:
+            print("request_id=%s 当前状态是 %s，已经是闭合态，无需结转"
+                  % (args.resolve, row.get("event")))
+            return 1
+        if not args.outcome:
+            print("必须用 --as accepted|rejected 说明那次请求的真实结果。\n"
+                  "  查不清就先去看服务商后台的用量：把已经计费的请求记成\n"
+                  "  accepted 才不会让预算闸低估花销。")
+            return 2
+        event = dict(row)
+        event["event"] = (EVENT_ACCEPTED if args.outcome == "accepted"
+                          else EVENT_REJECTED)
+        event["reason"] = str(args.reason)[:300]
+        event["resolved_by"] = "manual"
+        event["recorded_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z")
+        with PaidRequestLock(state_dir / LOCK_NAME):
+            _append(state_dir, event)
+        print("已把 request_id=%s 结转为 %s" % (args.resolve, event["event"]))
+        return 0
+
+    unclosed = [(rid, row) for rid, row in latest.items()
+                if row.get("event") in _GLOBAL_BLOCKING]
+    print("付费账本：%s" % (state_dir / LEDGER_NAME))
+    print("  事件 %d 条 / 请求 %d 个" % (len(rows), len(latest)))
+    if unclosed:
+        print("\n⛔ 未闭合请求 %d 个 —— 它们会阻断全部后续付费：" % len(unclosed))
+        for rid, row in unclosed:
+            print("    %s  %s  stage=%s  job_key=%s"
+                  % (rid, row.get("event"), row.get("stage"),
+                     str(row.get("job_key"))[:40]))
+        print("\n  确认真实结果后逐个结转：")
+        print("    python -m core.paid_requests --resolve <ID> --as accepted|rejected")
+    else:
+        print("\n✅ 没有未闭合请求。")
+
+    rejected_counts: dict[str, int] = {}
+    for row in latest.values():
+        if row.get("event") == EVENT_REJECTED:
+            key = str(row.get("job_key") or "?")
+            rejected_counts[key] = rejected_counts.get(key, 0) + 1
+    blocked = {k: n for k, n in rejected_counts.items()
+               if n >= REJECTED_RETRY_BUDGET}
+    if blocked:
+        print("\n⚠️ 已用满被拒重试预算（%d 次）的 job_key %d 个："
+              % (REJECTED_RETRY_BUDGET, len(blocked)))
+        for key, n in sorted(blocked.items()):
+            print("    %s  被拒 %d 次" % (key[:60], n))
+        print("\n  这类要改提示词而不是重跑：改完把 PROMPT_VERSION +1 即可解锁。")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

@@ -52,6 +52,8 @@ try {
 def _state_dir() -> Path:
     """告警日志的落点。config.toml 读不出来也要有地方写。"""
     try:
+        # 延迟导入：告警要在 config.toml 本身读不出来时也能落盘。模块级导入
+        # 会让"配置坏了"这条最需要告警的故障，恰好把告警一起带走。
         from core.config import cfg
         return cfg().state_dir
     except (Exception, SystemExit):

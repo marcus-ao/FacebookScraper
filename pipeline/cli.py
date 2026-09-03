@@ -1,11 +1,11 @@
 r"""L 组：把四个阶段的真相源重新对账。**不建立发布任务队列。**
 
-    pipeline.py status        各阶段积压 + 最近一次成功 + 本月花费
-    pipeline.py preflight     上线预检：还差什么 + 激活后每天会发生什么
-    pipeline.py check-alive   死人开关：太久没有成功运行就告警
-    pipeline.py activate      G8 通过后原子记录“只处理此后新帖”的边界
-    pipeline.py run           manual/assisted 对账并从真相源恢复中断
-    pipeline.py approve       批量确认待处理项，并在确认后逐篇提交
+    python -m pipeline status        各阶段积压 + 最近一次成功 + 本月花费
+    python -m pipeline preflight     上线预检：还差什么 + 激活后每天会发生什么
+    python -m pipeline check-alive   死人开关：太久没有成功运行就告警
+    python -m pipeline activate      G8 通过后原子记录“只处理此后新帖”的边界
+    python -m pipeline run           manual/assisted 对账并从真相源恢复中断
+    python -m pipeline approve       批量确认待处理项，并在确认后逐篇提交
 
 前两个只读子命令**零网络、零费用、零写盘**（`check-alive` 唯一的副作用是
 `core.notify` 那条告警，它本来就要落 `state/alerts.log`）。
@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                         # noqa: E402
@@ -42,72 +42,19 @@ from core.console import force_utf8                 # noqa: E402
 from core.notify import notify                      # noqa: E402
 from core.store import Archive, ArchivePathError    # noqa: E402
 import translate as translation                     # noqa: E402
+from pipeline.settings import (AUTONOMY_LEVELS,      # noqa: E402
+                               PIPELINE_CONFIG_KEYS,
+                               PipelineConfigError,
+                               pipeline_settings)
+from core import paid_requests                      # noqa: E402
+from publish import business_suite as bs             # noqa: E402
+from publish.compose import (                        # noqa: E402
+    _PROBE_REQUIRED_OBSERVATIONS as required)
+from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
+                            DAILY_TASK)
+from pipeline import engine as pipeline_assisted     # noqa: E402
+from pipeline import engine as assisted              # noqa: E402
 
-
-# `[pipeline]` 的全部合法键。CR-40 立的规矩：不许有改了不生效的死旋钮，
-# 也不许有拼错了却静默被忽略的键。所以这张表是双向的 ——
-# 表外的键报错，表里标 False 的键在 status 里显式说明"还没接上"。
-PIPELINE_CONFIG_KEYS: dict[str, bool] = {
-    "autonomy": True,
-    "dead_man_days": True,         # ← 本文件的 check-alive 就在消费它
-    "monthly_budget_usd": True,
-    "daily_budget_usd": True,
-}
-AUTONOMY_LEVELS = ("manual", "assisted", "supervised", "autonomous")
-
-
-class PipelineConfigError(RuntimeError):
-    """`[pipeline]` 配置本身不合法。失败闭合，不猜默认值。"""
-
-
-# ---------------------------------------------------------------------------
-# 配置
-# ---------------------------------------------------------------------------
-
-def pipeline_settings(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """严格读 `[pipeline]`；未知键、错类型都失败闭合。
-
-    形状照抄 ``localize_images.Settings.validate`` 的双向对账，
-    但这里只有四个键，不值得为它建一个类。
-    """
-    if raw is None:
-        raw = cfg()._d.get("pipeline", {}) or {}
-    if not isinstance(raw, Mapping):
-        raise PipelineConfigError("[pipeline] 不是一张表")
-
-    unknown = sorted(set(raw) - set(PIPELINE_CONFIG_KEYS))
-    if unknown:
-        raise PipelineConfigError(
-            "[pipeline] 有代码不认识的键：" + "、".join(unknown)
-            + "\n    （拼错的键会静默失效，所以这里直接拒绝；"
-              "真要加新键，请同时改 pipeline.py 的 PIPELINE_CONFIG_KEYS）")
-    missing = sorted(set(PIPELINE_CONFIG_KEYS) - set(raw))
-    if missing:
-        raise PipelineConfigError(
-            "[pipeline] 缺少必需键：" + "、".join(missing)
-            + "\n    （config.toml 里那一整段是 L 组的骨架，不要删键）")
-
-    autonomy = raw["autonomy"]
-    if autonomy not in AUTONOMY_LEVELS:
-        raise PipelineConfigError(
-            "[pipeline].autonomy 必须是 %s 之一，实得 %r"
-            % ("/".join(AUTONOMY_LEVELS), autonomy))
-
-    days = raw["dead_man_days"]
-    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
-        raise PipelineConfigError(
-            "[pipeline].dead_man_days 必须是 >=1 的整数，实得 %r" % (days,))
-
-    budgets = {}
-    for key in ("monthly_budget_usd", "daily_budget_usd"):
-        value = raw[key]
-        if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                or not math.isfinite(float(value)) or value < 0):
-            raise PipelineConfigError(
-                "[pipeline].%s 必须是非负数，实得 %r" % (key, value))
-        budgets[key] = float(value)
-
-    return {"autonomy": autonomy, "dead_man_days": days, **budgets}
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +256,6 @@ def month_spend(dirs: list[Path], month: str,
     text_cost = image_cost = 0.0
     paid_ids: frozenset[str] = frozenset()
     if state_dir is not None:
-        from core import paid_requests
         try:
             paid = paid_requests.ledger_month_snapshot(
                 state_dir, month=month, zone_name="Europe/Berlin")
@@ -328,6 +274,8 @@ def month_spend(dirs: list[Path], month: str,
         problems.append("[translate] 配置不可用，翻译花费未计入（%s）" % exc)
         ts = None
     try:
+        # 延迟导入：它会拉起 Pillow。`python -m pipeline status` 是零网络的只读命令，
+        # 常用来"看一眼积压"，不该为此付 Pillow 的启动开销。
         import localize_images as image_de
         isettings = image_de.Settings()
     except SystemExit as exc:
@@ -510,7 +458,6 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     open_count = 0
     g9_error = None
     try:
-        import pipeline_assisted
         activated = pipeline_assisted.activation_time(state_dir)
         latest = pipeline_assisted.latest_human_items(state_dir)
         open_count = sum(1 for row in latest.values() if row.get("status") == "open")
@@ -619,7 +566,6 @@ def run_status(dirs: list[Path], now: datetime | None = None,
 
 def _probe_observation_gaps() -> tuple[str, ...]:
     """`ui_constraints_verified` 到底还差哪几个观察项。判据借 compose 的，不另写。"""
-    from publish.compose import _PROBE_REQUIRED_OBSERVATIONS as required
 
     configured = cfg().get("publish", "ui_probe_dump", "")
     if not isinstance(configured, str) or not configured.strip():
@@ -639,10 +585,6 @@ def _probe_observation_gaps() -> tuple[str, ...]:
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
     """G6/G6c 三道生产闸。直接调 business_suite 的判据（导入不会启动浏览器）。"""
-    try:
-        from publish import business_suite as bs
-    except Exception as exc:                          # noqa: BLE001
-        return [("发布证据闸", False, "publish.business_suite 导入失败：%s" % exc)]
     out = []
     for label, fn in (("账号上下文", bs.require_account_context_evidence),
                       ("提交按钮 + 成功信号", bs.require_submission_evidence),
@@ -658,7 +600,6 @@ def _publish_gate_states() -> list[tuple[str, bool, str]]:
 
 def _task_states() -> list[tuple[str, str]]:
     import subprocess
-    from tools.schedule import ALIVE_TASK, CATCHUP_TASK, DAILY_TASK
 
     out = []
     for name in (DAILY_TASK, CATCHUP_TASK, ALIVE_TASK):
@@ -687,7 +628,6 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     `[publish.trusted_owners]` 少一个自家兄弟账号。那两张表和 14 个 UI 上限
     一样是承重的，但它们不在 GO_LIVE 的关键路径上，于是没人盯。
     """
-    import pipeline_assisted as assisted
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state_dir = cfg().state_dir
@@ -789,7 +729,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         for line in blockers:
             print("    - %s" % line)
     elif activated is None:
-        print("  可以了：python pipeline.py activate --g8-verified")
+        print("  可以了：python -m pipeline activate --g8-verified")
     elif settings["autonomy"] == "manual":
         print("  已激活。把 config.toml 的 [pipeline].autonomy 改成 assisted。")
     else:
@@ -930,7 +870,6 @@ def main(argv=None) -> int:
             print("[!] 预检失败：%s" % exc)
             return 2
 
-    import pipeline_assisted as assisted
     if args.command == "activate":
         # `--g8-verified` 曾经只是一句自觉。激活早了不是顺序不好看，是**真花钱**：
         # assisted 会先付费翻译、再付费调图，最后逐篇卡在离线硬闸上。
@@ -940,7 +879,7 @@ def main(argv=None) -> int:
             print("[!] G8 验收证据不成立，拒绝激活：")
             for line in blockers:
                 print("    - %s" % line)
-            print("    想看完整清单：python pipeline.py preflight")
+            print("    想看完整清单：python -m pipeline preflight")
             return 2
         try:
             when = assisted.activate(

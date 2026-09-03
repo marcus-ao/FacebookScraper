@@ -6,10 +6,7 @@ import html
 import json
 import math
 import os
-import re
-import sys
 import unicodedata
-from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from difflib import SequenceMatcher
@@ -24,6 +21,19 @@ from core.store import Archive, post_dirname
 from publish import journal
 from publish.compose import ComposeError, compose_post
 import translate as translation
+from core.paid_model import FileLock
+from core import paid_model
+from core import imagehash
+from pipeline.settings import pipeline_settings
+import localize_images
+import localize_images as image_de
+from core import paid_requests
+from core.chrome import attach
+from routes import delta
+# 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
+from publish import business_suite as bs
+from tools import publish_post
+
 
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
@@ -49,50 +59,10 @@ class BudgetStopped(PipelineRunError):
     pass
 
 
-class PipelineOperationLock(AbstractContextManager):
+def PipelineOperationLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
     """让 daily/catch-up/手工 run/approve 共用同一把跨进程锁。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = Path(path)
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(
-                    self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError) as exc:
-            self._file.close()
-            self._file = None
-            raise PipelineRunError(
-                "另一个 pipeline run/approve/activate 正在运行；"
-                "为防重复付费或重复提交，本次没有开始") from exc
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=PipelineRunError,
+                    busy_message="另一个流水线实例正在运行；本次不做任何改动。")
 
 
 @dataclass(frozen=True)
@@ -175,12 +145,8 @@ class BudgetSnapshot:
 
 
 def _atomic_json(path: Path, data: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(dict(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8")
-    os.replace(temporary, path)
+    """实现在 core/paid_model。**顺带补上了原本缺失的 fsync。**"""
+    paid_model.atomic_write_json(path, dict(data), indent=2, sort_keys=True)
 
 
 def _parse_aware(value: Any) -> datetime | None:
@@ -353,22 +319,17 @@ def _image_paths(source: SourcePost) -> tuple[Path, ...]:
 
 
 def dhash(path: Path) -> int:
-    with Image.open(path) as image:
-        # BILINEAR 是本项目配对标定使用的 dHash 采样；真实 2026-08-27
-        # FB/IG 五张素材在这一路径上的逐图距离均为 0。
-        gray = image.convert("L").resize((9, 8), Image.Resampling.BILINEAR)
-        pixels = list(gray.getdata())
-    value = 0
-    for row in range(8):
-        offset = row * 9
-        for column in range(8):
-            value = (value << 1) | int(
-                pixels[offset + column] > pixels[offset + column + 1])
-    return value
+    """素材配对用的 dHash。实现在 core/imagehash，与图片德语化共用同一份。
+
+    ⚠️ 2026-09-02 之前这里独立实现，而 localize_images 另有一份用不同滤波器
+    的同名实现——对同一张图给出不同的值。现在两边共用一份（BILINEAR，
+    依据见 core/imagehash 的模块说明）。
+    """
+    return imagehash.dhash_file(path)
 
 
 def dhash_distance(left: int, right: int) -> int:
-    return (left ^ right).bit_count()
+    return imagehash.hamming(left, right)
 
 
 def _media_relation(left: SourcePost, right: SourcePost,
@@ -425,21 +386,12 @@ def needs_human_path(state_dir: Path) -> Path:
 
 
 def needs_human_events(state_dir: Path) -> list[dict]:
-    path = needs_human_path(state_dir)
-    if not path.is_file():
-        return []
-    rows: list[dict] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PipelineRunError("%s 第 %d 行损坏：%s" % (
-                path, number, exc)) from exc
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+    """读待人工确认队列。读法在 core/paid_model，与发布留痕共用一份。"""
+    def corrupt(path, number, exc):
+        return PipelineRunError(
+            "%s 第 %d 行损坏：%s" % (path, number, exc or "不是 JSON 对象"))
+
+    return paid_model.read_jsonl(needs_human_path(state_dir), on_corrupt=corrupt)
 
 
 def latest_human_items(state_dir: Path) -> dict[str, dict]:
@@ -552,7 +504,7 @@ def _approve_hints(open_rows: list[dict]) -> str:
     if ready:
         # item_id 是 `kind-hash20`、ref 是 `platform:post_id`，都只含
         # [a-z0-9.:-]，cmd.exe 下不需要引号 —— 加了反而会被 html.escape 成 &quot;。
-        command = ("python pipeline.py approve"
+        command = ("python -m pipeline approve"
                    + "".join(" --item-id %s" % row["item_id"] for row in ready))
         cards = []
         for row in ready:
@@ -584,7 +536,7 @@ def _approve_hints(open_rows: list[dict]) -> str:
         for row in similar:
             refs = list(row.get("source_refs") or [])
             lines.append(
-                "python pipeline.py approve --item-id %s --select-source %s=%s"
+                "python -m pipeline approve --item-id %s --select-source %s=%s"
                 % (row["item_id"], row["item_id"], refs[0] if refs else "平台:帖子ID"))
             if len(refs) > 1:
                 lines.append("#   另一个版本是：%s" % refs[1])
@@ -942,7 +894,6 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
     unknown: list[str] = []
     paid_ids: frozenset[str] = frozenset()
     if state_dir is not None:
-        from core import paid_requests
         try:
             paid = paid_requests.ledger_snapshot(
                 state_dir, now=now, zone_name=zone_name)
@@ -956,7 +907,6 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
         text_settings = translation.Settings()
     except SystemExit as exc:
         raise PipelineRunError("[translate] 配置不可用：%s" % exc) from exc
-    import localize_images as image_de
     try:
         image_settings = image_de.Settings()
     except SystemExit as exc:
@@ -1041,6 +991,20 @@ def assert_budget(account_dirs: Iterable[Path], settings: Mapping[str, Any], *,
     return snapshot
 
 
+def budget_preflight() -> None:
+    """在 paid lock 内按全账号真相源重算日/月预算。
+
+    这是 :class:`core.paid_requests.RequestController` 的生产 ``preflight``。
+    它住在这里而不是 core/，是因为它要同时知道 `[pipeline]` 预算、付费账本、
+    以及翻译/调图两边的计价公式 —— 三样都在 core/ 之上。各 CLI 的 ``main()``
+    负责把它注入进去。
+    """
+    c = cfg()
+    assert_budget(
+        translation.account_dirs(c.archive_dir), pipeline_settings(),
+        now=datetime.now(timezone.utc), state_dir=c.state_dir)
+
+
 def assert_budget_after(snapshot: BudgetSnapshot,
                         settings: Mapping[str, Any]) -> None:
     daily_limit = float(settings["daily_budget_usd"])
@@ -1061,7 +1025,6 @@ class RealStageRunner:
     """只调用各阶段现有入口；每个付费调用最多处理一篇/一张。"""
 
     def delta(self, *, if_stale: bool) -> int:
-        from routes import delta
         args = ["--platform", "all"]
         if if_stale:
             args.append("--if-stale")
@@ -1073,8 +1036,7 @@ class RealStageRunner:
             "--post-id", source.post_id])
 
     def image(self, source: SourcePost, media_index: int) -> int:
-        import localize_images
-        return localize_images.main([
+            return localize_images.main([
             "--account", source.account_dir.name,
             "--post-id", source.post_id,
             "--media-index", str(media_index)])
@@ -1088,7 +1050,6 @@ def translation_needed(source: SourcePost) -> bool:
 
 def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
     """调用 K 组已有内容寻址判据，准确识别哪些单图会产生付费请求。"""
-    import localize_images
     try:
         settings = localize_images.Settings()
         jobs, _state, _stats = localize_images.build_jobs(
@@ -1111,8 +1072,6 @@ def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
     ``while len(found) < count`` 的无上界循环，加了月末边界就必须给它一个出口，
     否则要么死循环、要么在月末把整次 run 抛崩。
     """
-    # 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
-    from publish import business_suite as bs
 
     zone = ZoneInfo(rules.timezone)
     ui_zone = bs.resolve_ui_timezone(rules.ui_timezone)
@@ -1591,7 +1550,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                   "本次零浏览器操作。" % coverage_count)
         return 0
 
-    from publish import business_suite as bs
     # 在任何浏览器读取之前先把整批严格离线硬闸重做一遍。
     provisional = next_slots(now, (), len(ready_rows), rules)
     if len(provisional) < len(ready_rows):
@@ -1632,7 +1590,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     c.assert_publish_chrome_isolated()
 
     async def read_slots():
-        from core.chrome import attach
         pw = None
         try:
             pw, _browser, context = await attach(
@@ -1683,7 +1640,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         final_batch.append((row, post, slot))
 
     print("=== 本次批量确认（%d 篇；德国时间 10:00/17:00）===" % len(final_batch))
-    from tools import publish_post
     for index, (row, post, slot) in enumerate(final_batch, 1):
         print("%d. %s  %s  %s  来源=%s" % (
             index, row["item_id"], post.post_id, slot.isoformat(),

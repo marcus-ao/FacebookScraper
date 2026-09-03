@@ -13,6 +13,20 @@ r"""把 :mod:`publish.selectors` 的每一条定位**回查**到它自称的 pro
 - dump 不在（别人的机器 / CI）→ 只能做结构检查（来源字段填了没）。
 
 **跳过不等于通过**，调用方要把两种结果分开打印。
+
+## 这带来一条刻意接受的边界：自动发布是单机工具
+
+`business_suite.py` 的三道闸一律要求 `passed is True`，而 dump 缺失时本模块
+返回 `None`（跳过）。两者相加的结果是：**换一台机器、或这份 1.97 MB 的 dump
+丢了，`--submit` 就永久失效。**
+
+这是 2026-09-03 用户明确拍板接受的：dump 含真实 Business Suite 的语义快照与
+117 张截图（134 MB），把它连同截图塞进版本库既撑爆仓库、又有截图漏内容的风险；
+而导出脱敏摘要虽然能跨机，却证明不了 final 截图存在，等于把闸调松一档。
+
+代价写在明面上，不留给下一个人自己撞：
+- 错误信息直接给出重录命令（见下面 `validate_v2_dump` / `verify` 的返回文案）；
+- `README.md` 与 `docs/MANUAL_STEPS.md` 都记了"换机 = 必须重录探查"。
 """
 from __future__ import annotations
 
@@ -56,6 +70,19 @@ def _parse_aware(value: object) -> datetime | None:
     return parsed
 
 
+# 校验结果缓存。**键含 mtime 与大小**，dump 在进程存活期间被换掉会重新校验。
+#
+# 一次 `--submit` 全程会沿 compose / workflow / business_suite 三条路径反复
+# 要同一份 dump：实测约 38 次解析、约 72 MB 读盘，每次得出完全相同的结论。
+# 这里只缓存"校验通过的结果"，失败路径照旧每次重算（失败是要给人看原因的）。
+_DUMP_CACHE: dict[tuple, tuple[dict, str]] = {}
+
+
+def clear_dump_cache() -> None:
+    """测试用：换了 dump 文件内容后强制重新校验。"""
+    _DUMP_CACHE.clear()
+
+
 def validate_v2_dump(source_dump: str, dumps_dir: Path
                      ) -> tuple[dict | None, str]:
     """验证新版证据契约完整性；部分录制绝不能解锁生产提交。"""
@@ -63,7 +90,18 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
         return None, "没有来源 dump"
     path = Path(dumps_dir) / source_dump
     if not path.is_file():
-        return None, "本机没有 %s（dump 不进版本库）" % source_dump
+        return None, (
+            "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
+            "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+        ) % source_dump
+    try:
+        stat = path.stat()
+        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        cache_key = None
+    if cache_key is not None and cache_key in _DUMP_CACHE:
+        return _DUMP_CACHE[cache_key]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -119,6 +157,8 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
             break
     if not valid_final:
         return None, "v2 dump 没有位于本轮截图目录内的有效 final 遮罩截图"
+    if cache_key is not None:
+        _DUMP_CACHE[cache_key] = (data, "")
     return data, ""
 
 
@@ -160,7 +200,11 @@ def verify(spec: Locator, dumps_dir: Path) -> tuple[bool | None, str]:
         return False, "没写来源 dump 或来源交互序号"
     path = Path(dumps_dir) / spec.source_dump
     if not path.is_file():
-        return None, "本机没有 %s（dump 不进版本库）" % spec.source_dump
+        return None, (
+            "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
+            "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+        ) % spec.source_dump
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -502,35 +546,49 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
             return False
         return shot.is_file() and shot.stat().st_size > 0
 
-    for before in account_rows:
-        for clicked in button_rows:
-            for confirmed in success_rows:
-                for ready in loaded_rows:
-                    for card in planner_rows:
-                        page_ids = {
-                            before.get("page_id"), clicked.get("page_id"),
-                            confirmed.get("page_id"), ready.get("page_id"),
-                            card.get("page_id")}
-                        orders = (before.get("evidence_order"),
-                                  clicked.get("evidence_order"),
-                                  confirmed.get("evidence_order"),
-                                  ready.get("evidence_order"),
-                                  card.get("evidence_order"))
-                        if (len(page_ids) == 1
-                                and all(isinstance(value, int) for value in orders)
-                                and not _signal_hits(before, success)
-                                and orders[0] < orders[1] < orders[2] <= orders[3]
-                                <= orders[4]
-                                and any(
-                                    final.get("page_id") == card.get("page_id")
-                                    and int(final.get("evidence_order") or 0)
-                                    >= int(card.get("evidence_order") or 0)
-                                    and valid_final(final)
-                                    for final in finals)):
-                            return True, ""
+    # 逐 page_id 按 evidence_order 贪心串一次链。
+    #
+    # ⚠️ 2026-09-03 之前这里是五层嵌套循环（O(n⁵)，82 行）。要证明的命题只是
+    # 「这五条证据来自同一页，且 evidence_order 按 账号 < 提交 < 成功 ≤ 就绪
+    # ≤ 卡片 排列，之后还有一张同页的有效 final 截图」。按序贪心取每一步
+    # **最小可行**的那条即可：链是单调的，早选不会挡住后面任何可行解。
+    def orders_on(rows: list[dict], page: str) -> list[int]:
+        return sorted(
+            row["evidence_order"] for row in rows
+            if row.get("page_id") == page
+            and isinstance(row.get("evidence_order"), int)
+            and not isinstance(row.get("evidence_order"), bool))
+
+    def first_at_least(values: list[int], bound: int, *, strict: bool) -> int | None:
+        for value in values:
+            if value > bound or (not strict and value == bound):
+                return value
+        return None
+
+    pages = {row.get("page_id") for row in account_rows if row.get("page_id")}
+    for page in pages:
+        # 账号上下文那一条本身不能已经命中成功信号——否则"提交前不可见"就没证到。
+        account_orders = orders_on(
+            [row for row in account_rows if not _signal_hits(row, success)], page)
+        if not account_orders:
+            continue
+        chain_orders = [account_orders[0]]
+        for rows, strict in ((button_rows, True), (success_rows, True),
+                             (loaded_rows, False), (planner_rows, False)):
+            nxt = first_at_least(orders_on(rows, page), chain_orders[-1],
+                                 strict=strict)
+            if nxt is None:
+                break
+            chain_orders.append(nxt)
+        if len(chain_orders) != 5:
+            continue
+        card_order = chain_orders[-1]
+        if any(final.get("page_id") == page
+               and int(final.get("evidence_order") or 0) >= card_order
+               and valid_final(final)
+               for final in finals):
+            return True, ""
     return False, ("证据不在同一页面，或顺序不是账号 → 提交 → 成功 → "
                    "Planner 就绪 → 卡片 → final")
 
 
-def verify_all_signals(dumps_dir: Path) -> dict[str, tuple[bool | None, str]]:
-    return {key: verify_signal(spec, dumps_dir) for key, spec in SIGNALS.items()}

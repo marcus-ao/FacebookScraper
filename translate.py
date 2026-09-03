@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
-import os
 import re
 import statistics
 import sys
@@ -31,7 +29,7 @@ import time
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,19 +37,36 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+# `run_translate.bat` 用的是 `python translate.py`，于是本文件的模块名是
+# `__main__`。上层模块（pipeline.engine 等）写的是 `import translate`，
+# 那会**再加载一份**本文件：两份 Settings、两份模块级常量、两份锁对象。
+# 先把自己登记成正规名字，让后来的 import 拿到同一个对象。
+if __name__ == "__main__":                         # pragma: no cover
+    sys.modules.setdefault("translate", sys.modules[__name__])
+
 from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
+from core import paid_model                        # noqa: E402
 from core import paid_requests                     # noqa: E402
-from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
-                        post_dirname)              # noqa: E402
+from core.store import (Archive, ArchivePathError, account_dirs,  # noqa: E402
+                        assert_physical_direct_path, post_dirname)
+from core.paid_model import FileLock                # noqa: E402
+# 译文产物的契约（写盘格式、"当前可用"判据、不可改内容规则）住在 core/：
+# 发布、调图、流水线三路都要读它，不该为此 import 本文件（连着 openai SDK
+# 和整个批处理循环）。本文件是**写方**，用的是同一份定义。
+from core.translated import (PROMPT_VERSION,        # noqa: E402
+                             SourceTextError, apply_money_mapping,
+                             extract_hashtags, extract_money_tokens,
+                             hashtags_preserved, load_translated,
+                             money_preserved, normalize_money_token,
+                             numeric_flags, render_glossary,
+                             review_numeric_flags, source_text_sha256,
+                             translation_is_current)
+from core.translated import append_translated as append_jsonl  # noqa: E402
 
 # 提示词模板。放在独立文件里，改翻译行为不用改 Python，营销同事也能改。
 TEMPLATE_PATH = ROOT / "prompts" / "translate_de.md"
 DEEPSEEK_API_URL = "https://api.deepseek.com"
-
-# 提示词版本。改了提示词就把它 +1：译文行里记着这个值，
-# 于是"这批译文是旧提示词产出的"变成可查的事实，而不是靠记忆。
-PROMPT_VERSION = 5
 
 # 模型偶尔会在译文外面裹一层解释或代码围栏，这里做最小限度的剥离。
 # 不做激进清洗——把模型真的想说的话删掉，比留着更难排查。
@@ -80,6 +95,7 @@ class Settings:
         self.timeout: float = float(g("timeout_seconds", 120))
         self.max_retries: int = int(g("max_retries", 2))
         self.gap: float = float(g("request_gap_seconds", 1.0))
+        self.failure_budget: int = int(g("failure_budget", 3))
         # 官方 OpenAI 兼容接口的 thinking 档位。业务默认 high；代码会同时发送
         # thinking.enabled，避免依赖端点默认值。
         self.reasoning_effort = str(g("reasoning_effort", "high") or "high").strip().lower()
@@ -112,86 +128,39 @@ class Settings:
                              "deepseek-v4-flash；旧 deepseek-chat/reasoner 已停用")
         if not self.api_key_env:
             raise SystemExit("[translate].api_key_env 不能为空")
-        if self.timeout <= 0 or self.max_retries < 0 or self.gap < 0:
-            raise SystemExit("[translate] 的 timeout_seconds 必须 > 0，"
-                             "max_retries/request_gap_seconds 必须 >= 0")
+        paid_model.validate_endpoint(
+            "translate", timeout=self.timeout,
+            max_retries=self.max_retries, gap=self.gap)
         if self.style_examples < 0:
             raise SystemExit("[translate].style_examples 不能为负数")
+        if self.failure_budget < 1:
+            raise SystemExit("[translate].failure_budget 必须 >= 1")
         if self.reasoning_effort not in {"low", "high", "max"}:
             raise SystemExit("[translate].reasoning_effort 可选值：low, high, max")
-        if (set(self.cost_rates) != {"input", "cache_read", "output"}
-                or any(not isinstance(value, (int, float))
-                       or isinstance(value, bool)
-                       or not math.isfinite(float(value)) or float(value) < 0
-                       for value in self.cost_rates.values())):
-            raise SystemExit(
-                "[translate].cost_rates_usd_per_million 必须且只能包含"
-                " input/cache_read/output，且费率是非负有限数字")
+        paid_model.validate_cost_rates(
+            "translate", self.cost_rates, {"input", "cache_read", "output"})
 
-    def _raw_key(self) -> tuple[str, str]:
-        """返回 (密钥, 来源)。环境变量优先，其次项目内的 .env。
-
-        支持 .env 是因为 setx 会把密钥写进用户注册表、对所有进程可见；
-        放项目里的 .env 收敛得多（已在 .gitignore 中）。不引入 python-dotenv：
-        只需要 KEY=value 这一种形态，十行够了，不值得多一个依赖。
-        """
-        key = os.environ.get(self.api_key_env, "").strip()
-        if key:
-            return key, f"环境变量 {self.api_key_env}"
-        env_file = ROOT / ".env"
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                name, _, value = line.partition("=")
-                if name.strip() == self.api_key_env:
-                    return value.strip().strip('"').strip("'"), f"{env_file.name} 文件"
-        return "", ""
+    @property
+    def credentials(self) -> paid_model.ModelCredentials:
+        return paid_model.ModelCredentials(self.api_key_env, what="翻译 API 密钥")
 
     def api_key(self) -> str:
-        key, _ = self._raw_key()
-        if not key:
-            raise SystemExit(
-                f"没找到 API 密钥（变量名 {self.api_key_env}）。两种设法任选其一：\n"
-                f"\n"
-                f"  【推荐】先复制项目里的 .env.example 为 .env，再把占位值替换成密钥：\n"
-                f"      Copy-Item .env.example .env\n"
-                f"  .env 内容应为一行：\n"
-                f"      {self.api_key_env}=你的密钥\n"
-                f"      （.env 已在 .gitignore 里，不会进版本库）\n"
-                f"\n"
-                f"  【或者】设系统环境变量：\n"
-                f"      setx {self.api_key_env} \"你的密钥\"\n"
-                f"      设完必须**重开终端 / 重新双击 .bat** 才生效\n"
-                f"\n"
-                f"  ❌ 不要写进 config.toml —— 那个文件会进版本库。"
-            )
-        return key
+        return self.credentials.api_key()
 
-    def redacted(self) -> str:
-        """给 --check 打印用。只露头尾各 4 位，中间打码。"""
-        key, source = self._raw_key()
-        if not key:
-            return "(未设置)"
-        shown = f"{key[:4]}...{key[-4:]}" if len(key) > 12 else "(已设置)"
-        return f"{shown}　长度 {len(key)}　来源：{source}"
+    def credential_status(self) -> str:
+        """给 --check 打印用。**只报告是否存在与来源**，不露密钥片段或长度。
+
+        （2026-09-02 之前这里叫 redacted()，会打印头尾各 4 位和密钥长度。
+        图片侧从一开始就没这么做，两边现在统一到更严的那个口径。）
+        """
+        return self.credentials.status()
 
 
 def build_client(s: Settings):
-    """构造 DeepSeek 官方 OpenAI 兼容客户端。
-
-    OpenAI SDK 会按官方约定使用 ``Authorization: Bearer``，并负责连接错误、
-    429 与 5xx 的退避重试；业务代码只负责请求与结果契约。
-    """
-    from openai import OpenAI
-
-    return OpenAI(
-        api_key=s.api_key(),
-        base_url=s.base_url,
-        timeout=s.timeout,
-        max_retries=s.max_retries,
-    )
+    """构造 DeepSeek 官方 OpenAI 兼容客户端。实现在 core/paid_model，与 K 组共用。"""
+    return paid_model.build_client(
+        api_key=s.api_key(), base_url=s.base_url,
+        timeout=s.timeout, max_retries=s.max_retries)
 
 
 # --------------------------------------------------------------------------
@@ -266,16 +235,6 @@ _ANGLICISM = {
 }
 
 
-def render_glossary(glossary: dict) -> str:
-    if not glossary:
-        return ("（本账号还没有配置术语表。请在同一批译文里对反复出现的产品名与卖点词"
-                "保持一致的译法。）")
-    lines = ["以下英文词/短语**必须**译成右列指定的德文，不得使用同义替换：", "",
-             "| 英文 | 德文 |", "| --- | --- |"]
-    lines += [f"| {k} | {v} |" for k, v in sorted(glossary.items())]
-    return "\n".join(lines)
-
-
 def render_style_examples(examples: list[str]) -> str:
     if not examples:
         return "（暂无——该账号还没有抓到足够长的文案。回填完成后这里会自动填充。）"
@@ -341,182 +300,6 @@ def build_system_prompt(s: Settings, examples: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------
-# 需人工确认的数字（价格 / 尺码 / 英制单位）
-# --------------------------------------------------------------------------
-
-# 提示词要求模型**不要**换算金额与尺码，所以这些会原样留在德语译文里。
-# 这里把它们标出来，让审校人一眼看到"这篇要改价"，而不是在几十篇里自己找。
-_MONEY_RE = re.compile(
-    r"[$€£¥]\s?\d"                                       # $50、€ 50（符号在前）
-    r"|\d[\d.,]*\s?[$€£¥]"                               # 19,99 €（德式后置，我们自己要求的格式）
-    r"|(?<![A-Za-z])\d[\d.,]*\s?(?:USD|EUR|Dollar|Euro)\b",
-    re.I)
-_SIZE_RE = re.compile(
-    r"\b(?:US|UK)\s?\d{1,2}(?:[.,]5)?\b|\b(?:size|Größe|Gr\.)\s?\d{1,3}\b", re.I)
-_IMPERIAL_RE = re.compile(
-    r"\b\d[\d.,]*\s?(?:inch(?:es)?|lbs?|oz|ft|°F)\b|\d\s?\"", re.I)
-
-
-def numeric_flags(text: str) -> list[str]:
-    """译文里需要人工确认的数字。空列表表示这篇可以直接用。"""
-    out = []
-    if _MONEY_RE.search(text):
-        out.append("含货币金额 —— 需替换成德国站定价（提示词刻意不换算）")
-    if _SIZE_RE.search(text):
-        out.append("含数字尺码 —— 需确认是否要转 EU 码")
-    if _IMPERIAL_RE.search(text):
-        out.append("含英制单位 —— 确认换算是否正确")
-    return out
-
-
-def review_numeric_flags(src_en: str, text_de: str) -> list[str]:
-    """审校警示同时看原文和译文，避免模型删掉/改写数字后反而不报警。"""
-    out: list[str] = []
-    if _MONEY_RE.search(src_en or "") or _MONEY_RE.search(text_de or ""):
-        out.append("含货币金额 —— 需替换成德国站定价（提示词刻意不换算）")
-    if _SIZE_RE.search(src_en or "") or _SIZE_RE.search(text_de or ""):
-        out.append("原文或译文含数字尺码 —— 确认未擅自换成 EU 码")
-    if _IMPERIAL_RE.search(src_en or "") or _IMPERIAL_RE.search(text_de or ""):
-        out.append("原文含/译文保留英制单位 —— 核对物理量换算与有效位数")
-    return out
-
-
-# 一个完整的金额 token：符号在前（$49.99）或在后（49,99 € / 50 USD）。
-# 用 \d+(?:[.,]\d+)* 而不是 [\d.,]* ——后者会把句尾的句号也吃进来，
-# 导致"原样出现"的比对因为一个标点而误报。
-_MONEY_TOKEN_RE = re.compile(
-    r"[$€£¥]\s?\d+(?:[.,]\d+)*"
-    r"|\d+(?:[.,]\d+)*\s?(?:(?:USD|EUR|Dollar|Euro)\b|[$€£¥](?!\w))",
-    re.I)
-
-
-def normalize_money_token(tok: str) -> str:
-    """比对用的归一化：只去掉空白。数值、分隔符、符号、符号位置都要求原样。"""
-    return re.sub(r"\s+", "", tok)
-
-
-# 兼容模块内旧名字；流水线预检使用公开入口，避免与实际替换规则漂移。
-_norm_money = normalize_money_token
-
-
-def extract_money_tokens(text: str) -> tuple[str, ...]:
-    """公开给流水线分流使用的金额真相；与写盘硬闸共用同一正则。"""
-    return tuple(token.strip() for token in _MONEY_TOKEN_RE.findall(text or ""))
-
-
-def apply_money_mapping(text: str, mapping: Mapping[str, str]) -> str:
-    """按完整金额 token 应用业务价格表；空白差异沿用金额硬闸的归一化。
-
-    这一步只改最终发布副本，不回写 ``translated.jsonl``。配置里归一化后
-    重复且值不同的键会失败，避免字典顺序偷偷决定价格。
-    """
-    normalized: dict[str, str] = {}
-    for raw_key, raw_value in mapping.items():
-        key = _norm_money(str(raw_key))
-        value = str(raw_value).strip()
-        if not key or not value:
-            raise ValueError("价格映射的键和值都不能为空")
-        if key in normalized and normalized[key] != value:
-            raise ValueError("归一化后重复的金额映射值不一致：%r" % raw_key)
-        normalized[key] = value
-    return _MONEY_TOKEN_RE.sub(
-        lambda match: normalized.get(_norm_money(match.group(0)), match.group(0)),
-        text or "")
-
-
-def money_preserved(src_en: str, text_de: str) -> list[str]:
-    """检查原文每处金额是否原样出现，且译文没有新增金额。
-
-    这是对提示词第 3 节的**代码侧强制**：提示词要求模型逐字符复制金额，
-    但提示词只是要求，模型可能不听。金额被悄悄换算是本项目里
-    最贵的一类错误——格式看着完全正确，人工审校时极易滑过去——
-    所以必须有一道机器检查兜底。
-
-    只去空白后比对，不做任何数值或格式归一：
-    `$49.99` → `49,99 $` 币种没变，但写法和符号位置都变了，同样算违规。
-    """
-    source_tokens = _MONEY_TOKEN_RE.findall(src_en or "")
-    translated_tokens = _MONEY_TOKEN_RE.findall(text_de or "")
-
-    # 必须按 token 精确、多重集比对。子串判断会把 $5 错认成存在于 $50 中；
-    # 单纯逐个 ``in`` 还会让原文出现两次、译文只留一次的金额漏检。
-    translated_left = Counter(_norm_money(t) for t in translated_tokens)
-    missing: list[str] = []
-    for token in source_tokens:
-        normalized = _norm_money(token)
-        if translated_left[normalized] > 0:
-            translated_left[normalized] -= 1
-        else:
-            missing.append(token.strip())
-
-    source_left = Counter(_norm_money(t) for t in source_tokens)
-    added: list[str] = []
-    for token in translated_tokens:
-        normalized = _norm_money(token)
-        if source_left[normalized] > 0:
-            source_left[normalized] -= 1
-        else:
-            added.append(token.strip())
-
-    if not missing and not added:
-        return []
-    parts = []
-    if missing:
-        parts.append("原文金额 %s 未在译文里原样出现" % "、".join(missing))
-    if added:
-        parts.append("译文新增了原文没有的金额 %s" % "、".join(added))
-    hint = ("译文里凭空出现了 €/EUR，八成是被换算了"
-            if re.search(r"€|EUR\b|Euro", text_de or "", re.I)
-            else "可能被改写、被换算、重复或整个漏掉了")
-    return ["❗%s —— %s" % ("；".join(parts), hint)]
-
-
-def _is_hashtag_char(ch: str) -> bool:
-    """Meta 标签可用的 Unicode 字符：字母、数字、组合记号与下划线。"""
-    return ch == "_" or unicodedata.category(ch)[:1] in {"L", "N", "M"}
-
-
-def extract_hashtags(text: str) -> list[str]:
-    r"""按出现顺序提取 hashtag，并保留原始大小写与 Unicode 码点。
-
-    不用 ``\w+``：它会漏掉部分组合音标/分解式文字；也不用“读到空格为止”，
-    否则句尾逗号或句号会被误算进标签。
-    """
-    value = text or ""
-    out: list[str] = []
-    i = 0
-    while i < len(value):
-        if value[i] != "#":
-            i += 1
-            continue
-        if i and (_is_hashtag_char(value[i - 1]) or value[i - 1] == "#"):
-            i += 1
-            continue
-        end = i + 1
-        while end < len(value) and _is_hashtag_char(value[end]):
-            end += 1
-        if end > i + 1:
-            out.append(value[i:end])
-            i = end
-        else:
-            i += 1
-    return out
-
-
-def hashtags_preserved(src_en: str, text_de: str) -> list[str]:
-    """标签必须逐个原样复制，数量、内容、大小写与顺序全部一致。"""
-    source = extract_hashtags(src_en)
-    translated = extract_hashtags(text_de)
-    if source == translated:
-        return []
-    return [
-        "❗话题标签没有按原帖逐个原样照搬（数量、内容、大小写和顺序都必须一致）"
-        f" —— 原文 {json.dumps(source, ensure_ascii=False)}；"
-        f"译文 {json.dumps(translated, ensure_ascii=False)}"
-    ]
-
-
-# --------------------------------------------------------------------------
 # F1：翻译主流程
 # --------------------------------------------------------------------------
 
@@ -540,25 +323,12 @@ class FatalBatchError(RuntimeError):
     """鉴权、端点或请求配置是整批共享的；遇到这类错误必须立刻停。"""
 
 
-class SourceDataError(FatalBatchError):
-    """归档正文不满足付费请求的最小输入契约。"""
+class SourceDataError(FatalBatchError, SourceTextError):
+    """归档正文不满足付费请求的最小输入契约。
 
-
-def source_text_sha256(text: str) -> str:
-    """绑定模型实际收到的正文（strip 后 UTF-8），防止旧译文错配新正文。"""
-    if not isinstance(text, str):
-        raise SourceDataError("manifest 的 text 必须是字符串；已停止，未调用 API")
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
-
-
-def translation_is_current(source: dict, translated: dict | None) -> bool:
-    """只有源正文指纹与当前提示词版本同时匹配，译文才算当前可用。"""
-    if not isinstance(translated, dict):
-        return False
-    text = source.get("text")
-    return (isinstance(text, str)
-            and translated.get("source_text_sha256") == source_text_sha256(text)
-            and translated.get("prompt_version") == PROMPT_VERSION)
+    同时继承 :class:`core.translated.SourceTextError`：契约本身住在 core/，
+    但翻译这边还要把它归进"整批共享的致命错误"，遇到就立刻停整批。
+    """
 
 
 def _model_matches(requested: str, actual: str) -> bool:
@@ -595,64 +365,29 @@ def _usage_values(usage) -> dict[str, int]:
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    if isinstance(exc, (ModelMismatchError, paid_requests.PaidRequestBlocked)):
-        return True
-    try:
-        import openai
-        return isinstance(exc, openai.APIError)
-    except (ImportError, AttributeError):
-        return False
+    """整批性错误的判据。实现在 core/paid_model，与 K 组共用同一份。
+
+    ⚠️ 2026-09-02 之前这里是 ``isinstance(exc, openai.APIError)``——那是
+    429/超时/单条 400 的共同基类，一次限流就会掀掉整批 1051 篇。
+    CR-53 早已在 localize_images.py 里查清并修掉，但修复没有同步过来。
+    现在两边走同一个函数，不会再各自漂移。
+    """
+    return paid_model.is_fatal_api_error(
+        exc, extra_fatal=(ModelMismatchError, paid_requests.PaidRequestBlocked))
 
 
-class Translator:
+class Translator(paid_model.PaidCaller):
     """一次翻译调用。抽成类是为了测试能整体替换掉它，不必打桩到 SDK 内部。"""
 
     def __init__(self, settings: Settings, client=None,
                  paid_controller: paid_requests.RequestController | None = None) -> None:
-        self.s = settings
-        self._client = client
-        self._last_call = 0.0
+        self._init_paid(settings, client, paid_controller)
         self.last_usage: dict[str, int] = {}
         self.last_model: str = ""
         # 上一次响应实际返回的部分。--check 用它验证官方端点确实返回了思考内容，
         # 而不是只凭请求参数猜测 thinking 已生效。
         self.last_blocks: list[str] = []
         self.usage_totals: Counter = Counter()
-        self._paid_controller = paid_controller
-        self._paid_job_key = ""
-        self._paid_source_ref = ""
-        self._paid_receipt: paid_requests.PaidReceipt | None = None
-
-    def set_paid_context(self, job_key: str, source_ref: str) -> None:
-        self._paid_job_key = str(job_key)
-        self._paid_source_ref = str(source_ref)
-
-    @property
-    def paid_request_id(self) -> str:
-        return self._paid_receipt.request_id if self._paid_receipt else ""
-
-    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
-        if self._paid_controller is None or self._paid_receipt is None:
-            return
-        receipt = self._paid_receipt
-        self._paid_controller.finalize(
-            receipt, accepted=accepted, reason=reason)
-        self._paid_receipt = None
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = build_client(self.s)
-        return self._client
-
-    def _pace(self) -> None:
-        gap = self.s.gap
-        if gap <= 0:
-            return
-        elapsed = time.monotonic() - self._last_call
-        if elapsed < gap:
-            time.sleep(gap - elapsed)
-        self._last_call = time.monotonic()
 
     def request_kwargs(self, text: str, system: str) -> dict:
         """正式翻译和 --check 共用同一请求形态，避免自检假阳性。"""
@@ -800,114 +535,15 @@ def _approx_tokens(text: str) -> int:
     return max(1, round(cjk * 0.6 + other * 0.3))
 
 
-class TranslationRunLock(AbstractContextManager):
+def TranslationRunLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
     """整个付费批次单实例运行，防止双击两次造成同一帖子重复付费。"""
-
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self._file = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self.path.open("a+b")
-        if self._file.seek(0, os.SEEK_END) == 0:
-            self._file.write(b"0")
-            self._file.flush()
-        self._file.seek(0)
-        try:
-            if sys.platform.startswith("win"):
-                import msvcrt
-                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, BlockingIOError):
-            self._file.close()
-            self._file = None
-            raise SystemExit("另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        if self._file is not None:
-            try:
-                self._file.seek(0)
-                if sys.platform.startswith("win"):
-                    import msvcrt
-                    msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._file.close()
-                self._file = None
-        return False
+    return FileLock(path, error_type=SystemExit,
+                    busy_message="另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
 
 
 # --------------------------------------------------------------------------
 # 归档读写
 # --------------------------------------------------------------------------
-
-def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
-    """archive/ 下所有含 manifest.jsonl 的账号目录。"""
-    if not archive_root.exists():
-        return []
-    dirs = sorted(p for p in archive_root.iterdir()
-                  if p.is_dir() and (p / "manifest.jsonl").exists())
-    if only:
-        dirs = [p for p in dirs if p.name == only]
-    return dirs
-
-
-def load_translated(path: Path) -> dict[str, dict]:
-    """读 translated.jsonl，同 post_id 后写胜出（与 manifest 一致的语义）。"""
-    out: dict[str, dict] = {}
-    if not path.exists():
-        return out
-    assert_physical_direct_path(
-        path.parent, path, kind="file", label="translated.jsonl")
-    # 二进制逐行解码：若一次硬终止恰好截断 UTF-8 多字节字符，只跳过那一行；
-    # 后面已经 fsync 的付费结果仍然必须可见，不能被整文件 UnicodeDecodeError 吞掉。
-    with path.open("rb") as f:
-        for raw_line in f:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            try:
-                line = raw_line.decode("utf-8")
-                r = json.loads(line)
-                if (not isinstance(r, dict)
-                        or not isinstance(r.get("post_id"), str)
-                        or not r["post_id"].strip()
-                        or not isinstance(r.get("text_de"), str)
-                        or not r["text_de"].strip()
-                        or not isinstance(r.get("translated_at"), str)
-                        or not isinstance(r.get("model"), str)
-                        or not isinstance(r.get("prompt_version"), int)):
-                    continue
-                out[r["post_id"]] = r
-            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
-                # TypeError：整行是合法 JSON 但不是对象（如数组），下标取不到
-                continue
-    return out
-
-
-def append_jsonl(path: Path, row: dict) -> None:
-    """把付费结果安全追加成独立一行；坏尾/缺换行不能吞掉新结果。"""
-    payload = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    assert_physical_direct_path(
-        path.parent, path, kind="file", label="translated.jsonl")
-    with path.open("a+b") as f:
-        end = f.seek(0, os.SEEK_END)
-        if end:
-            f.seek(-1, os.SEEK_END)
-            if f.read(1) != b"\n":
-                f.seek(0, os.SEEK_END)
-                f.write(b"\n")
-        f.seek(0, os.SEEK_END)
-        f.write(payload)
-        f.flush()
-        os.fsync(f.fileno())
 
 
 def pending(rows: list[dict], done: dict[str, dict], force: bool,
@@ -1032,6 +668,7 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
           f"称呼 {s.address_form} / 术语表 {len(s.glossary)} 条")
 
     ok = bad = flagged = money_violated = hashtag_violated = 0
+    consecutive_failures = 0
     for i, r in enumerate(todo, 1):
         pid = r.get("post_id", "?")
         text = (r.get("text") or "").strip()
@@ -1054,13 +691,22 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         except Exception as e:
             print(f"  [{i}/{len(todo)}] {pid}  失败：{type(e).__name__}: {e}")
             bad += 1
+            consecutive_failures += 1
             if _is_fatal_api_error(e):
                 raise FatalBatchError(
-                    "API 鉴权/端点/模型或请求配置属于整批共享错误，已立刻停止，"
+                    "鉴权/权限/端点不存在/响应契约破裂属于整批共享错误，已立刻停止，"
                     "避免对剩余帖子重复无意义请求") from e
+            if consecutive_failures >= s.failure_budget:
+                raise FatalBatchError(
+                    f"连续 {consecutive_failures} 篇失败，已达 "
+                    f"[translate].failure_budget={s.failure_budget}，停止本批。"
+                    "\n    单条失败不再掀掉整批（CR-53），但连续失败说明问题不在"
+                    "素材而在链路 —— 先看上面每条的原因，修掉后重跑即可"
+                    "（已成功的不会重复付费）。") from e
             # 内容级输出错误只跳过这一条，保留批处理的断点续跑能力。
             continue
 
+        consecutive_failures = 0
         money_violations = money_preserved(text, de)
         hashtag_violations = hashtags_preserved(text, de)
         violations = money_violations + hashtag_violations
@@ -1109,330 +755,31 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
     if flagged:
         print(f"  ⚠ {flagged} 篇含金额/尺码/英制单位，需人工确认——"
               f"审校清单里会逐篇标出来。")
-    if money_violated:
-        print(f"  ❗ {money_violated} 篇的金额没有原样保留，已全部拒绝写盘并计为失败。")
-        print(f"     金额必须原封不动（数值/小数点/符号/符号位置都不许改），"
-              f"由人工替换成德国站定价。")
-        print("     修正提示词/模型后直接重跑即可；这些 post_id 没被记成已完成。")
-    if hashtag_violated:
-        print(f"  ❗ {hashtag_violated} 篇的话题标签与原帖不完全一致，"
-              "已全部拒绝写盘并计为失败。")
-        print("     标签必须保持相同数量、内容、大小写与顺序；不得翻译、删减、新增或调序。")
-        print("     直接重跑即可；这些 post_id 没被记成已完成。")
+    if money_violated or hashtag_violated:
+        if money_violated:
+            print(f"  ❗ {money_violated} 篇的金额没有原样保留，已全部拒绝写盘并计为失败。")
+            print("     金额必须原封不动（数值/小数点/符号/符号位置都不许改），"
+                  "由人工替换成德国站定价。")
+        if hashtag_violated:
+            print(f"  ❗ {hashtag_violated} 篇的话题标签与原帖不完全一致，"
+                  "已全部拒绝写盘并计为失败。")
+            print("     标签必须保持相同数量、内容、大小写与顺序；"
+                  "不得翻译、删减、新增或调序。")
+        # ⚠️ 别再写"直接重跑即可"。这些 post_id 确实没被记成已完成，但**钱已经花了**，
+        # 付费账本给每个 job_key 记了一条 output_rejected。同一个 job_key 只允许被拒
+        # REJECTED_RETRY_BUDGET 次，之后 _assert_startable 会拒绝再发请求 ——
+        # 那是刻意的：反复重跑同一条只是重复扣费碰运气。
+        print(f"     这些 post_id 没被记成已完成，**但钱已经花了**。"
+              f"同一条最多再重试 {paid_requests.REJECTED_RETRY_BUDGET - 1} 次；")
+        print("     若是提示词的问题，改完提示词并把 PROMPT_VERSION +1，"
+              "重试计数随之重置。")
+        print("     查看当前被拒次数：python -m core.paid_requests --status")
     return ok, bad
 
 
 # --------------------------------------------------------------------------
 # F3：人工审核清单
 # --------------------------------------------------------------------------
-
-def run_review(arc_base: Path) -> int:
-    """生成 review.md：原文 / 译文 / 配图 / 图内英文待确认框。
-
-    图片用相对路径引用，review.md 就放在同目录，所以 Markdown 预览器
-    直接能显示——交给德语审校人时不用额外传文件。
-    """
-    arc = Archive(arc_base.parent, arc_base.name)
-    row_list = [r for r in arc.rows()
-                if isinstance(r, dict)
-                and isinstance(r.get("post_id"), str) and r["post_id"].strip()
-                and isinstance(r.get("text"), str)]
-    rows = {r["post_id"]: r for r in row_list}
-    # 目录名是 `<平台前缀>_<账号>`；用它判断一篇帖子是本账号原创还是合作帖
-    this_account = arc_base.name.split("_", 1)[-1].strip().lower()
-    trans = load_translated(arc_base / "translated.jsonl")
-    if not trans:
-        print(f"  {arc_base.name}：还没有译文，跳过（先跑一次翻译）")
-        return 0
-    # 延迟导入避免模块加载时形成 translate <-> localize_images 循环；这里只读
-    # images_de.jsonl / media_de，不触发客户端构造、密钥读取或 API 调用。
-    import localize_images as image_de
-    image_state = image_de.load_image_state(arc_base / "images_de.jsonl")
-    # [image] 配置只用来打一行形变/放大告警。**不能因为它不合法就让 F 组的
-    # 审校清单整条命令跑不出来**（CR-56）：Settings() 会做双向配置审计并
-    # SystemExit，而这个账号可能一张德语图都没有。
-    try:
-        image_settings = image_de.Settings()
-    except SystemExit as exc:
-        image_settings = None
-        print(f"  ! [image] 配置当前不可用（{exc}）；"
-              "K8 并排与逐类清单照常生成，只是不打印形变/放大告警")
-
-    eligible = {pid for pid, r in rows.items() if (r.get("text") or "").strip()}
-    orphan_ids = sorted(set(trans) - set(rows))
-    translated_ids = {
-        pid for pid in set(trans) & eligible
-        if translation_is_current(rows[pid], trans[pid])
-    }
-    stale_ids = sorted((set(trans) & eligible) - translated_ids)
-    missing_ids = eligible - translated_ids
-    ordered = sorted(
-        (trans[pid] for pid in translated_ids),
-        key=lambda t: (rows.get(t["post_id"], {}).get("created_at") or "", t["post_id"]))
-
-    n_flagged = sum(1 for t in ordered
-                    if review_numeric_flags(rows[t["post_id"]].get("text") or "",
-                                            t.get("text_de", "")))
-    n_money_violated = sum(1 for t in ordered
-                           if money_preserved(rows.get(t["post_id"], {}).get("text") or "",
-                                              t.get("text_de", "")))
-    n_hashtag_violated = sum(1 for t in ordered
-                             if hashtags_preserved(
-                                 rows.get(t["post_id"], {}).get("text") or "",
-                                 t.get("text_de", "")))
-
-    lines = [
-        f"# 德语文案审校清单 · {arc_base.name}",
-        "",
-        f"生成时间：{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}　"
-        f"可译 {len(eligible)} 篇 / 当前有效译文 {len(ordered)} 篇 / "
-        f"待译 {len(missing_ids)} 篇（过期 {len(stale_ids)} 篇），"
-        f"其中 **{n_flagged} 篇含需人工确认的数字**",
-        "",
-        "审校方式：逐篇看「德语译文」并勾选/批注。再次运行 `--review` 会重建本文件，"
-        "程序会先把上一版保存为 `review.previous.md`；本文件不是译文真相源。",
-        "",
-        "两类必须人工处理的事：",
-        "",
-        "1. **数字**。提示词**刻意不换算**货币金额与数字尺码——德国站的定价与尺码"
-        "对照是商务决策，模型无从知道，擅自换算就是把文案问题变成商业事故。"
-        "含这类数字的帖子下面会标出来。",
-        "2. **图内德语图**。程序产出、人工可覆盖；逐张并排核对德语正确性、"
-        "不可改内容与产品外观。K3 预扫描已取消，因此下面的逐类人工清单是唯一验收口。",
-        "",
-    ]
-    if orphan_ids:
-        lines += [f"> ⚠️ `translated.jsonl` 有 {len(orphan_ids)} 条在当前 manifest 中找不到的"
-                  "孤儿记录，本清单已忽略：" + "、".join(orphan_ids[:10]), ""]
-    if stale_ids:
-        lines += [f"> ⚠️ 有 {len(stale_ids)} 条译文对应旧版英文正文或旧提示词版本，"
-                  "本清单已忽略；"
-                  "普通重跑会只重译这些帖子：" + "、".join(stale_ids[:10]), ""]
-    if missing_ids:
-        lines += [f"> ℹ️ 当前是部分审校：还有 {len(missing_ids)} 篇正文尚未翻译。", ""]
-    if n_money_violated:
-        lines += [
-            f"> ❗ **{n_money_violated} 篇的金额没有被原样保留**——模型没照提示词做，"
-            f"这几篇下面标了 ❗，请优先核对。",
-            "> 规则是：美元金额逐字符原样复制，`$49.99` 就得还是 `$49.99`，"
-            "不许变成 `49,99 €`，也不许变成 `49,99 $`。",
-            "",
-        ]
-    if n_hashtag_violated:
-        lines += [
-            f"> ❗ **{n_hashtag_violated} 篇的话题标签没有逐个原样照搬**——"
-            "数量、内容、大小写或顺序与原帖不一致，请优先核对。",
-            "",
-        ]
-    lines += ["---", ""]
-
-    for i, t in enumerate(ordered, 1):
-        pid = t["post_id"]
-        src = rows.get(pid, {})
-        created = (src.get("created_at") or "")[:10]
-        lines += [f"## {i}. `{pid}`　{created}", ""]
-        if src.get("permalink"):
-            lines += [f"原帖：<{src['permalink']}>", ""]
-        # 合作帖：它在本账号主页上，但**内容是别人创作的**。
-        # 审校人需要知道这一点——二次发布到 DE Page 涉及的是对方的著作权，
-        # 而译文本身看不出这个区别。
-        if (src.get("owner")
-                and str(src["owner"]).strip().lower() != this_account):
-            lines += [f"> 🤝 **合作帖**：原作者是 `@{src['owner']}`，"
-                      f"本账号是 coauthor。发布前确认二次使用授权。", ""]
-
-        lines += ["**英文原文**", ""]
-        lines += markdown_text_block(src.get("text") or "") + [""]
-        lines += ["**德语译文**", ""]
-        lines += markdown_text_block(t.get("text_de", "")) + [""]
-
-        money_violations = money_preserved(src.get("text") or "", t.get("text_de", ""))
-        hashtag_violations = hashtags_preserved(
-            src.get("text") or "", t.get("text_de", ""))
-        if money_violations:
-            lines.append("> ❗ **金额没有原样保留——模型没照提示词做，这条要重点看**")
-            lines += [f"> - {v}" for v in money_violations]
-            lines.append("> - 规则：金额必须逐字符原样复制（数值/小数点/货币符号/"
-                         "符号位置都不许改），德国站定价由人工替换")
-            lines.append("")
-        if hashtag_violations:
-            lines.append("> ❗ **话题标签没有逐个原样照搬——这条要重点看**")
-            lines += [f"> - {v}" for v in hashtag_violations]
-            lines.append("")
-
-        flags = review_numeric_flags(src.get("text") or "", t.get("text_de", ""))
-        if flags:
-            lines.append("> ⚠️ **需人工确认的数字**")
-            lines += [f"> - {f}" for f in flags]
-            lines.append("")
-
-        media = [m for m in (src.get("media") or []) if m.get("kind") == "image"]
-        local = [m for m in media if m.get("local_path")]
-        if local:
-            lines.append("**配图**")
-            lines.append("")
-            for m in local:
-                p = str(m["local_path"]).replace("\\", "/")
-                dim = (f"（{m.get('width')}×{m.get('height')}）"
-                       if m.get("width") else "")
-                lines.append(f"![{pid}]({p}) {dim}")
-            lines.append("")
-        elif media:
-            lines += ["**配图**：有 %d 张，但本地文件缺失（media 未下载成功）" % len(media), ""]
-        else:
-            lines += ["**配图**：无", ""]
-
-        if not src.get("media_complete", True):
-            lines += ["> ⚠️ 该帖媒体不全（登出增量只拿到轮播封面），"
-                      "配图可能少于实际。", ""]
-
-        image_pairs = image_de.review_image_pairs(
-            arc_base, src, t, state=image_state)
-        if image_pairs:
-            lines += ["**原图 / 德语图并排审校（K8）**", "",
-                      "| 原图 | 德语图 |", "| --- | --- |"]
-            for pair in image_pairs:
-                source_ref = pair.source_rel.replace("\\", "/")
-                original_cell = f"![{pid} 原图 {pair.media_index + 1}](<{source_ref}>)"
-                if pair.localized_rel:
-                    localized_ref = pair.localized_rel.replace("\\", "/")
-                    kind = "人工覆盖" if pair.manual else "程序产出"
-                    localized_cell = (
-                        f"![{pid} 德语图 {pair.media_index + 1}](<{localized_ref}>)"
-                        f"<br>{kind}")
-                else:
-                    localized_cell = "⚠️ **尚未生成德语图**"
-                lines.append(f"| {original_cell} | {localized_cell} |")
-            lines.append("")
-
-            for pair in image_pairs:
-                lines += [f"**第 {pair.media_index + 1} 张图逐类检查**", ""]
-                if pair.record:
-                    distance = pair.record.get("dhash_distance", "?")
-                    drift = pair.record.get("aspect_drift_percent", "?")
-                    scale = pair.record.get("scale_factor")
-                    lines.append(
-                        f"> 程序记录：size {pair.record.get('size_requested', '?')} → "
-                        f"{pair.record.get('size_returned', '?')}；dHash 距离 {distance}；"
-                        f"宽高比形变 {drift} %"
-                        + (f"；放大 {scale}x" if scale is not None else "") + "。")
-                    if (image_settings is not None and isinstance(drift, (int, float))
-                            and drift > image_settings.aspect_drift_warn_percent):
-                        lines.append(
-                            f"> ⚠️ 宽高比形变超过配置阈值 "
-                            f"{image_settings.aspect_drift_warn_percent:g} %，重点检查构图。")
-                    if (image_settings is not None and isinstance(scale, (int, float))
-                            and scale > image_settings.scale_warn_factor):
-                        lines.append(
-                            f"> ⚠️ 原图被放大 {scale}x（超过 "
-                            f"{image_settings.scale_warn_factor:g}x）——"
-                            "德语图是放大件，请确认清晰度可接受再勾选。")
-                    lines.append("")
-                elif pair.manual:
-                    lines += ["> ℹ️ 当前德语图是人工覆盖版本，仍需逐类验收。", ""]
-                else:
-                    lines += ["> ⚠️ 先生成/补齐德语图，以下项目才能勾选。", ""]
-                lines += [
-                    "- [ ] 德语文字正确，且所有应译英文均已替换（无漏译/错译）",
-                    "- [ ] 优惠码 / 折扣码逐字符未变",
-                    "- [ ] 品牌名 / Logo / 商标逐字符未变",
-                    "- [ ] 产品型号逐字符未变",
-                    "- [ ] 合作方水印 / 署名 / 作者账号逐字符未变",
-                    "- [ ] 金额 / 货币符号 / 小数点 / 符号位置逐字符未变",
-                    "- [ ] 数值与单位逐字符未变，且没有换算",
-                    "- [ ] 认证、合规与法律标记逐字符未变",
-                    "- [ ] @提及 / #标签 / URL / 二维码 / 条码 / 人名地名未变",
-                    "- [ ] 产品外观、人物、背景、构图、配色与非文字元素未变",
-                    "",
-                ]
-
-        lines.append("- [ ] 译文已审校")
-        if money_violations:
-            lines.append("- [ ] **金额已核对回原文写法**（模型改动过，必查）")
-        if hashtag_violations:
-            lines.append("- [ ] **话题标签已恢复为与原帖完全一致**（模型改动过，必查）")
-        if flags:
-            lines.append("- [ ] 数字已按德国站确认/替换")
-        lines += ["- [ ] 图内德语图已逐张完成 K8 审校（见上方逐类清单）",
-                  "", "---", ""]
-
-    out = arc_base / "review.md"
-    backup = arc_base / "review.previous.md"
-    assert_physical_direct_path(
-        arc_base, out, kind="file", label="review.md")
-    assert_physical_direct_path(
-        arc_base, backup, kind="file", label="review.previous.md")
-    backed_up = False
-    if out.exists():
-        out.replace(backup)
-        backed_up = True
-    out.write_text("\n".join(lines), encoding="utf-8")
-    current_trans = {pid: trans[pid] for pid in translated_ids}
-    n_de = sync_text_de(arc_base, row_list, current_trans)
-    print(f"  {arc_base.name}：{out}　（{len(ordered)} 篇，"
-          f"另写出 {n_de} 个 text_de.txt）")
-    if backed_up:
-        print(f"    上一版审校清单已备份：{backup.name}")
-    return len(ordered)
-
-
-def sync_text_de(arc_base: Path, rows: list[dict], trans: dict[str, dict]) -> int:
-    """把译文同步一份 `text_de.txt` 到每帖文件夹里（J 组布局）。
-
-    **`translated.jsonl` 仍然是译文的唯一真相源**，这里写的是**派生副本**。
-    这条边界是刻意保留的：计划里已经拍板"译文写独立文件，重跑抓取不能冲掉
-    花钱买来的结果"，把真相源挪进文件夹会动到那个决策，不值得为整洁去动它。
-
-    副本的价值在人：设计同事拿到一个文件夹，里面英文、德文、配图齐全，
-    不用再去翻一个几 MB 的 JSONL。删了也没关系，跑一次 --review 就回来了。
-    """
-    written = removed = 0
-    for row in rows:
-        # manifest 可能有脏行（run_review 明确承诺脏输入不崩）。
-        # 这是个派生副本的生成器，没有任何理由成为整批的失败点。
-        if not isinstance(row, dict) or not row.get("post_id"):
-            continue
-        entry = trans.get(row["post_id"])
-        de = entry.get("text_de") if isinstance(entry, dict) else None
-        current = bool(de and translation_is_current(row, entry))
-        posts_dir = arc_base / "posts"
-        d = posts_dir / post_dirname(row["post_id"], row.get("created_at"))
-        try:
-            assert_physical_direct_path(
-                posts_dir, d, kind="directory", label="译文帖子目录")
-        except ArchivePathError as exc:
-            print(f"    ! 跳过不安全的 text_de.txt 目标：{exc}")
-            continue
-        if not d.is_dir():
-            continue          # 还没迁移到新布局，或该帖文件夹被人删了
-        text_de = d / "text_de.txt"
-        try:
-            assert_physical_direct_path(
-                d, text_de, kind="file", label="text_de.txt")
-        except ArchivePathError as exc:
-            print(f"    ! 跳过不安全的 text_de.txt 目标：{exc}")
-            continue
-        if not current:
-            if text_de.exists():
-                try:
-                    text_de.unlink()
-                    removed += 1
-                except OSError as exc:
-                    print(f"    ! 无法移除过期的 text_de.txt：{exc}")
-            continue
-        text_de.write_text(de, encoding="utf-8")
-        written += 1
-    if removed:
-        print(f"    - 已移除 {removed} 个过期 text_de.txt；旧付费记录仍保留在 translated.jsonl")
-    return written
-
-
-def markdown_text_block(text: str) -> list[str]:
-    """把外部正文放进不会被其自身反引号提前闭合的 Markdown 围栏。"""
-    runs = re.findall(r"`+", text or "")
-    width = max(3, max((len(run) for run in runs), default=0) + 1)
-    fence = "`" * width
-    return [fence + "text", (text or "").rstrip(), fence]
 
 
 # --------------------------------------------------------------------------
@@ -1451,7 +798,7 @@ def run_check(s: Settings,
     print(f"  base_url    : {s.base_url}")
     print("  API 格式    : DeepSeek 官方 OpenAI 兼容 Chat Completions")
     print("  鉴权        : Authorization: Bearer（由 SDK 设置）")
-    print(f"  密钥环境变量: {s.api_key_env} = {s.redacted()}")
+    print(f"  密钥环境变量: {s.api_key_env} = {s.credential_status()}")
     print(f"  model       : {s.model}")
     print(f"  thinking    : enabled / effort={s.reasoning_effort}")
     print("  输出上限    : 未发送 max_tokens 或同类限制")
@@ -1669,10 +1016,15 @@ def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
 
+    # 组装根：预算策略住在 pipeline_assisted（它才同时知道账本与两边的计价
+    # 公式）。core/ 不许知道这件事，所以由这里注入 —— 见 RequestController。
+    from pipeline.engine import budget_preflight   # noqa: PLC0415
+
     s = Settings()
     if a.check:
         return run_check(
-            s, paid_controller=paid_requests.RequestController(cfg().state_dir))
+            s, paid_controller=paid_requests.RequestController(
+                cfg().state_dir, preflight=budget_preflight))
 
     root = cfg().archive_dir
     dirs = account_dirs(root, a.account)
@@ -1711,7 +1063,7 @@ def main(argv=None) -> int:
     try:
         scope = resolve_scope(dirs, post_ids=a.post_id,
                               latest_posts=a.latest_posts)
-    except SourceDataError as e:
+    except SourceTextError as e:          # SourceDataError 是它的子类
         print(f"[!] {e}")
         return 1
     if scope is not None:
@@ -1723,11 +1075,16 @@ def main(argv=None) -> int:
         print("=== DeepSeek 翻译费用离线预算 ===")
         try:
             return run_estimate(s, dirs, a.limit, a.force, scope)
-        except SourceDataError as e:
+        except SourceTextError as e:          # SourceDataError 是它的子类
             print(f"[!] {e}")
             return 1
 
     if a.review:
+        # 组装根：审校清单要同时读译文与调图两边的产物，所以住在 tools/
+        # （本模块**之上**）。这是 --review 唯一的入口，函数体内导入
+        # 是为了让 `import translate` 的人不用为此拉起 Pillow。
+        from tools.review_report import run_review   # noqa: PLC0415
+
         print("=== 生成审核清单 ===")
         total = sum(run_review(d) for d in dirs)
         print(f"\n共 {total} 篇进入审核清单。")
@@ -1736,7 +1093,8 @@ def main(argv=None) -> int:
     translator = Translator(
         s, paid_controller=(
             None if a.dry_run
-            else paid_requests.RequestController(cfg().state_dir)))
+            else paid_requests.RequestController(
+                cfg().state_dir, preflight=budget_preflight)))
     ok = bad = 0
     remaining = a.limit
     lock = nullcontext() if a.dry_run else TranslationRunLock(cfg().state_dir / "translate.lock")
