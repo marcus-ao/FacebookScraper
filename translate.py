@@ -560,55 +560,18 @@ def _is_fatal_api_error(exc: Exception) -> bool:
         exc, extra_fatal=(ModelMismatchError, paid_requests.PaidRequestBlocked))
 
 
-class Translator:
+class Translator(paid_model.PaidCaller):
     """一次翻译调用。抽成类是为了测试能整体替换掉它，不必打桩到 SDK 内部。"""
 
     def __init__(self, settings: Settings, client=None,
                  paid_controller: paid_requests.RequestController | None = None) -> None:
-        self.s = settings
-        self._client = client
-        self._last_call = 0.0
+        self._init_paid(settings, client, paid_controller)
         self.last_usage: dict[str, int] = {}
         self.last_model: str = ""
         # 上一次响应实际返回的部分。--check 用它验证官方端点确实返回了思考内容，
         # 而不是只凭请求参数猜测 thinking 已生效。
         self.last_blocks: list[str] = []
         self.usage_totals: Counter = Counter()
-        self._paid_controller = paid_controller
-        self._paid_job_key = ""
-        self._paid_source_ref = ""
-        self._paid_receipt: paid_requests.PaidReceipt | None = None
-
-    def set_paid_context(self, job_key: str, source_ref: str) -> None:
-        self._paid_job_key = str(job_key)
-        self._paid_source_ref = str(source_ref)
-
-    @property
-    def paid_request_id(self) -> str:
-        return self._paid_receipt.request_id if self._paid_receipt else ""
-
-    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
-        if self._paid_controller is None or self._paid_receipt is None:
-            return
-        receipt = self._paid_receipt
-        self._paid_controller.finalize(
-            receipt, accepted=accepted, reason=reason)
-        self._paid_receipt = None
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = build_client(self.s)
-        return self._client
-
-    def _pace(self) -> None:
-        gap = self.s.gap
-        if gap <= 0:
-            return
-        elapsed = time.monotonic() - self._last_call
-        if elapsed < gap:
-            time.sleep(gap - elapsed)
-        self._last_call = time.monotonic()
 
     def request_kwargs(self, text: str, system: str) -> dict:
         """正式翻译和 --check 共用同一请求形态，避免自检假阳性。"""

@@ -356,57 +356,18 @@ def safe_error_summary(exc: Exception) -> str:
     return " / ".join(parts)
 
 
-class ImageEditor:
+class ImageEditor(paid_model.PaidCaller):
     """一次 GPT-Image-2 edits 调用；整体可替换，离线测试不接触 SDK/网络。"""
 
     def __init__(self, settings: Settings, client=None,
                  paid_controller: paid_requests.RequestController | None = None) -> None:
-        self.s = settings
-        self._client = client
-        self._last_call = 0.0
+        self._init_paid(settings, client, paid_controller)
         self._catalog_attempted = False
         self._catalog_verified = False
         self._catalog_error: Exception | None = None
         self.last_usage: dict[str, Any] = {}
         self.last_model = ""
         self.last_model_verification = ""
-        self._paid_controller = paid_controller
-        self._paid_job_key = ""
-        self._paid_source_ref = ""
-        self._paid_media_index: int | None = None
-        self._paid_receipt: paid_requests.PaidReceipt | None = None
-
-    def set_paid_context(self, job_key: str, source_ref: str,
-                         media_index: int) -> None:
-        self._paid_job_key = str(job_key)
-        self._paid_source_ref = str(source_ref)
-        self._paid_media_index = int(media_index)
-
-    @property
-    def paid_request_id(self) -> str:
-        return self._paid_receipt.request_id if self._paid_receipt else ""
-
-    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
-        if self._paid_controller is None or self._paid_receipt is None:
-            return
-        receipt = self._paid_receipt
-        self._paid_controller.finalize(
-            receipt, accepted=accepted, reason=reason)
-        self._paid_receipt = None
-
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = build_client(self.s)
-        return self._client
-
-    def _pace(self) -> None:
-        if self.s.gap <= 0:
-            return
-        elapsed = time.monotonic() - self._last_call
-        if elapsed < self.s.gap:
-            time.sleep(self.s.gap - elapsed)
-        self._last_call = time.monotonic()
 
     def verify_model_available(self) -> None:
         """每个客户端实例只查一次目录，且必须先于付费图片调用。"""

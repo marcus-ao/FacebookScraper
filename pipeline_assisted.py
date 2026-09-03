@@ -376,21 +376,12 @@ def needs_human_path(state_dir: Path) -> Path:
 
 
 def needs_human_events(state_dir: Path) -> list[dict]:
-    path = needs_human_path(state_dir)
-    if not path.is_file():
-        return []
-    rows: list[dict] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise PipelineRunError("%s 第 %d 行损坏：%s" % (
-                path, number, exc)) from exc
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+    """读待人工确认队列。读法在 core/paid_model，与发布留痕共用一份。"""
+    def corrupt(path, number, exc):
+        return PipelineRunError(
+            "%s 第 %d 行损坏：%s" % (path, number, exc or "不是 JSON 对象"))
+
+    return paid_model.read_jsonl(needs_human_path(state_dir), on_corrupt=corrupt)
 
 
 def latest_human_items(state_dir: Path) -> dict[str, dict]:

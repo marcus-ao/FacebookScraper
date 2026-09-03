@@ -22,6 +22,7 @@ import json
 import math
 import os
 import sys
+import time
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -34,7 +35,7 @@ __all__ = [
     "validate_endpoint", "validate_cost_rates",
     "build_client", "is_fatal_api_error",
     "atomic_write_text", "append_jsonl",
-    "usage_number",
+    "usage_number", "PaidCaller", "read_jsonl",
 ]
 
 
@@ -321,3 +322,94 @@ def append_jsonl(path: Path, row: Mapping[str, Any], *, guard=None) -> None:
             (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
+
+
+class PaidCaller:
+    """付费模型调用方的共用状态机。
+
+    ``translate.Translator`` 与 ``localize_images.ImageEditor`` 原本各写了一遍
+    这一整套：客户端惰性构造、调用间隔、付费上下文（job_key / source_ref /
+    media_index）、收据与闭合。八个成员逐字节相同，只有 ``set_paid_context``
+    的 ``media_index`` 是图片侧特有的。
+
+    子类负责：在 ``__init__`` 里调 ``_init_paid``，以及真正发请求那一步。
+    """
+
+    def _init_paid(self, settings, client, paid_controller) -> None:
+        self.s = settings
+        self._client = client
+        self._last_call = 0.0
+        self._paid_controller = paid_controller
+        self._paid_job_key = ""
+        self._paid_source_ref = ""
+        self._paid_media_index: int | None = None
+        self._paid_receipt = None
+
+    def set_paid_context(self, job_key: str, source_ref: str,
+                         media_index: int | None = None) -> None:
+        self._paid_job_key = str(job_key)
+        self._paid_source_ref = str(source_ref)
+        self._paid_media_index = (None if media_index is None
+                                  else int(media_index))
+
+    @property
+    def paid_request_id(self) -> str:
+        return self._paid_receipt.request_id if self._paid_receipt else ""
+
+    def finalize_paid(self, accepted: bool, reason: str = "") -> None:
+        if self._paid_controller is None or self._paid_receipt is None:
+            return
+        receipt = self._paid_receipt
+        self._paid_controller.finalize(receipt, accepted=accepted, reason=reason)
+        self._paid_receipt = None
+
+    @property
+    def client(self):
+        """惰性构造。**不要在 __init__ 里建**：``--dry-run`` / ``--estimate``
+        不该因为密钥没设就退出。"""
+        if self._client is None:
+            self._client = build_client(
+                api_key=self.s.api_key(), base_url=self.s.base_url,
+                timeout=self.s.timeout, max_retries=self.s.max_retries)
+        return self._client
+
+    def _pace(self) -> None:
+        """相邻两次付费调用的最小间隔。"""
+        gap = self.s.gap
+        if gap <= 0:
+            return
+        elapsed = time.monotonic() - self._last_call
+        if elapsed < gap:
+            time.sleep(gap - elapsed)
+        self._last_call = time.monotonic()
+
+
+def read_jsonl(path: Path, *, on_corrupt, transform=None) -> list[dict]:
+    """读一份追加式真相源。空行跳过，**坏行失败闭合**，非对象行也失败闭合。
+
+    ``on_corrupt(path, line_number, exc_or_none)`` 返回要抛的异常——各真相源
+    的异常类型与文案不同（付费账本、发布留痕、待人工确认队列），但"读法"
+    只该有一份。
+
+    ``transform(row, path, line_number)`` 在每一行上做各自的字段校验/补齐。
+    它拿到的是**真实行号**（空行不计入序号会让报错指错地方）。
+
+    ⚠️ 坏行绝不能静默跳过：这些文件是钱和"发出去了没有"的唯一凭据，
+    少读一行就是少算一笔或漏掉一次未闭合的提交。
+    """
+    path = Path(path)
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    for number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise on_corrupt(path, number, exc)
+        if not isinstance(row, dict):
+            raise on_corrupt(path, number, None)
+        rows.append(row if transform is None else transform(row, path, number))
+    return rows

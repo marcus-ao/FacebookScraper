@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 from core.paid_model import FileLock
+from core import paid_model
 
 JOURNAL_NAME = "published.jsonl"
 
@@ -271,26 +272,22 @@ def _validate_loaded_row(row: dict, *, path: Path, number: int) -> dict:
 
 
 def load(state_dir: Path) -> list[dict]:
-    """读全部留痕；坏 JSON 行失败闭合，旧行补兼容字段。"""
-    path = journal_path(state_dir)
-    if not path.is_file():
-        return []
-    rows: list[dict] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "%s 第 %d 行不是合法 JSON：%s。不要手工改发布证据。"
-                % (path, number, exc)) from exc
-        if not isinstance(row, dict):
-            raise ValueError(
+    """读全部留痕；坏 JSON 行失败闭合，旧行补兼容字段。
+
+    读法在 core/paid_model，与待人工确认队列共用一份。
+    """
+    def corrupt(path, number, exc):
+        if exc is None:
+            return ValueError(
                 "%s 第 %d 行不是对象；不能静默丢弃发布证据" % (path, number))
-        rows.append(_validate_loaded_row(
+        return ValueError(
+            "%s 第 %d 行不是合法 JSON：%s。不要手工改发布证据。"
+            % (path, number, exc))
+
+    return paid_model.read_jsonl(
+        journal_path(state_dir), on_corrupt=corrupt,
+        transform=lambda row, path, number: _validate_loaded_row(
             _compat_row(row), path=path, number=number))
-    return rows
 
 
 def append(state_dir: Path, record: PublishAttempt) -> Path:
