@@ -21,6 +21,7 @@ from PIL import Image, UnidentifiedImageError
 from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
 from publish import evidence
+from publish.business_suite import resolve_ui_timezone
 from core.store import (Archive, ArchivePathError, assert_physical_direct_path,
                         post_dirname)
 from translate import (PROMPT_VERSION, account_dirs, apply_money_mapping,
@@ -834,8 +835,6 @@ def _validate_schedule_month(post_id: str, scheduled_at: datetime,
     发帖设备本机（``[publish].ui_timezone``）的日历；德国 10-01 00:00 在
     美西还是 09-30，两边**分属不同的月**。
     """
-    from publish.business_suite import resolve_ui_timezone
-
     zone = resolve_ui_timezone(ui_timezone)
     target = scheduled_at.astimezone(zone)
     today = now.astimezone(zone)

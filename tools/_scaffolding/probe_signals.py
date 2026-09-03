@@ -848,7 +848,7 @@ r"""**生成文件** —— 由 `tools/probe_signals.py --emit` 从一份 v2 pro
 """
 from __future__ import annotations
 
-from publish.selectors import EvidenceSignal, Locator
+from publish.locator_types import EvidenceSignal, Locator
 
 '''
 

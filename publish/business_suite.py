@@ -34,6 +34,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from core.config import cfg
+from publish import evidence
 from publish import selectors
 from publish.evidence import token_present as evidence_token_present
 from publish.selectors import (COMPOSER, SIGNALS, EvidenceSignal, Locator,
@@ -1001,14 +1003,10 @@ def _same_time(rendered: str, hour12: int, minute: int, meridiem: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _verified_locator(spec: Locator) -> tuple[bool | None, str]:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
-    from publish import evidence
     return evidence.verify(spec, cfg().state_dir)
 
 
 def _verified_signal(spec: EvidenceSignal) -> tuple[bool | None, str]:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
-    from publish import evidence
     return evidence.verify_signal(spec, cfg().state_dir)
 
 
@@ -1029,7 +1027,6 @@ def readback_evidence_ready() -> bool:
 
 
 def _require_reviewed_dump(*specs) -> None:
-    from core.config import cfg                    # 延迟导入，避免模块初始化环
     configured = str(cfg().get("publish", "ui_probe_dump", "") or "").strip()
     if not configured:
         raise ProbeRequired("[publish].ui_probe_dump 为空；生产证据没有审核边界")
@@ -1066,7 +1063,6 @@ def require_account_context_evidence() -> EvidenceSignal:
     if missing:
         raise ProbeRequired(
             "composer_account_context 缺少目标账号 token：%s" % "、".join(missing))
-    from core.config import cfg
     wanted = str(cfg().get("publish", "facebook_page_name", "") or "").strip()
     if (not wanted or spec.attributes.get(
             "facebook_account_token", "").casefold() != wanted.casefold()):
@@ -1119,15 +1115,13 @@ def require_readback_evidence() -> EvidenceSignal:
         raise ProbeRequired(
             "planner_loaded_signal 必须是数据完成后的 v2 semantic 语义，"
             "URL/页面骨架不能证明 Planner 数据已就绪")
-    from publish import evidence as _ev
-    missing = [key for key in _ev.PLANNER_REQUIRED
+    missing = [key for key in evidence.PLANNER_REQUIRED
                if not spec.attributes.get(key)]
     if missing:
         raise ProbeRequired(
             "planner_scheduled_card 缺少从 v2 dump 回填的属性：%s。"
             "\n⛔ 无法完整回读排期或远端占用槽，G6c 保持关闭。"
             % "、".join(missing))
-    from core.config import cfg
     current_targets = {
         "facebook_account_token": str(
             cfg().get("publish", "facebook_page_name", "") or "").strip(),
@@ -1162,7 +1156,6 @@ def require_readback_evidence() -> EvidenceSignal:
         passed, detail = _verified_signal(empty)
         if passed is not True:
             raise ProbeRequired("Planner 空态证据不能从 v2 dump 回查：%s" % detail)
-    from publish import evidence
     passed, detail = evidence.verify_publish_chain(
         button, account, success, loaded, spec, cfg().state_dir)
     if passed is not True:
@@ -1392,8 +1385,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
     ``'…#test September 15, 2026, 10:00 AM'``），所以这里解析的是整条名字，
     而不是"卡片内那个独立的时刻子元素"——后者在真实 UI 上不存在。
     """
-    from publish import evidence as _ev
-    return _ev.parse_entry_moment(rendered, spec.attributes)
+    return evidence.parse_entry_moment(rendered, spec.attributes)
 
 
 async def _open_channel_dialogs(
