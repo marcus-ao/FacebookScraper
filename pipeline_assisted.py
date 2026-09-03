@@ -25,6 +25,15 @@ from core.paid_model import FileLock
 from core import paid_model
 from core import imagehash
 from pipeline_settings import pipeline_settings
+import localize_images
+import localize_images as image_de
+from core import paid_requests
+from core.chrome import attach
+from routes import delta
+# 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
+from publish import business_suite as bs
+from tools import publish_post
+
 
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
@@ -885,7 +894,6 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
     unknown: list[str] = []
     paid_ids: frozenset[str] = frozenset()
     if state_dir is not None:
-        from core import paid_requests
         try:
             paid = paid_requests.ledger_snapshot(
                 state_dir, now=now, zone_name=zone_name)
@@ -899,7 +907,6 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
         text_settings = translation.Settings()
     except SystemExit as exc:
         raise PipelineRunError("[translate] 配置不可用：%s" % exc) from exc
-    import localize_images as image_de
     try:
         image_settings = image_de.Settings()
     except SystemExit as exc:
@@ -1018,7 +1025,6 @@ class RealStageRunner:
     """只调用各阶段现有入口；每个付费调用最多处理一篇/一张。"""
 
     def delta(self, *, if_stale: bool) -> int:
-        from routes import delta
         args = ["--platform", "all"]
         if if_stale:
             args.append("--if-stale")
@@ -1030,8 +1036,7 @@ class RealStageRunner:
             "--post-id", source.post_id])
 
     def image(self, source: SourcePost, media_index: int) -> int:
-        import localize_images
-        return localize_images.main([
+            return localize_images.main([
             "--account", source.account_dir.name,
             "--post-id", source.post_id,
             "--media-index", str(media_index)])
@@ -1045,7 +1050,6 @@ def translation_needed(source: SourcePost) -> bool:
 
 def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
     """调用 K 组已有内容寻址判据，准确识别哪些单图会产生付费请求。"""
-    import localize_images
     try:
         settings = localize_images.Settings()
         jobs, _state, _stats = localize_images.build_jobs(
@@ -1068,8 +1072,6 @@ def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
     ``while len(found) < count`` 的无上界循环，加了月末边界就必须给它一个出口，
     否则要么死循环、要么在月末把整次 run 抛崩。
     """
-    # 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
-    from publish import business_suite as bs
 
     zone = ZoneInfo(rules.timezone)
     ui_zone = bs.resolve_ui_timezone(rules.ui_timezone)
@@ -1548,7 +1550,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                   "本次零浏览器操作。" % coverage_count)
         return 0
 
-    from publish import business_suite as bs
     # 在任何浏览器读取之前先把整批严格离线硬闸重做一遍。
     provisional = next_slots(now, (), len(ready_rows), rules)
     if len(provisional) < len(ready_rows):
@@ -1589,7 +1590,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     c.assert_publish_chrome_isolated()
 
     async def read_slots():
-        from core.chrome import attach
         pw = None
         try:
             pw, _browser, context = await attach(
@@ -1640,7 +1640,6 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         final_batch.append((row, post, slot))
 
     print("=== 本次批量确认（%d 篇；德国时间 10:00/17:00）===" % len(final_batch))
-    from tools import publish_post
     for index, (row, post, slot) in enumerate(final_batch, 1):
         print("%d. %s  %s  %s  来源=%s" % (
             index, row["item_id"], post.post_id, slot.isoformat(),

@@ -46,6 +46,15 @@ from pipeline_settings import (AUTONOMY_LEVELS,      # noqa: E402
                                PIPELINE_CONFIG_KEYS,
                                PipelineConfigError,
                                pipeline_settings)
+from core import paid_requests                      # noqa: E402
+from publish import business_suite as bs             # noqa: E402
+from publish.compose import (                        # noqa: E402
+    _PROBE_REQUIRED_OBSERVATIONS as required)
+from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
+                            DAILY_TASK)
+import pipeline_assisted                             # noqa: E402
+import pipeline_assisted as assisted                 # noqa: E402
+
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +256,6 @@ def month_spend(dirs: list[Path], month: str,
     text_cost = image_cost = 0.0
     paid_ids: frozenset[str] = frozenset()
     if state_dir is not None:
-        from core import paid_requests
         try:
             paid = paid_requests.ledger_month_snapshot(
                 state_dir, month=month, zone_name="Europe/Berlin")
@@ -266,6 +274,8 @@ def month_spend(dirs: list[Path], month: str,
         problems.append("[translate] 配置不可用，翻译花费未计入（%s）" % exc)
         ts = None
     try:
+        # 延迟导入：它会拉起 Pillow。`pipeline.py status` 是零网络的只读命令，
+        # 常用来"看一眼积压"，不该为此付 Pillow 的启动开销。
         import localize_images as image_de
         isettings = image_de.Settings()
     except SystemExit as exc:
@@ -448,7 +458,6 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     open_count = 0
     g9_error = None
     try:
-        import pipeline_assisted
         activated = pipeline_assisted.activation_time(state_dir)
         latest = pipeline_assisted.latest_human_items(state_dir)
         open_count = sum(1 for row in latest.values() if row.get("status") == "open")
@@ -557,7 +566,6 @@ def run_status(dirs: list[Path], now: datetime | None = None,
 
 def _probe_observation_gaps() -> tuple[str, ...]:
     """`ui_constraints_verified` 到底还差哪几个观察项。判据借 compose 的，不另写。"""
-    from publish.compose import _PROBE_REQUIRED_OBSERVATIONS as required
 
     configured = cfg().get("publish", "ui_probe_dump", "")
     if not isinstance(configured, str) or not configured.strip():
@@ -577,10 +585,6 @@ def _probe_observation_gaps() -> tuple[str, ...]:
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
     """G6/G6c 三道生产闸。直接调 business_suite 的判据（导入不会启动浏览器）。"""
-    try:
-        from publish import business_suite as bs
-    except Exception as exc:                          # noqa: BLE001
-        return [("发布证据闸", False, "publish.business_suite 导入失败：%s" % exc)]
     out = []
     for label, fn in (("账号上下文", bs.require_account_context_evidence),
                       ("提交按钮 + 成功信号", bs.require_submission_evidence),
@@ -596,7 +600,6 @@ def _publish_gate_states() -> list[tuple[str, bool, str]]:
 
 def _task_states() -> list[tuple[str, str]]:
     import subprocess
-    from tools.schedule import ALIVE_TASK, CATCHUP_TASK, DAILY_TASK
 
     out = []
     for name in (DAILY_TASK, CATCHUP_TASK, ALIVE_TASK):
@@ -625,7 +628,6 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     `[publish.trusted_owners]` 少一个自家兄弟账号。那两张表和 14 个 UI 上限
     一样是承重的，但它们不在 GO_LIVE 的关键路径上，于是没人盯。
     """
-    import pipeline_assisted as assisted
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state_dir = cfg().state_dir
@@ -868,7 +870,6 @@ def main(argv=None) -> int:
             print("[!] 预检失败：%s" % exc)
             return 2
 
-    import pipeline_assisted as assisted
     if args.command == "activate":
         # `--g8-verified` 曾经只是一句自觉。激活早了不是顺序不好看，是**真花钱**：
         # assisted 会先付费翻译、再付费调图，最后逐篇卡在离线硬闸上。

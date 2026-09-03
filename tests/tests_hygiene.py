@@ -305,5 +305,196 @@ check(not bad_bats,
       "scripts/ 下的 .bat 全是 CRLF，实得裸 LF：%s" % ("、".join(bad_bats) or "无"))
 
 
+# ==========================================================================
+print("\n[6] 模块图必须是 DAG，依赖只许向下")
+# --------------------------------------------------------------------------
+# 2026-09-03 的架构复查：`core/{config,store,chrome,...}` 之上的 13 个模块
+# 是**一个强连通分量**——不是"有几处循环"，是整个应用层根本没有分层，
+# 它是一个模块套着 13 个文件名。任何一块都不能单独读、单独测、单独换。
+#
+# 而它是**一次一行**长出来的：每次都是"就这一次，在函数体里 import 一下"。
+# 现场留下 28 处函数内导入，其中 6 处注释明写着"延迟导入，避免模块初始化环"。
+# 那些注释是唯一的记录——而注释不会让测试变红。
+#
+# 所以这里立两条：
+#
+#   6a  **模块级**导入图无环。这是会在 import 期直接炸的那一类。
+#   6b  **全部**导入（含函数体内）在排除组装根之后仍然无环。
+#       这一条抓的是"用延迟导入把环藏起来"——Python 不炸，但模块之间
+#       依旧互为前提。
+#
+# 组装根豁免（``main`` / ``_cli``）：进程入口的职责就是把对象图装起来，
+# 它**可以**向上够。`translate.main()` 要一个住在 pipeline_assisted 的预算
+# 策略，那是依赖注入，不是环。豁免只给这两个名字，且只给函数体。
+
+COMPOSITION_ROOTS = {"main", "_cli"}
+
+
+def internal_imports(tree: ast.AST, own: set[str], *,
+                     toplevel_only: bool = False,
+                     skip_composition_roots: bool = False) -> set[str]:
+    if toplevel_only:
+        nodes: list[ast.AST] = []
+
+        def walk(body):
+            # if/try 里的模块级导入照样在 import 期执行，要算进来
+            for node in body:
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    nodes.append(node)
+                elif isinstance(node, (ast.If, ast.Try)):
+                    walk(node.body)
+                    walk(getattr(node, "orelse", []))
+                    walk(getattr(node, "finalbody", []))
+                    for handler in getattr(node, "handlers", []):
+                        walk(handler.body)
+        walk(tree.body)
+    else:
+        skipped: set[int] = set()
+        if skip_composition_roots:
+            for node in ast.walk(tree):
+                if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.name in COMPOSITION_ROOTS):
+                    skipped |= {id(d) for d in ast.walk(node)}
+        nodes = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.Import, ast.ImportFrom))
+                 and id(n) not in skipped]
+
+    found: set[str] = set()
+    for node in nodes:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            # `from publish import evidence` 的目标是 publish.evidence，
+            # 不是 publish —— 两者分层不同，混为一谈会漏报也会误报。
+            names = [node.module] + [f"{node.module}.{a.name}"
+                                     for a in node.names]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        else:
+            continue
+        found |= {n for n in names if n in own}
+    return found
+
+
+def module_name(path: Path) -> str:
+    return ".".join(path.relative_to(ROOT).with_suffix("").parts
+                    ).removesuffix(".__init__")
+
+
+def find_cycles(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Tarjan 强连通分量；返回所有大小 >1 的分量。"""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    stack: list[str] = []
+    on_stack: set[str] = set()
+    counter = [0]
+    out: list[list[str]] = []
+
+    def strongconnect(v: str) -> None:
+        index[v] = low[v] = counter[0]
+        counter[0] += 1
+        stack.append(v)
+        on_stack.add(v)
+        for w in graph.get(v, ()):
+            if w == v:
+                continue
+            if w not in index:
+                strongconnect(w)
+                low[v] = min(low[v], low[w])
+            elif w in on_stack:
+                low[v] = min(low[v], index[w])
+        if low[v] == index[v]:
+            component = []
+            while True:
+                w = stack.pop()
+                on_stack.discard(w)
+                component.append(w)
+                if w == v:
+                    break
+            if len(component) > 1:
+                out.append(sorted(component))
+
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(old_limit, 10_000))
+    try:
+        for v in sorted(graph):
+            if v not in index:
+                strongconnect(v)
+    finally:
+        sys.setrecursionlimit(old_limit)
+    return out
+
+
+graph_files = python_files(include_tests=False, include_scaffolding=False)
+own_modules = {module_name(p) for p in graph_files}
+trees = {module_name(p): ast.parse(p.read_text(encoding="utf-8"))
+         for p in graph_files}
+
+for label, kwargs in (
+        ("6a 模块级导入图", dict(toplevel_only=True)),
+        ("6b 含函数体（排除组装根）", dict(skip_composition_roots=True))):
+    graph = {name: internal_imports(tree, own_modules, **kwargs) - {name}
+             for name, tree in trees.items()}
+    cycles = find_cycles(graph)
+    check(not cycles,
+          "%s 无环，实得 %d 个：%s" % (
+              label, len(cycles),
+              " ｜ ".join(" <-> ".join(c) for c in cycles) or "无"))
+
+# 组装根豁免不是"随便什么函数都能藏环"。函数体内导入本仓库模块的，
+# 只允许出现在 main/_cli 里，或者带一句说明它为什么必须晚绑定。
+#
+# 目前允许的两类理由：
+#   - 组装根（main/_cli）；
+#   - 明写 `# 延迟导入：`  开头的注释，说明晚绑定的**代价原因**
+#     （例如 pipeline.py 不想为了看一眼积压就把 Pillow 拉起来）。
+LAZY_REASON = re.compile(r"#\s*延迟导入[：:]")
+
+
+def module_scope_import_ids(tree: ast.Module) -> set[int]:
+    """在 import 期执行的导入：模块级，含 `if __name__` / `try` 包着的那些。"""
+    out: set[int] = set()
+
+    def walk(body):
+        for node in body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                out.add(id(node))
+            elif isinstance(node, (ast.If, ast.Try)):
+                walk(node.body)
+                walk(getattr(node, "orelse", []))
+                walk(getattr(node, "finalbody", []))
+                for handler in getattr(node, "handlers", []):
+                    walk(handler.body)
+    walk(tree.body)
+    return out
+
+
+undocumented: list[str] = []
+for path in graph_files:
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines()
+    tree = trees[module_name(path)]
+    exempt = module_scope_import_ids(tree)
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in COMPOSITION_ROOTS):
+            exempt |= {id(d) for d in ast.walk(node)}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if id(node) in exempt:
+            continue
+        if not internal_imports(ast.Module(body=[node], type_ignores=[]),
+                                own_modules):
+            continue
+        # 前三行（成段说明）或本行行尾（`import x  # 延迟导入：...`）都算
+        window = "\n".join(lines[max(0, node.lineno - 4):node.end_lineno])
+        if not LAZY_REASON.search(window):
+            undocumented.append("%s:%d" % (rel(path), node.lineno))
+
+check(not undocumented,
+      "函数体内导入本仓库模块的，都在组装根里或写了「延迟导入：」理由，"
+      "实得 %d 处无说明：%s"
+      % (len(undocumented), "、".join(undocumented) or "无"))
+
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 sys.exit(1 if fails else 0)

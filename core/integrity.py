@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from core.config import cfg, per_platform
+
 
 def _parse_ts(value) -> datetime | None:
     """把 manifest 里的 created_at 解析成 datetime，解析不了就返回 None。
@@ -148,7 +150,6 @@ def params(platform: str | None = None) -> tuple[int, int]:
     不给就退回通用值。实测两个账号的节奏差一个量级，共用阈值必然一边误报、
     一边漏报——详见计划 D 组头部那张表。
     """
-    from core.config import cfg, per_platform
     c = cfg()
     gap = per_platform(c.get("integrity", "gap_flag_days", None), platform or "", 5)
     quiet = per_platform(c.get("integrity", "alert_after_quiet_days", None),
