@@ -1,0 +1,174 @@
+{
+  "in_neakasa.tech/3965025107383038890": [
+    {
+      "kind": "pun",
+      "en_span": [
+        0,
+        12
+      ],
+      "label": "Cat or CCTV —— 头韵 + 反差梗。德语 Überwachungskamera 又长又不押韵，直译整句就垮了，要另找一个说法"
+    },
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        13,
+        46
+      ],
+      "label": "yours 指代不明（你的猫？你的摄像头？）—— 德语必须选定 deine Katze 还是 deins，选错整句意思就变了"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        22,
+        41
+      ],
+      "label": "professionally nosy —— 拟人俏皮话，德语没有对应搭配，直译会读起来像在骂猫"
+    }
+  ],
+  "in_neakasa.tech/3975547640610092585": [
+    {
+      "kind": "pun",
+      "en_span": [
+        0,
+        13
+      ],
+      "label": "Berlin bound —— 押头韵的行程梗，德语受众就在柏林，原样译过去反而没有那层「远道而来」的意思"
+    },
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        48,
+        67
+      ],
+      "label": "another new product 指代不明：是 Riko 的新版本还是另一条产品线？德语冠词必须选一个，选错就等于替市场部做了宣布"
+    }
+  ],
+  "fa_neakasaofficial/122098529409379375": [
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        408,
+        446
+      ],
+      "label": "family 指品牌社区还是家庭？德语 Familie 直译后歧义比英语更重"
+    },
+    {
+      "kind": "us_only",
+      "en_span": [
+        576,
+        638
+      ],
+      "label": "这句是照 US 站的反诈话术写的；德国站要按 DSGVO 口径重写，不能直译"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        639,
+        659
+      ],
+      "label": "Stay safe out there —— 美式口语收尾，直译成德语会显得像在警告人身安全，语气跑偏"
+    }
+  ],
+  "fa_neakasaofficial/122099269947379375": [
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        549,
+        593
+      ],
+      "label": "their 指代不明：是被推荐人的订单还是推荐人自己的？金额归属搞反是钱的问题"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        595,
+        622
+      ],
+      "label": "win-win —— 英语惯用语，德语商务语境里用得少且偏生硬，需要改写"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        1126,
+        1156
+      ],
+      "label": "commissions roll in —— 形象说法，德语直译成「滚进来」不成立"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        1354,
+        1383
+      ],
+      "label": "game-changing —— 营销套话，德语没有等效单词，直译像体育解说"
+    }
+  ],
+  "fa_neakasaofficial/122123185335379375": [
+    {
+      "kind": "pun",
+      "en_span": [
+        64,
+        82
+      ],
+      "label": "on the fence —— 成语「拿不定主意」。直译成 auf dem Zaun 在德语里完全不通"
+    },
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        243,
+        316
+      ],
+      "label": "这句英语本身就残缺（couldn't feel more 后面缺补足语），主语与情感指向都不明，LLM 会自作主张补一个"
+    },
+    {
+      "kind": "us_only",
+      "en_span": [
+        458,
+        474
+      ],
+      "label": "Early bird —— 众筹早鸟档是 Kickstarter 的美国站节奏；德国站是否有同一档期要业务确认"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        620,
+        642
+      ],
+      "label": "photobomb —— 网络俚语，德语没有通用译法，需要整句改写"
+    }
+  ],
+  "in_neakasa.tech/3973012230169803390": [
+    {
+      "kind": "pun",
+      "en_span": [
+        64,
+        82
+      ],
+      "label": "on the fence —— 成语「拿不定主意」。直译成 auf dem Zaun 在德语里完全不通"
+    },
+    {
+      "kind": "ambiguous",
+      "en_span": [
+        243,
+        316
+      ],
+      "label": "这句英语本身就残缺（couldn't feel more 后面缺补足语），主语与情感指向都不明，LLM 会自作主张补一个"
+    },
+    {
+      "kind": "us_only",
+      "en_span": [
+        458,
+        474
+      ],
+      "label": "Early bird —— 众筹早鸟档是 Kickstarter 的美国站节奏；德国站是否有同一档期要业务确认"
+    },
+    {
+      "kind": "pun",
+      "en_span": [
+        620,
+        642
+      ],
+      "label": "photobomb —— 网络俚语，德语没有通用译法，需要整句改写"
+    }
+  ]
+}

@@ -1,0 +1,179 @@
+/*
+ * 审校台的设计口径。
+ *
+ * 风格取向：Swiss / 极简，高密度。这是内网工作台，不是落地页——
+ * 屏幕上每一块地方都要么在承载内容，要么在承载信号，没有第三种。
+ *
+ * ⛔ **配色上最要紧的一条**：内容区里**只有两种饱和色**——
+ *    红（确定性检查：这里错了）和黄（LLM 风险：这里注意看）。
+ * PROTOTYPE_DESIGN.md 第 8 节写得很直白：混成一种颜色，用几次她两种都不信。
+ * 所以主色（靛蓝）只出现在操作控件上，绝不进正文；背景一律中性灰，
+ * 不带任何色相——底色一旦带色相，红黄两种标记的区分度就被削掉一截。
+ */
+
+/* 字体走系统栈：生产机要求断网也能跑，外链字体会挂住首屏。 */
+:root {
+  --font-sans: "Segoe UI", -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+
+  /* 中性 */
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --fg: #0f172a;
+  --muted: #f8fafc;
+  --muted-fg: #475569;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* 操作色。只用在按钮/链接/焦点环上。 */
+  --primary: #4f46e5;
+  --primary-fg: #ffffff;
+  --primary-soft: #eef2ff;
+
+  /* 两种标记色 —— 内容区仅有的两种饱和色 */
+  --error: #dc2626;          /* 红：这里错了 */
+  --error-soft: #fee2e2;
+  --error-line: #fca5a5;
+  --risk: #b45309;           /* 黄：这里注意看 */
+  --risk-soft: #fef3c7;
+  --risk-line: #fcd34d;
+
+  --ok: #047857;
+
+  /* 密度 9/10：8–32px 的紧凑刻度 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 1px 3px rgba(15, 23, 42, .04);
+  --shadow-lg: 0 4px 16px rgba(15, 23, 42, .10);
+  --ease: 180ms cubic-bezier(.4, 0, .2, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 焦点环：全局统一，任何地方都不许把它去掉而不给替代 */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+a { color: var(--primary); }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* 触控/点击目标不小于 32px 高（桌面内网工具，指针为主），
+     水平内边距保证文字两侧有呼吸。 */
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--ease), border-color var(--ease),
+              color var(--ease), box-shadow var(--ease);
+}
+.btn:hover:not(:disabled) { background: var(--muted); border-color: #94a3b8; }
+.btn:active:not(:disabled) { transform: translateY(.5px); }
+.btn:disabled { opacity: .45; }
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+.btn-primary:hover:not(:disabled) { background: #4338ca; border-color: #4338ca; }
+
+.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost:hover:not(:disabled) { background: var(--muted); border-color: var(--border); }
+
+.btn-danger { color: var(--error); border-color: var(--error-line); }
+.btn-danger:hover:not(:disabled) { background: var(--error-soft); border-color: var(--error); }
+
+.btn-sm { min-height: 26px; font-size: 12px; padding: 0 var(--space-2); }
+
+/* ---------- 徽标 ---------- */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px var(--space-2);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  /* 徽标不许折行：一个换了行的告警条会把整行的高度撑乱，
+     而行高一乱，「一眼扫过去」这件事就没了。 */
+  white-space: nowrap;
+}
+.tag-error { background: var(--error-soft); color: var(--error); }
+.tag-risk { background: var(--risk-soft); color: var(--risk); }
+.tag-neutral { background: var(--muted); color: var(--muted-fg); }
+.tag-ok { background: #d1fae5; color: var(--ok); }
+
+/* ---------- 正文里的标记 ---------- */
+/* 红：确定性检查。error 实心底，warn 只给下划线——
+   都是红色系，但"错了"和"要确认"看得出轻重。 */
+mark.mk {
+  background: none;
+  color: inherit;
+  padding: 1px 0;
+  border-radius: 2px;
+  scroll-margin-block: 96px;   /* 跳转时不被吸顶条盖住 */
+}
+mark.mk-error { background: var(--error-soft); box-shadow: inset 0 -2px 0 var(--error); }
+mark.mk-warn { box-shadow: inset 0 -2px 0 var(--error-line); }
+mark.mk-risk { background: var(--risk-soft); box-shadow: inset 0 -2px 0 var(--risk-line); }
+
+/* 当前跳到的那一处 */
+mark.mk-active {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; background-clip: content-box; }
+
+/* ---------- 动效 ---------- */
+/* Motion 2/10：只有状态过渡，没有入场编排。这是天天要用的工作台，
+   每次打开都演一遍动画的界面，第三天就开始烦人。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
