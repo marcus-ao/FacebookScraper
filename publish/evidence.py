@@ -93,7 +93,7 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
         return None, (
             "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
             "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
-            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 第 3 节）"
         ) % source_dump
     try:
         stat = path.stat()
@@ -203,7 +203,7 @@ def verify(spec: Locator, dumps_dir: Path) -> tuple[bool | None, str]:
         return None, (
             "本机没有 %s —— 证据 dump 不进版本库，**本项目的自动发布是单机工具**。\n"
             "    换机器或 dump 丢失后必须重录一次探查才能重新解锁 --submit：\n"
-            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 重录一节）"
+            "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 第 3 节）"
         ) % spec.source_dump
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -281,7 +281,7 @@ def _signal_hits(item: dict, spec: EvidenceSignal) -> bool:
 
 
 #: `planner_scheduled_card` v2 契约要求的属性。
-#: **2026-09-01 按真实 Planner 重写**，见 `docs/PROBE_FINDINGS_20260901.md`。
+#: **2026-09-01 按真实 Planner 重写**，见 `docs/HANDOFF.md` 第 5 节。
 PLANNER_REQUIRED = (
     "date_format", "time_format", "datetime_regex",
     "entry_role", "entry_probe_text",

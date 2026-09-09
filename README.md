@@ -10,8 +10,12 @@
 | ---------------------------------------------------------- | ---------------------------------------------- |
 | 本文件                                                     | 怎么跑、架构为什么长这样                       |
 | [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)               | **需要你亲自动手的步骤**，逐步操作指南         |
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | 进度真相源：全部任务、验收、已完成项的实际偏差 |
-| [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)                 | 已实现代码的二次审查、修复与验证记录           |
+| [docs/HANDOFF.md](docs/HANDOFF.md)                         | 红线、真实 UI 长什么样、踩过的坑（动代码前必读） |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)               | 为谁做、做到什么程度算够                       |
+| [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md)             | **还差什么、按什么顺序修**                     |
+| [web/DESIGN.md](web/DESIGN.md)                             | 审校台原型的设计与接口契约                     |
+
+> ⛔ **进度不写在文档里**，它是算出来的：`scriptsun_pipeline.bat preflight`。
 
 ## 当前自动发布状态（2026-09-01）
 
@@ -50,7 +54,7 @@ FB/IG 渠道沿用 composer 默认全选，代码不点击；提交前核对目�
 > 封号风险从「一次性敞口」变成「累积性敞口」，而抓取小号被封是本项目
 > **唯一不可恢复的失败模式**——回填与增量会同时断掉。
 >
-> 所以 `docs/IMPLEMENTATION_PLAN.md` 的 **C7「累积风险缓解」是方案的组成部分**，
+> 所以 **C7「累积风险缓解」是方案的组成部分**（见 docs/HANDOFF.md 第 1 节红线 3），
 > 不是锦上添花：随机化触发时刻、抓取深度上限（只滚几屏不滚到底）、
 > 滚动节奏拟人、异常即停不重试、频率可降级、失败预算。
 > **不要因为"跑得挺好"就把它们优化掉**——这类风险的反馈是延迟的，且只反馈一次。

@@ -1,6 +1,6 @@
 r"""审校台的 FastAPI 应用与路由注册。
 
-**读全真，写全假**（docs/PROTOTYPE_DESIGN.md 第 2 节）。这份文件本身很薄，
+**读全真，写全假**（web/DESIGN.md 第 2 节）。这份文件本身很薄，
 它的全部职责是把请求分给两个来源：
 
     GET  /api/tasks                  ─┐

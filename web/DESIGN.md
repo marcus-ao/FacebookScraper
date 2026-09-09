@@ -5,7 +5,7 @@
 这份文件是**动手写代码前的最后一份文档**。它定死三件事：**界面长什么样**、
 **数据接口契约**、**哪些是假的以及切换时改哪里**。
 
-需求背景见 [REQUIREMENTS.md](REQUIREMENTS.md)。本文件只管原型。
+需求背景见 [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md)。本文件只管原型。
 
 ---
 
@@ -98,7 +98,7 @@ FacebookScraper/
 > **任何生产代码都不许 import `web/`。**
 
 这样 `web/` 是模块图上的一个叶子，`tests/tests_hygiene.py` 的 DAG 护栏会**自动**
-守住 REQUIREMENTS.md §5.2 那条约束（Web 层不许复制流水线逻辑）——不用靠人记。
+守住 docs/REQUIREMENTS.md §5.2 那条约束（Web 层不许复制流水线逻辑）——不用靠人记。
 
 放在 `Demo/` 下面的"自由"是假的：那里不参与测试、不受 DAG 检查，而这个原型如果真要
 长成 M2，那些检查正是需要的。
@@ -124,7 +124,7 @@ FacebookScraper/
 | 排期时刻 + 渠道 | `publish/compose.py` 的组装结果 | ✅ 有 |
 | 平台 / 作者 / 合作方 | `post.json` 的 `platform` / `owner` / `coauthors` | ✅ 有 |
 | **LLM 风险预扫描** | — | ⚪ **需新建**，见 §8 |
-| **actor 留痕** | — | ⚪ 需新建（REQUIREMENTS.md §4.3） |
+| **actor 留痕** | — | ⚪ 需新建（docs/REQUIREMENTS.md §4.3） |
 
 ---
 
@@ -276,7 +276,7 @@ LLM 只负责真正模糊的三类：
 | 真相源 | `translated.jsonl` | **`translated_human.jsonl`** |
 | 派生副本 | `text_de.txt`（人工版优先渲染） | 同一个文件 |
 
-三个好处：追加式（和项目其它真相源一致）、能顺带记 `actor` 和时间（REQUIREMENTS.md §4.3
+三个好处：追加式（和项目其它真相源一致）、能顺带记 `actor` 和时间（docs/REQUIREMENTS.md §4.3
 本来就要求）、`--review` 只重建派生副本 **永远碰不到人工版**。
 
 ### 🐛 附带必须修的 bug
@@ -441,4 +441,4 @@ text_de.write_text(de, encoding="utf-8")   # 没有任何"人工改过就别覆�
 | 「退回」动作 | §7。能直接编辑之后它就是个死信箱 |
 | 实时调 LLM | §8。预跑存静态文件 |
 | 生产机装 Node | §3。开发机构建，只拷 `dist/` |
-| 配置编辑 | REQUIREMENTS.md §5.3 的二分，安全参数在 Web 上永远只读 |
+| 配置编辑 | docs/REQUIREMENTS.md §5.3 的二分，安全参数在 Web 上永远只读 |

@@ -398,7 +398,7 @@ async def ensure_logged_in(page, *, page_name: str, instagram_account: str = "",
                 "这条定位是 FB 预览里的 heading，预览要有内容才渲染。"
                 % exc) from exc
         # ⚠️ **只核对 Facebook。** 实测 composer 上没有 IG 帐号名
-        # （`docs/PROBE_FINDINGS_20260901.md` 第一节），IG 由 G6c 提交后
+        # （`docs/HANDOFF.md` 第 5.1 节），IG 由 G6c 提交后
         # 从 Planner 详情弹窗回读证明，少了会转人工。
         attrs = account_spec.attributes
         extracted: list[str] = []
@@ -1136,7 +1136,7 @@ def require_readback_evidence() -> EvidenceSignal:
             "Planner 卡片账号 token 与当前目标配置不一致：%s"
             % "、".join(wrong_targets))
     # ⚠️ **图片数量的硬闸从这里搬走了。** 实测 Planner 侧零数量语义
-    # （`docs/PROBE_FINDINGS_20260901.md` 第二节），继续要求它等于永远关闸。
+    # （`docs/HANDOFF.md` 第 5.2 节），继续要求它等于永远关闸。
     # 张数改由 `upload_images()` 在 composer 上传后数缩略图来保证。
     button, success = require_submission_evidence()
     account = require_account_context_evidence()
@@ -1445,7 +1445,7 @@ async def _collect_planner_matches(
     """匹配日历条目；``open_dialogs`` 时再逐个点开确认渠道与 remote id。
 
     ⚠️ **图片数量不再参与匹配**：实测 Planner 侧零数量语义
-    （`docs/PROBE_FINDINGS_20260901.md`）。张数的保证挪到了
+    （`docs/HANDOFF.md` 第 5 节）。张数的保证挪到了
     `upload_images()` 在 composer 上传后数缩略图那一步。
     """
     for channel in target_channels:

@@ -1,7 +1,7 @@
 r"""审校台的**只读数据层**：从归档算出任务列表与详情。
 
 ⛔ **这是生产代码，不是原型的一次性代码。**
-docs/PROTOTYPE_DESIGN.md 第 2 节把整个原型切成两半：读的那半从第一天起就是
+web/DESIGN.md 第 2 节把整个原型切成两半：读的那半从第一天起就是
 生产代码（碰的是只读数据，怎么试错都无害），写的那半随时可扔（碰的是追加式
 真相源，那正是不能拿来试错的地方）。本文件是前一半。切换到生产时**不动它**，
 只换 ``fake_writer.py``。
@@ -28,7 +28,7 @@ docs/PROTOTYPE_DESIGN.md 第 2 节把整个原型切成两半：读的那半从�
 "图选哪张/回退没有"  ``publish.compose.compose_post``（``image_sources`` / ``warnings``）
 ===================  =========================================================
 
-本模块自己**只做两件事**：把这些返回值拼成 docs/PROTOTYPE_DESIGN.md 第 6 节
+本模块自己**只做两件事**：把这些返回值拼成 web/DESIGN.md 第 6 节
 那份 JSON 契约；以及**把标记定位到字符下标**（那三个 regex 只判"有没有"，
 不给位置，而界面要在正文里画出来）。定位复用的是 ``core.translated`` 里
 **同一个正则对象**——不是照抄一份——所以那边改了这边自动跟着改，
@@ -381,7 +381,7 @@ class _Context:
 
 def list_tasks(*, days: int = DEFAULT_DAYS,
                now: datetime | None = None) -> dict:
-    """任务列表。契约见 docs/PROTOTYPE_DESIGN.md 第 6 节。
+    """任务列表。契约见 web/DESIGN.md 第 6 节。
 
     排序：按 ``schedule.at`` 升序（最急的在最上面）；没有排期的排在最后，
     内部按原帖时间倒序（最新的先看）。

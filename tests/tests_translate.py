@@ -1097,5 +1097,5 @@ with tempfile.TemporaryDirectory() as lock_tmp:
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 if not fails:
     print("\n真实 DeepSeek 验收：scripts\\run_translate.bat --check")
-    print("真实译文验收（F1/F2）见 docs/TRANSLATION_PLAN.md。")
+    print("真实译文验收（F1/F2）见 docs/MANUAL_STEPS.md。")
 sys.exit(1 if fails else 0)

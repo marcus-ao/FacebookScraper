@@ -54,7 +54,7 @@ def _schedule_timezone() -> ZoneInfo:
             "  或者直接重跑 scripts\\setup.bat（requirements.txt 里已经列了它）。\n\n"
             "  ❌ 不要改成写死 UTC 偏移绕过去：Europe/Berlin 每年切两次夏令时，"
             "写死偏移会在切换日把帖子发到错误的时刻，而且没人会立刻发现"
-            "（见 docs/PUBLISH_PLAN.md 第 3.3 节）。") from exc
+            "（见 docs/HANDOFF.md 第 5 节）。") from exc
     except ValueError as exc:
         raise SystemExit(f"[publish].timezone 不是有效时区名：{name!r}") from exc
 

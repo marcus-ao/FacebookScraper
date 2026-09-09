@@ -196,7 +196,7 @@ def activation_blockers(state_dir: Path) -> tuple[str, ...]:
     if cfg().get("publish", "ui_constraints_verified", False) is not True:
         blockers.append(
             "[publish].ui_constraints_verified 仍是 false —— assisted 会先花钱"
-            "翻译/调图，再逐篇卡在离线硬闸上。先按 docs/GO_LIVE.md 第 3b 步"
+            "翻译/调图，再逐篇卡在离线硬闸上。先按 docs/MANUAL_STEPS.md 第 3.4 节"
             "量完 14 个 UI 上限。")
     if not journal.scheduled_source_refs(state_dir):
         blockers.append(

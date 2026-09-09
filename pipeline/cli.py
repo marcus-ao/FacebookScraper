@@ -615,7 +615,7 @@ def _task_states() -> list[tuple[str, str]]:
 
 
 def run_preflight(days: int = 90, now: datetime | None = None) -> int:
-    """上线预检：把 `docs/GO_LIVE.md` 那张手维护的表变成**算出来的**。
+    """上线预检：把手维护的状态表变成**算出来的**。
 
     **零网络、零费用、零写盘。** 回答两个问题：
 
@@ -647,7 +647,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         print("    还差 %d 个只能人亲眼量的观察项：" % len(gaps))
         for key in gaps:
             print("      - %s" % key)
-        print("    填法：docs/GO_LIVE.md 第 3b 步（一条 --set-note 命令填完）")
+        print("    填法：docs/MANUAL_STEPS.md 第 3.4 节（一条 --set-note 命令填完）")
 
     blockers = assisted.activation_blockers(state_dir)
     scheduled_refs = len(assisted.journal.scheduled_source_refs(state_dir))

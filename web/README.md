@@ -1,6 +1,6 @@
 # 审校台原型
 
-给业务同事用的德语审校界面。设计见 [docs/PROTOTYPE_DESIGN.md](../docs/PROTOTYPE_DESIGN.md)，
+给业务同事用的德语审校界面。设计见 [DESIGN.md](DESIGN.md)，
 需求背景见 [docs/REQUIREMENTS.md](../docs/REQUIREMENTS.md)。**本文件只讲怎么跑。**
 
 ## 一条必须先知道的分界

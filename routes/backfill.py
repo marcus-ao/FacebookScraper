@@ -11,7 +11,7 @@ r"""Day 1 · 一次性历史回填（登录态 + 人工滚动 + 响应拦截）
 
 跑一次就够。跑完这个账号的历史内容就全在 archive/ 里了，
 之后的新帖由 routes/delta.py 每天接手（方案 B：登录态 + CDP 附着，
-见 docs/IMPLEMENTATION_PLAN.md 第 0 节的方案变更说明）。
+见 docs/HANDOFF.md 第 2.1 节的方案变更说明）。
 """
 from __future__ import annotations
 
