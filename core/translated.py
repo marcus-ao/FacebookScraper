@@ -25,7 +25,9 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from core import paid_model
 from core.store import assert_physical_direct_path
@@ -33,6 +35,7 @@ from core.store import assert_physical_direct_path
 # 提示词版本。改了提示词就把它 +1：译文行里记着这个值，
 # 于是"这批译文是旧提示词产出的"变成可查的事实，而不是靠记忆。
 PROMPT_VERSION = 5
+_UNSET_REVISION = object()
 
 
 class SourceTextError(ValueError):
@@ -41,6 +44,10 @@ class SourceTextError(ValueError):
     ``translate.SourceDataError`` 继承它，好让翻译批次那边把它当作
     「整批共享的致命错误」一起停下来。
     """
+
+
+class HumanRevisionConflict(ValueError):
+    """打开页面之后出现了更新的人工版本，旧页面不能把它覆盖。"""
 
 
 # --------------------------------------------------------------------------
@@ -55,22 +62,58 @@ def source_text_sha256(text: str) -> str:
 
 
 def translation_is_current(source: dict, translated: dict | None) -> bool:
-    """只有源正文指纹与当前提示词版本同时匹配，译文才算当前可用。"""
+    """机器版需匹配提示词；人工版只绑定原文，不能被模板升级作废。"""
     if not isinstance(translated, dict):
         return False
     text = source.get("text")
     return (isinstance(text, str)
             and translated.get("source_text_sha256") == source_text_sha256(text)
-            and translated.get("prompt_version") == PROMPT_VERSION)
+            and (translated.get("is_human") is True
+                 or translated.get("prompt_version") == PROMPT_VERSION))
+
+
+def effective_translation(source: dict, machine: dict | None,
+                          human: dict | None) -> dict | None:
+    """返回人工优先的副本；过期人工版仍供复核展示，调用方另判 current。"""
+    for entry, is_human in ((human, True), (machine, False)):
+        if (not isinstance(entry, dict)
+                or entry.get("post_id") != source.get("post_id")
+                or not isinstance(entry.get("text_de"), str)
+                or not entry["text_de"].strip()):
+            continue
+        selected = dict(entry, is_human=is_human)
+        selected["stale"] = not translation_is_current(source, selected)
+        return selected
+    return None
+
+
+def image_translation(source: dict, machine: dict | None,
+                       human: dict | None) -> dict | None:
+    """图片沿用当前机器文案；机器版缺失或过期时使用已复核的人工正文。
+
+    这样日常改文案不会无声触发整组图片重做，而新原文已经人工复核后也不会
+    因为机器译文过期而永远卡住。未复核的人工稿始终拦住新的图片费用。
+    """
+    selected = effective_translation(source, machine, human)
+    if selected is not None and selected["is_human"] and selected["stale"]:
+        return None
+    generated = effective_translation(source, machine, None)
+    if generated is not None and not generated["stale"]:
+        return generated
+    return selected if selected is not None and not selected["stale"] else None
 
 
 def load_translated(path: Path) -> dict[str, dict]:
     """读 translated.jsonl，同 post_id 后写胜出（与 manifest 一致的语义）。"""
-    out: dict[str, dict] = {}
+    return {row["post_id"]: row for row in _translation_rows(path, human=False)}
+
+
+def _translation_rows(path: Path, *, human: bool):
+    """统一读取两份译文账本，保留历史行供旧副本识别。"""
     if not path.exists():
-        return out
+        return
     assert_physical_direct_path(
-        path.parent, path, kind="file", label="translated.jsonl")
+        path.parent, path, kind="file", label=path.name)
     # 二进制逐行解码：若一次硬终止恰好截断 UTF-8 多字节字符，只跳过那一行；
     # 后面已经 fsync 的付费结果仍然必须可见，不能被整文件 UnicodeDecodeError 吞掉。
     with path.open("rb") as f:
@@ -85,16 +128,98 @@ def load_translated(path: Path) -> dict[str, dict]:
                         or not isinstance(r.get("post_id"), str)
                         or not r["post_id"].strip()
                         or not isinstance(r.get("text_de"), str)
-                        or not r["text_de"].strip()
-                        or not isinstance(r.get("translated_at"), str)
-                        or not isinstance(r.get("model"), str)
-                        or not isinstance(r.get("prompt_version"), int)):
+                        or not r["text_de"].strip()):
                     continue
-                out[r["post_id"]] = r
-            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+                if human:
+                    source_hash = r.get("source_text_sha256")
+                    if ("source_text_sha256" not in r
+                            or (source_hash is not None and not (
+                                isinstance(source_hash, str)
+                                and re.fullmatch(r"[0-9a-f]{64}", source_hash)))):
+                        continue
+                    UUID(r["revision"])
+                    recorded = datetime.fromisoformat(r["recorded_at"].replace("Z", "+00:00"))
+                    if recorded.tzinfo is None or recorded.utcoffset() is None:
+                        continue
+                elif (not isinstance(r.get("translated_at"), str)
+                      or not isinstance(r.get("model"), str)
+                      or not isinstance(r.get("prompt_version"), int)):
+                    continue
+                yield r
+            except (UnicodeDecodeError, ValueError, KeyError, TypeError, AttributeError):
                 # TypeError：整行是合法 JSON 但不是对象（如数组），下标取不到
                 continue
-    return out
+
+
+def load_human_translated(path: Path) -> dict[str, dict]:
+    """人工版独立追加留档；后写胜出，坏行不遮住此前已保存的版本。"""
+    return {row["post_id"]: row for row in _translation_rows(path, human=True)}
+
+
+def load_human_translation_history(path: Path) -> dict[str, list[dict]]:
+    """保留人工版本历史，供图片按其生成时的正文指纹找到同源依据。"""
+    history: dict[str, list[dict]] = {}
+    for row in _translation_rows(path, human=True):
+        history.setdefault(row["post_id"], []).append(row)
+    return history
+
+
+def translation_text_history(arc_base: Path) -> dict[str, set[str]]:
+    """全部已知译文的文本，用于区分旧派生副本和未留档的手工修改。"""
+    texts: dict[str, set[str]] = {}
+    for name, human in (("translated.jsonl", False), ("translated_human.jsonl", True)):
+        for row in _translation_rows(arc_base / name, human=human):
+            texts.setdefault(row["post_id"], set()).add(row["text_de"])
+    return texts
+
+
+def _append_human_row(path: Path, post_id: str, text_de: str,
+                      source_hash: str | None, now: datetime | None, *,
+                      expected_revision=_UNSET_REVISION) -> dict:
+    if not isinstance(post_id, str) or not post_id.strip():
+        raise ValueError("人工译文缺少 post_id")
+    if not isinstance(text_de, str) or not text_de.strip():
+        raise ValueError("人工译文不能为空")
+    recorded = now if now is not None else datetime.now(timezone.utc)
+    if (not isinstance(recorded, datetime) or recorded.tzinfo is None
+            or recorded.utcoffset() is None):
+        raise ValueError("人工译文保存时间必须带时区")
+    row = {"post_id": post_id, "text_de": text_de,
+           "source_text_sha256": source_hash,
+           "recorded_at": recorded.astimezone(timezone.utc).isoformat(),
+           "revision": str(uuid4()), "actor": None}
+    assert_physical_direct_path(path.parent.parent, path.parent,
+                                kind="directory", label="人工译文账号目录")
+    assert_physical_direct_path(path.parent, path, kind="file", label=path.name)
+    lock_path = path.with_suffix(".lock")
+    assert_physical_direct_path(path.parent, lock_path, kind="file", label=lock_path.name)
+    with paid_model.FileLock(lock_path, busy_message="正在保存人工译文，请稍后重试"):
+        if expected_revision is not _UNSET_REVISION:
+            current = load_human_translated(path).get(post_id)
+            revision = current.get("revision") if current else None
+            if expected_revision != revision:
+                raise HumanRevisionConflict("人工译文已有新版本，请重新加载后再保存")
+        paid_model.append_jsonl(path, row, guard=lambda p: assert_physical_direct_path(
+            p.parent, p, kind="file", label=p.name))
+    return row
+
+
+def append_human_translation(path: Path, source: dict, text_de: str, *,
+                             now: datetime | None = None,
+                             expected_revision=_UNSET_REVISION) -> dict:
+    """保存人工版本；显式传入 expected_revision 时，在追加锁内核对版本。
+
+    None 表示打开页面时尚无人工版；省略参数用于没有页面快照的调用方。
+    """
+    return _append_human_row(path, source.get("post_id"), text_de,
+                             source_text_sha256(source.get("text")), now,
+                             expected_revision=expected_revision)
+
+
+def preserve_legacy_translation(path: Path, post_id: str, text_de: str) -> dict:
+    """仅在尚无人工版时导入旧文件，锁内再次确认，避免盖住并发保存的新稿。"""
+    return _append_human_row(path, post_id, text_de, None, None,
+                             expected_revision=None)
 
 
 def append_translated(path: Path, row: dict) -> None:

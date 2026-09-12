@@ -1,10 +1,7 @@
 r"""审校台的**只读数据层**：从归档算出任务列表与详情。
 
-⛔ **这是生产代码，不是原型的一次性代码。**
-web/DESIGN.md 第 2 节把整个原型切成两半：读的那半从第一天起就是
-生产代码（碰的是只读数据，怎么试错都无害），写的那半随时可扔（碰的是追加式
-真相源，那正是不能拿来试错的地方）。本文件是前一半。切换到生产时**不动它**，
-只换 ``fake_writer.py``。
+列表以归档索引定位源帖，再读取 post.json 真相；文案同时读取机器与人工账本，
+人工稿优先展示，源文变化保留稿件并提示复核。历史原型状态不参与读取。
 
 **本模块只读，一个字节都不写。** 它碰 ``archive/`` 与 ``state/`` 全是读；
 不调用任何付费 API，不启动浏览器。
@@ -39,6 +36,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from pathlib import Path
@@ -87,6 +85,7 @@ RISKS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "risks.json"
 #: 「查看」禁掉。它在切换到生产时天然对应「译文还没跑出来」，不是临时凑数。
 STATUS_NOT_READY = "not_ready"
 STATUS_PENDING_REVIEW = "pending_review"
+STATUS_EDITED = "edited"
 STATUS_SCHEDULED = "scheduled"
 
 
@@ -311,6 +310,27 @@ def _translation_of(source: engine.SourcePost) -> dict | None:
     return entries.get(source.post_id)
 
 
+def _human_translation_of(source: engine.SourcePost) -> dict | None:
+    return translation.load_human_translated(
+        source.account_dir / "translated_human.jsonl").get(source.post_id)
+
+
+def _effective_translation_of(source: engine.SourcePost) -> dict | None:
+    return translation.effective_translation(
+        dict(source.row), _translation_of(source), _human_translation_of(source))
+
+
+def _source_truth(source: engine.SourcePost) -> engine.SourcePost:
+    """列表来自索引；展示与保存的正文始终取已校验的 post.json。"""
+    arc = store.Archive(source.account_dir.parent, source.account_dir.name)
+    row, _post_dir = compose._read_post_truth(arc, dict(source.row))
+    if row.get("platform") != source.platform or row.get("account") != source.account:
+        raise compose.ComposeError("源帖的平台或账号与归档索引不一致，请先核对归档")
+    if not isinstance(row.get("text"), str) or not row["text"].strip():
+        raise compose.ComposeError("源帖正文缺失，无法审校")
+    return replace(source, row=row)
+
+
 def excerpt(text: str, limit: int = 90) -> str:
     value = " ".join((text or "").split())
     return value if len(value) <= limit else value[:limit] + " …"
@@ -341,9 +361,10 @@ class _Context:
         self.risks = load_risks()
 
     def reviewable(self, source: engine.SourcePost) -> bool:
-        """有当前可用译文 = 能进详情页审。判据借 core.translated 的，不另写。"""
-        return translation.translation_is_current(
-            source.row, _translation_of(source))
+        """人工稿即使源文变更也可打开复核；不能因此藏起已经做过的修改。"""
+        entry = _effective_translation_of(source)
+        return bool(entry and (entry.get("is_human") or
+                               translation.translation_is_current(source.row, entry)))
 
     def scheduled_at(self, source: engine.SourcePost) -> datetime | None:
         """已经在 published.jsonl 里排过期的，用真实排期时刻。"""
@@ -387,7 +408,8 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
     内部按原帖时间倒序（最新的先看）。
     """
     ctx = _Context(days=days, now=now)
-    ordered = sorted(ctx.sources.values(), key=lambda s: (s.created_at, s.ref))
+    ordered = sorted((_source_truth(item) for item in ctx.sources.values()),
+                     key=lambda s: (s.created_at, s.ref))
 
     reviewable = {item.ref: ctx.reviewable(item) for item in ordered}
     already = {item.ref: ctx.scheduled_at(item) for item in ordered}
@@ -400,7 +422,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         task_id = task_id_of(source)
         alerts, details = _hard_alerts(source, ctx.rules)
         author_kind, author_flag = _author_kind(source, details, alerts)
-        entry = _translation_of(source) if reviewable[source.ref] else None
+        entry = _effective_translation_of(source) if reviewable[source.ref] else None
         when = already[source.ref] or allocated.get(source.ref)
         tasks.append({
             "id": task_id,
@@ -435,6 +457,9 @@ def _status(ctx: _Context, source: engine.SourcePost, reviewable: bool,
             scheduled: datetime | None) -> str:
     if scheduled is not None:
         return STATUS_SCHEDULED
+    entry = _effective_translation_of(source)
+    if entry and entry.get("is_human"):
+        return STATUS_PENDING_REVIEW if entry.get("stale") else STATUS_EDITED
     return STATUS_PENDING_REVIEW if reviewable else STATUS_NOT_READY
 
 
@@ -458,16 +483,20 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
         except (OSError, ValueError, ArchivePathError):
             pairs = []
     by_index = {pair.media_index: pair for pair in pairs}
+    source_version = translation.source_text_sha256(source.text)
+    text_version = translation.source_text_sha256(entry["text_de"]) if entry else "none"
 
     out: list[dict] = []
     for index in range(len(_image_media(source))):
         pair = by_index.get(index)
         record = pair.record if pair is not None else None
+        version = "%s-%s-%s" % (
+            source_version, text_version, (record or {}).get("output_sha256") or "manual")
         out.append({
             "index": index,
-            "original_url": "/api/tasks/%s/image/%d?variant=original" % (
-                task_id, index),
-            "de_url": "/api/tasks/%s/image/%d?variant=de" % (task_id, index),
+            "original_url": "/api/tasks/%s/image/%d?variant=original&v=%s" % (
+                task_id, index, source_version),
+            "de_url": "/api/tasks/%s/image/%d?variant=de&v=%s" % (task_id, index, version),
             "de_present": bool(pair is not None and pair.localized_rel),
             "metrics": _metrics(record),
         })
@@ -521,11 +550,15 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
     source = ctx.sources.get(task_id)
     if source is None:
         return None
+    source = _source_truth(source)
 
     entry = _translation_of(source)
-    reviewable = translation.translation_is_current(source.row, entry)
+    human = _human_translation_of(source)
+    effective = translation.effective_translation(dict(source.row), entry, human)
+    reviewable = ctx.reviewable(source)
     text_en = source.text
     text_de = str(entry.get("text_de") or "") if entry else ""
+    shown_text = str(effective.get("text_de") or "") if effective else text_de
 
     scheduled = ctx.scheduled_at(source)
     when = scheduled
@@ -538,8 +571,9 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
 
     # 原文变更判据：译文绑的指纹与当前正文对不上。**不是** translation_is_current
     # ——那个还包含提示词版本，而提示词升级不是"原文已变更"。
-    bound = str(entry.get("source_text_sha256") or "") if entry else ""
-    stale = bool(entry) and bound != translation.source_text_sha256(text_en)
+    bound_entry = human or entry
+    bound = str(bound_entry.get("source_text_sha256") or "") if bound_entry else ""
+    stale = bool(bound_entry) and bound != translation.source_text_sha256(text_en)
 
     coauthors = source.row.get("coauthors")
     return {
@@ -549,16 +583,16 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "text": {
             "en": text_en,
             "de_machine": text_de or None,
-            # 人工版住在 translated_human.jsonl（第 9 节，⚪ 需新建）。
-            # 归档里还没有这个文件，所以只读层永远给 null；原型的人工版由
-            # fake_writer 叠加上去。切换到生产时改的是那一头，本函数不动。
-            "de_human": None,
+            "de_human": human["text_de"] if human else None,
+            "human_revision": human["revision"] if human else None,
             "source_text_sha256": translation.source_text_sha256(text_en),
             "stale": stale,
         },
-        "highlights": build_highlights(text_en, text_de) if text_de else [],
+        "highlights": build_highlights(text_en, shown_text) if shown_text else [],
         "risks": ctx.risks.get(task_id, []),
-        "images": _images_of(source, entry if reviewable else None),
+        # 日常改文案沿用机器依据；机器版过期时可用已重新复核的人工稿补图。
+        "images": _images_of(source, translation.image_translation(
+            dict(source.row), entry, human)),
         "schedule": ({"at": _iso(when), "channel": source.platform}
                      if when is not None else None),
         "meta": {
@@ -574,10 +608,16 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
             # 详情页上"这篇其实有 4 张图是英文的"就彻底消失了。
             "compose_warnings": _compose_warnings(source, ctx.rules, when),
         },
-        # actor 留痕（REQUIREMENTS.md 第 4.3 节，⚪ 需新建）。归档里还没有，
-        # 只读层给空数组；原型的留痕由 fake_writer 叠加。
-        "trail": [],
+        "trail": ([{"at": human["recorded_at"], "actor": None,
+                    "action": "text_edited", "revision": human["revision"]}]
+                  if human else []),
     }
+
+
+def source_post(task_id: str) -> engine.SourcePost | None:
+    """按列表中的任务标识查源帖，绝不把客户端标识拼成文件路径。"""
+    source = _Context().sources.get(task_id)
+    return _source_truth(source) if source is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -597,14 +637,16 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
     source = ctx.sources.get(task_id)
     if source is None or index < 0:
         return None
+    source = _source_truth(source)
     media = _image_media(source)
     if index >= len(media):
         return None
 
     path: Path | None = None
     if variant == "de":
-        entry = _translation_of(source)
-        if entry and translation.translation_is_current(source.row, entry):
+        entry = translation.image_translation(
+            dict(source.row), _translation_of(source), _human_translation_of(source))
+        if entry:
             try:
                 for pair in localize_images.review_image_pairs(
                         source.account_dir, source.row, entry):

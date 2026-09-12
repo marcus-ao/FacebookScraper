@@ -23,8 +23,9 @@ from core.config import cfg
 from publish import evidence
 from publish.business_suite import resolve_ui_timezone
 from core.store import (Archive, ArchivePathError, account_dirs,
-                        assert_physical_direct_path, post_dirname)
+                        assert_physical_direct_path, read_post_truth)
 from core.translated import (PROMPT_VERSION, apply_money_mapping,
+                            effective_translation, load_human_translated,
                             extract_hashtags, extract_money_tokens,
                             hashtags_preserved, load_translated,
                             money_preserved, normalize_money_token,
@@ -455,28 +456,10 @@ def _relative_archive_path(account_dir: Path, raw: str, *,
 
 
 def _read_post_truth(arc: Archive, row: dict) -> tuple[dict, Path]:
-    post_id = str(row.get("post_id") or "")
-    post_dir = arc.posts_dir / post_dirname(post_id, row.get("created_at"))
     try:
-        assert_physical_direct_path(
-            arc.posts_dir, post_dir, kind="directory", label="待发布帖子目录")
+        return read_post_truth(arc.base, row)
     except ArchivePathError as exc:
-        raise _fail(post_id, str(exc)) from exc
-    if not post_dir.is_dir():
-        raise _fail(post_id, "帖子目录不存在：%s" % post_dir)
-
-    post_json = post_dir / "post.json"
-    try:
-        assert_physical_direct_path(
-            post_dir, post_json, kind="file", label="待发布 post.json")
-        source = json.loads(post_json.read_text(encoding="utf-8"))
-    except (ArchivePathError, OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise _fail(post_id, "post.json 无法安全读取：%s" % exc) from exc
-    if not isinstance(source, dict):
-        raise _fail(post_id, "post.json 顶层不是对象")
-    if source.get("post_id") != post_id:
-        raise _fail(post_id, "post.json 的 post_id 与 manifest 不一致")
-    return source, post_dir
+        raise _fail(str(row.get("post_id") or "?"), str(exc)) from exc
 
 
 def _find_source(archive_root: Path, post_id: str, *,
@@ -535,13 +518,17 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     if not isinstance(text, str) or not text.strip():
         raise _fail(post_id, "英文原文缺失或为空")
 
-    entry = load_translated(arc.base / "translated.jsonl").get(post_id)
+    entry = effective_translation(
+        source, load_translated(arc.base / "translated.jsonl").get(post_id),
+        load_human_translated(arc.base / "translated_human.jsonl").get(post_id))
     if not isinstance(entry, dict):
-        raise _fail(post_id, "translated.jsonl 中没有译文")
+        raise _fail(post_id, "机器与人工译文账本中都没有译文")
     text_de = entry.get("text_de")
     if not isinstance(text_de, str) or not text_de.strip():
         raise _fail(post_id, "德语译文缺失或为空")
-    if entry.get("prompt_version") != PROMPT_VERSION:
+    if entry.get("is_human") and entry.get("stale"):
+        raise _fail(post_id, "人工译文依据的源帖已变更或无法确认；请在审校台复核并保存")
+    if not entry.get("is_human") and entry.get("prompt_version") != PROMPT_VERSION:
         raise _fail(
             post_id,
             "译文提示词版本已过期（实得 %r，当前 %d）"
@@ -555,9 +542,8 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     # 标签与金额是 translate.py 里**同一类**「不可改内容规则」，写盘时一起判
     # （``run_translate`` 把两者的 violations 合成一个列表，任一不过都不写）。
     # 发布环节必须把两条都再过一次，理由与金额那条完全相同（PUBLISH_PLAN §5.2）：
-    # ``translated.jsonl`` 是译文真相源，而人工审校的修正就是直接改它
-    # （``review.md`` 明确写着"直接修改本文件不会回写数据"）。手工改动不经过
-    # ``run_translate`` 的写盘闸，所以只在写入侧判等于对手工修正不设防。
+    # 人工版独立保存在 translated_human.jsonl。保存允许修改所有正文；
+    # 本批尚未接通平台标签映射的审校确认，发布仍保留原有确定性闸。
     # 改错标签 = 发出去的德语帖挂错话题/漏掉品牌标签，和改错价格同属对外事故，
     # 而且 IG 侧的标签是触达路径，不是装饰。
     # ⚠️ 这与 ``_validate_instagram`` 的标签**数量**上限不是一回事：那道闸问的是
@@ -918,6 +904,20 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
     warnings: list[str] = []
     image_paths, image_sources, dimensions = _choose_images(
         arc, source, post_dir, warnings)
+    require_all_media_de = cfg().get("publish", "require_all_media_de", True)
+    if not isinstance(require_all_media_de, bool):
+        raise _fail(post_id, "[publish].require_all_media_de 必须是 true 或 false")
+    missing = [index for index, value in enumerate(image_sources)
+               if value == "original"]
+    if require_all_media_de and missing:
+        commands = [
+            'python localize_images.py --account "%s" --post-id "%s" --media-index %d'
+            % (arc.base.name, post_id, index) for index in missing]
+        raise _fail(
+            post_id,
+            "%s缺少德语图；已在浏览器操作前停止。补图后再提交：\n%s"
+            % ("、".join("第 %d 张" % (index + 1) for index in missing),
+               "\n".join(commands)))
 
     # 当前发布目标固定包含 Instagram；来源为 Facebook 也不能跳过这道限制。
     if instagram_constraints is None:

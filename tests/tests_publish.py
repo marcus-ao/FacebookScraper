@@ -15,6 +15,7 @@ import tokenize
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -266,6 +267,7 @@ class VerifiedProbeConfig:
         values = {
             ("publish", "ui_constraints_verified"): self._verified,
             ("publish", "ui_probe_dump"): str(self._dump),
+            ("publish", "require_all_media_de"): False,
             # 跨月上限只能在 UI 时区里判，所以严格路径要读它（见
             # compose._validate_schedule_month）。
             ("publish", "ui_timezone"): "America/Los_Angeles",
@@ -331,6 +333,46 @@ with tempfile.TemporaryDirectory() as d:
           "启动入口把 [publish] profile 显式传入，没有用抓取默认值")
 
 
+print("\n[S0-1] 默认拒绝原图回退；只有显式 false 才能放行")
+with tempfile.TemporaryDirectory() as d:
+    root = Path(d) / "archive"
+    fixture = make_fixture(root)
+    media_de = fixture["post_dir"] / "media_de"
+    media_de.mkdir()
+    Image.new("RGB", (101, 100), (1, 2, 3)).save(media_de / "01.png")
+    settings = cfg()._d["publish"]
+    settings.pop("require_all_media_de", None)
+    try:
+        compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+        missing_error = ""
+    except ComposeError as exc:
+        missing_error = str(exc)
+    check("第 2 张" in missing_error and "--media-index 1" in missing_error
+          and '--account "in_neakasa.tech"' in missing_error
+          and '--post-id "fixture-post"' in missing_error,
+          "配置缺省时离线拒绝缺少的第2张，并给出零基下标的补图命令")
+    settings["require_all_media_de"] = True
+    check(raises(ComposeError, lambda: compose_post(
+        "fixture-post", WHEN, archive_root=root, warning_sink=None), "德语图"),
+        "显式 true 同样阻止原图回退")
+    for invalid in ("false", 0, None):
+        settings["require_all_media_de"] = invalid
+        check(raises(ComposeError, lambda: compose_post(
+            "fixture-post", WHEN, archive_root=root, warning_sink=None),
+            "require_all_media_de"), "错误配置不能被当成关闭图片闸：%r" % invalid)
+    settings["require_all_media_de"] = False
+    allowed = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    check(allowed.image_sources == ("media_de", "original")
+          and any("第 2 张" in value for value in allowed.warnings),
+          "显式 false 允许原图，但保留来源及警告")
+    settings["require_all_media_de"] = True
+    Image.new("RGB", (102, 100), (4, 5, 6)).save(media_de / "02.png")
+    localized = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    check(localized.image_sources == ("media_de", "media_de"),
+          "所有图片均有德语版本时通过，人工放置的德语图同样有效")
+
+# 下文历史用例专门覆盖原图回退及其它独立闸；明确选择兼容配置。
+cfg()._d["publish"]["require_all_media_de"] = False
 print("\n[2] G0b 正常组装：当前译文、金额、德语图优先、原图回退、合作方提示")
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
@@ -1043,9 +1085,13 @@ check(any("红线 5" in item or "不得凭截图" in item for item in gated),
 check("composer_submit_button" in gated[0]
       and "composer_success_signal" in gated[0],
       "submit() 明确点名它缺的是提交按钮与成功信号两样")
-check(bs.submission_evidence_ready() and bs.readback_evidence_ready(),
-      "而在**本机当前状态**下（signals_backfilled.py 已落地 + ui_probe_dump "
-      "已签字）三道闸是开着的 —— 上面那两条验的是缺证据时的行为，不是常态")
+with tempfile.TemporaryDirectory() as folder:
+    missing_state = Path(folder)
+    with patch.object(bs, "cfg", lambda: VerifiedProbeConfig(
+            missing_state, missing_state / "profile",
+            missing_state / "publish_probe_missing.json")):
+        check(not bs.submission_evidence_ready() and not bs.readback_evidence_ready(),
+              "只有登记表但本机缺少实际probe时，提交与回读闸都保持关闭")
 check("ui_timezone" in gated[1] and "怎么补上" in gated[1],
       "缺 UI 时区时给出可照做的补录命令，而不是拿 [publish].timezone 顶上")
 
@@ -1980,13 +2026,19 @@ check("force_utf8()" in entry,
       "入口调 force_utf8()（本机代码页 936，输出一被重定向就炸在 ß/⚠ 上）")
 check("--submit" in entry and "bs.submit" in workflow_entry,
       "单帖默认仍停在提交前；只有显式 --submit 才进入 G6")
-with contextlib.redirect_stdout(io.StringIO()) as captured:
-    submit_gate_code = publish_entry.main([
-        "--post-id", "does-not-matter", "--at", "2026-09-08T10:00",
-        "--submit", "--assume-yes"])
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder)
+    with patch.object(compose_module, "cfg", lambda: VerifiedProbeConfig(
+            state, state / "profile", state / "publish_probe_fixture.json",
+            verified=False)), \
+            patch.object(publish_entry, "prepare", side_effect=AssertionError("不得碰浏览器")), \
+            contextlib.redirect_stdout(io.StringIO()) as captured:
+        submit_gate_code = publish_entry.main([
+            "--post-id", "does-not-matter", "--at", "2026-09-08T10:00",
+            "--submit", "--assume-yes"])
 check("ui_constraints_verified" in entry,
       "--submit 那条路径上仍然存在 ui_constraints_verified 这道闸")
-check(submit_gate_code == 2 and "没有碰浏览器" in captured.getvalue(),
+check(submit_gate_code == 2 and "ui_constraints_verified" in captured.getvalue(),
       "--submit 自动隐含 strict；任一硬闸不过都在碰浏览器之前失败闭合")
 check("publish_debug_port" in workflow_entry and "publish_profile_dir" in workflow_entry
       and "assert_publish_chrome_isolated" in workflow_entry,

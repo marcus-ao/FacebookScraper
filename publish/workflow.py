@@ -248,6 +248,7 @@ async def _execute_unlocked(
                 readback_signal="",
                 remote_id=readback.remote_id or unverified.remote_id,
                 verification=readback.error,
+                readback_diagnostics=readback.diagnostics,
                 channels_verified=readback.channels,
                 note=(readback.error
                       + "；禁止自动重试，必须人工确认远端是否已经排期"))
@@ -262,6 +263,7 @@ async def _execute_unlocked(
             step=step, screenshot=readback.screenshot,
             success_signal=unverified.success_signal,
             readback_signal=readback.success_signal,
+            readback_diagnostics=readback.diagnostics,
             remote_id=(readback.remote_id or unverified.remote_id),
             remote_ids=tuple(
                 part for part in str(readback.remote_id or "").split(";")

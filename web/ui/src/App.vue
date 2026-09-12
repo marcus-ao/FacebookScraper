@@ -1,11 +1,10 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
-import { ACTOR, api } from './api.js'
+import { onMounted, reactive } from 'vue'
+import { api } from './api.js'
 
 import Icon from './components/Icon.vue'
 import TaskList from './components/TaskList.vue'
 import TaskDetail from './components/TaskDetail.vue'
-import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const state = reactive({
   tasks: [],
@@ -14,11 +13,6 @@ const state = reactive({
   error: '',
   openId: null          // null = 列表页
 })
-
-// 确认弹窗。approve 那个是 §13 明写要有的：「她会当场对时刻和渠道提意见」——
-// 弹窗把排期时刻和渠道摆到她眼前，那条意见才提得出来。
-const dialog = reactive({ open: false, kind: '', task: null, reason: '' })
-const busy = ref('')
 
 async function load() {
   state.loading = true
@@ -41,28 +35,9 @@ function patchRow(detail) {
   if (!row) return
   row.status = detail.status
   const human = detail.text && detail.text.de_human
-  if (human) row.text_de_excerpt = human.replace(/\s+/g, ' ').slice(0, 90) + ' …'
-}
-
-function ask(kind, task) {
-  Object.assign(dialog, { open: true, kind, task, reason: '' })
-}
-
-async function confirmDialog() {
-  const task = dialog.task
-  const kind = dialog.kind
-  const reason = dialog.reason
-  dialog.open = false
-  busy.value = task.id
-  try {
-    const detail = kind === 'approve'
-      ? await api.approve(task.id, ACTOR)
-      : await api.skip(task.id, ACTOR, reason)
-    patchRow(detail)
-  } catch (exc) {
-    state.error = String(exc.message || exc)
-  } finally {
-    busy.value = ''
+  if (human) {
+    const excerpt = human.replace(/\s+/g, ' ').trim()
+    row.text_de_excerpt = excerpt.length > 90 ? excerpt.slice(0, 90) + ' …' : excerpt
   }
 }
 
@@ -80,13 +55,9 @@ onMounted(load)
         </div>
       </div>
 
-      <!--
-        ⚠️ 第 13 节：演示前必须说明「原型上点的"通过"不会真的发帖」，
-        否则她会以为已经排了。所以这句话不放在口头，钉在界面上。
-      -->
       <p class="prototype-note">
         <Icon name="info" :size="14" />
-        原型：点「通过」不会真的发帖，也不会改动任何归档数据
+        人工文案可保存；审校通过与排期将在后续接通
       </p>
     </header>
 
@@ -105,10 +76,7 @@ onMounted(load)
         v-else-if="!state.openId"
         :tasks="state.tasks"
         :summary="state.summary"
-        :busy="busy"
         @open="state.openId = $event"
-        @approve="ask('approve', $event)"
-        @skip="ask('skip', $event)"
       />
 
       <TaskDetail
@@ -117,19 +85,9 @@ onMounted(load)
         :task-id="state.openId"
         @back="state.openId = null"
         @changed="patchRow"
-        @approve="ask('approve', $event)"
-        @skip="ask('skip', $event)"
       />
     </main>
 
-    <ConfirmDialog
-      v-if="dialog.open"
-      :kind="dialog.kind"
-      :task="dialog.task"
-      v-model:reason="dialog.reason"
-      @cancel="dialog.open = false"
-      @confirm="confirmDialog"
-    />
   </div>
 </template>
 

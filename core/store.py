@@ -46,11 +46,10 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
+import os  # noqa: F401  兼容现有故障注入测试对 core.store.os.replace 的补丁
 import re
 import shutil
 import stat
-import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from core import paid_model
@@ -296,6 +295,31 @@ def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
     if only:
         dirs = [p for p in dirs if p.name == only]
     return dirs
+
+
+def read_post_truth(account_dir: Path, indexed: dict) -> tuple[dict, Path]:
+    """按索引定位后只读实际 post.json；统一审校、图片与发布的原文边界。"""
+    post_id = str(indexed.get("post_id") or "")
+    try:
+        assert_physical_direct_path(account_dir.parent, account_dir,
+                                    kind="directory", label="账号归档目录")
+        posts_dir = assert_physical_direct_path(account_dir, account_dir / "posts",
+                                                kind="directory", label="posts 根目录")
+        post_dir = assert_physical_direct_path(
+            posts_dir, posts_dir / post_dirname(post_id, indexed.get("created_at")),
+            kind="directory", label="帖子目录")
+        path = assert_physical_direct_path(post_dir, post_dir / "post.json",
+                                           kind="file", label="post.json")
+        source = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ArchivePathError("post.json 无法安全读取：%s" % exc) from exc
+    error = _archive_row_error(source)
+    if error:
+        raise ArchivePathError("post.json schema 无效：%s" % error)
+    for key in ("post_id", "platform", "account"):
+        if source.get(key) != indexed.get(key):
+            raise ArchivePathError("post.json 的 %s 与 manifest 不一致" % key)
+    return source, post_dir
 
 
 class Archive:
@@ -673,4 +697,3 @@ class Archive:
         # 失败”会以 media_count 更大为由覆盖旧 local_path，反而丢掉恢复成果。
         return (new_media >= old_media and new_local >= old_local
                 and (new_media > old_media or new_local > old_local))
-

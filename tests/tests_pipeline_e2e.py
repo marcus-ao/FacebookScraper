@@ -29,8 +29,9 @@ import io
 import json
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image, ImageDraw
 
@@ -42,6 +43,8 @@ import translate as translation        # noqa: E402
 from core.config import cfg            # noqa: E402
 from core.store import post_dirname    # noqa: E402
 from core.console import force_utf8    # noqa: E402
+import core.config as config_module   # noqa: E402
+from publish_fixtures import verified_probe_config  # noqa: E402
 
 force_utf8()
 
@@ -55,11 +58,7 @@ def check(condition, message):
 
 
 class ArchiveOverride:
-    """只把归档根换成临时目录，其余配置（含已复核的 G1 约束）全部走真的。
-
-    ⛔ 不要顺手把 `[publish]` 也桩掉：这一套要证明的正是
-    **真实的四道闸放行了这一篇**，桩掉就又变成自己验自己。
-    """
+    """归档放在临时目录；G1 使用临时记录，但仍经过真实约束校验。"""
 
     def __init__(self, real, archive_dir: Path):
         self._real = real
@@ -176,6 +175,8 @@ with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
     archive = root / "archive"
     state = root / "state"
+    original_global_config = cfg()
+    config_module._cfg = verified_probe_config(original_global_config, state)
     fb = archive / "fa_neakasaofficial"
     ig = archive / "in_neakasa.tech"
     fb.mkdir(parents=True)
@@ -263,6 +264,36 @@ with tempfile.TemporaryDirectory() as folder:
           == {item["item_id"] for item in ready},
           "ready 项的 item_id 是内容哈希，重跑不产生第二批重复项")
 
+    print("\n[2b] 批量审批两次组装均沿用注入时钟；确认前不提交")
+    from publish import business_suite as bs
+    from tools import publish_post
+
+    class OfflineSession:
+        async def new_page(self):
+            return object()
+
+        async def stop(self):
+            return None
+
+    session = OfflineSession()
+    inventory = bs.RemoteSlotInventory(
+        occupied=(datetime.fromisoformat("2026-09-04T10:00:00+02:00"),),
+        ui_timezone="America/Los_Angeles",
+        visible_start=date(2026, 9, 1), visible_end=date(2026, 9, 30))
+    with patch.object(A, "cfg", lambda: ArchiveOverride(cfg(), archive)), \
+            patch.object(A, "attach", AsyncMock(return_value=(session, None, session))), \
+            patch.object(bs, "require_submission_evidence", return_value=None), \
+            patch.object(bs, "require_readback_evidence", return_value=None), \
+            patch.object(bs, "read_remote_slot_inventory", AsyncMock(return_value=inventory)), \
+            patch.object(publish_post, "main", side_effect=AssertionError("不得真实提交")), \
+            contextlib.redirect_stdout(io.StringIO()) as approval_output:
+        approved = A.approve(
+            item_ids=[item["item_id"] for item in again], selections={},
+            state_dir=state, now=now, confirm=lambda _message: False)
+    check(approved == 0 and "已取消" in approval_output.getvalue()
+          and "2026-09-04T17:00:00+02:00" in approval_output.getvalue(),
+          "批准前和远端占位后都通过真实时间闸，顺延槽位使用同一注入时钟")
+
     print("\n[3] 硬闸仍然拦得住：正文被改脏之后 ready 立刻消失")
     dirty = ig / "translated.jsonl"
     rows = [json.loads(line) for line in
@@ -284,6 +315,7 @@ with tempfile.TemporaryDirectory() as folder:
           "发布侧这道复查才是最后一层")
 
 
+config_module._cfg = original_global_config
 print("\n[4] 跨进程 argv 契约：这几段是靠命令行拼起来的，拼错了只在真跑时才炸")
 
 # ⚠️ 这四条是**整条链上仅有的四个字符串接缝**。它们在别处全被 mock 掉了：

@@ -1,31 +1,11 @@
-r"""审校台的 FastAPI 应用与路由注册。
+r"""审校台 HTTP 接口：归档读取、人工文案保存与即时检查。
 
-**读全真，写全假**（web/DESIGN.md 第 2 节）。这份文件本身很薄，
-它的全部职责是把请求分给两个来源：
-
-    GET  /api/tasks                  ─┐
-    GET  /api/tasks/<id>              ├─ reader.py   真 —— 只读归档，生产代码
-    GET  /api/tasks/<id>/image/<n>   ─┘
-
-    POST /api/tasks/<id>/approve     ─┐
-    POST /api/tasks/<id>/skip         ├─ fake_writer.py  假 —— 只写 web/_fake_state.json
-    PUT  /api/tasks/<id>/text_de     ─┘
-
-**切换到生产 = 换掉 fake_writer 那三个 handler，前端一行不用改。**
-
-为什么选 FastAPI 而不是 stdlib ``http.server``：原型只读，``http.server``
-够用，但 M2 要多用户并发 + 写入 + 登录，那时必须换掉——等于把切换成本推到
-最需要稳定的时刻。现在选定，从原型到 M2 一次不用换（第 3 节）。
-
-### 跑起来
-
-    .venv\Scripts\python.exe -m uvicorn web.api.app:app --port 8765
-
-前端构建产物 ``web/ui/dist/`` 存在时由本应用直接伺服，所以**生产机不需要
-Node、不需要 npm install、断网也能跑**。
+人工文案追加到 translated_human.jsonl。通过与不发尚未接通，明确返回 501；
+历史原型 _fake_state.json 不参与任何请求。前端静态产物由本应用直接伺服。
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -38,16 +18,24 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.console import force_utf8                    # noqa: E402
-from web.api import fake_writer, reader                # noqa: E402
+from web.api import reader, writer                     # noqa: E402
+from core.store import ArchivePathError                # noqa: E402
+from publish.compose import ComposeError               # noqa: E402
 
 # 每个可执行入口都要调一次：本机代码页是 936，uvicorn 的日志一旦被重定向到
 # 文件就回落到 GBK，而告警文案里的 ⚠ ✅ ❌ ß 一个都编码不出来，print 会直接
 # 把进程带走。双击运行时看不到这个故障，它只在真正需要可靠时发作。
 force_utf8()
 
-app = FastAPI(title="审校台原型", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
 
 DIST = ROOT / "web" / "ui" / "dist"
+
+
+@app.exception_handler(ComposeError)
+@app.exception_handler(ArchivePathError)
+async def archive_error(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": "源内容无法安全读取，请检查归档后重试"})
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +46,6 @@ DIST = ROOT / "web" / "ui" / "dist"
 def get_tasks() -> JSONResponse:
     """任务列表。契约见 PROTOTYPE_DESIGN.md 第 6 节。"""
     payload = reader.list_tasks()
-    fake_writer.overlay_list(payload)
     return JSONResponse(payload)
 
 
@@ -73,10 +60,9 @@ def get_task_image(task_id: str, index: int,
     if found is None:
         raise HTTPException(status_code=404, detail="图片不存在")
     data, media_type = found
-    # 归档是不可变内容，缓存一天；德语图换了之后 URL 不变，所以只给一天，
-    # 不给 immutable。
+    # 人工图和当前译文会变化，刷新时须重新读取，不能继续展示一天前的图。
     return Response(content=data, media_type=media_type,
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/tasks/{task_id:path}")
@@ -85,39 +71,40 @@ def get_task(task_id: str) -> JSONResponse:
     detail = reader.task_detail(task_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="任务不存在")
-    fake_writer.overlay_detail(detail)
     return JSONResponse(detail)
 
 
 # ---------------------------------------------------------------------------
-# 假写入端（假）—— 切换到生产时只换这三个
+# 文案保存已接通；审校状态与排期保留明确的未实现响应
 # ---------------------------------------------------------------------------
 
 @app.post("/api/tasks/{task_id:path}/approve")
 async def post_approve(task_id: str, request: Request) -> JSONResponse:
-    """原型：只写 web/_fake_state.json。生产：调 pipeline 的批准路径。"""
-    body = await _json_body(request)
-    return JSONResponse(_guard(task_id, lambda: fake_writer.approve(
-        task_id, actor=_actor(body))))
+    """真实排期尚未接通，不能把原型点击冒充发布成功。"""
+    raise HTTPException(status_code=501, detail="审校通过与排期尚未接通，当前仅支持保存人工文案")
 
 
 @app.post("/api/tasks/{task_id:path}/skip")
 async def post_skip(task_id: str, request: Request) -> JSONResponse:
-    """原型：只写 web/_fake_state.json。生产：写 needs_human.jsonl 的终态。"""
-    body = await _json_body(request)
-    return JSONResponse(_guard(task_id, lambda: fake_writer.skip(
-        task_id, actor=_actor(body), reason=str(body.get("reason") or ""))))
+    """审校状态流转将由后续 review_items 真相源实现。"""
+    raise HTTPException(status_code=501, detail="不发与挂起等审校状态尚未接通，当前仅支持保存人工文案")
 
 
 @app.put("/api/tasks/{task_id:path}/text_de")
 async def put_text_de(task_id: str, request: Request) -> JSONResponse:
-    """原型：只写 web/_fake_state.json。生产：追加 translated_human.jsonl。"""
+    """追加人工文案，并核对浏览器看到的源文与人工稿版本。"""
     body = await _json_body(request)
     text = body.get("text_de")
     if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=400, detail="text_de 必须是非空字符串")
-    return JSONResponse(_guard(task_id, lambda: fake_writer.save_text_de(
-        task_id, text, actor=_actor(body))))
+    digest = body.get("source_text_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(status_code=400, detail="缺少有效源文版本，请重新打开这篇后保存")
+    revision = body.get("human_revision")
+    if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+        raise HTTPException(status_code=400, detail="人工文案版本无效，请重新打开这篇后保存")
+    return JSONResponse(writer.save_text_de(
+        task_id, text, source_text_sha256=digest, human_revision=revision))
 
 
 # ---------------------------------------------------------------------------
@@ -150,24 +137,6 @@ async def _json_body(request: Request) -> dict:
     except (ValueError, UnicodeError):
         return {}
     return body if isinstance(body, dict) else {}
-
-
-def _actor(body: dict) -> str:
-    """留痕的 actor（REQUIREMENTS.md 第 4.3 节）。
-
-    原型没有登录（第 14 节：登录与权限是 M2 的事），所以 actor 由前端带上来，
-    默认一个占位。**字段位置和生产一致**，M2 接上登录之后换的是取值来源，
-    不是 JSON 形状。
-    """
-    value = body.get("actor")
-    return value.strip() if isinstance(value, str) and value.strip() else "原型用户"
-
-
-def _guard(task_id: str, action):
-    """写之前先确认这个任务真实存在，避免假状态里长出归档里没有的 id。"""
-    if reader.task_detail(task_id) is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return action()
 
 
 # ---------------------------------------------------------------------------

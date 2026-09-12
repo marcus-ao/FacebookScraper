@@ -53,6 +53,10 @@ def make_archive(base: Path, posts: list[dict]) -> Path:
     with (d / "manifest.jsonl").open("w", encoding="utf-8") as f:
         for p in posts:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
+            # 审校按每帖 post.json 读取原文，manifest 只负责定位。
+            post_dir = d / "posts" / T.post_dirname(p["post_id"], p["created_at"])
+            post_dir.mkdir(parents=True, exist_ok=True)
+            (post_dir / "post.json").write_text(json.dumps(p, ensure_ascii=False), encoding="utf-8")
     return d
 
 
@@ -417,6 +421,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "正文变更前审校流程确实生成旧版派生副本")
 
     corrected = post("same", "NEW price $20", 1)
+    (stale_post_dir / "post.json").write_text(json.dumps(corrected), encoding="utf-8")
     with (stale_arc / "manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(corrected, ensure_ascii=False) + "\n")
 
@@ -443,6 +448,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "重译后新正文和新译文一起进入审校清单")
 
     newest = post("same", "LATEST price $30", 1)
+    (stale_post_dir / "post.json").write_text(json.dumps(newest), encoding="utf-8")
     with (stale_arc / "manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(newest, ensure_ascii=False) + "\n")
     T.run_translate(s, FakeTranslator(), stale_arc, limit=1, force=True, dry_run=False)

@@ -6,10 +6,9 @@ import Icon from './Icon.vue'
 
 const props = defineProps({
   tasks: { type: Array, required: true },
-  summary: { type: Object, required: true },
-  busy: { type: String, default: '' }
+  summary: { type: Object, required: true }
 })
-const emit = defineEmits(['open', 'approve', 'skip'])
+const emit = defineEmits(['open'])
 
 // ⛔ **不做「有告警」和「常规」两个 tab**（§10）：分 tab 的实际结果是只有第一个
 // 被看，第二个 tab 里的会被批量通过——那正好绕过了这个界面存在的意义。
@@ -92,14 +91,15 @@ const canOpen = (t) => t.status !== 'not_ready'
           <p class="facts">
             <span :class="['when', { firm: task.status === 'scheduled' }]">
               <Icon name="calendar" :size="13" />
-              {{ formatSchedule(task.schedule && task.schedule.at) || '未分配槽位' }}
+              <span v-if="task.schedule && task.status !== 'scheduled'">建议</span>
+              {{ formatSchedule(task.schedule && task.schedule.at) || '暂无建议时刻' }}
             </span>
             <span class="dot">·</span>
             <span>{{ PLATFORM_LABEL[task.platform] }}</span>
             <span class="dot">·</span>
             <span><Icon name="image" :size="13" /> {{ task.image_count }} 张图</span>
             <!-- 已处理过的才显示状态文字；待办的不显示，视觉区分已经够了。 -->
-            <template v-if="isDone(task) || task.status === 'not_ready'">
+            <template v-if="isDone(task) || ['not_ready', 'edited'].includes(task.status)">
               <span class="dot">·</span>
               <span class="status">{{ STATUS_LABEL[task.status] }}</span>
             </template>
@@ -115,14 +115,14 @@ const canOpen = (t) => t.status !== 'not_ready'
             <Icon name="eye" :size="13" /> 查看
           </button>
           <button
-            class="btn btn-sm btn-primary" :disabled="busy === task.id"
-            @click="emit('approve', task)"
+            class="btn btn-sm btn-primary" disabled
+            title="审校通过与排期将在后续接通"
           >
             <Icon name="check" :size="13" /> 通过
           </button>
           <button
-            class="btn btn-sm btn-danger" :disabled="busy === task.id"
-            @click="emit('skip', task)"
+            class="btn btn-sm btn-danger" disabled
+            title="不发与挂起等审校状态将在后续接通"
           >
             <Icon name="ban" :size="13" /> 这篇不发
           </button>

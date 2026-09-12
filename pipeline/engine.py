@@ -7,22 +7,21 @@ import json
 import math
 import os
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-from PIL import Image
-
 from core.config import cfg
 from core.store import Archive, post_dirname
 from publish import journal
-from publish.compose import ComposeError, compose_post
+from publish.compose import ComposeError, _read_post_truth, compose_post
 import translate as translation
 from core.paid_model import FileLock
 from core import paid_model
+from core import translated as translated_content
 from core import imagehash
 from pipeline.settings import pipeline_settings
 import localize_images
@@ -45,9 +44,11 @@ CANDIDATE_ITEM_KINDS = frozenset({
     "material_gate", "unknown_owner", "unknown_collaborator", "unmapped_price",
     "budget_stopped", "offline_gate", "paid_request_unresolved",
     "publish_unresolved", "late_scheduled_overlap", "ready_to_publish",
+    "human_translation_stale",
 })
 PREPAID_ITEM_KINDS = frozenset({
     "material_gate", "unknown_owner", "unknown_collaborator", "unmapped_price",
+    "human_translation_stale",
 })
 
 
@@ -59,7 +60,7 @@ class BudgetStopped(PipelineRunError):
     pass
 
 
-def PipelineOperationLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
+def PipelineOperationLock(path: Path) -> FileLock:   # noqa: N802  保留原名
     """让 daily/catch-up/手工 run/approve 共用同一把跨进程锁。"""
     return FileLock(path, error_type=PipelineRunError,
                     busy_message="另一个流水线实例正在运行；本次不做任何改动。")
@@ -643,6 +644,19 @@ def out_of_scope_reason(row: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _refresh_human_source(source: SourcePost) -> SourcePost:
+    """人工稿按实际源帖复核；旧索引不能把已复核稿误判过期或绕过付费前闸。"""
+    human = translated_content.load_human_translated(
+        source.account_dir / "translated_human.jsonl").get(source.post_id)
+    if human is None:
+        return source
+    arc = Archive(source.account_dir.parent, source.account_dir.name)
+    row, _directory = _read_post_truth(arc, dict(source.row))
+    if row.get("platform") != source.platform or row.get("account") != source.account:
+        raise ComposeError("源帖平台或账号与索引不一致，请先核对归档")
+    return replace(source, row=row)
+
+
 def load_sources(account_dirs: Iterable[Path], activated_at: datetime
                  ) -> tuple[list[SourcePost], list[HumanItem],
                             list[tuple[str, str]]]:
@@ -664,13 +678,19 @@ def load_sources(account_dirs: Iterable[Path], activated_at: datetime
             if created <= activated_at.astimezone(timezone.utc):
                 continue
             ref = journal.source_ref(platform, post_id)
-            reason = out_of_scope_reason(row)
+            source = SourcePost(platform, Path(account_dir), row, created, ref)
+            try:
+                source = _refresh_human_source(source)
+            except (ComposeError, OSError, ValueError) as exc:
+                issues.append(HumanItem(
+                    _item_id("material_gate", (source,), str(exc)),
+                    "material_gate", (ref,), "源帖真相无法读取，未进入付费阶段：%s" % exc))
+                continue
+            reason = out_of_scope_reason(source.row)
             if reason is not None:
                 out_of_scope.append((ref, reason))
                 continue
-            sources.append(SourcePost(
-                platform=platform, account_dir=Path(account_dir), row=row,
-                created_at=created, ref=ref))
+            sources.append(source)
     sources.sort(key=lambda item: (item.created_at, item.ref))
     out_of_scope.sort()
     return sources, issues, out_of_scope
@@ -747,6 +767,25 @@ def reconcile(sources: list[SourcePost], *,
 
 
 def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | None:
+    for source in candidate.sources:
+        try:
+            source = _refresh_human_source(source)
+        except (ComposeError, OSError, ValueError) as exc:
+            return HumanItem(
+                _item_id("material_gate", candidate.sources, source.ref),
+                "material_gate", candidate.source_refs,
+                "源帖真相无法读取，未调用付费服务：%s" % exc)
+        human = translated_content.load_human_translated(
+            source.account_dir / "translated_human.jsonl").get(source.post_id)
+        effective = translated_content.effective_translation(dict(source.row), None, human)
+        if effective is not None and effective.get("stale"):
+            return HumanItem(
+                _item_id("human_translation_stale", candidate.sources, source.ref),
+                "human_translation_stale", candidate.source_refs,
+                "%s 的人工译文依据已变更或无法确认；保留人工版本，请复核并保存，未调用付费服务。"
+                % source.ref,
+                {"source_ref": source.ref, "human_revision": human.get("revision"),
+                 "source_text_sha256": translated_content.source_text_sha256(source.text)})
     # exact merge 最终会把所有来源一起写进 journal；secondary 的残缺轮播或
     # 缺失原图不能躲在 canonical 的完整素材后面。
     for material_source in candidate.sources:
@@ -1044,6 +1083,11 @@ class RealStageRunner:
 
 def translation_needed(source: SourcePost) -> bool:
     entries = translation.load_translated(source.account_dir / "translated.jsonl")
+    human = translated_content.load_human_translated(
+        source.account_dir / "translated_human.jsonl").get(source.post_id)
+    if human is not None:
+        # 过期人工版由付费前检查送回审校；重译机器文案不能替人完成复核。
+        return False
     return not translation.translation_is_current(
         source.row, entries.get(source.post_id))
 
@@ -1345,7 +1389,7 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
                 source.post_id, placeholder, archive_root=cfg().archive_dir,
                 account=source.account_dir.name,
                 price_map=rules.price_map,
-                require_verified_ui_constraints=True, warning_sink=None)
+                require_verified_ui_constraints=True, warning_sink=None, now=now)
         except ComposeError as exc:
             offline_item = HumanItem(
                 _item_id("offline_gate", candidate.sources, str(exc)),
@@ -1566,7 +1610,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 archive_root=cfg().archive_dir,
                 account=str(details["account_dir"]),
                 price_map=rules.price_map,
-                require_verified_ui_constraints=True, warning_sink=None)
+                require_verified_ui_constraints=True, warning_sink=None, now=now)
         except (KeyError, ComposeError) as exc:
             raise PipelineRunError(
                 "批准前离线硬闸失败（%s）：%s" % (row.get("item_id"), exc)) from exc
@@ -1634,7 +1678,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
             str(details["post_id"]), slot, archive_root=c.archive_dir,
             account=str(details["account_dir"]),
             price_map=rules.price_map,
-            require_verified_ui_constraints=True, warning_sink=None)
+            require_verified_ui_constraints=True, warning_sink=None, now=now)
         if _publish_fingerprint(post) != str(details["publish_fingerprint"]):
             raise PipelineRunError("读取远端槽位期间发布内容发生变化；整批未提交")
         final_batch.append((row, post, slot))

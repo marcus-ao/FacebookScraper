@@ -169,6 +169,7 @@ class ScheduledReadback:
     card_sha256: str = ""
     screenshot: str = ""
     error: str = ""
+    diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1439,7 +1440,7 @@ async def _collect_planner_matches(
         cards, spec: EvidenceSignal, *, expected_naive: datetime,
         expected_caption: str, target_channels: tuple[str, ...],
         expected_image_count: int | None, page=None, timeout: float = 30.0,
-        open_dialogs: bool = False
+        open_dialogs: bool = False, diagnostics: dict | None = None
         ) -> tuple[list[_PlannerMatch], tuple[str, ...], tuple[str, ...],
                    int | None, bool]:
     """匹配日历条目；``open_dialogs`` 时再逐个点开确认渠道与 remote id。
@@ -1455,14 +1456,40 @@ async def _collect_planner_matches(
     missing_match: tuple[str, ...] = ()
     last_seen: tuple[str, ...] = ()
     hits: list[tuple[object, str]] = []
+    observations = {
+        "links_read": 0, "datetime_parse_failed": 0, "time_mismatch": 0,
+        "caption_mismatch": 0, "matched_entries": 0, "unclassified_links": 0,
+    }
+    relevant_samples: list[dict] = []
+    other_samples: list[dict] = []
     for card in cards:
         rendered = await _node_text(card)
-        # 必须是完整最终正文，不接受“旧文案 + 新 CTA”把期望文案当子串包含。
-        if expected_caption not in rendered:
-            continue
-        if _entry_naive(rendered, spec) != expected_naive:
-            continue
-        hits.append((card, rendered))
+        parsed = _entry_naive(rendered, spec)
+        caption_matches = expected_caption in rendered
+        time_matches = parsed == expected_naive
+        observations["links_read"] += 1
+        if caption_matches and parsed is None:
+            observations["datetime_parse_failed"] += 1
+        elif caption_matches and not time_matches:
+            observations["time_mismatch"] += 1
+        elif time_matches and not caption_matches:
+            observations["caption_mismatch"] += 1
+        elif caption_matches and time_matches:
+            observations["matched_entries"] += 1
+            hits.append((card, rendered))
+        else:
+            # role=link 还包含导航，无法证明是卡片时不归咎于日期解析。
+            observations["unclassified_links"] += 1
+        samples = relevant_samples if caption_matches or time_matches else other_samples
+        if len(samples) < 20:
+            samples.append({
+                "text_length": len(rendered), "text_preview": rendered[:200],
+                "parsed_at": parsed.isoformat() if parsed is not None else "",
+                "caption_matches": caption_matches, "time_matches": time_matches,
+            })
+    if diagnostics is not None:
+        diagnostics.update(observations)
+        diagnostics["samples"] = (relevant_samples + other_samples)[:20]
     if not hits:
         return matches, missing_match, last_seen, None, False
     if not open_dialogs:
@@ -1578,12 +1605,13 @@ async def verify_scheduled(
             final_text_sha256=expected_hash,
             expected_image_count=expected_image_count,
             screenshot=shot, error=str(exc))
+    diagnostics: dict = {}
     (matches, missing_match, last_seen, last_image_count,
      image_mismatch) = await _collect_planner_matches(
         cards, spec, expected_naive=expected_naive,
         expected_caption=expected_caption, target_channels=target_channels,
         expected_image_count=expected_image_count,
-        page=page, timeout=timeout, open_dialogs=True)
+        page=page, timeout=timeout, open_dialogs=True, diagnostics=diagnostics)
 
     causal_error = ""
     selected: _PlannerMatch | None = None
@@ -1618,7 +1646,15 @@ async def verify_scheduled(
             expected_image_count=expected_image_count,
             remote_id=selected.remote_id,
             success_signal=_signal_name(spec),
-            card_sha256=selected.card_sha256, screenshot=shot)
+            card_sha256=selected.card_sha256, screenshot=shot,
+            diagnostics=diagnostics)
+    mismatch_details = []
+    for key, label in (
+            ("datetime_parse_failed", "含完整正文的链接时刻无法解析"),
+            ("time_mismatch", "含完整正文的链接时刻不匹配"),
+            ("caption_mismatch", "目标时刻的链接正文不匹配")):
+        if diagnostics[key]:
+            mismatch_details.append("%s：%d 条" % (label, diagnostics[key]))
     detail = (
         "排期卡片图片数不符：实得 %s，期望 %s"
         % (last_image_count, expected_image_count)
@@ -1626,6 +1662,7 @@ async def verify_scheduled(
         (causal_error if causal_error else
          "排期卡片明确缺少渠道：%s" % "、".join(missing_match)
          if missing_match else
+         "；".join(mismatch_details) if mismatch_details else
          "内容日历里找不到同时匹配目标时刻与完整最终正文的卡片"))
     shot = await _readback_screenshot(page, screenshot_path, timeout)
     return ScheduledReadback(
@@ -1635,7 +1672,8 @@ async def verify_scheduled(
         missing_channels=missing_match,
         image_count=last_image_count,
         expected_image_count=expected_image_count,
-        success_signal="", screenshot=shot, error=detail)
+        success_signal="", screenshot=shot, error=detail,
+        diagnostics=diagnostics)
 
 
 async def _visible_calendar_range(page, spec: EvidenceSignal

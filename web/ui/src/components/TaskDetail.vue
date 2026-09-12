@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ACTOR, api } from '../api.js'
+import { api } from '../api.js'
 import { buildMarks, charLength, MARK_ERROR, MARK_RISK, MARK_WARN } from '../marks.js'
 import { PLATFORM_LABEL, RISK_KIND_LABEL, STATUS_LABEL } from '../format.js'
 import Icon from './Icon.vue'
@@ -9,11 +9,13 @@ import ImageCompare from './ImageCompare.vue'
 import MetaPanel from './MetaPanel.vue'
 
 const props = defineProps({ taskId: { type: String, required: true } })
-const emit = defineEmits(['back', 'changed', 'approve', 'skip'])
+const emit = defineEmits(['back', 'changed'])
 
 const detail = ref(null)
 const loading = ref(true)
 const error = ref('')
+const conflict = ref(false)
+const saved = ref(false)
 
 // 「下一处 →」的游标。§11.1：在 1700~3400 字符的长度下光高亮不够，
 // 她会扫一眼觉得"差不多"就过了。逐个跳把"检查"从一个开放任务变成一个
@@ -29,6 +31,7 @@ const liveMarks = ref([])
 const checking = ref(false)
 const saving = ref(false)
 let checkTimer = null
+let checkSequence = 0
 
 const unseenImages = ref(0)
 
@@ -71,6 +74,8 @@ function jump(delta) {
 }
 
 function startEdit() {
+  error.value = ''
+  saved.value = false
   draft.value = currentText.value
   liveMarks.value = marks.value
   editing.value = true
@@ -78,6 +83,11 @@ function startEdit() {
 }
 
 function discard() {
+  clearTimeout(checkTimer)
+  checkSequence += 1
+  checking.value = false
+  error.value = ''
+  conflict.value = false
   editing.value = false
   draft.value = ''
   liveMarks.value = []
@@ -89,52 +99,103 @@ function discard() {
 watch(draft, (value) => {
   if (!editing.value) return
   clearTimeout(checkTimer)
+  const sequence = ++checkSequence
   checking.value = true
   checkTimer = setTimeout(async () => {
     try {
       const result = await api.check(props.taskId, value)
       // 风险预扫描扫的是英文原文，改德语不会让它变，所以照旧带着。
-      liveMarks.value = buildMarks(result.highlights, detail.value.risks)
+      if (sequence === checkSequence && editing.value) {
+        liveMarks.value = buildMarks(result.highlights, detail.value.risks)
+      }
     } catch { /* 校验挂了不该影响编辑 */ } finally {
-      checking.value = false
+      if (sequence === checkSequence) checking.value = false
     }
   }, 250)
 })
 
 async function save() {
   saving.value = true
+  error.value = ''
+  conflict.value = false
   try {
-    detail.value = await api.saveTextDe(props.taskId, draft.value, ACTOR)
+    detail.value = await api.saveTextDe(props.taskId, draft.value, {
+      sourceTextSha256: detail.value.text.source_text_sha256,
+      humanRevision: detail.value.text.human_revision
+    })
     emit('changed', detail.value)
     discard()
+    saved.value = true
   } catch (exc) {
     error.value = String(exc.message || exc)
+    conflict.value = exc.status === 409
   } finally {
     saving.value = false
   }
+}
+
+async function refreshContext() {
+  try {
+    detail.value = await api.getTask(props.taskId)
+    emit('changed', detail.value)
+    error.value = ''
+    conflict.value = false
+    const result = await api.check(props.taskId, draft.value)
+    liveMarks.value = buildMarks(result.highlights, detail.value.risks)
+  } catch (exc) {
+    error.value = String(exc.message || exc)
+  }
+}
+
+function goBack() {
+  if (editing.value && draft.value !== currentText.value &&
+      !window.confirm('修改尚未保存，确定返回列表并放弃当前草稿？')) return
+  emit('back')
+}
+
+function beforeUnload(event) {
+  if (!editing.value || draft.value === currentText.value) return
+  event.preventDefault()
+  event.returnValue = ''
 }
 
 function onKey(event) {
   if (editing.value || event.target.matches('input, textarea')) return
   if (event.key === 'n' || event.key === 'ArrowDown') { event.preventDefault(); jump(1) }
   if (event.key === 'p' || event.key === 'ArrowUp') { event.preventDefault(); jump(-1) }
-  if (event.key === 'Escape') emit('back')
+  if (event.key === 'Escape') goBack()
 }
 
-onMounted(() => { load(); document.addEventListener('keydown', onKey) })
-onUnmounted(() => { clearTimeout(checkTimer); document.removeEventListener('keydown', onKey) })
+onMounted(() => {
+  load()
+  document.addEventListener('keydown', onKey)
+  window.addEventListener('beforeunload', beforeUnload)
+})
+onUnmounted(() => {
+  clearTimeout(checkTimer)
+  checkSequence += 1
+  document.removeEventListener('keydown', onKey)
+  window.removeEventListener('beforeunload', beforeUnload)
+})
 watch(() => props.taskId, load)
 </script>
 
 <template>
   <div class="detail">
     <p v-if="loading" class="loading">正在读这一篇…</p>
-    <p v-else-if="error" class="banner-error">{{ error }}</p>
+    <p v-if="error" class="banner-error" role="alert">
+      {{ error }}
+      <button v-if="conflict && editing" class="btn btn-sm" @click="refreshContext">
+        载入最新内容并保留草稿
+      </button>
+      <button v-else-if="!detail" class="btn btn-sm" @click="load">重试</button>
+    </p>
+    <p v-if="saved" class="save-success" role="status">人工文案已保存</p>
 
-    <template v-else-if="detail">
+    <template v-if="detail && !loading">
       <!-- ---------- 吸顶动作条 ---------- -->
       <header class="bar">
-        <button class="btn btn-ghost btn-sm" @click="emit('back')">
+        <button class="btn btn-ghost btn-sm" :disabled="saving" @click="goBack">
           <Icon name="arrowLeft" :size="14" /> 返回列表
         </button>
 
@@ -173,10 +234,10 @@ watch(() => props.taskId, load)
             <button class="btn btn-sm" @click="startEdit">
               <Icon name="pencil" :size="13" /> 编辑德语
             </button>
-            <button class="btn btn-sm btn-primary" @click="emit('approve', detail)">
+            <button class="btn btn-sm btn-primary" disabled title="审校通过与排期将在后续接通">
               <Icon name="check" :size="13" /> 通过
             </button>
-            <button class="btn btn-sm btn-danger" @click="emit('skip', detail)">
+            <button class="btn btn-sm btn-danger" disabled title="不发与挂起等审校状态将在后续接通">
               <Icon name="ban" :size="13" /> 这篇不发
             </button>
           </template>
@@ -195,7 +256,7 @@ watch(() => props.taskId, load)
       -->
       <p v-if="unseenImages > 0 && !editing" class="nudge">
         <Icon name="info" :size="13" />
-        还有 {{ unseenImages }} 张图没查看。可以直接通过，这里只是提醒。
+        还有 {{ unseenImages }} 张图没查看。
       </p>
 
       <!-- 标记地图（§11.1 的加分项）：全部标记按在原文里的位置摊平，
@@ -251,6 +312,8 @@ watch(() => props.taskId, load)
 .detail { padding: 0 var(--space-5) var(--space-6); }
 .loading { padding: var(--space-6); color: var(--muted-fg); }
 .banner-error { padding: var(--space-4); color: var(--error); }
+.banner-error .btn { margin-left: var(--space-2); }
+.save-success { padding: var(--space-2) 0; color: var(--ok); font-size: 13px; }
 
 .bar {
   position: sticky; top: 0; z-index: 10;

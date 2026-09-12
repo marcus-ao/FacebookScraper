@@ -25,8 +25,8 @@ const ACTION_LABEL = {
 
     <dl>
       <div>
-        <dt><Icon name="calendar" :size="13" /> 排期时刻</dt>
-        <dd :class="{ muted: !when }">{{ when || '还没有分配槽位' }}</dd>
+        <dt><Icon name="calendar" :size="13" /> {{ detail.status === 'scheduled' ? '排期时刻' : '建议时刻' }}</dt>
+        <dd :class="{ muted: !when }">{{ when || '暂无建议时刻' }}</dd>
       </div>
       <div>
         <dt><Icon name="image" :size="13" /> 发布渠道</dt>
@@ -71,16 +71,15 @@ const ACTION_LABEL = {
     <!-- actor 留痕。**只在详情页显示**（§10）：列表上显示会诱发互相盯梢，
          几个人的小团队里是负面效果。 -->
     <div class="trail">
-      <h4>操作留痕</h4>
+      <h4>最近保存</h4>
       <ol v-if="detail.trail && detail.trail.length">
         <li v-for="(row, i) in detail.trail" :key="i">
           <span class="at">{{ formatTrailTime(row.at) }}</span>
-          <span class="who">{{ row.actor }}</span>
           <span class="what">{{ ACTION_LABEL[row.action] || row.action }}</span>
           <span v-if="row.note" class="note">「{{ row.note }}」</span>
         </li>
       </ol>
-      <p v-else class="empty">还没有人动过这篇。</p>
+      <p v-else class="empty">尚未保存人工文案。</p>
     </div>
   </section>
 </template>

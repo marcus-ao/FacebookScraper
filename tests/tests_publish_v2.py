@@ -7,6 +7,8 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from playwright.async_api import async_playwright
 
@@ -18,6 +20,9 @@ from publish import business_suite as bs
 from publish import evidence, journal, selectors
 from publish.selectors import EvidenceSignal, Locator, SURFACE_COMPOSER
 from tools.publish_post import _pending_blocks_force
+from publish import workflow
+from core.config import cfg
+from publish_fixtures import verified_probe_config
 
 force_utf8()
 
@@ -412,6 +417,104 @@ check(readback.found and readback.channels == ("facebook", "instagram")
 baseline = asyncio.run(bs.snapshot_scheduled_matches(
     PlannerPage(entries_for()), when, caption,
     ui_timezone="America/Los_Angeles", card_spec=card_spec))
+
+print("\n[S0-2] 长文案回读失败要留下可区分、有界的诊断")
+long_caption = "Dies ist eine lange deutsche Produktbeschreibung. " * 24
+truncated = long_caption[:250] + "…"
+readback = asyncio.run(bs.verify_scheduled(
+    PlannerPage(entries_for(truncated)), when, long_caption,
+    ui_timezone="America/Los_Angeles", card_spec=card_spec))
+diagnostics = getattr(readback, "diagnostics", {})
+truncated_readback = readback
+samples = diagnostics.get("samples", [])
+check(not readback.found and diagnostics.get("caption_mismatch") == 2
+      and "正文不匹配" in readback.error,
+      "同一目标时刻的截断文案不算成功，并明确报告正文不匹配")
+check(bool(samples) and samples[0].get("text_length") == len(
+          truncated + " " + ENTRY_MOMENT)
+      and samples[0].get("text_preview") == truncated[:200],
+      "诊断保留实际回读文本长度与前200字符，供判断长文是否被截断")
+readback = asyncio.run(bs.verify_scheduled(
+    PlannerPage(entries_for(long_caption)), when, long_caption,
+    ui_timezone="America/Los_Angeles", card_spec=card_spec))
+check(readback.found, "完整长文案仍可正常核验，诊断不放宽或限制正文判据")
+
+for moment, expected_reason, text in (
+        ("unrecognized time", "datetime_parse_failed", "时刻无法解析"),
+        ("September 09, 2026, 1:00 AM", "time_mismatch", "时刻不匹配")):
+    # 一个无关但可解析的条目代表日历已经加载，避免等待真实20秒UI预算。
+    rows = entries_for(moment=moment) + [("Other " + ENTRY_MOMENT, "")]
+    readback = asyncio.run(bs.verify_scheduled(
+        PlannerPage(rows), when, caption,
+        ui_timezone="America/Los_Angeles", card_spec=card_spec))
+    diagnostics = getattr(readback, "diagnostics", {})
+    check(not readback.found and diagnostics.get(expected_reason) == 2
+          and text in readback.error,
+          "完整正文存在时区分%s，不再合并成找不到卡片" % text)
+
+readback = asyncio.run(bs.verify_scheduled(
+    PlannerPage([("Home", ""), ("Inbox", "")] + [
+        ("Other %d %s" % (index, ENTRY_MOMENT), "") for index in range(30)]),
+    when, caption, ui_timezone="America/Los_Angeles", card_spec=card_spec))
+diagnostics = getattr(readback, "diagnostics", {})
+check(diagnostics.get("datetime_parse_failed") == 0
+      and diagnostics.get("caption_mismatch") == 30
+      and len(diagnostics.get("samples", [])) == 20,
+      "导航链接不会冒充时刻解析失败，大量卡片诊断最多保留20条样本")
+
+with tempfile.TemporaryDirectory() as folder:
+    attempt = journal.PublishAttempt(
+        post_id="long-caption", platform="facebook",
+        status=journal.STATUS_SUBMITTED_UNVERIFIED,
+        scheduled_at=when.isoformat(), recorded_at=when.isoformat(),
+        text_de_sha256="fixture")
+    if "readback_diagnostics" in journal.PublishAttempt.__dataclass_fields__:
+        attempt = journal.transition(
+            attempt, journal.STATUS_SUBMITTED_UNVERIFIED,
+            recorded_at=when.isoformat(), readback_diagnostics=diagnostics)
+    journal.append(Path(folder), attempt)
+    row = journal.load(Path(folder))[-1]
+    check(row.get("readback_diagnostics") == diagnostics,
+          "回读诊断进入追加式journal，后续审核可查到样本而不依赖控制台")
+
+with tempfile.TemporaryDirectory() as folder:
+    state = Path(folder) / "state"
+    config = verified_probe_config(cfg(), state)
+    image = state / "image.png"
+    image.write_bytes(b"fixture-image")
+    post = SimpleNamespace(
+        post_id="long-caption-workflow", platform="facebook",
+        text_de=long_caption, source_text="English source",
+        original_text_de=long_caption, image_paths=(image,),
+        image_sources=("media_de",), warnings=())
+    page = PlannerPage([])
+    session = SimpleNamespace(new_page=AsyncMock(return_value=page), stop=AsyncMock())
+    account = bs.AccountContext(True, TARGET_FB, True, TARGET_IG, True, True)
+    with patch.object(workflow, "cfg", return_value=config), \
+            patch.object(workflow, "attach", AsyncMock(return_value=(session, None, session))), \
+            patch.object(bs, "require_submission_evidence", return_value=None), \
+            patch.object(bs, "require_readback_evidence", return_value=None), \
+            patch.object(bs, "require_account_context_evidence", return_value=object()), \
+            patch.object(bs, "snapshot_scheduled_matches", AsyncMock(return_value=
+                         bs.ScheduledBaseline(when.isoformat(), 0))), \
+            patch.object(bs, "open_composer", AsyncMock(return_value=page)), \
+            patch.object(bs, "ensure_logged_in", AsyncMock(return_value=account)), \
+            patch.object(bs, "upload_images", AsyncMock(return_value=())), \
+            patch.object(bs, "fill_caption", AsyncMock()), \
+            patch.object(bs, "set_schedule", AsyncMock(return_value="fixture-time")), \
+            patch.object(bs, "submit", AsyncMock(return_value=
+                         bs.SubmitResult(True, True, success_signal="fixture-success"))), \
+            patch.object(bs, "verify_scheduled", AsyncMock(return_value=truncated_readback)):
+        outcome = asyncio.run(workflow.execute(
+            post, when, ui_timezone="America/Los_Angeles", timeout=0.1,
+            stamp="fixture", submit_enabled=True))
+    saved = journal.load(state)[-1]
+    check(outcome.code == 5 and saved["status"] == journal.STATUS_SUBMITTED_UNVERIFIED
+          and saved.get("readback_diagnostics", {}).get("caption_mismatch") == 2
+          and saved.get("readback_diagnostics", {}).get("samples", [{}])[0].get(
+              "text_preview") == truncated[:200],
+          "真实状态机把失败诊断追加到journal，保持未核验态且不自动补提")
+
 readback = asyncio.run(bs.verify_scheduled(
     PlannerPage(entries_for()), when, caption,
     ui_timezone="America/Los_Angeles", card_spec=card_spec,

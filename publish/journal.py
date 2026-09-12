@@ -155,6 +155,7 @@ class PublishAttempt:
     #: 单个 `remote_id` 只能记住其中一个，跨渠道对账会缺一半。
     remote_ids: tuple[str, ...] = ()
     verification: str = ""
+    readback_diagnostics: dict = field(default_factory=dict)
     channels_verified: tuple[str, ...] = ()
     manual_evidence: bool = False
 

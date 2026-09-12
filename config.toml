@@ -464,6 +464,9 @@ ui_timeout_seconds = 30
 # 这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
 require_confirmation = true
 
+# 缺少德语图时在离线组装阶段拒绝发布；显式 false 才允许带警告回退原图。
+require_all_media_de = true
+
 # ⚠️ **[publish] 的新标量键请加在这一行之前。**
 # L 组会往本段末尾加三个子表（price_map / trusted_owners / schedule_rule），
 # TOML 规则要求子表必须在段的最后 —— 子表头之后的键会全部归属子表，

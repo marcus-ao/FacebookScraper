@@ -64,7 +64,7 @@ const fmt = (value, digits = 3) =>
     <div v-if="image" class="stage">
       <figure>
         <figcaption>原图（英文）</figcaption>
-        <img :src="api.imageUrl(taskId, image.index, 'original')" :alt="`原图 ${current + 1}`" />
+        <img :src="image.original_url || api.imageUrl(taskId, image.index, 'original')" :alt="`原图 ${current + 1}`" />
       </figure>
       <figure>
         <figcaption>
@@ -73,7 +73,7 @@ const fmt = (value, digits = 3) =>
             <Icon name="alert" :size="12" /> 缺德语图，显示的是原图
           </span>
         </figcaption>
-        <img :src="api.imageUrl(taskId, image.index, 'de')" :alt="`德语图 ${current + 1}`" />
+        <img :src="image.de_url || api.imageUrl(taskId, image.index, 'de')" :alt="`德语图 ${current + 1}`" />
       </figure>
     </div>
 
@@ -98,7 +98,7 @@ const fmt = (value, digits = 3) =>
           :aria-label="`第 ${img.index + 1} 张${seen.has(img.index) ? '（看过）' : ''}`"
           @click="current = img.index"
         >
-          <img :src="api.imageUrl(taskId, img.index, 'de')" alt="" loading="lazy" />
+          <img :src="img.de_url || api.imageUrl(taskId, img.index, 'de')" alt="" loading="lazy" />
           <span class="badge">{{ img.index + 1 }}</span>
           <span v-if="seen.has(img.index)" class="seen-mark"><Icon name="check" :size="11" /></span>
           <span v-if="!img.de_present" class="miss" title="缺德语图，已回退原图"></span>

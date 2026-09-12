@@ -44,16 +44,17 @@ if __name__ == "__main__":                          # pragma: no cover
 
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
-from core import paid_model
+from core import paid_model                        # noqa: E402
 from core import paid_requests                      # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
                         account_dirs, assert_physical_direct_path,
-                        post_dirname)
+                        post_dirname, read_post_truth)
 # 这四个名字曾经是 `import translate`：为了判「这张图的译文还算不算数」，
 # 调图这一路要把翻译执行器整个拉起来。契约下沉到 core/ 之后就没这回事了。
-from core.translated import (load_translated,       # noqa: E402
-                             render_glossary, translation_is_current)
-from core.paid_model import FileLock
+from core.translated import (image_translation, load_human_translated,  # noqa: E402
+                             load_human_translation_history, load_translated,
+                             render_glossary)
+from core.paid_model import FileLock                # noqa: E402
 from core import imagehash                          # noqa: E402
 
 
@@ -1006,7 +1007,7 @@ def append_image_jsonl(path: Path, row: Mapping[str, Any]) -> None:
         p.parent, p, kind="file", label="images_de.jsonl"))
 
 
-def ImageRunLock(path: Path) -> FileLock:      # noqa: N802（保留原名）
+def ImageRunLock(path: Path) -> FileLock:      # noqa: N802  保留原名
     """整个付费图片批次单实例，防止重复双击造成重复收费。"""
     return FileLock(path, error_type=SystemExit,
                     busy_message="另一个图片德语化批次正在运行。请勿重复双击；等它结束后再试。")
@@ -1142,6 +1143,23 @@ def readonly_archive(arc_base: Path) -> Archive:
     return Archive(arc_base.parent, arc_base.name)
 
 
+def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[str, Any],
+                       record: Mapping[str, Any] | None, source_sha: str,
+                       human_history: list[dict]) -> Mapping[str, Any]:
+    """一张现有图沿用同源人工旧稿的生成依据；普通改正文不触发再次付费。"""
+    if (not current.get("is_human") or not isinstance(record, Mapping)
+            or record.get("source_sha256") != source_sha
+            or record.get("prompt_version") != IMAGE_PROMPT_VERSION
+            or not _record_output_exists(arc_base, record)):
+        return current
+    for historical in reversed(human_history):
+        candidate = image_translation(row, None, historical)
+        if (candidate is not None
+                and text_de_sha256(candidate["text_de"]) == record.get("text_de_sha256")):
+            return candidate
+    return current
+
+
 def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                force: bool = False,
                media_index_filter: int | None = None,
@@ -1156,6 +1174,8 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
     # 只读边界校验；不新建任何目录（CR-50）。
     readonly_archive(arc_base)
     translated = load_translated(arc_base / "translated.jsonl")
+    human_history = load_human_translation_history(arc_base / "translated_human.jsonl")
+    human = {pid: revisions[-1] for pid, revisions in human_history.items()}
     state = load_image_state(arc_base / "images_de.jsonl")
     stats = RunStats()
     jobs: list[ImageJob] = []
@@ -1166,15 +1186,17 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 or not isinstance(row.get("text"), str)):
             raise ValueError("manifest 帖子记录不满足 post_id/text 最小契约")
         post_id = row["post_id"].strip()
-        trans = translated.get(post_id)
-        if not translation_is_current(row, trans):
+        if post_id in human:
+            # 人工审校以 post.json 为准；CLI 重读旧 manifest 不能把刚复核的稿判过期。
+            row, _post_dir = read_post_truth(arc_base, row)
+        trans = image_translation(row, translated.get(post_id), human.get(post_id))
+        if trans is None:
             image_count = sum(
                 1 for index, media in enumerate(row.get("media") or [])
                 if (media_index_filter is None or index == media_index_filter)
                 and isinstance(media, dict) and media.get("kind") == "image")
             stats.skipped_no_translation += image_count
             continue
-        text_de = trans["text_de"].strip()
         media_list = row.get("media") or []
         if not isinstance(media_list, list):
             raise ValueError(f"帖子 {post_id} 的 media 不是数组")
@@ -1207,6 +1229,12 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 continue
             out_path, out_rel = _target_for_job(
                 arc_base, row, media_index, settings.output_format)
+            record = state.latest.get((post_id, media_index))
+            source_sha = sha256_file(source_path)
+            # force 是显式重生成，用当前稿；普通对账逐张保留已经付费完成的依据。
+            basis = (trans if force else _image_text_basis(
+                arc_base, row, trans, record, source_sha, human_history.get(post_id, [])))
+            text_de = basis["text_de"].strip()
             job = ImageJob(
                 account=arc_base.name,
                 arc_base=arc_base,
@@ -1214,7 +1242,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 media_index=media_index,
                 source_path=source_path,
                 source_rel=source_rel,
-                source_sha256=sha256_file(source_path),
+                source_sha256=source_sha,
                 source_size=source_size,
                 text_de=text_de,
                 text_de_sha256=text_de_sha256(text_de),
@@ -1231,7 +1259,6 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 print(f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
                       + "、".join(path.name for path in manual))
                 continue
-            record = state.latest.get(job.key)
             if (not force and image_record_is_current(job, record)
                     and _record_output_exists(arc_base, record)):
                 stats.skipped_current += 1
@@ -1447,6 +1474,8 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         return []
 
     pairs: list[ReviewImagePair] = []
+    human_history = (load_human_translation_history(arc_base / "translated_human.jsonl")
+                     if translated.get("is_human") else {})
     for media_index, media in enumerate(media_list):
         if not isinstance(media, Mapping) or media.get("kind") != "image":
             continue
@@ -1456,8 +1485,10 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
             # 旧布局/缺文件仍由 run_review 原有“配图”段展示；K8 只接受可物理比对的图片。
             continue
         source_sha = sha256_file(source_path)
-        text_sha = text_de_sha256(text_de)
         record = state.latest.get((post_id, media_index))
+        basis = _image_text_basis(arc_base, row, translated, record, source_sha,
+                                  human_history.get(post_id, []))
+        text_sha = text_de_sha256(basis["text_de"])
         localized_rel: str | None = None
         current_record: dict[str, Any] | None = None
         manual = False
@@ -1644,13 +1675,16 @@ def run_show_prompt(settings: Settings,
     shown = 0
     for arc_base, rows in scoped_rows.items():
         translated = load_translated(arc_base / "translated.jsonl")
+        human = load_human_translated(arc_base / "translated_human.jsonl")
         for row in sorted(
                 rows,
                 key=lambda value: str(value.get("created_at") or ""),
                 reverse=True):
             post_id = row.get("post_id")
-            entry = translated.get(post_id) if isinstance(post_id, str) else None
-            if not translation_is_current(row, entry):
+            if post_id in human:
+                row, _post_dir = read_post_truth(arc_base, row)
+            entry = image_translation(row, translated.get(post_id), human.get(post_id))
+            if entry is None:
                 continue
             print("\n" + "=" * 72)
             print(f"账号：{arc_base.name} / post_id={post_id} / 零 API 调用")
