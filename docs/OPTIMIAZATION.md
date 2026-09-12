@@ -8,6 +8,8 @@
 | | |
 |---|---|
 | 本文件 | **还差什么、先修哪个** |
+| [FUNCTIONALITY.md](FUNCTIONALITY.md) | 五个阶段各要实现什么功能。⚠️ **它的 §6 重排了本清单的实施顺序**：S0 三条与 S2-1 被提为硬前置 |
+| [CONTEXT.md](CONTEXT.md) | 术语表。词有歧义时以它为准 |
 | [HANDOFF.md](HANDOFF.md) | 动代码之前必须知道的（红线、架构、真实 UI、踩过的坑） |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | 为谁做、做到什么程度算够 |
 | [MANUAL_STEPS.md](MANUAL_STEPS.md) | 需要人亲自动手的步骤 |

@@ -20,6 +20,8 @@ scripts\run_pipeline.bat preflight
 | 本文件 | **需要人亲自动手的步骤** |
 | [HANDOFF.md](HANDOFF.md) | 动代码之前必须知道的（红线、架构、真实 UI、踩过的坑） |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | 为谁做、做到什么程度算够 |
+| [FUNCTIONALITY.md](FUNCTIONALITY.md) | 五个阶段各要实现什么功能（业务访谈后的规划） |
+| [CONTEXT.md](CONTEXT.md) | 术语表。词有歧义时以它为准 |
 | [OPTIMIAZATION.md](OPTIMIAZATION.md) | 还差什么、先修哪个 |
 
 ---

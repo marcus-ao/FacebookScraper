@@ -17,6 +17,8 @@ scripts\run_pipeline.bat preflight
 |---|---|
 | 本文件 | **为什么这么实现、踩过哪些坑、动手前的禁令** |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | 为谁做、做到什么程度算够 |
+| [FUNCTIONALITY.md](FUNCTIONALITY.md) | 五个阶段各要实现什么功能（业务访谈后的规划） |
+| [CONTEXT.md](CONTEXT.md) | 术语表。词有歧义时以它为准 |
 | [MANUAL_STEPS.md](MANUAL_STEPS.md) | 需要人亲自动手的步骤 |
 | [OPTIMIAZATION.md](OPTIMIAZATION.md) | 还差什么、先修哪个 |
 | [README.md](../README.md) | 怎么跑、架构为什么长这样 |

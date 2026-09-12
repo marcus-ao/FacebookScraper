@@ -14,6 +14,8 @@
 | 文件 | 管什么 |
 |---|---|
 | 本文件 | **为谁做、做到什么程度算够、现状差什么** |
+| [FUNCTIONALITY.md](FUNCTIONALITY.md) | 五个阶段各要实现什么功能。⚠️ **它的 §0.2 列出了本文件里哪些决定已被推翻**，读本文件前先扫一眼那张表 |
+| [CONTEXT.md](CONTEXT.md) | 术语表。词有歧义时以它为准 |
 | [HANDOFF.md](HANDOFF.md) | 为什么这么实现、真实 UI 长什么样、踩过哪些坑 |
 | [MANUAL_STEPS.md](MANUAL_STEPS.md) | 需要人亲自动手的步骤 |
 | [OPTIMIAZATION.md](OPTIMIAZATION.md) | **还差什么、按什么顺序修** |

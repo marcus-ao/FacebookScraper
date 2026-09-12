@@ -12,6 +12,8 @@
 | [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)               | **需要你亲自动手的步骤**，逐步操作指南         |
 | [docs/HANDOFF.md](docs/HANDOFF.md)                         | 红线、真实 UI 长什么样、踩过的坑（动代码前必读） |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)               | 为谁做、做到什么程度算够                       |
+| [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md)             | **五个阶段各要实现什么功能**（业务访谈后的规划）|
+| [docs/CONTEXT.md](docs/CONTEXT.md)                         | **术语表**。词有歧义时以它为准                 |
 | [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md)             | **还差什么、按什么顺序修**                     |
 | [web/DESIGN.md](web/DESIGN.md)                             | 审校台原型的设计与接口契约                     |
 
