@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.config import MonitorSchedule, cfg
 from core.feishu import FeishuClient, FeishuSettings, Outbox
 from core.heartbeat import Heartbeat, HeartbeatSettings
 from core.mirror import DriveClient, MirrorService, MirrorSettings
+from core.monitoring import MonitoringJournal, SKIP_REASONS
 from core.paid_model import atomic_write_json
 from core.network_evidence import NetworkEvidence, NetworkEvidenceSettings, network_evidence_status
 from core import notify, review
@@ -22,10 +24,14 @@ import localize_images
 class Runtime:
     def __init__(self, *, detector, process: bool = False):
         self.detector, self.process = detector, process
+        self.clock = lambda: datetime.now(timezone.utc)
         self.c = cfg()
         if process and engine.activation_time(self.c.state_dir) is None:
             raise ValueError('流水线尚未激活；请先完成发布前置核验，再启用 --process')
-        self.pending_processing = False
+        self.processing = MonitoringJournal(self.c.state_dir, now=self.clock())
+        self.processing_executor = ThreadPoolExecutor(max_workers=1,
+                                                      thread_name_prefix='content-processing')
+        self.processing_future = None
         self.settings = FeishuSettings.load()
         self.outbox = Outbox(self.c.state_dir / 'feishu_outbox.json', self.settings)
         self.client = None
@@ -42,6 +48,7 @@ class Runtime:
         self.network = NetworkEvidence(self.c.state_dir / 'network_evidence.json', NetworkEvidenceSettings.load(self.c))
 
     def close(self):
+        self.processing_executor.shutdown(wait=False, cancel_futures=False)
         self.heartbeat.close()
         self.network.close()
         if self.drive is not None:
@@ -50,14 +57,114 @@ class Runtime:
             self.client.close()
 
     def scan(self, kind: str, platform: str) -> int:
+        started = self.clock()
+        before = self._delta_entry(platform)
+        before_archive = self._archive_images(platform)
+        self.processing.fact('scan_started', started, kind=kind, platform=platform)
         code = self.detector(kind, platform)
-        now = datetime.now(timezone.utc)
+        now = self.clock()
         if code:
+            self.processing.fact('scan_finished', now, kind=kind, platform=platform,
+                                 exit_code=int(code), discovered=0,
+                                 skipped=dict.fromkeys(SKIP_REASONS, 0))
             self._system(f'capture:{platform}:{now.date()}:{code}',
                          f'{platform} 监测未完成（退出码 {code}），请检查抓取日志和手动登录状态。', now)
             return code
-        self.pending_processing = True
+        observation = self._scan_observation(kind, platform, before, before_archive)
+        if observation['discovered']:
+            self.processing.fact('content_discovered', now, kind=kind, platform=platform,
+                                 count=observation['discovered'])
+        self.processing.fact('scan_finished', now, kind=kind, platform=platform, exit_code=0,
+                             discovered=observation['discovered'], skipped=observation['skipped'])
+        if self.process and observation['discovered']:
+            self.processing.request(now, platform, kind, observation['discovered'],
+                                    observation['skipped'], image_count=observation['image_count'])
         return code
+
+    def _delta_entry(self, platform: str) -> dict:
+        path = self.c.state_dir / 'delta_state.json'
+        try:
+            payload = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        entry = payload.get(platform) if isinstance(payload, dict) else None
+        return dict(entry) if isinstance(entry, dict) else {}
+
+    def _archive_images(self, platform: str) -> dict[str, int]:
+        account = dict(zip(('facebook', 'instagram'), self.c.active_accounts()))[platform]
+        directory = self.c.archive_dir / account
+        if not (directory / 'manifest.jsonl').exists():
+            return {}
+        try:
+            rows = Archive(directory.parent, directory.name).rows()
+            return {str(row['post_id']): sum(
+                1 for item in row.get('media', [])
+                if isinstance(item, dict) and item.get('kind') == 'image') for row in rows}
+        except (OSError, ValueError, TypeError, KeyError):
+            return {}
+
+    def _scan_observation(self, kind: str, platform: str, before: dict,
+                          before_archive: dict[str, int]) -> dict:
+        after = self._delta_entry(platform)
+        stamp_key = 'last_reconcile_at' if kind == 'reconcile' else 'last_success'
+        changed = bool(after.get(stamp_key) and after.get(stamp_key) != before.get(stamp_key))
+        count_key = 'last_reconcile_new_count' if kind == 'reconcile' else 'last_new_count'
+        discovered = int(after.get(count_key, 0) or 0) if changed else 0
+        skipped = after.get('last_observed_skipped') if changed else {}
+        after_archive = self._archive_images(platform) if changed else before_archive
+        new_images = sum(after_archive[post_id] for post_id in after_archive.keys() - before_archive.keys())
+        return {'discovered': max(0, discovered),
+                'image_count': max(0, discovered, new_images),
+                'skipped': {key: max(0, int((skipped or {}).get(key, 0) or 0))
+                            for key in SKIP_REASONS}}
+
+    def processing_status(self) -> dict:
+        return self.processing.processing_status()
+
+    def activity_summary(self, now: datetime) -> dict | None:
+        return self.processing.activity_summary(now)
+
+    def start_processing(self, now: datetime):
+        """Claim a known-pending batch and run it off the scheduler thread.
+
+        A marker left in ``running`` after process restart is changed to
+        ``interrupted`` during construction and is never claimed here.
+        """
+        if not self.process:
+            return None
+        if self.processing_future is not None and not self.processing_future.done():
+            return self.processing_future
+        batch = self.processing.claim(now)
+        if batch is None:
+            return None
+        self.processing_future = self.processing_executor.submit(self._process_batch, batch)
+        return self.processing_future
+
+    def _process_batch(self, batch: dict):
+        started = self.clock()
+        before = sum(1 for item in engine.latest_human_items(self.c.state_dir).values()
+                     if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish')
+        try:
+            directories = account_dirs(self.c.archive_dir)
+            code = 0
+            if directories:
+                code = engine.run(account_dirs=directories, state_dir=self.c.state_dir,
+                                  settings=engine.pipeline_settings(), now=started,
+                                  detect_updates=False)
+            after = sum(1 for item in engine.latest_human_items(self.c.state_dir).values()
+                        if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish')
+            result = self.processing.finish(batch, self.clock(), code=int(code or 0),
+                                            ready_count=max(0, after - before))
+            if code:
+                self._system(f'processing:{started.date()}:{code}',
+                             f'本轮内容处理未完成（退出码 {code}），请检查流水线日志与付费请求记录。',
+                             self.clock())
+            return result
+        except BaseException as exc:
+            self.processing.finish(batch, self.clock(), code=None, error=type(exc).__name__)
+            self._system(f'processing-uncertain:{batch["batch_id"]}',
+                         '内容处理进程意外中断；可能已有付费请求，恢复前请先核账。', self.clock())
+            return self.processing_status()
 
     def _system(self, event_id, text, now):
         if self.settings.enabled:
@@ -72,16 +179,9 @@ class Runtime:
             directories = engine.active_account_dirs(account_dirs(self.c.archive_dir))
             scheduled = journal.scheduled_source_refs(self.c.state_dir)
             awakened = review.wake_due(directories, now=now, scheduled_refs=scheduled)
-            self.pending_processing = self.pending_processing or bool(awakened)
-            if self.process and self.pending_processing:
-                self.pending_processing = False
-                all_directories = account_dirs(self.c.archive_dir)
-                if all_directories:
-                    code = engine.run(account_dirs=all_directories, state_dir=self.c.state_dir,
-                                      settings=engine.pipeline_settings(), now=now, detect_updates=False)
-                    if code:
-                        self._system(f'processing:{now.date()}:{code}',
-                                     f'本轮内容处理未完成（退出码 {code}），请检查流水线日志与付费请求记录。', now)
+            if self.process and awakened:
+                self.processing.request(now, 'review', 'wakeup', len(awakened), {},
+                                        image_count=len(awakened))
         except Exception as exc:
             notify.notify('本轮维护暂未完成', type(exc).__name__ + '；请检查本地记录。', popup=False)
         self.heartbeat.tick(now)

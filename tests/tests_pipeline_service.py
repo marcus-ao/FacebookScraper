@@ -26,13 +26,30 @@ class ServiceTests(unittest.TestCase):
         engine.activate(self.state, g8_verified=True, now=self.now - timedelta(days=2))
 
     def test_two_platform_scans_process_once_without_duplicate_detection(self):
-        detector = Mock(return_value=0)
+        def detect(kind, platform):
+            path = self.state / 'delta_state.json'
+            try:
+                data = json.loads(path.read_text(encoding='utf-8'))
+            except FileNotFoundError:
+                data = {}
+            data[platform] = {'last_reconcile_at': self.now.isoformat(),
+                              'last_reconcile_new_count': 1,
+                              'last_observed_skipped': {}}
+            path.write_text(json.dumps(data), encoding='utf-8')
+            return 0
+        detector = Mock(side_effect=detect)
         runtime = Runtime(detector=detector, process=True)
+        runtime.clock = lambda: self.now
+        self.addCleanup(runtime.close)
         with patch.object(engine, 'run', return_value=0) as process:
             runtime.scan('reconcile', 'facebook')
             runtime.scan('reconcile', 'instagram')
             process.assert_not_called()
             runtime.maintenance(self.now)
+            process.assert_not_called()
+            future = runtime.start_processing(self.now)
+            self.assertIsNotNone(future)
+            future.result(timeout=5)
             process.assert_called_once()
             self.assertFalse(process.call_args.kwargs['detect_updates'])
             runtime.maintenance(self.now)

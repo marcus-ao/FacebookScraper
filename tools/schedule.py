@@ -35,6 +35,7 @@ import argparse
 import os
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -330,16 +331,99 @@ def scheduler_xml(root: Path | None = None) -> str:
        escape(str(root / "scripts" / "run_scheduler.bat")), escape(str(root)))
 
 
+def _task_state(name: str) -> dict:
+    """Query locale-independent task XML and return registration/enabled state."""
+    result = subprocess.run(["schtasks", "/Query", "/TN", name, "/XML"],
+                            capture_output=True)
+    if result.returncode != 0:
+        return {"name": name, "registered": False, "enabled": False}
+    try:
+        root = ET.fromstring(result.stdout or "")
+        enabled = root.findtext(".//{%s}Enabled" % NS)
+        if enabled is None:
+            enabled = root.findtext(".//Enabled")
+    except ET.ParseError:
+        return {"name": name, "registered": True, "enabled": None,
+                "error": "task_xml_unreadable"}
+    return {"name": name, "registered": True,
+            "enabled": str(enabled).strip().lower() == "true"}
+
+
+def _legacy_scheduler_conflicts() -> list[dict]:
+    return [state for state in (_task_state(DAILY_TASK), _task_state(CATCHUP_TASK))
+            if state["registered"] and state.get("enabled") is not False]
+
+
+def scheduler_install(dry_run: bool = False) -> int:
+    """Install only the persistent scheduler, refusing active legacy pollers."""
+    if not sys.platform.startswith("win"):
+        print("[!] 常驻计划任务只在 Windows 上有意义。")
+        return 1
+    conflicts = _legacy_scheduler_conflicts()
+    if conflicts:
+        print("[!] 旧增量任务仍启用：%s。先停用旧任务，避免重复抓取。"
+              % ", ".join(item["name"] for item in conflicts))
+        return 2
+    path = _write_xml(SCHEDULER_TASK, scheduler_xml())
+    argv = ["schtasks", "/Create", "/TN", SCHEDULER_TASK, "/XML", str(path), "/F"]
+    print("  %s" % " ".join(argv))
+    if dry_run:
+        return 0
+    result = subprocess.run(argv, capture_output=True, text=True)
+    print("  " + (((result.stdout or "") + (result.stderr or "")).strip() or "(no output)"))
+    return int(result.returncode)
+
+
+def scheduler_status() -> int:
+    """Show persistent task state and fail when a legacy poller can duplicate it."""
+    if not sys.platform.startswith("win"):
+        print("[!] 常驻计划任务只在 Windows 上有意义。")
+        return 1
+    current = _task_state(SCHEDULER_TASK)
+    label = ("未注册" if not current["registered"] else
+             "启用" if current.get("enabled") is True else
+             "停用" if current.get("enabled") is False else "状态无法解析")
+    print("%s: %s" % (SCHEDULER_TASK, label))
+    conflicts = _legacy_scheduler_conflicts()
+    if conflicts:
+        print("[!] 发现会重复抓取的旧任务：%s"
+              % ", ".join(item["name"] for item in conflicts))
+        return 2
+    return 0
+
+
+def scheduler_set_enabled(enabled: bool) -> int:
+    """Pause/resume without deleting the persistent task definition."""
+    if not sys.platform.startswith("win"):
+        print("[!] 常驻计划任务只在 Windows 上有意义。")
+        return 1
+    flag = "/ENABLE" if enabled else "/DISABLE"
+    result = subprocess.run(["schtasks", "/Change", "/TN", SCHEDULER_TASK, flag],
+                            capture_output=True, text=True)
+    print("  " + (((result.stdout or "") + (result.stderr or "")).strip() or "(no output)"))
+    return int(result.returncode)
+
+
 def main(argv=None) -> int:
     force_utf8()
     p = argparse.ArgumentParser(prog="python -m tools.schedule",
                                 description="每日增量的 Windows 计划任务")
-    p.add_argument("action", choices=("xml", "scheduler-xml", "install", "status", "remove"))
+    p.add_argument("action", choices=("xml", "scheduler-xml", "install", "status", "remove",
+                                      "scheduler-install", "scheduler-status",
+                                      "scheduler-disable", "scheduler-enable"))
     p.add_argument("--dry-run", action="store_true", help="install 时只打印命令")
     args = p.parse_args(argv)
     if args.action == "scheduler-xml":
         print(scheduler_xml())
         return 0
+    if args.action == "scheduler-install":
+        return scheduler_install(args.dry_run)
+    if args.action == "scheduler-status":
+        return scheduler_status()
+    if args.action == "scheduler-disable":
+        return scheduler_set_enabled(False)
+    if args.action == "scheduler-enable":
+        return scheduler_set_enabled(True)
 
     if args.action == "xml":
         for name, xml in plan():

@@ -15,8 +15,9 @@ from pathlib import Path
 
 from core.config import ROOT, Config, MonitorSchedule, cfg
 from core.integrity import parse_ts
+from core.monitoring import (batch_budget_minutes, monitor_interval_minutes,
+                             posting_distribution)
 from core.paid_model import FileLock, atomic_write_json
-from core.store import account_dirs
 from routes import delta, reconcile
 
 
@@ -28,48 +29,6 @@ def default_callback(kind: str, platform: str) -> int:
     if kind == "reconcile":
         return reconcile.main(["--platform", platform])
     return delta.main(["--platform", platform, "--if-stale", "--no-jitter"])
-
-
-def posting_distribution(directories, schedule: MonitorSchedule, now: datetime) -> dict:
-    """上个完整自然月的静态图文发布时间；由追加式 manifest 最新版本重算。
-
-    作息仍取配置，不根据美国发帖时间猜运营人员的上班时间。该统计供 preflight
-    检查源团队换作息后的余量，缺记录/坏行会显式计数，不能冒充完整样本。
-    """
-    month = (schedule.local(now).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-    summary = {"month": month, "by_hour": [0] * 24, "on_duty": 0,
-               "off_duty": 0, "unreadable": 0, "skipped": 0,
-               "reconcile_margin_min": schedule.reconcile_deadline_margin_minutes()}
-    for directory in directories:
-        try:
-            lines = (Path(directory) / "manifest.jsonl").read_text(encoding="utf-8").splitlines()
-        except OSError:
-            summary["unreadable"] += 1
-            continue
-        rows = {}
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-                if not isinstance(row, dict) or not row.get("post_id"):
-                    raise ValueError("not a post")
-                rows[str(row["post_id"])] = row
-            except (ValueError, TypeError):
-                summary["unreadable"] += 1
-        for row in rows.values():
-            created = parse_ts(row.get("created_at"))
-            if created is None or schedule.local(created).strftime("%Y-%m") != month:
-                continue
-            media = row.get("media")
-            if (not isinstance(media, list) or not media or not (row.get("text") or "").strip()
-                    or any(not isinstance(item, dict) or item.get("kind") != "image" for item in media)):
-                summary["skipped"] += 1
-                continue
-            local = schedule.local(created)
-            summary["by_hour"][local.hour] += 1
-            summary["on_duty" if schedule.is_on_duty(created) else "off_duty"] += 1
-    return summary
 
 
 class Scheduler:
@@ -139,7 +98,7 @@ class Scheduler:
         return threshold > 0 and delta.quiet_days(entry, self.clock()) >= threshold
 
     def _next_delta(self, now: datetime, platform: str) -> datetime:
-        minutes = self.schedule.interval_minutes(now, quiet=self._quiet(platform))
+        minutes = self._monitor_interval(now, quiet=self._quiet(platform))
         interval = minutes * self.rng.uniform(1 - self.schedule.jitter_ratio,
                                                1 + self.schedule.jitter_ratio)
         proposed = now + timedelta(minutes=interval)
@@ -160,12 +119,37 @@ class Scheduler:
                 0, self.schedule.on_duty_interval_min * self.schedule.jitter_ratio))
         return proposed.astimezone(timezone.utc)
 
+    def _monitor_interval(self, now: datetime, *, quiet: bool = False) -> float:
+        return monitor_interval_minutes(
+            self.schedule, self.state.get("posting_distribution"), now, quiet=quiet)
+
+    def _batch_budget(self) -> float:
+        path = ROOT / self.config.get("paths", "state", "state") / "processing_state.json"
+        try:
+            batch = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            batch = None
+        return batch_budget_minutes(self.schedule, len(delta.PLATFORMS), batch)
+
+    def _reconcile_shift(self, local: datetime, budget: float) -> timedelta:
+        base = datetime.combine(local.date(), self.schedule.parse_time(
+            self.schedule.reconcile_at), local.tzinfo)
+        configured_latest = base + timedelta(minutes=self.schedule.reconcile_jitter_min)
+        duty = datetime.combine(local.date(), self.schedule.parse_time(
+            self.schedule.on_duty_window[0]), local.tzinfo)
+        return max(timedelta(), configured_latest - (duty - timedelta(minutes=budget)))
+
     def _next_reconcile(self, now: datetime) -> datetime:
         local = self.schedule.local(now)
         base = datetime.combine(local.date(), self.schedule.parse_time(self.schedule.reconcile_at), local.tzinfo)
-        # 已过窗口就只安排明天；尚在窗口时从剩余区间抽取，不突然追补昨天。
         earliest = base - timedelta(minutes=self.schedule.reconcile_jitter_min)
         latest = base + timedelta(minutes=self.schedule.reconcile_jitter_min)
+        shift = self._reconcile_shift(local, self._batch_budget())
+        if shift:
+            # 整体前移随机窗口，保留抖动宽度，同时给两平台扫描和整批处理留足预算。
+            earliest -= shift
+            latest -= shift
+        # 已过窗口就只安排明天；尚在窗口时从剩余区间抽取，不突然追补昨天。
         if now >= latest:
             earliest += timedelta(days=1)
             latest += timedelta(days=1)
@@ -174,6 +158,12 @@ class Scheduler:
             0, (latest - lower).total_seconds()))).astimezone(timezone.utc)
 
     def _ensure_jobs(self, now):
+        sample_month = (self.schedule.local(now).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        if self.state.get("posting_distribution", {}).get("month") != sample_month:
+            # Missing active archives count as incomplete coverage; otherwise one
+            # populated account could accidentally authorize an adaptive window.
+            directories = [self.config.archive_dir / name for name in self.config.active_accounts()]
+            self.state["posting_distribution"] = posting_distribution(directories, self.schedule, now)
         expected = {}
         for platform in delta.PLATFORMS:
             account = self.config["targets"][platform]
@@ -184,13 +174,29 @@ class Scheduler:
                     next_at = self._next_delta(now, platform) if kind == "delta" else self._next_reconcile(now)
                     current = {"kind": kind, "platform": platform, "account": account,
                                "next_at": next_at.isoformat()}
+                    if kind == "reconcile":
+                        current["budget_minutes"] = self._batch_budget()
                 expected[key] = current
         self.state["jobs"] = expected
-        sample_month = (self.schedule.local(now).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-        if self.state.get("posting_distribution", {}).get("month") != sample_month:
-            active = set(self.config.active_accounts())
-            directories = [p for p in account_dirs(self.config.archive_dir) if p.name in active]
-            self.state["posting_distribution"] = posting_distribution(directories, self.schedule, now)
+        self._tighten_reconcile_jobs()
+
+    def _tighten_reconcile_jobs(self):
+        """Move existing draws earlier when observed workload raises the batch budget."""
+        required = self._batch_budget()
+        baseline = batch_budget_minutes(self.schedule, len(delta.PLATFORMS))
+        for job in self.state["jobs"].values():
+            if job["kind"] != "reconcile":
+                continue
+            old = job.get("budget_minutes", baseline)
+            if not isinstance(old, (int, float)) or isinstance(old, bool) or old < baseline:
+                old = baseline
+            if required <= old:
+                continue
+            planned = self.schedule.local(parse_ts(job["next_at"]))
+            extra = self._reconcile_shift(planned, required) - self._reconcile_shift(planned, old)
+            if extra > timedelta():
+                job["next_at"] = (parse_ts(job["next_at"]) - extra).isoformat()
+            job["budget_minutes"] = required
 
     def snapshot(self):
         return copy.deepcopy(self.state)
@@ -206,7 +212,7 @@ class Scheduler:
         local = self.schedule.local(now)
         deadline = datetime.combine(local.date(), self.schedule.parse_time(
             self.schedule.on_duty_window[0]), local.tzinfo)
-        budget = self.schedule.processing_budget_min + 2 * self.schedule.reconcile_max_session_seconds / 60
+        budget = self._batch_budget()
         planned_day = self.schedule.local(parse_ts(job["next_at"])).date()
         return local.date() != planned_day or now > deadline - timedelta(minutes=budget)
 
@@ -245,6 +251,8 @@ class Scheduler:
                 following = self._next_delta(started, platform)
             job.update(next_at=following.isoformat(), last_started=started.isoformat(),
                        last_exit_code=None, last_error=None)
+            if kind == "reconcile":
+                job["budget_minutes"] = self._batch_budget()
             self._save()
             if expired:
                 result = {"kind": kind, "platform": platform, "exit_code": None,
@@ -269,8 +277,6 @@ class Scheduler:
             self.state["last_tick"] = finished.isoformat()
             self._save()
             results.append(result)
-        if self.maintenance is not None:
-            self.maintenance(self.clock())
         return results
 
 
@@ -298,11 +304,13 @@ def main(argv=None) -> int:
         from pipeline.service import Runtime
         runtime = Runtime(process=args.process, detector=default_callback)
         runner.callback = runtime.scan
-        runner.maintenance = runtime.maintenance
         with runner:
             while True:
                 for result in runner.tick():
                     print(json.dumps(result, ensure_ascii=False), flush=True)
+                now = datetime.now(timezone.utc)
+                runtime.maintenance(now)
+                runtime.start_processing(now)
                 if args.once:
                     return 0
                 time.sleep(30)

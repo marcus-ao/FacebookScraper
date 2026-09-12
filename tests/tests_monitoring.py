@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config import Config, MonitorSchedule  # noqa: E402
 from core.capture import prune_captures_days  # noqa: E402
+from core.integrity import parse_ts  # noqa: E402
 from pipeline.scheduler import Scheduler, SchedulerAlreadyRunning  # noqa: E402
 from routes import delta, reconcile  # noqa: E402
 from core.console import force_utf8  # noqa: E402
@@ -59,6 +60,82 @@ class MonitoringTests(unittest.TestCase):
         c._d["delta"]["reconcile_jitter_min"] = 50
         with self.assertRaisesRegex(ValueError, "截止"):
             MonitorSchedule.load(c)
+
+    def test_reconcile_window_moves_before_full_batch_deadline(self):
+        class Latest:
+            @staticmethod
+            def uniform(_lower, upper):
+                return upper
+
+        now = utc(22)  # Shanghai 06:00 on the next local day.
+        with tempfile.TemporaryDirectory() as td:
+            runner = Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
+                               clock=lambda: now, rng=Latest())
+            # Exercise the scheduling guard independently from config validation.
+            object.__setattr__(runner.schedule, "processing_budget_min", 40)
+            planned = runner.schedule.local(runner._next_reconcile(now))
+            duty = datetime.combine(planned.date(), runner.schedule.parse_time(
+                runner.schedule.on_duty_window[0]), planned.tzinfo)
+            expected_latest = duty - timedelta(minutes=43)
+            self.assertLessEqual(planned, expected_latest)
+
+    def test_batch_budget_scales_with_posts_images_and_observed_duration(self):
+        from core.monitoring import batch_budget_minutes
+        schedule = MonitorSchedule.load()
+        baseline = batch_budget_minutes(schedule, 2, {
+            "platforms": {"facebook": {"discovered": 1, "image_count": 1}}})
+        backlog = batch_budget_minutes(schedule, 2, {
+            "platforms": {"facebook": {"discovered": 3, "image_count": 5}}})
+        observed = batch_budget_minutes(schedule, 2, {
+            "platforms": {}, "last_success_duration_minutes": 180})
+        self.assertGreater(backlog, baseline)
+        self.assertGreaterEqual(observed, 183)
+
+    def test_reconcile_schedule_uses_last_successful_batch_duration(self):
+        class Latest:
+            @staticmethod
+            def uniform(_lower, upper):
+                return upper
+
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            state = Path(td) / "state"
+            state.mkdir()
+            config._d["paths"]["state"] = str(state)
+            (state / "processing_state.json").write_text(json.dumps({
+                "version": 1, "status": "ready", "platforms": {},
+                "last_success_duration_minutes": 180,
+            }), encoding="utf-8")
+            now = utc(18)  # Shanghai 02:00.
+            runner = Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
+                               config=config, clock=lambda: now, rng=Latest())
+            planned = runner.schedule.local(runner._next_reconcile(now))
+            duty = datetime.combine(planned.date(), runner.schedule.parse_time(
+                runner.schedule.on_duty_window[0]), planned.tzinfo)
+            self.assertLessEqual(planned, duty - timedelta(minutes=183))
+
+    def test_existing_reconcile_draw_tightens_when_batch_history_grows(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            state = Path(td) / "state"
+            state.mkdir()
+            config._d["paths"]["state"] = str(state)
+            now = utc(18)
+            with Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
+                           config=config, clock=lambda: now,
+                           rng=random.Random(4)) as runner:
+                before = parse_ts(runner.state["jobs"]["reconcile:facebook"]["next_at"])
+                (state / "processing_state.json").write_text(json.dumps({
+                    "version": 1, "status": "ready", "platforms": {},
+                    "last_success_duration_minutes": 180,
+                }), encoding="utf-8")
+                runner._ensure_jobs(now)
+                after = parse_ts(runner.state["jobs"]["reconcile:facebook"]["next_at"])
+                self.assertLess(after, before)
+                local = runner.schedule.local(after)
+                duty = datetime.combine(local.date(), runner.schedule.parse_time(
+                    runner.schedule.on_duty_window[0]), local.tzinfo)
+                self.assertLessEqual(local, duty - timedelta(minutes=183))
 
     def test_delta_first_screen_and_window_minimum(self):
         d = delta.DeltaConfig.load()
@@ -190,7 +267,11 @@ class MonitoringTests(unittest.TestCase):
             path = Path(td) / "not_created" / "scheduler.json"
             calls = []
             runner = Scheduler(path, lambda *args: calls.append(args), clock=lambda: utc(1))
-            self.assertEqual(len(runner.preview()["jobs"]), 4)
+            preview = runner.preview()
+            self.assertEqual(len(preview["jobs"]), 4)
+            self.assertEqual(set(preview["posting_distribution"]["coverage_by_archive"]),
+                             set(runner.config.active_accounts()))
+            self.assertFalse(preview["posting_distribution"]["archive_coverage_complete"])
             self.assertFalse(path.parent.exists())
             self.assertEqual(calls, [])
 
@@ -210,6 +291,48 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(summary["by_hour"][22], 1)
             self.assertEqual(summary["on_duty"], 0)
             self.assertEqual(summary["off_duty"], 1)
+
+    def test_supported_previous_month_window_only_slows_outside_observed_hours(self):
+        from pipeline.scheduler import posting_distribution
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td)
+            rows = [
+                dict(post_id="before", created_at="2026-07-31T15:59:00Z", text="boundary",
+                     media=[dict(kind="video")]),
+                *[dict(post_id=f"sample-{i}", created_at=f"2026-08-{i + 1:02d}T01:30:00Z",
+                       text="image", media=[dict(kind="image")]) for i in range(10)],
+                dict(post_id="after", created_at="2026-09-01T00:00:00Z", text="boundary",
+                     media=[dict(kind="video")]),
+            ]
+            (path / "manifest.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+            scheduler = Scheduler(Path(td) / "scheduler.json", lambda *args: 0,
+                                  clock=lambda: utc(1), rng=random.Random(1))
+            summary = posting_distribution([path], scheduler.schedule, utc(1))
+            self.assertTrue(summary["archive_coverage_complete"])
+            self.assertEqual(summary["sample_count"], 10)
+            self.assertTrue(summary["adapted"])
+            self.assertGreaterEqual(summary["coverage_ratio"], 0.9)
+            self.assertEqual(summary["observed_window"], [9, 10])
+            scheduler.state = {"version": 1, "jobs": {}, "posting_distribution": summary}
+            self.assertEqual(scheduler._monitor_interval(utc(1)), 60)   # 上海 09:00，在观测窗内
+            self.assertEqual(scheduler._monitor_interval(utc(3)), 180)  # 上海 11:00，只允许降频
+            self.assertEqual(scheduler._monitor_interval(utc(15)), 180) # 上海 23:00，绝不提频
+
+    def test_incomplete_or_small_previous_month_sample_keeps_configured_plan(self):
+        from pipeline.scheduler import posting_distribution
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td)
+            rows = [dict(post_id=f"sample-{i}", created_at=f"2026-08-{i + 1:02d}T01:30:00Z",
+                         text="image", media=[dict(kind="image")]) for i in range(9)]
+            (path / "manifest.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+            scheduler = Scheduler(Path(td) / "scheduler.json", lambda *args: 0,
+                                  clock=lambda: utc(1), rng=random.Random(1))
+            summary = posting_distribution([path], scheduler.schedule, utc(1))
+            self.assertFalse(summary["archive_coverage_complete"])
+            self.assertFalse(summary["adapted"])
+            scheduler.state = {"version": 1, "jobs": {}, "posting_distribution": summary}
+            self.assertEqual(scheduler._monitor_interval(utc(1)), 60)
+            self.assertEqual(scheduler._monitor_interval(utc(11)), 180)
 
     def test_detect_launcher_never_uses_backfill_profile(self):
         from tools import start_chrome_detect
