@@ -1,6 +1,6 @@
 r"""审校台 HTTP 接口：归档读取、人工文案保存与即时检查。
 
-人工文案追加到 translated_human.jsonl。通过与不发尚未接通，明确返回 501；
+人工文案、本地化选择、审校状态与 ZIP 导出写入真实归档；排期需通过本机核验。
 历史原型 _fake_state.json 不参与任何请求。前端静态产物由本应用直接伺服。
 """
 from __future__ import annotations
@@ -18,8 +18,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.console import force_utf8                    # noqa: E402
-from web.api import reader, writer                     # noqa: E402
+from web.api import reader, writer, jobs, approval, calendar                     # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
+from core import review, translated, localization                     # noqa: E402
+from core.paid_model import FileLockBusy                 # noqa: E402
+from pipeline.engine import BudgetStopped              # noqa: E402
 from publish.compose import ComposeError               # noqa: E402
 
 # 每个可执行入口都要调一次：本机代码页是 936，uvicorn 的日志一旦被重定向到
@@ -28,6 +31,10 @@ from publish.compose import ComposeError               # noqa: E402
 force_utf8()
 
 app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
+
+app.include_router(jobs.router)
+app.include_router(approval.router)
+app.include_router(calendar.router)
 
 DIST = ROOT / "web" / "ui" / "dist"
 
@@ -38,14 +45,29 @@ async def archive_error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": "源内容无法安全读取，请检查归档后重试"})
 
 
+@app.exception_handler(BudgetStopped)
+@app.exception_handler(localization.LocalizationConflict)
+@app.exception_handler(review.ReviewConflict)
+@app.exception_handler(translated.HumanRevisionConflict)
+@app.exception_handler(FileLockBusy)
+async def review_conflict(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(localization.LocalizationValidationError)
+@app.exception_handler(review.ReviewValidationError)
+async def review_validation(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # ---------------------------------------------------------------------------
 # 只读端（真）
 # ---------------------------------------------------------------------------
 
 @app.get("/api/tasks")
-def get_tasks() -> JSONResponse:
+def get_tasks(status: str | None = None, tag: str | None = None, month: str | None = None) -> JSONResponse:
     """任务列表。契约见 PROTOTYPE_DESIGN.md 第 6 节。"""
-    payload = reader.list_tasks()
+    payload = reader.list_tasks(status=status, tag=tag, month=month)
     return JSONResponse(payload)
 
 
@@ -75,19 +97,56 @@ def get_task(task_id: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# 文案保存已接通；审校状态与排期保留明确的未实现响应
+# 文案、审校状态、分类与导出；排期由独立 approval 路由调用生产流程
 # ---------------------------------------------------------------------------
-
-@app.post("/api/tasks/{task_id:path}/approve")
-async def post_approve(task_id: str, request: Request) -> JSONResponse:
-    """真实排期尚未接通，不能把原型点击冒充发布成功。"""
-    raise HTTPException(status_code=501, detail="审校通过与排期尚未接通，当前仅支持保存人工文案")
-
 
 @app.post("/api/tasks/{task_id:path}/skip")
 async def post_skip(task_id: str, request: Request) -> JSONResponse:
-    """审校状态流转将由后续 review_items 真相源实现。"""
-    raise HTTPException(status_code=501, detail="不发与挂起等审校状态尚未接通，当前仅支持保存人工文案")
+    body = await _json_body(request)
+    return JSONResponse(writer.review_action(task_id, "skipped", **_review_input(body)))
+
+
+@app.post("/api/tasks/{task_id:path}/review")
+async def post_review(task_id: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    return JSONResponse(writer.review_action(task_id, body.get("action"), **_review_input(body)))
+
+
+@app.post("/api/tasks/{task_id:path}/export")
+async def post_export(task_id: str, request: Request) -> Response:
+    body = await _json_body(request)
+    options = _review_input(body)
+    data, filename = writer.export_post(task_id,
+        source_text_sha256=options["source_text_sha256"], review_revision=options["review_revision"],
+        handoff_url=options["handoff_url"])
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": 'attachment; filename="%s"' % filename,
+        "Cache-Control": "no-store",
+    })
+
+
+@app.put("/api/tasks/{task_id:path}/tags")
+async def put_tags(task_id: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    digest = _source_digest(body)
+    revision = body.get("tags_revision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+        raise HTTPException(status_code=400, detail="分类标签版本无效，请刷新后重试")
+    return JSONResponse(writer.save_tags(task_id, body.get("tags"),
+                         source_text_sha256=digest, tags_revision=revision))
+
+
+@app.put("/api/tasks/{task_id:path}/localization")
+async def put_localization(task_id: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    human_revision = body.get("human_revision")
+    local_revision = body.get("localization_revision")
+    for revision in (human_revision, local_revision):
+        if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+            raise HTTPException(status_code=400, detail="文案版本无效，请重新打开这篇")
+    return JSONResponse(writer.save_localization(task_id, body,
+        source_text_sha256=_source_digest(body), human_revision=human_revision,
+        review_revision=_state_revision(body), localization_revision=local_revision))
 
 
 @app.put("/api/tasks/{task_id:path}/text_de")
@@ -97,14 +156,13 @@ async def put_text_de(task_id: str, request: Request) -> JSONResponse:
     text = body.get("text_de")
     if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=400, detail="text_de 必须是非空字符串")
-    digest = body.get("source_text_sha256")
-    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise HTTPException(status_code=400, detail="缺少有效源文版本，请重新打开这篇后保存")
+    digest = _source_digest(body)
     revision = body.get("human_revision")
     if revision is not None and (not isinstance(revision, str) or not revision.strip()):
         raise HTTPException(status_code=400, detail="人工文案版本无效，请重新打开这篇后保存")
     return JSONResponse(writer.save_text_de(
-        task_id, text, source_text_sha256=digest, human_revision=revision))
+        task_id, text, source_text_sha256=digest, human_revision=revision,
+        review_revision=_state_revision(body)))
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +186,8 @@ async def post_check(task_id: str, request: Request) -> JSONResponse:
     if not isinstance(text_de, str):
         raise HTTPException(status_code=400, detail="text_de 必须是字符串")
     return JSONResponse(
-        {"highlights": reader.build_highlights(detail["text"]["en"], text_de)})
+        {"highlights": reader.build_highlights(
+            detail["localization"]["source_body"] if body.get("body_only") else detail["text"]["en"], text_de)})
 
 
 async def _json_body(request: Request) -> dict:
@@ -137,6 +196,26 @@ async def _json_body(request: Request) -> dict:
     except (ValueError, UnicodeError):
         return {}
     return body if isinstance(body, dict) else {}
+
+
+def _source_digest(body: dict) -> str:
+    digest = body.get("source_text_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(status_code=400, detail="缺少有效源文版本，请重新打开这篇后保存")
+    return digest
+
+
+def _state_revision(body: dict) -> str | None:
+    revision = body.get("review_revision")
+    if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+        raise HTTPException(status_code=400, detail="审校状态版本无效，请刷新后重试")
+    return revision
+
+
+def _review_input(body: dict) -> dict:
+    return {"source_text_sha256": _source_digest(body), "review_revision": _state_revision(body),
+            "reason": body.get("reason", ""), "wake_at": body.get("wake_at"),
+            "handoff_url": body.get("handoff_url", "")}
 
 
 # ---------------------------------------------------------------------------

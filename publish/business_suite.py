@@ -30,7 +30,7 @@ import time
 import hashlib
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -183,6 +183,17 @@ class ScheduledBaseline:
 
 
 @dataclass(frozen=True)
+class RemotePlannerCard:
+    """Planner 卡片的原始展示及详情弹窗证明的渠道；空渠道表示未识别。"""
+
+    at: datetime
+    channels: tuple[str, ...] = ()
+    remote_ids: tuple[tuple[str, str], ...] = ()
+    rendered: str = ""
+    card_sha256: str = ""
+
+
+@dataclass(frozen=True)
 class RemoteSlotInventory:
     """一次 Planner 读取的槽位与它实际覆盖的 UI 日期范围。"""
 
@@ -190,8 +201,31 @@ class RemoteSlotInventory:
     ui_timezone: str
     visible_start: date | None = None
     visible_end: date | None = None
+    cards: tuple[RemotePlannerCard, ...] = ()
+    cards_loaded: bool = False
+
+    @property
+    def channels_complete(self) -> bool:
+        """旧式仅时刻读取不能充当已核对过渠道的空日历。"""
+        return (self.cards_loaded
+                and all(card.channels and set(card.channels) <= {"facebook", "instagram"}
+                        for card in self.cards)
+                and {card.at.timestamp() for card in self.cards}
+                == {item.timestamp() for item in self.occupied})
+
+    def occupied_for_channel(self, channel: str) -> tuple[datetime, ...]:
+        if channel not in {"facebook", "instagram"}:
+            raise ValueError("未知目标渠道：%s" % channel)
+        if not self.channels_complete:
+            raise ProbeRequired("Planner 渠道信息不完整，不能把未识别卡片当作空档")
+        # UTC 时间戳去重，避免同一 ZoneInfo 的 fold 比较吞掉回拨时刻。
+        selected = {card.at.timestamp(): card.at for card in self.cards
+                    if channel in card.channels}
+        return tuple(selected[key] for key in sorted(selected))
 
     def covers(self, slots: tuple[datetime, ...] | list[datetime]) -> bool:
+        if any(slot.tzinfo is None or slot.utcoffset() is None for slot in slots):
+            raise ValueError("Planner 覆盖范围只能判断带时区的时刻")
         if self.visible_start is None or self.visible_end is None:
             return False
         zone = resolve_ui_timezone(self.ui_timezone)
@@ -1718,8 +1752,13 @@ async def _visible_calendar_range(page, spec: EvidenceSignal
 async def read_remote_slot_inventory(
         page, *, ui_timezone: str, business_timezone: str,
         timeout: float = DEFAULT_UI_TIMEOUT,
-        card_spec: EvidenceSignal | None = None) -> RemoteSlotInventory:
-    """读取占用槽及当前 DOM 被证明覆盖的 UI 日期区间。"""
+        card_spec: EvidenceSignal | None = None,
+        include_cards: bool = False) -> RemoteSlotInventory:
+    """读取已证明覆盖的 UI 日期；include_cards 额外只读已有详情弹窗。
+
+    卡片正文可提及任意渠道，不能用它猜渠道。详情弹窗没有可靠渠道证据时
+    保留空 channels；月历仍能展示，按渠道判空档则失败闭合。
+    """
     production_evidence = card_spec is None
     spec = card_spec or require_readback_evidence()
     required = ("datetime_regex", "date_format", "time_format")
@@ -1748,7 +1787,8 @@ async def read_remote_slot_inventory(
         page, spec, timeout=timeout, loaded_spec=loaded_spec,
         empty_spec=empty_spec)
     visible = await _visible_calendar_range(page, spec)
-    occupied: set[datetime] = set()
+    occupied: dict[float, datetime] = {}
+    remote_cards: list[RemotePlannerCard] = []
     combined_format = "%s %s" % (
         spec.attributes["date_format"], spec.attributes["time_format"])
     for card in cards:
@@ -1776,14 +1816,25 @@ async def read_remote_slot_inventory(
                     "日历卡片时刻无法按已录证格式解析：%s" % exc) from exc
             first = naive.replace(tzinfo=ui_zone, fold=0)
             second = naive.replace(tzinfo=ui_zone, fold=1)
-            occupied.add(first.astimezone(business_zone))
+            if first.astimezone(timezone.utc).astimezone(ui_zone).replace(tzinfo=None) != naive:
+                raise PublishStepError("Planner 卡片时刻在 UI 时区的夏令时切换中不存在")
+            moments = [first.astimezone(business_zone)]
             if first.utcoffset() != second.utcoffset():
                 # UI 卡片没有 offset；回拨小时的两种绝对时刻都当作已占用。
-                occupied.add(second.astimezone(business_zone))
+                moments.append(second.astimezone(business_zone))
+            occupied.update((at.timestamp(), at) for at in moments)
+            if include_cards:
+                remote_ids = await _open_channel_dialogs(page, card, spec, timeout=timeout)
+                for at in moments:
+                    remote_cards.append(RemotePlannerCard(
+                        at=at, channels=tuple(sorted(remote_ids)),
+                        remote_ids=tuple(sorted(remote_ids.items())), rendered=raw,
+                        card_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
     return RemoteSlotInventory(
-        occupied=tuple(sorted(occupied)), ui_timezone=ui_timezone,
+        occupied=tuple(occupied[key] for key in sorted(occupied)), ui_timezone=ui_timezone,
         visible_start=(visible[0] if visible else None),
-        visible_end=(visible[1] if visible else None))
+        visible_end=(visible[1] if visible else None),
+        cards=tuple(remote_cards), cards_loaded=include_cards)
 
 
 async def read_remote_occupied_slots(

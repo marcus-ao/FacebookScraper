@@ -28,7 +28,7 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.capture import Collector, download_media, prune_captures  # noqa: E402
-from core.store import Archive, Media, Post                         # noqa: E402
+from core.store import Archive, Media, Post, iter_post_dirs         # noqa: E402
 import routes.delta as delta                                        # noqa: E402
 from routes.delta import (                                          # noqa: E402
     DeltaBlocked, DeltaConfig, blank_entry, budget_exhausted, delta_once,
@@ -51,9 +51,8 @@ NOW = datetime(2026, 8, 30, 9, 0, 0, tzinfo=timezone.utc)
 def test_cfg(**kw):
     """把所有等待时间清零：真睡的话这套测试要跑几分钟。"""
     base = dict(request_gap_seconds=0.0, first_screen_seconds=0.0,
-                max_scrolls=2, max_session_seconds=30.0, keep_captures=3,
-                start_jitter_minutes=45.0, failure_budget=3,
-                stale_after_hours=26.0, slowdown_stale_after_hours=72.0,
+                max_scrolls=2, max_session_seconds=30.0, keep_captures_days=3,
+                failure_budget=3,
                 _quiet_slowdown={"facebook": 14, "instagram": 7})
     base.update(kw)
     return DeltaConfig(**base)
@@ -251,7 +250,7 @@ with tempfile.TemporaryDirectory() as d:
     n1 = asyncio.run(delta_once(ctx, "instagram", "acme_us", arc, test_cfg()))
     check(n1.new == 1, "第一次跑：新增 1 篇")
     check(len(arc.rows()) == 1, "写进了 manifest")
-    post_dirs = [p for p in (Path(d) / "in_acme_us" / "posts").iterdir() if p.is_dir()]
+    post_dirs = list(iter_post_dirs(Path(d) / "in_acme_us"))
     check(len(post_dirs) == 1 and (post_dirs[0] / "post.json").exists(),
           "落进了每帖一个文件夹（J 组布局）")
     check(any(p.suffix == ".jpg" for p in post_dirs[0].iterdir()),
@@ -518,6 +517,8 @@ def run_due(pages, state, tmp, platforms=("facebook", "instagram")):
     class FC:
         archive_dir = Path(tmp)
         state_dir = Path(tmp)
+        detect_debug_port = 9224
+        detect_profile_dir = Path(tmp) / "detect"
 
         def __getitem__(self, key):
             return {"facebook": "acme_page", "instagram": "acme_us"}
@@ -527,7 +528,7 @@ def run_due(pages, state, tmp, platforms=("facebook", "instagram")):
         delta.cfg = lambda: FC()
         delta.notify = lambda t, m, **k: notices.append((t, m))
 
-        async def fake_attach():
+        async def fake_attach(**_kwargs):
             return FakePw(), FakeBrowser(), ctx
         delta.attach = fake_attach
         rc = asyncio.run(delta._run_due(list(platforms), test_cfg(), state,
@@ -669,7 +670,7 @@ with tempfile.TemporaryDirectory() as tmp:
     notices = []
     saved_attach, saved_notify = delta.attach, delta.notify
 
-    async def broken_attach():
+    async def broken_attach(**_kwargs):
         # core.chrome.attach() 的端口竞态/无 context 失败契约是 SystemExit，
         # 它不属于 Exception；这条防止兜底看似存在、真实失败却仍穿透。
         raise SystemExit("CDP context missing")
@@ -820,10 +821,10 @@ check(not budget_exhausted(e, 0), "预算设 0 表示不启用该保护")
 dcfg = test_cfg()
 quiet = blank_entry()
 quiet["consecutive_quiet_days"] = 10
-check(effective_stale_hours(quiet, dcfg, "instagram") == 72.0,
-      "IG 连续 10 天零新增（阈值 7）→ 降频到 72 小时")
-check(effective_stale_hours(quiet, dcfg, "facebook") == 26.0,
-      "同样 10 天，FB 阈值是 14 天 → 仍按 26 小时跑（两个账号节奏差一个量级）")
+check(effective_stale_hours(quiet, dcfg, "instagram", now=NOW) == 2.25,
+      "IG 连续 10 天零新增（阈值 7）→ 离岗频率，最小135分钟")
+check(effective_stale_hours(quiet, dcfg, "facebook", now=NOW) == 0.75,
+      "同样 10 天，FB 阈值是 14 天 → 在岗频率，最小45分钟")
 check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9,
       "阈值写成一个数时两个平台通用（向后兼容，不强制写成表）")
 # 断言的是"内联表能按平台解析出来"，**不要求两个值必须不同** ——
@@ -853,6 +854,9 @@ class Recorder:
 def run_main(argv, state, rec, cdp=True, tmp=None, launch_error=None):
     """跑 main()，但把睡眠、通知、Chrome、真实抓取全部换成记账。"""
     path = Path(tmp) / "delta_state.json"
+    for platform in delta.PLATFORMS:
+        if platform in state:
+            state[platform].setdefault("account", delta.cfg()["targets"][platform])
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     saved = (delta.state_path, delta.time.sleep, delta.notify,
              delta.cdp_ready, delta.launch, delta.asyncio.run)
@@ -860,7 +864,7 @@ def run_main(argv, state, rec, cdp=True, tmp=None, launch_error=None):
         delta.state_path = lambda: path
         delta.time.sleep = lambda s: rec.sleeps.append(s)
         delta.notify = lambda t, m, **k: rec.notices.append((t, m))
-        delta.cdp_ready = lambda _p: cdp
+        delta.cdp_ready = lambda _p, **_kw: cdp
         def fake_launch(*_a, **_kw):
             rec.launched.append(True)
             if launch_error is not None:
@@ -877,7 +881,7 @@ def run_main(argv, state, rec, cdp=True, tmp=None, launch_error=None):
 
 with tempfile.TemporaryDirectory() as tmp:
     rec = Recorder()
-    recent = delta.iso(delta.utcnow() - timedelta(hours=1))
+    recent = delta.iso(delta.utcnow() - timedelta(minutes=10))
     state = {"facebook": {**blank_entry(), "last_success": recent},
              "instagram": {**blank_entry(), "last_success": recent}}
     rc = run_main(["--if-stale"], state, rec, tmp=tmp)
@@ -891,7 +895,7 @@ with tempfile.TemporaryDirectory() as tmp:
              "instagram": {**blank_entry(), "last_success": old}}
     run_main(["--if-stale"], state, rec, tmp=tmp)
     check(len(rec.sleeps) == 1 and 0 <= rec.sleeps[0] <= 45 * 60,
-          "到期时才抖动，且在 0..start_jitter_minutes 之间")
+          "到期时才抖动，按当前窗口间隔乘抖动比例（最多45分钟）")
 
     draws = []
     for _ in range(3):

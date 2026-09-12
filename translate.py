@@ -25,8 +25,6 @@ import json
 import re
 import statistics
 import sys
-import time
-import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from contextlib import nullcontext
@@ -48,21 +46,22 @@ from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
 from core import paid_model                        # noqa: E402
 from core import paid_requests                     # noqa: E402
-from core.store import (Archive, ArchivePathError, account_dirs,  # noqa: E402
-                        assert_physical_direct_path, post_dirname)
+from core.store import Archive, account_dirs        # noqa: E402
+from core.store import post_dirname as post_dirname  # noqa: E402 兼容旧脚本
 from core.paid_model import FileLock                # noqa: E402
 # 译文产物的契约（写盘格式、"当前可用"判据、不可改内容规则）住在 core/：
 # 发布、调图、流水线三路都要读它，不该为此 import 本文件（连着 openai SDK
 # 和整个批处理循环）。本文件是**写方**，用的是同一份定义。
 from core.translated import (PROMPT_VERSION,        # noqa: E402
-                             SourceTextError, apply_money_mapping,
-                             extract_hashtags, extract_money_tokens,
+                             SourceTextError, apply_money_mapping as apply_money_mapping,
+                             extract_hashtags as extract_hashtags, extract_money_tokens as extract_money_tokens,
                              hashtags_preserved, load_translated,
-                             money_preserved, normalize_money_token,
-                             numeric_flags, render_glossary,
+                             money_preserved, normalize_money_token as normalize_money_token,
+                             numeric_flags as numeric_flags, render_glossary,
                              review_numeric_flags, source_text_sha256,
                              translation_is_current)
 from core.translated import append_translated as append_jsonl  # noqa: E402
+from core.localization import extract_urls, without_urls  # noqa: E402
 
 # 提示词模板。放在独立文件里，改翻译行为不用改 Python，营销同事也能改。
 TEMPLATE_PATH = ROOT / "prompts" / "translate_de.md"
@@ -183,7 +182,7 @@ def pick_style_examples(rows: list[dict], n: int, exclude_id: str | None = None,
     这点冗余远比缓存全失效划算。exclude_id 参数保留给调用方按需使用。
     """
     wanted_owner = (owner or "").strip().lower()
-    texts = [(r.get("text") or "").strip() for r in rows
+    texts = [without_urls(r.get("text") or "").strip() for r in rows
              if r.get("post_id") != exclude_id
              and (not wanted_owner
                   or (r.get("owner") or "").strip().lower() == wanted_owner)]
@@ -535,7 +534,7 @@ def _approx_tokens(text: str) -> int:
     return max(1, round(cjk * 0.6 + other * 0.3))
 
 
-def TranslationRunLock(path: Path) -> FileLock:   # noqa: N802（保留原名）
+def TranslationRunLock(path: Path) -> FileLock:   # noqa: N802 保留原名
     """整个付费批次单实例运行，防止双击两次造成同一帖子重复付费。"""
     return FileLock(path, error_type=SystemExit,
                     busy_message="另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
@@ -633,10 +632,12 @@ def resolve_scope(dirs: list[Path], *, post_ids: list[str] | None = None,
 
 def run_translate(s: Settings, translator: Translator, arc_base: Path,
                   limit: int | None, force: bool, dry_run: bool,
-                  scope: frozenset[str] | None = None) -> tuple[int, int]:
+                  scope: frozenset[str] | None = None, *,
+                  refine_instruction: str = "", refine_id: str = "",
+                  current_body: str = "", source_rows: list[dict] | None = None) -> tuple[int, int]:
     """翻译一个账号目录。返回 (成功数, 失败数)。"""
     arc = Archive(arc_base.parent, arc_base.name)
-    rows = arc.rows()
+    rows = arc.rows() if source_rows is None else source_rows
     out_path = arc_base / "translated.jsonl"
     done = load_translated(out_path)
     todo = pending(rows, done, force, scope)
@@ -664,6 +665,13 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
     account_owner = arc_base.name.split("_", 1)[-1].strip().lower()
     examples = pick_style_examples(rows, s.style_examples, owner=account_owner)
     system = build_system_prompt(s, examples)
+    if refine_instruction:
+        if not re.fullmatch(r"[0-9a-f]{32}", refine_id) or len(todo) != 1:
+            raise ValueError("文案优化必须指定唯一帖子和版本 ID")
+        system += ("\n\n本篇运营优化指令；仍须遵守以上金额、品牌和标签规则：\n"
+                   + json.dumps(without_urls(refine_instruction), ensure_ascii=False))
+        if current_body:
+            system += "\n当前德语正文供优化参考：\n" + json.dumps(without_urls(current_body), ensure_ascii=False)
     print(f"  提示词：{len(system)} 字符 / {len(examples)} 篇风格参照 / "
           f"称呼 {s.address_form} / 术语表 {len(s.glossary)} 条")
 
@@ -683,11 +691,12 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
             str(r.get("platform") or "source").strip().lower(), pid)
         paid_job_key = "translation:" + hashlib.sha256(
             (arc_base.name + "\0" + pid + "\0" + source_text_sha256(text)
-             + "\0" + str(PROMPT_VERSION)).encode("utf-8")).hexdigest()
+             + "\0" + str(PROMPT_VERSION)
+             + ("\0refine:" + refine_id if refine_instruction else "")).encode("utf-8")).hexdigest()
         if hasattr(translator, "set_paid_context"):
             translator.set_paid_context(paid_job_key, source_ref)
         try:
-            de = translator.translate(text, system)
+            de = translator.translate(without_urls(text), system)
         except Exception as e:
             print(f"  [{i}/{len(todo)}] {pid}  失败：{type(e).__name__}: {e}")
             bad += 1
@@ -707,9 +716,11 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
             continue
 
         consecutive_failures = 0
-        money_violations = money_preserved(text, de)
-        hashtag_violations = hashtags_preserved(text, de)
+        money_violations = money_preserved(without_urls(text), de)
+        hashtag_violations = hashtags_preserved(without_urls(text), de)
         violations = money_violations + hashtag_violations
+        if extract_urls(de):
+            violations.append('模型新增了网页链接，请在链接区确认德国站落地页；本次结果未写盘')
         if violations:
             if hasattr(translator, "finalize_paid"):
                 translator.finalize_paid(
@@ -736,6 +747,8 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         paid_request_id = str(getattr(translator, "paid_request_id", "") or "")
         if paid_request_id:
             row["paid_request_id"] = paid_request_id
+        if refine_instruction:
+            row.update(refine_instruction=refine_instruction, refine_id=refine_id)
         try:
             append_jsonl(out_path, row)
         except BaseException:
@@ -1028,6 +1041,12 @@ def main(argv=None) -> int:
 
     root = cfg().archive_dir
     dirs = account_dirs(root, a.account)
+    active = set(cfg().active_accounts())
+    if a.account is None:
+        dirs = [d for d in dirs if d.name in active]
+    elif a.account not in active and not (a.estimate or a.show_prompt or a.dry_run):
+        print(f"[!] {a.account} 已冻结为历史归档，只允许离线查看，不再翻译或改写。")
+        return 2
 
     if a.account and not dirs:
         avail = [p.name for p in account_dirs(root)]

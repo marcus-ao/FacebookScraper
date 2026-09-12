@@ -492,6 +492,8 @@ with tempfile.TemporaryDirectory() as folder:
     account = bs.AccountContext(True, TARGET_FB, True, TARGET_IG, True, True)
     with patch.object(workflow, "cfg", return_value=config), \
             patch.object(workflow, "attach", AsyncMock(return_value=(session, None, session))), \
+            patch.object(workflow.channels, "require_independent_channel_evidence", return_value=None), \
+            patch.object(workflow, "check_live_slot", AsyncMock()), \
             patch.object(bs, "require_submission_evidence", return_value=None), \
             patch.object(bs, "require_readback_evidence", return_value=None), \
             patch.object(bs, "require_account_context_evidence", return_value=object()), \
@@ -652,6 +654,38 @@ check(inventory.covers([when])
       and not inventory.covers([
           datetime.fromisoformat("2026-12-15T10:00:00+01:00")]),
       "远端占位回读同时冻结当前 Planner 可见月份，区间外槽位整批失败闭合")
+
+with_cards = asyncio.run(bs.read_remote_slot_inventory(
+    PlannerPage(entries_for()), ui_timezone="America/Los_Angeles",
+    business_timezone="Europe/Berlin", card_spec=card_spec, include_cards=True))
+check(with_cards.channels_complete and len(with_cards.cards) == 2
+      and with_cards.occupied_for_channel("facebook") == (when,)
+      and with_cards.occupied_for_channel("instagram") == (when,),
+      "月历可选读取真实详情渠道，保留不同渠道的两张原始卡片")
+unknown_cards = asyncio.run(bs.read_remote_slot_inventory(
+    PlannerPage([("%s %s" % (poison, ENTRY_MOMENT), "")]),
+    ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
+    card_spec=card_spec, include_cards=True))
+check(len(unknown_cards.cards) == 1 and not unknown_cards.channels_complete
+      and unknown_cards.cards[0].channels == (),
+      "月历正文里提及FB/IG不能证明渠道；未知卡片仍保留但不能判为空档")
+same_zone_fold = asyncio.run(bs.read_remote_slot_inventory(
+    PlannerPage([("anything November 01, 2026, 1:00 AM", "")], month="November"),
+    ui_timezone="America/Los_Angeles", business_timezone="America/Los_Angeles",
+    card_spec=card_spec))
+check(len(same_zone_fold.occupied) == 2,
+      "展示时区与UI时区相同时也保留回拨小时的两个绝对占位")
+try:
+    asyncio.run(bs.read_remote_slot_inventory(
+        PlannerPage([("anything March 08, 2026, 2:30 AM", "")], month="March"),
+        ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
+        card_spec=card_spec))
+except bs.PublishStepError:
+    nonexistent_card_blocked = True
+else:
+    nonexistent_card_blocked = False
+check(nonexistent_card_blocked,
+      "Planner卡片出现UI时区不存在的夏令时时刻时不可推算成真实排期")
 
 try:
     asyncio.run(bs.read_remote_occupied_slots(

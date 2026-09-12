@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo
 from core.chrome import attach
 from core.config import cfg
 from publish import business_suite as bs
-from publish import journal
+from publish import journal, channels
+from publish import planning
 
 
 @dataclass(frozen=True)
@@ -19,11 +20,22 @@ class AttemptOutcome:
     message: str
 
 
+def _independent_refs(post, source_refs: tuple[str, ...],
+                       target_channels: tuple[str, ...]) -> tuple[str, ...]:
+    canonical = journal.source_ref(post.platform, post.post_id)
+    refs = journal.effective_source_refs(post.platform, post.post_id, source_refs)
+    if refs != (canonical,) or target_channels != (post.platform,):
+        raise bs.PublishStepError('新发布尝试只能覆盖本篇来源及其对应渠道；旧跨平台覆盖记录只作历史保留。')
+    return refs
+
+
 def new_attempt(post, when: datetime, *, ui_timezone: str,
                 source_refs: tuple[str, ...] = (),
-                target_channels: tuple[str, ...] = ("facebook", "instagram")
+                target_channels: tuple[str, ...] | None = None
                 ) -> journal.PublishAttempt:
     """为一次浏览器尝试冻结所有内容指纹。"""
+    target_channels = target_channels or (post.platform,)
+    source_refs = _independent_refs(post, source_refs, target_channels)
     return journal.PublishAttempt(
         post_id=post.post_id,
         platform=post.platform,
@@ -62,15 +74,29 @@ async def _screenshot(page, attempt_id: str, phase: str, *,
     return str(target)
 
 
+async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeout: float):
+    """在单次提交意图落盘前再读远端；缓存从不参与最终裁决。"""
+    inventory = await bs.read_remote_slot_inventory(page, ui_timezone=ui_timezone,
+        business_timezone='Europe/Berlin', timeout=timeout, include_cards=True)
+    decision = planning.evaluate_slot(when, post.platform, inventory,
+        now=datetime.now().astimezone(), window=planning.configured_window(post.platform))
+    if not decision.allowed:
+        alternatives = '、'.join(value.isoformat() for value in decision.suggestions)
+        raise bs.PublishStepError('提交前时刻复核未通过（%s）；未自动顺延。可选时刻：%s'
+                                  % (decision.reason, alternatives or '当前可见范围内暂无可用时刻'))
+
+
 async def _execute_unlocked(
         post, when: datetime, *, ui_timezone: str, timeout: float,
         stamp: str, submit_enabled: bool,
         source_refs: tuple[str, ...] = (),
-        target_channels: tuple[str, ...] = ("facebook", "instagram")
+        target_channels: tuple[str, ...] | None = None
         ) -> AttemptOutcome:
     """执行 G2–G6c；不登录、不清草稿、不取消排期、不关闭用户 Chrome。"""
     c = cfg()
+    target_channels = target_channels or (post.platform,)
     c.assert_publish_chrome_isolated()
+    channels.require_independent_channel_evidence(target_channels)
     bs.assert_ui_time_unambiguous(when, ui_timezone)
     if submit_enabled:
         # 必须在附着浏览器前证明三类证据都已回填。
@@ -188,6 +214,9 @@ async def _execute_unlocked(
         if not submit_enabled:
             return AttemptOutcome(0, prepared, "已准备，停在提交前")
 
+        step = "提交前实时复核同渠道间隔"
+        await check_live_slot(planner_page or page, post, when,
+                              ui_timezone=ui_timezone, timeout=timeout)
         step = "G6 单次提交"
         # 先把“即将允许一次点击”的意图耐久化为禁止自动重试态，再调用 click。
         # 否则机器恰好在 click 已送达、SubmitResult/下一行 journal 尚未落盘时
@@ -306,12 +335,12 @@ async def _execute_unlocked(
 async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
                   stamp: str, submit_enabled: bool,
                   source_refs: tuple[str, ...] = (),
-                  target_channels: tuple[str, ...] = ("facebook", "instagram"),
+                  target_channels: tuple[str, ...] | None = None,
                   force: bool = False) -> AttemptOutcome:
     """在全局发布锁内重查 journal，再执行一次浏览器尝试。"""
     c = cfg()
-    refs = journal.effective_source_refs(
-        post.platform, post.post_id, source_refs)
+    target_channels = target_channels or (post.platform,)
+    refs = _independent_refs(post, source_refs, target_channels)
     with journal.PublishOperationLock(
             Path(c.state_dir) / "publish.lock", allow_reentrant=True):
         done = journal.scheduled_record_for_refs(c.state_dir, refs)

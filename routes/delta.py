@@ -1,24 +1,8 @@
-r"""每日增量：**登录态 + CDP 附着**。对应实施计划的 C 组。
+r"""登录态监测：常规只取首屏，reconcile 复用同一路径做每日随机深扫。
 
-与 routes\backfill.py 的差别不是"更快"或"更自动"，而是**频次**：
-回填带着小号的登录态跑一次，增量每天跑。封号风险因此是「累积性敞口」，
-而抓取小号被封是本项目**唯一不可恢复的失败模式**——回填与增量会同时断掉。
-
-> 2026-08-30：原设计是"增量完全登出、没有可封的东西"。实测 + 用户确认，
-> FB/IG 在没有登录态时直接报错（对公开账号请求 `web_profile_info` 首次即 429），
-> 登出这条腿不存在。该实现已于 2026-09-02 删除（git 历史可查）。
-
-因此下面每一处看着"保守到没必要"的地方——只滚两屏、随机延迟、异常即停、
-失败预算、零新增降频——都是在为"每天都要来一次"买保险。
-**不要因为"跑得挺好"就把它们优化掉**：这类风险的反馈是延迟的，且只反馈一次。
-
-当前实现范围：
-    C2  Instagram 登录态增量  已实现
-    C3  Facebook  登录态增量  已实现
-    C4  增量的媒体下载        已实现（走浏览器请求栈）
-    C5  运行状态记录          已实现（state/delta_state.json）
-    C6  主入口                已实现（--platform / --dry-run / --if-stale）
-    C7  累积风险缓解          已实现，**是方案的组成部分不是可选项**
+两种扫描均附着 detect 专用 Chrome；回填与发布各用自己的 profile。
+所有登录由人完成。随机触发、有限深度、异常即停、失败预算与安静账号降频
+仍是无人值守的必要边界。看到新内容后按原归档契约追加，后续处理由应用组装。
 """
 from __future__ import annotations
 
@@ -35,9 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.capture import (Collector, atomic_write_json, download_media,
-                          prune_captures)
+                          prune_captures_days)
 from core.chrome import attach, cdp_ready, launch
-from core.config import cfg, per_platform
+from core.config import MonitorSchedule, cfg, per_platform
 from core import integrity
 from core.integrity import parse_ts
 from core.notify import notify
@@ -64,17 +48,16 @@ def profile_url(platform: str, account: str) -> str:
 class DeltaConfig:
     """`[delta]` 的全部参数。**代码里不写死数字**（计划第 2 节）。"""
     request_gap_seconds: float = 8.0
-    stale_after_hours: float = 26.0
-    start_jitter_minutes: float = 45.0
-    max_scrolls: int = 2
+    max_scrolls: int = 0
     first_screen_seconds: float = 6.0
     max_session_seconds: float = 300.0
     failure_budget: int = 3
-    slowdown_stale_after_hours: float = 72.0
     autostart_chrome: bool = True
-    keep_captures: int = 7
+    keep_captures_days: int = 7
     min_own_posts: int = 3
     _quiet_slowdown: object = None
+    schedule: MonitorSchedule = field(default_factory=MonitorSchedule)
+    run_kind: str = "delta"
 
     @classmethod
     def load(cls, c=None) -> "DeltaConfig":
@@ -85,17 +68,15 @@ class DeltaConfig:
 
         return cls(
             request_gap_seconds=float(g("request_gap_seconds", 8.0)),
-            stale_after_hours=float(g("stale_after_hours", 26.0)),
-            start_jitter_minutes=float(g("start_jitter_minutes", 45.0)),
-            max_scrolls=int(g("max_scrolls", 2)),
+            max_scrolls=int(g("max_scrolls", 0)),
             first_screen_seconds=float(g("first_screen_seconds", 6.0)),
             max_session_seconds=float(g("max_session_seconds", 300.0)),
             failure_budget=int(g("failure_budget", 3)),
-            slowdown_stale_after_hours=float(g("slowdown_stale_after_hours", 72.0)),
             autostart_chrome=bool(g("autostart_chrome", True)),
-            keep_captures=int(g("keep_captures", 7)),
+            keep_captures_days=int(g("keep_captures_days", 7)),
             min_own_posts=int(g("min_own_posts", 3)),
             _quiet_slowdown=g("quiet_days_before_slowdown", 7),
+            schedule=MonitorSchedule.load(c),
         )
 
     def quiet_days_before_slowdown(self, platform: str) -> int:
@@ -152,6 +133,21 @@ def blank_entry() -> dict:
             "last_new_at": None, "last_new_count": 0,
             "consecutive_quiet_days": 0, "consecutive_failures": 0,
             "last_error": None}
+
+
+def bind_target_state(state: dict, c) -> None:
+    """换号不能继承旧账号的成功时刻/预算；原状态另存，便于历史排查。"""
+    for platform in PLATFORMS:
+        target = c["targets"][platform]
+        entry = state.setdefault(platform, blank_entry())
+        previous = entry.get("account")
+        # 唯一没有身份字段的历史 IG 状态属于已退休的 .tech。
+        if previous is None and platform == "instagram" and target == "neakasa.global":
+            previous = "neakasa.tech" if any(entry.get(k) for k in ("last_success", "last_run", "consecutive_failures")) else None
+        if previous and previous != target:
+            state.setdefault("retired_targets", {})[f"{platform}:{previous}"] = dict(entry)
+            entry = state[platform] = blank_entry()
+        entry["account"] = target
 
 
 def load_state(path: Path) -> dict:
@@ -264,16 +260,12 @@ def budget_exhausted(entry: dict, budget: int) -> bool:
     return int(entry.get("consecutive_failures") or 0) >= budget
 
 
-def effective_stale_hours(entry: dict, dcfg: DeltaConfig, platform: str) -> float:
-    """长期零新增就自动降频（C7「频率可降级」）。
-
-    实测 Instagram 已经连续 45 天没发新帖，天天全速跑没有任何收益，
-    却每天都在累积敞口。降频是这条路径上**唯一能直接降低风险**的旋钮。
-    """
+def effective_stale_hours(entry: dict, dcfg: DeltaConfig, platform: str,
+                          *, now: datetime | None = None) -> float:
+    """按当前上海窗口的最短随机间隔去重；安静账号白天也按离岗频率。"""
     threshold = dcfg.quiet_days_before_slowdown(platform)
-    if threshold > 0 and int(entry.get("consecutive_quiet_days") or 0) >= threshold:
-        return dcfg.slowdown_stale_after_hours
-    return dcfg.stale_after_hours
+    quiet = threshold > 0 and int(entry.get("consecutive_quiet_days") or 0) >= threshold
+    return dcfg.schedule.minimum_interval_minutes(now or utcnow(), quiet=quiet) / 60
 
 
 def stale_enough(entry: dict, now: datetime, hours: float) -> tuple[bool, str]:
@@ -283,7 +275,7 @@ def stale_enough(entry: dict, now: datetime, hours: float) -> tuple[bool, str]:
         return True, "还没有成功跑过"
     elapsed = (now - last).total_seconds() / 3600.0
     if elapsed < hours:
-        return False, "距上次成功 %.1f 小时，不足 %.0f 小时" % (elapsed, hours)
+        return False, "距上次成功 %.0f 分钟，不足 %.0f 分钟" % (elapsed * 60, hours * 60)
     return True, "距上次成功 %.1f 小时" % elapsed
 
 
@@ -417,19 +409,38 @@ class ScanResult:
     collab: int = 0
     # 被丢弃、但作者是已知合作方的那些（core.integrity.check_dropped_partners）
     suspect: list[dict] = field(default_factory=list)
+    skipped: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
         span = ("%s ~ %s" % (self.oldest_seen[:10], self.newest_seen[:10])
                 if self.newest_seen else "—")
-        return ("新增 %d 篇 · 修复旧帖 %d 篇 · 本账号 %d 篇（原创 %d · 合作 %d，%s）"
+        result = ("新增 %d 篇 · 修复旧帖 %d 篇 · 本账号 %d 篇（原创 %d · 合作 %d，%s）"
                 "· 丢弃 %d · 归档最新 %s"
                 % (self.new, self.upgraded, self.own, self.authored, self.collab, span,
                    self.rejected, self.newest_known[:10] or "—"))
+        return result + " · 发布范围外 " + " / ".join(
+            f"{label} {self.skipped.get(key, 0)}" for key, label in
+            (("video", "视频"), ("mixed_media", "混合"),
+             ("no_media", "无媒体"), ("no_text", "无正文")))
 
     def stale_view(self) -> bool:
         """看到的最新一篇比归档里最新的还旧 —— 强烈提示"没看到时间线"。"""
         return bool(self.newest_seen and self.newest_known
                     and self.newest_seen < self.newest_known)
+
+
+def scope_skip_counts(posts) -> dict[str, int]:
+    """观察到的内容分类；抓取仍留档，发布范围由下游另行判断。"""
+    counts = dict.fromkeys(("video", "mixed_media", "no_media", "no_text"), 0)
+    for post in posts:
+        kinds = {media.kind for media in post.media}
+        if not kinds:
+            counts["no_media"] += 1
+        elif "video" in kinds:
+            counts["mixed_media" if "image" in kinds else "video"] += 1
+        elif not (post.text or "").strip():
+            counts["no_text"] += 1
+    return counts
 
 
 async def delta_once(ctx, platform: str, account: str, arc: Archive,
@@ -457,11 +468,11 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
 
     # 解析之前无条件转储。回填那边这条兜底救过一次 40 分钟的人工滚动；
     # 增量重跑虽然便宜，但"解析器悄悄失效"与"这几天确实没发帖"在日志里
-    # 长得一模一样，没有原始响应就无从分辨。份数由 keep_captures 裁。
+    # 长得一模一样，没有原始响应就无从分辨。保留时间由 keep_captures_days 控制。
     if not dry_run:
         dump = arc.base / ("_capture_delta_%d.json" % int(time.time()))
         atomic_write_json(dump, col.payloads)
-        prune_captures(arc.base, dcfg.keep_captures)
+        prune_captures_days(arc.base, dcfg.keep_captures_days)
 
     posts = extract(col.payloads, platform, account, route="delta")
     if not posts:
@@ -492,7 +503,7 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         authored=n_authored, collab=len(posts) - n_authored, suspect=suspect,
         newest_seen=dates[-1] if dates else "", oldest_seen=dates[0] if dates else "",
         newest_known=max((r.get("created_at") or "" for r in known), default=""),
-        payloads=len(col.payloads))
+        payloads=len(col.payloads), skipped=scope_skip_counts(posts))
 
     # 「看到的自家帖子太少」是"没看到时间线"最可靠的信号。
     # ⚠️ 用篇数而不是"最新一篇的日期倒退"来判：后者在账号删掉最新一帖时会
@@ -595,7 +606,8 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                    path: Path, dry_run: bool) -> int:
     """附着一次 Chrome，把到期的平台依次跑完。返回退出码。"""
     try:
-        pw, browser, ctx = await attach()
+        c = cfg()
+        pw, browser, ctx = await attach(port=c.detect_debug_port, profile=c.detect_profile_dir)
     except (Exception, SystemExit) as e:
         # attach 在进入平台循环前失败；若让异常直接穿透，两个平台都会表现成
         # “从未运行”，失败预算和 --if-stale 也就全部失真。core.chrome.attach
@@ -626,8 +638,9 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 arc = Archive(c.archive_dir,
                               "%s_%s" % (platform[:2], account))
                 print("\n=== %s / %s ===" % (platform, account))
-                res = await delta_once(ctx, platform, account, arc, dcfg,
-                                       dry_run=dry_run)
+                res = await asyncio.wait_for(
+                    delta_once(ctx, platform, account, arc, dcfg, dry_run=dry_run),
+                    timeout=dcfg.max_session_seconds)
             except DeltaBlocked as e:
                 # C7「异常即停」：当次立即停止并告警，不重试、不换 UA、不绕。
                 # 继续试探是把"可能被注意到"变成"确定被注意到"。
@@ -641,6 +654,8 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                        "%s：%s（连续失败 %d 次，再失败 %d 次将停止自动运行）"
                        % (account, e, entry["consecutive_failures"], max(0, left)))
                 if e.hard:
+                    state["detect_hard_blocked"] = {
+                        "reason": str(e), "platform": platform, "recorded_at": iso(utcnow())}
                     # 剩下的平台也一起记一次失败：它们没跑，但"今天被拦了"
                     # 这件事必须体现在预算里，否则连续被拦时预算永远攒不满，
                     # 自动运行就永远停不下来。
@@ -687,6 +702,13 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
             if dry_run:
                 continue
             record_success(entry, utcnow(), res.new)
+            entry["account"] = account
+            entry["last_run_kind"] = dcfg.run_kind
+            entry["last_observed_skipped"] = res.skipped
+            if dcfg.run_kind == "reconcile":
+                entry["last_reconcile_at"] = entry["last_success"]
+                entry["last_reconcile_new_count"] = res.new
+                entry["reconcile_new_total"] = int(entry.get("reconcile_new_total", 0)) + res.new
             # D3：检查放在写完状态之后、存盘之前——它要读刚更新的
             # consecutive_quiet_days，而它自己的"报过了"标记也要一起落盘。
             run_integrity(arc, entry, platform, suspect=res.suspect)
@@ -694,7 +716,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
             quiet = entry["consecutive_quiet_days"]
             if quiet >= dcfg.quiet_days_before_slowdown(platform):
                 print("[i] 已连续 %d 天零新增，下次起按降频节奏（%.0f 小时一次）"
-                      % (quiet, dcfg.slowdown_stale_after_hours))
+                      % (quiet, dcfg.schedule.off_duty_interval_min / 60))
         return rc
     finally:
         try:
@@ -725,10 +747,11 @@ def _parse_args(argv):
     p.add_argument("--if-stale", action="store_true",
                    help="距上次成功不足阈值就直接退出（供计划任务的补跑触发器用）")
     p.add_argument("--no-jitter", action="store_true",
-                   help="跳过随机延迟。手工跑用，计划任务不要加")
+                   help="跳过入口延迟；手工运行或已持久随机排期的 scheduler 使用")
     p.add_argument("--reset-failures", action="store_true",
                    help="失败预算用尽后，人工确认已处理，用它清零")
     p.add_argument("--status", action="store_true", help="只打印状态，不抓取")
+    p.add_argument("--preview", action="store_true", help="离线查看窗口和配置，不接触浏览器")
     return p.parse_args(argv)
 
 
@@ -736,6 +759,9 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
                 state: dict, platforms: list[str]) -> int:
     """持有 :class:`DeltaRunLock` 后执行一次计划/手工增量。"""
     now = utcnow()
+    if state.get("detect_hard_blocked"):
+        print("[!] detect 会话已被登录墙/限流硬停；请人工检查后 --reset-failures。")
+        return 2
     due: list[str] = []
     blocked_by_budget: list[str] = []
     for platform in platforms:
@@ -749,7 +775,7 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
             print("    .venv\\Scripts\\python.exe -m routes.delta --reset-failures")
             continue
         if args.if_stale:
-            hours = effective_stale_hours(entry, dcfg, platform)
+            hours = effective_stale_hours(entry, dcfg, platform, now=now)
             run, why = stale_enough(entry, now, hours)
             if not run:
                 print("[i] %s 跳过：%s" % (platform, why))
@@ -766,24 +792,28 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
         print("没有到期的平台，本次不抓取。")
         return 2 if blocked_by_budget else 0
 
-    # C7「随机化触发时刻」：计划任务只能定固定时刻，抖动必须在这里做。
+    # 直接调用入口时也保留抖动；scheduler 已持久化随机时间，显式传 --no-jitter。
     # ⚠️ 顺序是**先判 stale 再抖动**——反过来的话每次唤醒都要先睡半小时
     # 才发现"其实不用跑"。
-    if not args.no_jitter and not args.dry_run and dcfg.start_jitter_minutes > 0:
-        delay = random.uniform(0, dcfg.start_jitter_minutes * 60)
+    if not args.no_jitter and not args.dry_run:
+        delay = random.uniform(0, dcfg.schedule.interval_minutes(now)
+                               * dcfg.schedule.jitter_ratio * 60)
         print("随机延迟 %.1f 分钟后开始（避免每天固定整点发起请求）..."
               % (delay / 60))
         time.sleep(delay)
 
-    port = cfg().debug_port
-    if not cdp_ready(port):
+    c = cfg()
+    c.assert_chrome_profiles_isolated()
+    port = c.detect_debug_port
+    profile = c.detect_profile_dir
+    if not cdp_ready(port, profile=profile):
         if dcfg.autostart_chrome:
             print("专用 Chrome 没在跑，正在拉起...")
             # 这不是自动登录：会话是人留在 profile 目录里的，这里只是把
             # 那个浏览器重新用起来（全项目红线 1 没有松动）。
             launch_error: Exception | SystemExit | None = None
             try:
-                launched = launch()
+                launched = launch(port=port, profile=profile)
             except (Exception, SystemExit) as e:
                 # launch 的 profile.mkdir / cfg.chrome_exe / Popen 都可能失败；
                 # core.chrome 也用 SystemExit 表达部分配置错误。两种形态必须
@@ -792,7 +822,7 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
                 launch_error = e
             if not launched:
                 msg = ("专用 Chrome 拉不起来（端口 %d 未就绪）。"
-                       "若端口被其它程序占用，改 config.toml 的 [chrome].debug_port"
+                       "请检查 config.toml 的 [detect].port 与探测专用 profile"
                        % port)
                 if launch_error is not None:
                     msg += "；%s：%s" % (
@@ -822,14 +852,22 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
     return run_rc if run_rc else (2 if blocked_by_budget else 0)
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     args = _parse_args(argv)
     # 运行分隔线由 Python 打，不由 .bat 的 echo %DATE% 打：
     # cmd 按控制台代码页（本机 936）写，会在一份 UTF-8 日志里插进 GBK 字节。
     # 输出被 run_delta.bat 追加进 state/delta.log，没有这行就分不清哪段是哪次跑的。
     print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
                                      or "(无参数)"))
-    dcfg = DeltaConfig.load()
+    dcfg = config or DeltaConfig.load()
+    if args.preview:
+        c = cfg()
+        c.assert_chrome_profiles_isolated()
+        print(f"目标：{', '.join(c.active_accounts())}；detect CDP={c.detect_debug_port}")
+        print(f"上海窗口 {dcfg.schedule.on_duty_window}；当前最小间隔 "
+              f"{dcfg.schedule.minimum_interval_minutes(utcnow()):g} 分钟；滚动 {dcfg.max_scrolls} 屏")
+        print(f"兜底截止余量 {dcfg.schedule.reconcile_deadline_margin_minutes():g} 分钟")
+        return 0
     path = state_path()
     platforms = list(PLATFORMS) if args.platform == "all" else [args.platform]
 
@@ -843,11 +881,13 @@ def main(argv=None) -> int:
             # 锁前读出的 state 可能已经被另一个计划任务改过；拿到锁后才读，
             # stale 判定和随后的原子写才能基于同一份最新状态。
             state = load_state(path)
+            bind_target_state(state, cfg())
             if args.reset_failures:
                 for platform in platforms:
                     entry = state.setdefault(platform, blank_entry())
                     entry["consecutive_failures"] = 0
                     entry["last_error"] = None
+                state.pop("detect_hard_blocked", None)
                 save_state(path, state)
                 print("已清零 %s 的失败计数。" % "、".join(platforms))
                 return 0

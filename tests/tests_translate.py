@@ -849,6 +849,9 @@ with tempfile.TemporaryDirectory() as tmp:
     class FakeConfig:
         archive_dir = root
 
+        def active_accounts(self):
+            return ("fa_acme", "in_acme")
+
         def get(self, section, key, default=None):
             return base_config.get(section, key, default)
 

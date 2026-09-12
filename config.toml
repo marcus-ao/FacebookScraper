@@ -7,93 +7,42 @@ exe = ""
 profile_dir = "~/.fbscraper-chrome"
 debug_port = 9222
 
+[detect]
+# 常规探测与兜底对账专用；人工登录一次，与回填和发布隔离。
+profile_dir = "~/.fbscraper-detect"
+port = 9224
+
 [targets]
 # 回填与增量的目标账号（US 站，2026-08-29 由用户提供）
 facebook = "neakasaofficial"       # facebook.com/<这里>
-instagram = "neakasa.tech"         # instagram.com/<这里>
+instagram = "neakasa.global"         # instagram.com/<这里>
 
 [backfill]
 # 人工滚动阶段的最长等待（秒）。到点自动收尾，防止忘了回车。
 max_session_seconds = 1800
 
 [delta]
-# ⚠️ 2026-08-30：增量方案从「完全登出」改为「登录态 + CDP 附着」（方案 B）。
-#    登出端点已关闭（FB/IG 无登录态直接报错），详见 IMPLEMENTATION_PLAN 第 0 节。
-#    **这个改变把封号风险从「一次性」变成了「累积性」**——下面那些看着像
-#    "保守到没必要"的参数，就是为这件事买的保险。调大之前先读 C7。
-
-# 计划任务里那个每日触发器的时刻（本地时间，24 小时制）。
-# ⚠️ 这只是**基准时刻**：程序内部还会再随机延迟 0..start_jitter_minutes 分钟，
-# 所以实际发起请求的时间不是这个整点——那正是 C7「随机化触发时刻」要的效果。
-# 改完要重新跑 `python -m tools.schedule install` 才生效。
-daily_time = "09:30"
-
-# 距上次成功超过这个小时数才真的跑（`--if-stale` 用）。
-# **增量的实际频率由这一项 + 计划任务的触发器决定**，不是由某个 runs_per_day
-# 决定 —— 那个键 2026-08-30 删掉了，因为没有任何代码读它，
-# 留一个改了不生效的旋钮比没有更糟（项目里已经因为 target_lang 犯过一次）。
-# 26 而不是 24：留 2 小时富余，免得每天同一时刻卡在边界上反复跳过。
-stale_after_hours = 26
-
-# 滚动分页之间的停顿下界（秒），上界取两倍。随机化本身比具体数值重要 ——
-# 匀速滚动是行为指纹。
+# 上海时区的运营作息；消息静默时段也引用这个窗口。
+on_duty_window = ["08:00", "19:00"]
+on_duty_interval_min = 60
+off_duty_interval_min = 180
+jitter_ratio = 0.25
+# 常规只取首屏；深扫每天独立一次，在 ±30 分钟、±1 屏内随机。
+max_scrolls = 0
+reconcile_at = "07:00"
+reconcile_jitter_min = 30
+reconcile_scrolls = 3
+# 两个平台总扫描上限3分钟，加25分钟处理，最晚07:58结束。
+reconcile_max_session_seconds = 90
+processing_budget_min = 25
 request_gap_seconds = 8
-
-# ---- C7「累积风险缓解」的参数。**代码已经真的读取它们**（2026-08-30 落地）----
-
-# 触发时刻随机化：计划任务定在基准时刻，程序内部再随机延迟 0..N 分钟。
-# 每天 09:00:00 整点发起请求是最容易被识别的模式之一。
-# ⚠️ 2026-09-03 曾为验证 assisted 链路临时改到 1，验证通过后已改回。
-#    以后再临时调小，记得当场改回来 —— 这条是 C7 的组成部分，不是调优项。
-start_jitter_minutes = 45
-
-# 抓取深度上限：只滚几屏。增量只需要看到最新几条，滚到底既慢又是明显的机器行为。
-# 2 屏 ≈ 首屏 + 两次翻页，对日更账号绰绰有余（FB 发帖中位间隔 1.0 天）。
-max_scrolls = 2
-
-# 打开主页后等首屏接口响应到齐的时间（秒）。goto 返回时它们通常还在路上。
 first_screen_seconds = 6
-
-# 单个平台一次抓取的硬上限（秒）。页面卡住时宁可放弃本次，
-# 也不要让计划任务里挂着一个永不退出的进程。
 max_session_seconds = 300
-
-# 连续失败达到这个次数就**停止自动运行**并要求人工确认
-# （处理完跑 `scripts\run_delta.bat --reset-failures` 清零）。
-# 会话失效时每天硬撞是最坏的一种行为。
 failure_budget = 3
-
-# 连续 N 天零新增就自动降频。
-# ⚠️ 同样在 2026-08-30 当天改过：原值 FB 14 / IG 7 是按"IG 已停更"定的，
-# 而修完合作帖判定后，**两个账号都是日更**（近一年间隔中位都是 1.0 天）。
-# 10 天没有任何新内容，对这两个账号都属于"真的安静下来了"。
-# 保留内联表写法：机制本身是对的，将来两边节奏分化时改一个数就行。
-# （写成内联表也是为了避开 TOML 子表的排序陷阱，见 [translate.glossary] 的警告。）
 quiet_days_before_slowdown = { facebook = 10, instagram = 10 }
-
-# 降频之后的间隔（小时）。72 = 三天一次。
-slowdown_stale_after_hours = 72
-
-# 发现专用 Chrome 没在跑时，自动把它拉起来（用户 2026-08-30 拍板）。
-# ⚠️ 这不是自动登录：会话是人留在 profile 目录里的，程序只是把那个浏览器
-# 重新用起来。改成 false 的话，Chrome 没开就跳过本次并告警。
 autostart_chrome = true
-
-# 增量每次会转储一份原始响应用于排查，只保留最近几份。
-# （回填的 `_capture_*.json` 不在此列 —— 那是离线重放的唯一输入，永不自动删。）
-keep_captures = 7
-
-# 一次抓取里至少应该看到几篇本账号的帖子。低于这个数就判定为
-# **"没拿到时间线"而不是"没有新帖"**，当次中止并告警。
-# ⚠️ 这道闸是 2026-08-30 首次实测补的：当时 IG 只打了一句"新增 0 篇"，
-# 而真相是它根本没看到时间线，两者在输出里完全一样。
-# 用篇数判而不是用"最新日期倒退"判：后者在账号删掉最新一帖时会天天误报。
-#
-# ⚠️ **"本账号的帖子"= 原创 + 合作帖**（`core.parse.on_timeline_of`）。
-# 这一点对 IG 是决定性的：实测增量看到的 36 篇里 **35 篇是合作帖、
-# 自己发的只有 1 篇**。所以合作帖判定一旦失效，这道闸会立刻拦下来
-# （1 < 3）——这是有意的，它比"安静地少抓几百篇"好得多。
-# 摘要行会把两者拆开报（`原创 N · 合作 M`），部分漂移也看得见。
+# 只清理超过保留期的增量响应；回填转储永久保留。
+keep_captures_days = 7
 min_own_posts = 3
 
 [integrity]
@@ -221,6 +170,7 @@ anglicism_policy = "moderate"
 "wet food"                  = "Nassfutter"
 
 [image]
+max_refine_per_media = 3  # 单张人工发起的优化次数上限；只读安全参数
 # ---- K 组：图内英文德语化（GPT-Image-2）。理由见 docs/HANDOFF.md 第 6 节 ----
 # ⚠️ 2026-08-31 用户拍板新增。这一项**推翻了**实施计划第 0 节原本
 #    「图内英文文字的德语替换（一期走人工处理）」那条排除，不是新增功能。
@@ -362,6 +312,8 @@ marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
 #   · @提及 / #标签 / URL / 二维码 / 条码 / 人名地名。
 
 [publish]
+ig_bio_url = ""  # 德国站稳定聚合页；业务配置后只读展示，空值不猜
+min_channel_gap_min = 90  # 同一目标渠道的排期间隔
 # ---- G 组：Business Suite 定时发布。真实 UI 见 docs/HANDOFF.md 第 5 节 ----
 # 范围（用户 2026-08-31 拍板）：FB DE Page + IG DE 同时发；**不补发历史**；
 # 只用最新几篇做端到端验证；上线后跟每日增量走。
@@ -471,6 +423,9 @@ require_all_media_de = true
 # L 组会往本段末尾加三个子表（price_map / trusted_owners / schedule_rule），
 # TOML 规则要求子表必须在段的最后 —— 子表头之后的键会全部归属子表，
 # 不再属于 [publish]。[translate.glossary] 已经为这条规则写过一次警告。
+
+[publish.link_map]
+# 英文落地页到德国站落地页的业务映射；Web 只读，单篇可确认覆盖。
 
 [publish.price_map]
 # 金额必须先由业务明确映射，assisted 才会花钱处理该帖。
@@ -606,3 +561,41 @@ daily_budget_usd = 5
 [paths]
 archive = "archive"
 state = "state"
+
+[feishu]
+# 管理员批准自建应用、配置两个接收组及可访问的审校台地址后再启用。
+# 密钥仅从 FEISHU_APP_ID / FEISHU_APP_SECRET 环境变量读取。
+enabled = false
+base_url = ""
+recipients = []
+technical_recipients = []
+
+[mirror]
+# 只向已授权的云盘目录创建不可覆盖快照；绝不从云盘回填本地。
+# 使用 FEISHU_APP_ID / FEISHU_APP_SECRET；获得目录写入权限后再启用。
+enabled = false
+root_folder_token = ""
+mirror_state = true
+state_interval_minutes = 60
+
+[heartbeat]
+# 外部服务负责发现缺席并告警；地址中的匿名凭据只放环境变量。
+enabled = false
+url_env = "HEARTBEAT_URL"
+interval_minutes = 5
+timeout_seconds = 3
+# 最长模型批次可能占用约25分钟；外部服务的缺席阈值也应覆盖正常处理耗时。
+stale_after_minutes = 45
+
+[calendar]
+# 核验发布浏览器的完整月历读取后再启用；刷新争用同一把发布锁，繁忙时跳过。
+enabled = false
+refresh_minutes = 60
+
+[network_evidence]
+# IPINFO_TOKEN 仅从环境变量读取。Lite 提供 IP/ASN，类型未知；Core 需相应服务权限。
+enabled = false
+tier = "lite"
+interval_minutes = 60
+history_size = 20
+timeout_seconds = 3

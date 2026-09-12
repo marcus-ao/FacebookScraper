@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -48,10 +48,11 @@ from core import paid_model                        # noqa: E402
 from core import paid_requests                      # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
                         account_dirs, assert_physical_direct_path,
-                        post_dirname, read_post_truth)
+                        post_directory, post_folder_matches_id, read_post_truth)
+from core.store import post_dirname as post_dirname  # noqa: E402 旧脚本公开入口
 # 这四个名字曾经是 `import translate`：为了判「这张图的译文还算不算数」，
 # 调图这一路要把翻译执行器整个拉起来。契约下沉到 core/ 之后就没这回事了。
-from core.translated import (image_translation, load_human_translated,  # noqa: E402
+from core.translated import (effective_translation, image_translation, load_human_translated,  # noqa: E402
                              load_human_translation_history, load_translated,
                              render_glossary)
 from core.paid_model import FileLock                # noqa: E402
@@ -86,6 +87,7 @@ IMAGE_CONFIG_KEYS = frozenset({
     "aspect_drift_warn_percent",
     "scale_warn_factor",
     "failure_budget",
+    "max_refine_per_media",
 })
 KEEP_VERBATIM_KEYS = frozenset({"promo_codes", "brands", "models", "events", "marks"})
 IMAGE_RATE_KEYS = frozenset({"text_input", "image_input", "image_output"})
@@ -160,6 +162,7 @@ class Settings:
         self.aspect_drift_warn_percent = self._number(raw, "aspect_drift_warn_percent")
         self.scale_warn_factor = self._number(raw, "scale_warn_factor")
         self.failure_budget = self._integer(raw, "failure_budget")
+        self.max_refine_per_media = self._integer(raw, "max_refine_per_media")
 
         rates = raw["cost_rates_usd_per_million"]
         if not isinstance(rates, Mapping):
@@ -235,6 +238,8 @@ class Settings:
                 "不是缩小线）")
         if self.failure_budget < 1:
             raise SystemExit("[image].failure_budget 必须 >= 1")
+        if self.max_refine_per_media < 1:
+            raise SystemExit("[image].max_refine_per_media 必须 >= 1")
         paid_model.validate_cost_rates("image", self.cost_rates, IMAGE_RATE_KEYS)
         if any(not isinstance(k, str) or not isinstance(v, str)
                or not k.strip() or not v.strip() for k, v in self.glossary.items()):
@@ -753,7 +758,7 @@ def _untrusted_text_de(text_de: str) -> str:
             + "\n</untrusted_text_de_reference>")
 
 
-def build_image_prompt(settings: Settings, text_de: str) -> str:
+def build_image_prompt(settings: Settings, text_de: str, *, refine_instruction: str = "") -> str:
     """渲染 ``prompts/image_de.md``；未知/缺失占位符在联网前失败。"""
     if not isinstance(text_de, str) or not text_de.strip():
         raise ValueError("当前帖子没有非空 text_de；K 组不做无译文降级")
@@ -786,6 +791,9 @@ def build_image_prompt(settings: Settings, text_de: str) -> str:
     for placeholder, value in substitutions:
         template = template.replace(placeholder, value)
     # 不扫描最终文本：外部 text_de 完全可以合法包含 ``{{TEXT_DE}}`` 字面量。
+    if refine_instruction:
+        template += ("\n\n本张图片的运营优化指令（仍须遵守以上型号、数字与还原规则）：\n"
+                     + json.dumps(refine_instruction, ensure_ascii=False))
     return template.strip()
 
 
@@ -936,18 +944,18 @@ def _valid_sha256(value: Any) -> bool:
 def _record_path_matches_key(post_id: str, media_index: int, out_rel: str) -> bool:
     """所有权记录必须绑定到自己的帖子目录、media_de 与两位媒体序号。"""
     pure = PurePosixPath(out_rel)
-    if (len(pure.parts) != 4 or pure.parts[0] != "posts"
-            or pure.parts[2] != "media_de"):
+    if (len(pure.parts) not in {4, 5} or pure.parts[0] != "posts"
+            or pure.parts[-2] != "media_de"):
         return False
-    filename = PurePosixPath(pure.parts[3])
-    if filename.stem != f"{media_index + 1:02d}" or filename.suffix.lower() not in {
-            ".jpg", ".jpeg", ".png", ".webp"}:
+    filename = PurePosixPath(pure.parts[-1])
+    if (not re.fullmatch(rf"{media_index + 1:02d}(?:_v[0-9a-f]{{32}})?", filename.stem)
+            or filename.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}):
         return False
-    safe_id = post_dirname(post_id, None).removeprefix("undated_")
-    folder = pure.parts[1]
-    return (folder == f"undated_{safe_id}"
-            or bool(re.fullmatch(
-                rf"\d{{4}}-\d{{2}}-\d{{2}}_\d{{4}}_{re.escape(safe_id)}", folder)))
+    folder = pure.parts[-3]
+    if (len(pure.parts) == 5 and pure.parts[1]
+            != (folder[:7] if not folder.startswith("undated_") else "undated")):
+        return False
+    return post_folder_matches_id(folder, post_id)
 
 
 def load_image_state(path: Path) -> ImageState:
@@ -982,7 +990,8 @@ def load_image_state(path: Path) -> ImageState:
                     or not isinstance(row.get("prompt_version"), int)
                     or not isinstance(row.get("model"), str) or not row["model"].strip()
                     or (model_verification is not None
-                        and model_verification not in {"response", "catalog"})
+                        and (not isinstance(model_verification, str)
+                             or model_verification not in {"response", "catalog"}))
                     or not isinstance(row.get("size_requested"), str)
                     or not isinstance(row.get("size_returned"), str)
                     or not isinstance(row.get("quality"), str)
@@ -1046,7 +1055,9 @@ def image_record_is_current(job: ImageJob, record: Mapping[str, Any] | None) -> 
             and record.get("source_sha256") == job.source_sha256
             and record.get("text_de_sha256") == job.text_de_sha256
             and record.get("prompt_version") == IMAGE_PROMPT_VERSION
-            and record.get("out_path") == job.out_rel)
+            and isinstance(record.get("out_path"), str)
+            and PurePosixPath(record["out_path"]).suffix == job.out_path.suffix
+            and _record_path_matches_key(job.post_id, job.media_index, record["out_path"]))
 
 
 def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
@@ -1055,17 +1066,15 @@ def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
     if raw is None:
         raise ValueError("图片 local_path 缺失或不是安全相对路径")
     pure = PurePosixPath(raw)
-    expected_dir = PurePosixPath(
-        "posts", post_dirname(str(row["post_id"]), row.get("created_at")))
+    post_dir = post_directory(arc_base, row)
+    expected_dir = PurePosixPath(post_dir.relative_to(arc_base).as_posix())
     if pure.parent != expected_dir:
         raise ValueError(
             f"图片 local_path 不在当前帖子目录：{raw}（预期 {expected_dir.as_posix()}/）")
 
     posts_dir = arc_base / "posts"
-    post_dir = posts_dir / expected_dir.name
     source = post_dir / pure.name
     assert_physical_direct_path(arc_base, posts_dir, kind="directory", label="posts 根目录")
-    assert_physical_direct_path(posts_dir, post_dir, kind="directory", label="帖子目录")
     assert_physical_direct_path(post_dir, source, kind="file", label="原图")
     if not source.is_file():
         raise ValueError(f"原图不存在：{raw}")
@@ -1074,9 +1083,8 @@ def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
 
 def _target_for_job(arc_base: Path, row: Mapping[str, Any], media_index: int,
                     output_format: str) -> tuple[Path, str]:
-    post_name = post_dirname(str(row["post_id"]), row.get("created_at"))
-    out_rel = PurePosixPath(
-        "posts", post_name, "media_de", f"{media_index + 1:02d}{_extension(output_format)}")
+    directory = post_directory(arc_base, row)
+    out_rel = PurePosixPath(directory.relative_to(arc_base).as_posix()) / "media_de" / f"{media_index + 1:02d}{_extension(output_format)}"
     out_path = arc_base.joinpath(*out_rel.parts)
     return out_path, out_rel.as_posix()
 
@@ -1147,7 +1155,8 @@ def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[s
                        record: Mapping[str, Any] | None, source_sha: str,
                        human_history: list[dict]) -> Mapping[str, Any]:
     """一张现有图沿用同源人工旧稿的生成依据；普通改正文不触发再次付费。"""
-    if (not current.get("is_human") or not isinstance(record, Mapping)
+    if (not isinstance(record, Mapping)
+            or not (current.get("is_human") or record.get("refine_id"))
             or record.get("source_sha256") != source_sha
             or record.get("prompt_version") != IMAGE_PROMPT_VERSION
             or not _record_output_exists(arc_base, record)):
@@ -1163,6 +1172,7 @@ def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[s
 def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                force: bool = False,
                media_index_filter: int | None = None,
+               allow_manual_refine: bool = False,
                report: Any = None) -> tuple[list[ImageJob], ImageState, RunStats]:
     """把帖子展开成图片任务；没有当前译文、人工覆盖或已完成项均不入队。
 
@@ -1189,7 +1199,10 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
         if post_id in human:
             # 人工审校以 post.json 为准；CLI 重读旧 manifest 不能把刚复核的稿判过期。
             row, _post_dir = read_post_truth(arc_base, row)
-        trans = image_translation(row, translated.get(post_id), human.get(post_id))
+        trans = ((effective_translation if allow_manual_refine else image_translation)(
+            row, translated.get(post_id), human.get(post_id)))
+        if trans is not None and trans.get("stale"):
+            trans = None
         if trans is None:
             image_count = sum(
                 1 for index, media in enumerate(row.get("media") or [])
@@ -1254,7 +1267,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 out_rel=out_rel,
             )
             manual = manual_override_paths(job, state)
-            if manual:
+            if manual and not allow_manual_refine:
                 stats.skipped_manual += 1
                 print(f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
                       + "、".join(path.name for path in manual))
@@ -1269,10 +1282,10 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
 
 
 def _write_output(job: ImageJob, validated: ValidatedImage,
-                  record: dict[str, Any], state: ImageState) -> None:
+                  record: dict[str, Any], state: ImageState, *, versioned: bool = False) -> None:
     """先 fsync 所有权记录，再原子替换图片，消除硬终止后的“假人工图”窗口。"""
     manual = manual_override_paths(job, state)
-    if manual:
+    if manual and not versioned:
         raise RuntimeError("API 返回期间出现人工德语图，已放弃写盘："
                            + "、".join(path.name for path in manual))
 
@@ -1296,7 +1309,7 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
             os.fsync(handle.fileno())
         # 生成期间人可能放入文件；在 replace 前再次以旧所有权集合判定。
         manual = manual_override_paths(job, state)
-        if manual:
+        if manual and not versioned:
             raise RuntimeError("写盘前发现人工德语图，已放弃覆盖："
                                + "、".join(path.name for path in manual))
         # 此时付费结果已在临时文件里完整 fsync 且通过全部硬闸。先把绑定输出哈希的
@@ -1309,11 +1322,16 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
         # JSONL fsync 本身有可见耗时。设计人员若恰在上一次检查之后放入同序号
         # 文件（含覆盖同名程序旧图），必须在原子替换前最后再判一次，不能覆盖。
         manual = manual_override_paths(job, state)
-        if manual:
+        if manual and not versioned:
             raise RuntimeError("所有权记录落盘后发现人工德语图，已放弃覆盖："
                                + "、".join(path.name for path in manual))
         assert_physical_direct_path(media_de, job.out_path, kind="file", label="德语图")
-        os.replace(temporary, job.out_path)
+        if versioned:
+            # 新版本只允许创建；与编辑中的人工文件或另一个任务重名就失败。
+            os.link(temporary, job.out_path)
+            temporary.unlink()
+        else:
+            os.replace(temporary, job.out_path)
         temporary = None
     finally:
         if temporary is not None:
@@ -1346,11 +1364,19 @@ def _scale_mark(job: ImageJob, settings: Settings) -> str:
 
 def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                  rows: list[dict], limit: int | None, force: bool,
-                 dry_run: bool, media_index_filter: int | None = None) -> RunStats:
+                 dry_run: bool, media_index_filter: int | None = None, *,
+                 refine_instruction: str = "", refine_id: str = "") -> RunStats:
     """处理一个账号；离线 dry-run 会完整建任务/渲染提示词但零 API、零写盘。"""
+    if refine_instruction and (not re.fullmatch(r"[0-9a-f]{32}", refine_id)
+                               or len(rows) != 1 or media_index_filter is None):
+        raise ValueError("图片优化必须指定唯一单张图片和版本 ID")
     jobs, state, stats = build_jobs(
         settings, arc_base, rows, force=force,
-        media_index_filter=media_index_filter)
+        media_index_filter=media_index_filter, allow_manual_refine=bool(refine_instruction))
+    if refine_instruction:
+        jobs = [replace(job, out_path=job.out_path.with_stem(job.out_path.stem + '_v' + refine_id),
+                        out_rel=str(PurePosixPath(job.out_rel).with_stem(
+                            PurePosixPath(job.out_rel).stem + '_v' + refine_id))) for job in jobs]
     if limit is not None:
         jobs = jobs[:limit]
     stats.queued = len(jobs)
@@ -1365,7 +1391,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
     for index, job in enumerate(jobs, 1):
         prompt = prompt_cache.get(job.post_id)
         if prompt is None:
-            prompt = build_image_prompt(settings, job.text_de)
+            prompt = build_image_prompt(settings, job.text_de, refine_instruction=refine_instruction)
             prompt_cache[job.post_id] = prompt
         size_string = f"{job.requested_size[0]}x{job.requested_size[1]}"
         scale_mark = _scale_mark(job, settings)
@@ -1377,7 +1403,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
 
         try:
             manual = manual_override_paths(job, state)
-            if manual:
+            if manual and not refine_instruction:
                 stats.skipped_manual += 1
                 print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
                       "跳过：调用前发现人工德语图")
@@ -1387,7 +1413,8 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             paid_job_key = "image:" + hashlib.sha256(
                 (job.account + "\0" + job.post_id + "\0"
                  + str(job.media_index) + "\0" + job.source_sha256 + "\0"
-                 + job.text_de_sha256 + "\0" + str(IMAGE_PROMPT_VERSION))
+                 + job.text_de_sha256 + "\0" + str(IMAGE_PROMPT_VERSION)
+                 + ("\0refine:" + refine_id if refine_instruction else ""))
                 .encode("utf-8")).hexdigest()
             if hasattr(editor, "set_paid_context"):
                 editor.set_paid_context(
@@ -1423,7 +1450,9 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             paid_request_id = str(getattr(editor, "paid_request_id", "") or "")
             if paid_request_id:
                 record["paid_request_id"] = paid_request_id
-            _write_output(job, validated, record, state)
+            if refine_instruction:
+                record.update(refine_instruction=refine_instruction, refine_id=refine_id)
+            _write_output(job, validated, record, state, versioned=bool(refine_instruction))
             if hasattr(editor, "finalize_paid"):
                 editor.finalize_paid(True, "localized image artifact fsynced")
             stats.succeeded += 1
@@ -1474,8 +1503,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         return []
 
     pairs: list[ReviewImagePair] = []
-    human_history = (load_human_translation_history(arc_base / "translated_human.jsonl")
-                     if translated.get("is_human") else {})
+    human_history = load_human_translation_history(arc_base / "translated_human.jsonl")
     for media_index, media in enumerate(media_list):
         if not isinstance(media, Mapping) or media.get("kind") != "image":
             continue
@@ -1718,7 +1746,7 @@ def main(argv=None) -> int:
     mode.add_argument("--dry-run", action="store_true",
                       help="列出将处理的图片与合法尺寸，零 API、零写盘")
     parser.add_argument("--account", default=None,
-                        help="只处理 archive/ 下一个账号目录，如 in_neakasa.tech")
+                        help="只处理 archive/ 下一个账号目录，如 in_neakasa.global")
     parser.add_argument("--limit", type=int, default=None,
                         help="所有账号合计最多处理 N 张图片")
     parser.add_argument(
@@ -1765,6 +1793,12 @@ def main(argv=None) -> int:
 
     root = cfg().archive_dir
     dirs = account_dirs(root, args.account)
+    active = set(cfg().active_accounts())
+    if args.account is None:
+        dirs = [path for path in dirs if path.name in active]
+    elif args.account not in active and not (args.estimate or args.show_prompt or args.dry_run):
+        print(f"[!] {args.account} 已冻结为历史归档，只允许离线查看，不再调用图片模型。")
+        return 2
     if args.account and not dirs:
         available = [path.name for path in account_dirs(root)]
         print(f"[!] archive/ 下没有账号目录 {args.account!r}。")

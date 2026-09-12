@@ -1,45 +1,53 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { api } from '../api.js'
-import { formatSchedule, PLATFORM_LABEL, STATUS_LABEL } from '../format.js'
+import { formatSchedule, formatWakeAt, PLATFORM_LABEL, STATUS_LABEL } from '../format.js'
 import Icon from './Icon.vue'
+import ReviewActions from './ReviewActions.vue'
 
 const props = defineProps({
   tasks: { type: Array, required: true },
   summary: { type: Object, required: true }
 })
-const emit = defineEmits(['open'])
-
-// ⛔ **不做「有告警」和「常规」两个 tab**（§10）：分 tab 的实际结果是只有第一个
-// 被看，第二个 tab 里的会被批量通过——那正好绕过了这个界面存在的意义。
-// 所以只有一个可开关的筛选，且默认关着，62 篇始终在同一个列表里。
+const emit = defineEmits(['open', 'changed'])
 const onlyAlerts = ref(false)
-
-const rows = computed(() => props.tasks.filter(
-  (t) => !onlyAlerts.value || t.hard_alerts.length > 0))
-
-// 一行的唯一职责：回答「我需不需要点开这篇」。所以显示的是异常，不是内容。
+const tab = ref('active')
+const selectedTag = ref('')
+const selectedMonth = ref('')
+const groupOf = (task) => task.status === 'snoozed' ? 'snoozed'
+  : ['scheduled', 'skipped', 'handed_off'].includes(task.status) ? 'done' : 'active'
+const tabs = computed(() => [
+  { id: 'active', label: '待处理' }, { id: 'snoozed', label: '已挂起' }, { id: 'done', label: '已处理' }
+].map((item) => ({ ...item, count: props.tasks.filter((t) => groupOf(t) === item.id).length })))
+const tags = computed(() => [...new Set(props.tasks.flatMap((t) => t.tags || []))].sort())
+const months = computed(() => [...new Set(props.tasks.map((t) => t.month).filter(Boolean))].sort().reverse())
+const rows = computed(() => props.tasks.filter((task) => {
+  return groupOf(task) === tab.value && (!onlyAlerts.value || task.hard_alerts.length > 0)
+    && (!selectedMonth.value || task.month === selectedMonth.value)
+    && (!selectedTag.value || (selectedTag.value === '__untagged__'
+      ? !(task.tags || []).length : (task.tags || []).includes(selectedTag.value)))
+}))
+const alertCount = computed(() => props.tasks.filter((t) => t.hard_alerts.length > 0).length)
 const isQuiet = (t) => t.hard_alerts.length === 0 && !t.risk_count && !t.author_flag
-const isDone = (t) => ['approved', 'scheduled', 'skipped'].includes(t.status)
-const canOpen = (t) => t.status !== 'not_ready'
+const isDone = (t) => ['approved', 'scheduled', 'skipped', 'handed_off'].includes(t.status)
 </script>
 
 <template>
   <div class="list-page">
     <div class="toolbar">
       <p class="count">
-        近 90 天图文帖 <strong>{{ summary.total }}</strong> 篇
+        近 90 天图文帖 <strong>{{ tasks.length }}</strong> 篇
       </p>
 
       <!-- §10 的那一条筛选。0 篇时不显示——一个永远是 0 的筛选器只是噪声。 -->
       <button
-        v-if="summary.with_hard_alerts > 0"
+        v-if="alertCount > 0"
         :class="['filter', { on: onlyAlerts }]"
         :aria-pressed="onlyAlerts"
         @click="onlyAlerts = !onlyAlerts"
       >
         <Icon name="alert" :size="14" />
-        {{ summary.with_hard_alerts }} 篇有硬闸告警
+        {{ alertCount }} 篇有硬闸告警
         <span>{{ onlyAlerts ? '· 显示全部' : '· 只看这些' }}</span>
       </button>
       <p v-else class="no-alerts">
@@ -47,6 +55,20 @@ const canOpen = (t) => t.status !== 'not_ready'
       </p>
     </div>
 
+    <div class="filters">
+      <div class="tabs" role="group" aria-label="审校进度">
+        <button v-for="item in tabs" :key="item.id" :class="['btn btn-sm', { selected: tab === item.id }]"
+          :aria-pressed="tab === item.id" @click="tab = item.id">{{ item.label }} {{ item.count }}</button>
+      </div>
+      <label>分类 <select v-model="selectedTag" aria-label="筛选分类">
+        <option value="">全部分类</option><option value="__untagged__">未分类</option>
+        <option v-for="tag in tags" :key="tag" :value="tag">{{ tag }}</option>
+      </select></label>
+      <label>月份 <select v-model="selectedMonth" aria-label="筛选月份">
+        <option value="">全部月份</option><option v-for="month in months" :key="month" :value="month">{{ month }}</option>
+      </select></label>
+    </div>
+    <p v-if="!rows.length" class="empty">当前筛选下没有帖子。</p>
     <ol class="rows">
       <li
         v-for="task in rows" :key="task.id"
@@ -89,7 +111,8 @@ const canOpen = (t) => t.status !== 'not_ready'
           </p>
 
           <p class="facts">
-            <span :class="['when', { firm: task.status === 'scheduled' }]">
+            <span v-if="task.status === 'snoozed'" class="when"><Icon name="clock" :size="13" /> 恢复：{{ formatWakeAt(task.review.wake_at) }}</span>
+            <span v-else :class="['when', { firm: task.status === 'scheduled' }]">
               <Icon name="calendar" :size="13" />
               <span v-if="task.schedule && task.status !== 'scheduled'">建议</span>
               {{ formatSchedule(task.schedule && task.schedule.at) || '暂无建议时刻' }}
@@ -99,33 +122,22 @@ const canOpen = (t) => t.status !== 'not_ready'
             <span class="dot">·</span>
             <span><Icon name="image" :size="13" /> {{ task.image_count }} 张图</span>
             <!-- 已处理过的才显示状态文字；待办的不显示，视觉区分已经够了。 -->
-            <template v-if="isDone(task) || ['not_ready', 'edited'].includes(task.status)">
+            <template v-if="task.status !== 'pending_review'">
               <span class="dot">·</span>
               <span class="status">{{ STATUS_LABEL[task.status] }}</span>
             </template>
           </p>
+          <p v-if="task.tags?.length" class="tags"><span v-for="tag in task.tags" :key="tag" class="tag tag-neutral">{{ tag }}</span></p>
         </div>
 
         <div class="actions">
           <button
-            class="btn btn-sm" :disabled="!canOpen(task)"
-            :title="canOpen(task) ? '' : '还没有译文，暂时无法审校'"
+            class="btn btn-sm"
             @click="emit('open', task.id)"
           >
-            <Icon name="eye" :size="13" /> 查看
+            <Icon name="eye" :size="13" /> {{ task.alerts?.some(item => item.code === 'unknown_collaborator') ? '查看并翻译' : '查看' }}
           </button>
-          <button
-            class="btn btn-sm btn-primary" disabled
-            title="审校通过与排期将在后续接通"
-          >
-            <Icon name="check" :size="13" /> 通过
-          </button>
-          <button
-            class="btn btn-sm btn-danger" disabled
-            title="不发与挂起等审校状态将在后续接通"
-          >
-            <Icon name="ban" :size="13" /> 这篇不发
-          </button>
+          <ReviewActions :detail="task" compact @changed="emit('changed', $event)" />
         </div>
       </li>
     </ol>
@@ -183,7 +195,7 @@ const canOpen = (t) => t.status !== 'not_ready'
 /* 干净本身就是信号——"这篇可以快速过"。所以干净的行**不加任何装饰**。 */
 .row.quiet { background: var(--card); }
 /* 已通过/已排期/不发的：整行变灰。视觉区分比多一列状态文字省地方。 */
-.row.done { opacity: .55; }
+.row.done { background: var(--muted); }
 .row.waiting { background: var(--muted); }
 
 .thumb {
@@ -218,4 +230,11 @@ const canOpen = (t) => t.status !== 'not_ready'
 .status { font-weight: 600; }
 
 .actions { display: flex; gap: var(--space-2); }
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
+.tabs { display: flex; gap: var(--space-1); }
+.selected { background: var(--primary); color: var(--primary-fg); }
+.filters label, .empty { font-size: 13px; color: var(--muted-fg); }
+.filters select { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: var(--card); color: var(--fg); }
+.tags { display: flex; gap: 4px; margin: 6px 0 0; flex-wrap: wrap; }
+.actions { flex-wrap: wrap; }
 </style>

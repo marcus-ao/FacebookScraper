@@ -178,13 +178,13 @@ with tempfile.TemporaryDirectory() as folder:
     original_global_config = cfg()
     config_module._cfg = verified_probe_config(original_global_config, state)
     fb = archive / "fa_neakasaofficial"
-    ig = archive / "in_neakasa.tech"
+    ig = archive / "in_neakasa.global"
     fb.mkdir(parents=True)
     ig.mkdir(parents=True)
     make_post(fb, "e2e-fb", "2026-09-01T13:00:00Z",
               "Autumn campaign is live. #Neakasa", "neakasaofficial")
     make_post(ig, "e2e-ig", "2026-09-01T15:00:00Z",
-              "Completely different caption about cats. #Cats", "neakasa.tech",
+              "Completely different caption about cats. #Neabot", "neakasa.global",
               tint=(210, 40, 30), pattern=5)
 
     boundary = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
@@ -282,6 +282,7 @@ with tempfile.TemporaryDirectory() as folder:
         visible_start=date(2026, 9, 1), visible_end=date(2026, 9, 30))
     with patch.object(A, "cfg", lambda: ArchiveOverride(cfg(), archive)), \
             patch.object(A, "attach", AsyncMock(return_value=(session, None, session))), \
+            patch.object(A.channels, "require_independent_channel_evidence", return_value=None), \
             patch.object(bs, "require_submission_evidence", return_value=None), \
             patch.object(bs, "require_readback_evidence", return_value=None), \
             patch.object(bs, "read_remote_slot_inventory", AsyncMock(return_value=inventory)), \
@@ -298,7 +299,7 @@ with tempfile.TemporaryDirectory() as folder:
     dirty = ig / "translated.jsonl"
     rows = [json.loads(line) for line in
             dirty.read_text(encoding="utf-8").splitlines() if line.strip()]
-    rows[-1]["text_de"] = "Deutscher Text ohne Hashtag."      # 抹掉 #Cats
+    rows[-1]["text_de"] = "Deutscher Text ohne Hashtag."      # 抹掉 #Neabot
     dirty.write_text("".join(json.dumps(item, ensure_ascii=False) + "\n"
                              for item in rows), encoding="utf-8")
     third = StageRunner(archive)
@@ -358,7 +359,7 @@ check(accepts(localize_images.main,
 submit_argv = [
     "--post-id", "__none__",
     "--at", datetime(2026, 9, 20, 10, tzinfo=timezone(timedelta(hours=2))).isoformat(),
-    "--account", "in_neakasa.tech",
+    "--account", "in_neakasa.global",
     "--submit", "--assume-yes", "--apply-price-map",
     "--source-ref", "instagram:__none__",
 ]

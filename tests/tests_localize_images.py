@@ -838,6 +838,9 @@ with tempfile.TemporaryDirectory() as scope_tmp:
     base_config = real_cfg()
 
     class FakeConfig:
+        def active_accounts(self):
+            return tuple(path.name for path in dirs)
+
         def __getitem__(self, key):
             return base_config[key]
 

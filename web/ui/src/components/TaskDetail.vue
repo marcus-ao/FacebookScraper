@@ -7,6 +7,12 @@ import Icon from './Icon.vue'
 import TextCompare from './TextCompare.vue'
 import ImageCompare from './ImageCompare.vue'
 import MetaPanel from './MetaPanel.vue'
+import ReviewActions from './ReviewActions.vue'
+import HashtagEditor from './HashtagEditor.vue'
+import LinkEditor from './LinkEditor.vue'
+import RefinementPanel from './RefinementPanel.vue'
+import ApprovalPanel from './ApprovalPanel.vue'
+import InitialTranslationPanel from './InitialTranslationPanel.vue'
 
 const props = defineProps({ taskId: { type: String, required: true } })
 const emit = defineEmits(['back', 'changed'])
@@ -16,6 +22,7 @@ const loading = ref(true)
 const error = ref('')
 const conflict = ref(false)
 const saved = ref(false)
+const candidateAdopted = ref(false)
 
 // 「下一处 →」的游标。§11.1：在 1700~3400 字符的长度下光高亮不够，
 // 她会扫一眼觉得"差不多"就过了。逐个跳把"检查"从一个开放任务变成一个
@@ -27,6 +34,7 @@ const active = ref(-1)
 // 这个语义——它会产生一条 translated_human.jsonl 记录，是有分量的动作。
 const editing = ref(false)
 const draft = ref('')
+const localizationDraft = ref(null)
 const liveMarks = ref([])
 const checking = ref(false)
 const saving = ref(false)
@@ -36,17 +44,37 @@ let checkSequence = 0
 const unseenImages = ref(0)
 
 // 标记地图的比例位置按**字符数**算，和后端下标同一口径。
-const enChars = computed(() => charLength(detail.value ? detail.value.text.en : ''))
+const enChars = computed(() => charLength(detail.value ? detail.value.localization.source_body : ''))
 
 const marks = computed(() => (detail.value
-  ? buildMarks(detail.value.highlights, detail.value.risks)
+  ? buildMarks(detail.value.body_highlights, detail.value.body_risks)
   : []))
 const shownMarks = computed(() => (editing.value ? liveMarks.value : marks.value))
 
 const currentText = computed(() => {
   if (!detail.value) return ''
-  return detail.value.text.de_human || detail.value.text.de_machine || ''
+  return detail.value.localization.body_de || ''
 })
+const shownLocalization = computed(() => editing.value ? { ...localizationDraft.value, body_de: draft.value } : detail.value?.localization)
+const captionLength = computed(() => {
+  const value = shownLocalization.value
+  if (!value) return 0
+  const tail = value.platform === 'instagram' ? value.ig_cta : value.links.map(link => /^https?:\/\//.test(link.target_url) ? link.target_url : '').filter(Boolean).join('\n')
+  return charLength([value.body_de.trim(), tail.trim(), value.tags.join(' ')].filter(Boolean).join('\n\n'))
+})
+function changeLocalization(fields) { Object.assign(localizationDraft.value, fields) }
+function hasUnsavedChanges() {
+  if (!editing.value) return false
+  const baseline = detail.value.localization
+  return draft.value !== baseline.body_de || ['tags', 'links', 'hashtags_confirmed', 'ig_cta'].some(key =>
+    JSON.stringify(localizationDraft.value[key]) !== JSON.stringify(baseline[key]))
+}
+const canEdit = computed(() => !['approved', 'scheduled', 'skipped', 'handed_off'].includes(detail.value?.status))
+function applyDetail(value) {
+  detail.value = value
+  saved.value = false
+  emit('changed', value)
+}
 const errorCount = computed(
   () => shownMarks.value.filter((m) => m.type === MARK_ERROR).length)
 const warnCount = computed(
@@ -77,12 +105,24 @@ function startEdit() {
   error.value = ''
   saved.value = false
   draft.value = currentText.value
+  localizationDraft.value = JSON.parse(JSON.stringify(detail.value.localization))
   liveMarks.value = marks.value
   editing.value = true
   active.value = -1
 }
 
+function adoptCandidate(job) {
+  if (editing.value && hasUnsavedChanges() && !window.confirm('采用候选将替换编辑区中的正文，继续吗？')) return
+  if (!editing.value) startEdit()
+  let body = job.body_de || ''
+  const cta = localizationDraft.value.ig_cta
+  if (detail.value.platform === 'instagram' && cta && body.endsWith(cta)) body = body.slice(0, -cta.length).trimEnd()
+  draft.value = body
+  candidateAdopted.value = true
+}
+
 function discard() {
+  candidateAdopted.value = false
   clearTimeout(checkTimer)
   checkSequence += 1
   checking.value = false
@@ -90,6 +130,7 @@ function discard() {
   conflict.value = false
   editing.value = false
   draft.value = ''
+  localizationDraft.value = null
   liveMarks.value = []
 }
 
@@ -103,10 +144,10 @@ watch(draft, (value) => {
   checking.value = true
   checkTimer = setTimeout(async () => {
     try {
-      const result = await api.check(props.taskId, value)
+      const result = await api.check(props.taskId, value, true)
       // 风险预扫描扫的是英文原文，改德语不会让它变，所以照旧带着。
       if (sequence === checkSequence && editing.value) {
-        liveMarks.value = buildMarks(result.highlights, detail.value.risks)
+        liveMarks.value = buildMarks(result.highlights, detail.value.body_risks)
       }
     } catch { /* 校验挂了不该影响编辑 */ } finally {
       if (sequence === checkSequence) checking.value = false
@@ -119,9 +160,16 @@ async function save() {
   error.value = ''
   conflict.value = false
   try {
-    detail.value = await api.saveTextDe(props.taskId, draft.value, {
-      sourceTextSha256: detail.value.text.source_text_sha256,
-      humanRevision: detail.value.text.human_revision
+    detail.value = await api.saveLocalization(props.taskId, {
+      body_de: draft.value,
+      tags: localizationDraft.value.tags,
+      hashtags_confirmed: localizationDraft.value.hashtags_confirmed,
+      links: localizationDraft.value.links,
+      ig_cta: localizationDraft.value.ig_cta,
+      source_text_sha256: detail.value.text.source_text_sha256,
+      human_revision: detail.value.text.human_revision,
+      review_revision: detail.value.review.revision,
+      localization_revision: detail.value.localization.revision
     })
     emit('changed', detail.value)
     discard()
@@ -136,30 +184,48 @@ async function save() {
 
 async function refreshContext() {
   try {
-    detail.value = await api.getTask(props.taskId)
+    const latest = await api.getTask(props.taskId)
+    const previous = localizationDraft.value
+    const sourceChanged = latest.text.source_text_sha256 !== detail.value.text.source_text_sha256
+    detail.value = latest
+    localizationDraft.value = {
+      ...JSON.parse(JSON.stringify(latest.localization)),
+      tags: [...latest.localization.protected_tags,
+        ...previous.tags.filter(tag => !previous.protected_tags.includes(tag))],
+      hashtags_confirmed: sourceChanged ? false : previous.hashtags_confirmed,
+      ig_cta: previous.ig_cta,
+      links: latest.localization.links.map(link => {
+        const kept = previous.links.find(item => item.source_url === link.source_url)
+        return kept ? { ...link, target_url: kept.target_url, confirmed: sourceChanged ? false : kept.confirmed } : link
+      })
+    }
     emit('changed', detail.value)
     error.value = ''
     conflict.value = false
-    const result = await api.check(props.taskId, draft.value)
-    liveMarks.value = buildMarks(result.highlights, detail.value.risks)
+    const result = await api.check(props.taskId, draft.value, true)
+    liveMarks.value = buildMarks(result.highlights, detail.value.body_risks)
   } catch (exc) {
     error.value = String(exc.message || exc)
   }
 }
 
+function mayLeave() {
+  return !hasUnsavedChanges() ||
+    window.confirm('修改尚未保存，确定离开并放弃当前草稿？')
+}
+defineExpose({ mayLeave })
 function goBack() {
-  if (editing.value && draft.value !== currentText.value &&
-      !window.confirm('修改尚未保存，确定返回列表并放弃当前草稿？')) return
-  emit('back')
+  if (mayLeave()) emit('back')
 }
 
 function beforeUnload(event) {
-  if (!editing.value || draft.value === currentText.value) return
+  if (!hasUnsavedChanges()) return
   event.preventDefault()
   event.returnValue = ''
 }
 
 function onKey(event) {
+  if (document.querySelector('[role="dialog"]')) return
   if (editing.value || event.target.matches('input, textarea')) return
   if (event.key === 'n' || event.key === 'ArrowDown') { event.preventDefault(); jump(1) }
   if (event.key === 'p' || event.key === 'ArrowUp') { event.preventDefault(); jump(-1) }
@@ -190,7 +256,8 @@ watch(() => props.taskId, load)
       </button>
       <button v-else-if="!detail" class="btn btn-sm" @click="load">重试</button>
     </p>
-    <p v-if="saved" class="save-success" role="status">人工文案已保存</p>
+    <p v-if="candidateAdopted && editing" class="save-success" role="status">候选已载入正文编辑区，确认后请保存。</p>
+    <p v-if="saved" class="save-success" role="status">本篇文案与本地化选择已保存</p>
 
     <template v-if="detail && !loading">
       <!-- ---------- 吸顶动作条 ---------- -->
@@ -231,15 +298,10 @@ watch(() => props.taskId, load)
 
         <span class="acts">
           <template v-if="!editing">
-            <button class="btn btn-sm" @click="startEdit">
+            <button v-if="canEdit" class="btn btn-sm" @click="startEdit">
               <Icon name="pencil" :size="13" /> 编辑德语
             </button>
-            <button class="btn btn-sm btn-primary" disabled title="审校通过与排期将在后续接通">
-              <Icon name="check" :size="13" /> 通过
-            </button>
-            <button class="btn btn-sm btn-danger" disabled title="不发与挂起等审校状态将在后续接通">
-              <Icon name="ban" :size="13" /> 这篇不发
-            </button>
+            <ReviewActions :detail="detail" @changed="applyDetail" />
           </template>
           <template v-else>
             <button class="btn btn-sm" :disabled="saving" @click="discard">放弃修改</button>
@@ -273,8 +335,9 @@ watch(() => props.taskId, load)
       </div>
 
       <!-- ---------- 正文对比 ---------- -->
+      <InitialTranslationPanel :detail="detail" :editing="editing" @changed="applyDetail" />
       <TextCompare
-        :en="detail.text.en"
+        :en="detail.localization.source_body"
         :de="currentText"
         :marks="marks"
         :live-marks="liveMarks"
@@ -286,6 +349,16 @@ watch(() => props.taskId, load)
         @select="active = $event"
       />
 
+      <div class="localization-blocks">
+        <HashtagEditor :detail="detail" :draft="shownLocalization" :editing="editing" @update="changeLocalization" />
+        <LinkEditor :draft="shownLocalization" :editing="editing" @update="changeLocalization" />
+      </div>
+      <p :class="['caption-counter', { near: detail.platform === 'instagram' && captionLength >= 1980 }]">
+        发布文案 {{ captionLength }}{{ detail.platform === 'instagram' ? ' / 2,200' : '' }} 字符（含标签与链接或引导话术）
+      </p>
+      <p v-if="!editing && detail.localization_validation.issues.length" class="localization-pending">
+        {{ detail.localization_validation.issues.map(item => item.message).join('；') }}
+      </p>
       <!-- 当前那一处的说明。标记本身只有颜色，说明在这里。 -->
       <p v-if="active >= 0 && shownMarks[active]" :class="['explain', shownMarks[active].type]">
         <Icon :name="shownMarks[active].type === 'risk' ? 'info' : 'alert'" :size="14" />
@@ -302,8 +375,10 @@ watch(() => props.taskId, load)
           :images="detail.images"
           @progress="unseenImages = $event"
         />
-        <MetaPanel :detail="detail" />
+        <MetaPanel :detail="detail" :editable="!editing" @changed="applyDetail" />
       </div>
+      <ApprovalPanel :detail="detail" :editing="editing" @changed="applyDetail" />
+      <RefinementPanel :detail="detail" :editing="editing" @candidate="adoptCandidate" @changed="applyDetail" />
     </template>
   </div>
 </template>
@@ -331,7 +406,7 @@ watch(() => props.taskId, load)
   font-size: 12px; color: var(--muted-fg);
   font-variant-numeric: tabular-nums; min-width: 62px; text-align: right;
 }
-.acts { display: flex; gap: var(--space-2); }
+.acts { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 .nudge {
   display: flex; align-items: center; gap: 6px;
@@ -388,4 +463,9 @@ watch(() => props.taskId, load)
 @media (max-width: 1200px) {
   .lower { grid-template-columns: 1fr; }
 }
+.localization-blocks { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-4); }
+.caption-counter { text-align: right; margin: 9px 0; font-size: 12px; color: var(--muted-fg); }
+.caption-counter.near, .localization-pending { color: #92400e; background: var(--risk-soft); border-radius: var(--radius); padding: 8px; }
+.localization-pending { font-size: 12px; }
+@media (max-width: 1100px) { .localization-blocks { grid-template-columns: 1fr; } }
 </style>

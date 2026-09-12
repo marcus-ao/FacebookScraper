@@ -34,7 +34,7 @@ from core.store import assert_physical_direct_path
 
 # 提示词版本。改了提示词就把它 +1：译文行里记着这个值，
 # 于是"这批译文是旧提示词产出的"变成可查的事实，而不是靠记忆。
-PROMPT_VERSION = 5
+PROMPT_VERSION = 6
 _UNSET_REVISION = object()
 
 

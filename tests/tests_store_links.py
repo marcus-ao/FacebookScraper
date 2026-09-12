@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory() as temp:
         rebuilt_count = arc.reindex()
     check(rebuilt_count == 1 and {row["post_id"] for row in arc.rows()} == {"victim"},
           "reindex 跳过链接目录，只保留真实直属帖子目录")
-    check("不是安全的真实直属目录" in output.getvalue(),
+    check("不安全" in output.getvalue(),
           "reindex 对链接目录给出明确跳过告警")
 
 
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory() as temp:
     arc = Archive(root, "acct")
     post = make_post("post_leaf", text="SHOULD NOT WRITE")
     post_dir = arc.post_dir(post)
-    post_dir.mkdir()
+    post_dir.mkdir(parents=True)
     outside_post = root / "outside_post_sentinel.json"
     outside_post.write_bytes(b"OUTSIDE POST SENTINEL")
     os.link(outside_post, post_dir / "post.json")
@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory() as temp:
     arc = Archive(root, "acct")
     post = make_post("text_leaf", text="SHOULD NOT WRITE")
     post_dir = arc.post_dir(post)
-    post_dir.mkdir()
+    post_dir.mkdir(parents=True)
     outside_text = root / "outside_text_sentinel.txt"
     outside_text.write_bytes(b"OUTSIDE TEXT SENTINEL")
     os.link(outside_text, post_dir / "text.txt")
@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory() as temp:
     arc = Archive(root, "acct")
     post = make_post("media_leaf", media=[Media(url="https://cdn/1.jpg", kind="image")])
     post_dir = arc.post_dir(post)
-    post_dir.mkdir()
+    post_dir.mkdir(parents=True)
     outside_media = root / "outside_media_sentinel.jpg"
     outside_media.write_bytes(b"OUTSIDE MEDIA SENTINEL")
     os.link(outside_media, post_dir / "01.jpg")

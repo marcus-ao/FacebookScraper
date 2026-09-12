@@ -1,0 +1,64 @@
+"""云盘镜像入口；默认只读预览，只有 --run 且配置启用时才会上传。"""
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from core.config import cfg  # noqa: E402
+from core.console import force_utf8  # noqa: E402
+from core.mirror import DriveClient, MirrorService, MirrorSettings  # noqa: E402
+from core.store import Archive, account_dirs, iter_post_dirs  # noqa: E402
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description='单向镜像归档原帖与 state；默认只读预览')
+    parser.add_argument('--run', action='store_true', help='执行已启用的镜像配置，可能上传文件')
+    parser.add_argument('--account', help='只处理指定账号目录；默认当前抓取目标')
+    args = parser.parse_args(argv)
+    force_utf8()
+    c = cfg()
+    settings = MirrorSettings.load()
+    directories = account_dirs(c.archive_dir, args.account)
+    if args.account is None:
+        directories = [directory for directory in directories if directory.name in c.active_accounts()]
+    # state_dir 属性会 mkdir，预览直接读取配置路径。
+    state_dir = ROOT / c.get('paths', 'state', 'state')
+    service = MirrorService(state_dir, settings)
+    if not args.run:
+        queue = service.snapshot()
+        print(json.dumps({'enabled': settings.enabled, 'mode': 'preview',
+                          'accounts': [directory.name for directory in directories],
+                          'source_directories': sum(1 for directory in directories for _ in iter_post_dirs(directory)),
+                          'queued_snapshots': len(queue['snapshots']),
+                          'mirror_state': settings.mirror_state}, ensure_ascii=False, indent=2))
+        return 0
+    if not settings.enabled:
+        print('镜像未启用；请先配置 [mirror] 根目录与应用权限。未上传文件。')
+        return 1
+    now = datetime.now(timezone.utc)
+    failures = 0
+    for directory in directories:
+        for source in Archive(directory.parent, directory.name).rows():
+            try:
+                service.queue_source(directory, source, now=now)
+            except Exception as exc:
+                failures += 1
+                print('原帖镜像待重试：%s/%s（%s）' % (directory.name, source['post_id'], type(exc).__name__))
+    service.queue_state(state_dir, now=now)
+    client = DriveClient.from_environment()
+    try:
+        result = service.dispatch(client, now=now)
+    finally:
+        client.close()
+    print(json.dumps(result, ensure_ascii=False))
+    return 1 if failures or result['pending'] else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -42,11 +42,14 @@ from core.console import force_utf8                 # noqa: E402
 from core.notify import notify                      # noqa: E402
 from core.store import Archive, ArchivePathError    # noqa: E402
 import translate as translation                     # noqa: E402
-from pipeline.settings import (AUTONOMY_LEVELS,      # noqa: E402
-                               PIPELINE_CONFIG_KEYS,
+from pipeline.settings import (AUTONOMY_LEVELS as AUTONOMY_LEVELS,      # noqa: E402
+                               PIPELINE_CONFIG_KEYS as PIPELINE_CONFIG_KEYS,
                                PipelineConfigError,
                                pipeline_settings)
 from core import paid_requests                      # noqa: E402
+from core.heartbeat import HeartbeatSettings, heartbeat_status  # noqa: E402
+from core.network_evidence import (NetworkEvidenceSettings, network_evidence_status,  # noqa: E402
+                                   detection_failure_kind)  # noqa: E402
 from publish import business_suite as bs             # noqa: E402
 from publish.compose import (                        # noqa: E402
     _PROBE_REQUIRED_OBSERVATIONS as required)
@@ -614,6 +617,61 @@ def _task_states() -> list[tuple[str, str]]:
     return out
 
 
+def _print_heartbeat_preflight(state_dir: Path, now: datetime) -> None:
+    """只读本地发送事实；外部告警是否已接通仍需服务方验收。"""
+    print("[7] 外部心跳")
+    try:
+        settings = HeartbeatSettings.load(cfg())
+        status = heartbeat_status(Path(state_dir) / "heartbeat.json", settings, now)
+    except ValueError:
+        print("    配置无效，请核对 [heartbeat] 的启用开关、间隔和超时。")
+        return
+    labels = {"disabled": "未启用", "never": "尚无成功记录", "unknown": "本地记录无法读取",
+              "healthy": "最近有成功记录", "stale": "成功记录已过期", "clock_skew": "成功时刻晚于当前时钟"}
+    print("    %s" % labels[status["status"]])
+    if status.get("last_success_at"):
+        print("    最后成功 %s；距今 %.1f 分钟。" % (
+            status["last_success_at"], status["age_seconds"] / 60))
+    if status.get("error_code"):
+        print("    最近结果：%s" % status["error_code"])
+    print("    缺席告警由外部服务承担；本机记录无法证明停机时告警仍能送达。")
+
+
+def _print_network_preflight(state_dir: Path, now: datetime) -> None:
+    print("[8] 出口 IP / ASN（只读已采集证据）")
+    try:
+        settings = NetworkEvidenceSettings.load(cfg())
+        status = network_evidence_status(Path(state_dir) / "network_evidence.json", settings, now)
+    except ValueError:
+        print("    出口观测配置无效，请核对 [network_evidence]。")
+        return
+    labels = {"disabled": "未启用采集", "never": "尚无成功记录", "unknown": "本地证据无法读取",
+              "healthy": "最近有出口记录", "stale": "出口记录已过期", "clock_skew": "记录时刻晚于当前时钟"}
+    print("    %s" % labels[status["status"]])
+    if status["latest"]:
+        row = status["latest"]
+        print("    最后成功 %s（距今 %.1f 分钟）：%s / %s / ASN 类型 %s" % (
+            row["at"], status["age_seconds"] / 60, row["ip"], row["asn"], row["asn_type"]))
+        stability = {"insufficient_samples": "样本不足", "stable_observed": "样本内出口相同", "changed": "观察到出口变化"}
+        print("    最近 %d 次：%s，%d 个 IP，%d 个已知 ASN。" % (
+            len(status["history"]), stability[status["stability"]], status["distinct_ips"], status["distinct_asns"]))
+        if status["network_type"] == "hosting":
+            print("    提供方标记为机房/托管网络，请检查出口配置。")
+    if status.get("last_error"):
+        print("    IP 信息服务最近结果：%s（不能据此判断社媒账号被封）。" % status["last_error"])
+    print("    ISP 分类不能证明住宅出口；此进程到 IPinfo 的出口也不能证明浏览器未使用代理/分流。")
+    detection = _load_json(Path(state_dir) / "delta_state.json")
+    if isinstance(detection, dict):
+        reasons = {"account_checkpoint": "账号 checkpoint / challenge，需要人工核对",
+                   "session_or_permission": "会话或权限问题", "rate_limited": "社媒接口限流",
+                   "connection_or_timeout": "连接或超时问题", "unclassified": "未分类失败，请查看探测日志"}
+        for platform in ("facebook", "instagram"):
+            entry = detection.get(platform)
+            kind = detection_failure_kind(entry.get("last_error")) if isinstance(entry, dict) else None
+            if kind:
+                print("    %s 上次探测：%s。" % (platform, reasons[kind]))
+
+
 def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     """上线预检：把手维护的状态表变成**算出来的**。
 
@@ -639,6 +697,11 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         ready = ready and ok
         print("    %s %-22s %s" % ("[开]" if ok else "[关]", label, detail))
 
+    try:
+        assisted.channels.require_independent_channel_evidence(('facebook',))
+    except assisted.bs.ProbeRequired as exc:
+        ready = False
+        print("    [关] 单渠道选择：%s" % exc)
     verified = cfg().get("publish", "ui_constraints_verified", False) is True
     gaps = () if verified else _probe_observation_gaps()
     ready = ready and verified
@@ -661,12 +724,14 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     print("[6] 计划任务")
     for name, state in _task_states():
         print("    %-24s %s" % (name, state))
+    _print_heartbeat_preflight(state_dir, now)
+    _print_network_preflight(state_dir, now)
 
     # ---- 业务配置：激活后决定"每天有多少帖能自己走完" ----
     rules = assisted.publish_rules()
     dirs = translation.account_dirs(cfg().archive_dir)
     horizon = now - timedelta(days=days)
-    sources, _issues, out_of_scope = assisted.load_sources(dirs, horizon)
+    sources, _issues, out_of_scope = assisted.load_sources(assisted.active_account_dirs(dirs), horizon)
     result = assisted.reconcile(sources)
     tally: dict[str, int] = {}
     unmapped: dict[str, int] = {}
@@ -695,13 +760,11 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     print("  不在图文发布范围，直接跳过（不进人工队列）：%d 篇" % len(out_of_scope))
     for reason, count in sorted(scope_tally.items(), key=lambda kv: -kv[1]):
         print("      %-30s %4d" % (reason, count))
-    print("  进入对账的图文帖：%d 篇 → 归并成 %d 个候选"
+    print("  进入对账的图文帖：%d 篇 → %d 个独立平台候选"
           % (result.source_count, len(result.candidates)))
     for kind, count in sorted(tally.items(), key=lambda kv: -kv[1]):
         print("      停在人工队列  %-24s %4d" % (kind, count))
-    if result.human_items:
-        print("      停在人工队列  %-24s %4d"
-              % ("similar_cross_platform", len(result.human_items)))
+    print("  跨平台合并候选：0（FB/IG 各自处理）")
     print("      可自动跑到待确认                  %4d" % auto)
     denominator = len(result.candidates) + len(result.human_items)
     if denominator:

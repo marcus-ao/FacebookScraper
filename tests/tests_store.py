@@ -143,8 +143,8 @@ with tempfile.TemporaryDirectory() as d:
                    text="safe", created_at="2026-08-25T14:23:20Z", owner="acct")
     check(arc.append(hostile) is True, "异常 post_id 仍可归档，不丢业务数据")
     hostile_dir = arc.post_dir(hostile)
-    check(hostile_dir.resolve().parent == arc.posts_dir.resolve(),
-          "异常 post_id 的目录 resolve 后仍严格位于 posts/ 下一层")
+    check(hostile_dir.resolve().parent.parent == arc.posts_dir.resolve(),
+          "异常 post_id 的目录 resolve 后仍严格位于 posts/月份 下一层")
     hostile_row = json.loads((hostile_dir / "post.json").read_text(encoding="utf-8"))
     check(hostile_row["post_id"] == hostile_id,
           "安全目录名只影响路径，post.json 保留远端原始 ID")
@@ -153,9 +153,9 @@ with tempfile.TemporaryDirectory() as d:
     # 即使未来目录名生成器发生回归，Archive.post_dir 的独立 containment
     # 仍必须拒绝越界路径。
     from unittest.mock import patch
-    with patch("core.store.post_dirname", return_value="../escape"):
+    with patch("core.store._new_folder_name", return_value="../escape"):
         try:
-            arc.post_dir(hostile)
+            arc.post_dir(Post("fresh", "instagram", "acct", "new", "2026-09-10T00:00:00Z"))
             contained = False
         except ValueError:
             contained = True
@@ -171,7 +171,7 @@ with tempfile.TemporaryDirectory() as d:
     # 下载发生在 append 之前：media_path 必须能在此时就建好文件夹
     m0 = arc.media_path(p, 0, "image/jpeg")
     check(m0.name == "01.jpg", "帖内第 1 张图叫 01.jpg（1 起、补零）")
-    check(m0.parent.name == "2026-08-25_1423_900", "图片落在该帖自己的文件夹里")
+    check(m0.parent.name == "2026-08-25_1423_sommer-sale_900", "图片落在该帖自己的文件夹里")
     check(m0.parent.exists(), "media_path 顺手把文件夹建好了（下载先于 append）")
     check(arc.media_path(p, 1, "video/mp4").name == "02.mp4",
           "编号跟的是帖内位置，不是「第几张图」—— 顺序信息比连号更值钱")
@@ -227,11 +227,10 @@ with tempfile.TemporaryDirectory() as d:
                media=[Media(url="one", kind="image"), Media(url="two", kind="image")],
                media_complete=True)
     check(arc.append(new) is True, "undated 残缺帖可升级成 dated 完整帖")
-    orphaned = arc.base / "_orphan_posts" / old_dir.name
-    check(arc.post_dir(new).exists() and not old_dir.exists() and orphaned.exists(),
-          "新 truth dir 写成后，旧 undated 目录移入 _orphan_posts/ 而非删除")
-    check(json.loads((orphaned / "post.json").read_text(encoding="utf-8"))["text"] == "old",
-          "隔离目录保留旧 post.json，可人工恢复")
+    check(arc.post_dir(new) == old_dir and old_dir.exists(),
+          "补出源发布时间也保留创建时固定的 folder_name")
+    history = json.loads((old_dir / "source_history.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    check(history["source"]["text"] == "old", "源版本历史保留旧正文，可人工恢复")
     check(Archive(d, "acct").reindex() == 1,
           "created_at 从无到有后 reindex 仍只有一条 truth")
 
@@ -248,13 +247,14 @@ with tempfile.TemporaryDirectory() as d:
                media_complete=True)
     check(arc.append(new) is True, "dated 残缺帖也可升级成 undated 完整帖")
     new_dir = arc.post_dir(new)
-    orphaned = arc.base / "_orphan_posts" / old_dir.name
-    check(new_dir.exists() and not old_dir.exists() and orphaned.exists(),
-          "created_at 反向纠正同样只保留本轮唯一 truth dir")
+    check(new_dir == old_dir and old_dir.exists(),
+          "created_at 反向纠正保留固定目录且只保留一个当前真相")
 
     # 模拟修复前已经遗留的双 truth dirs。旧实现先按 created_at 排序再用
     # post_id 后写胜出，会让 dated 旧残缺记录覆盖 undated 新完整记录。
-    shutil.copytree(orphaned, old_dir)
+    duplicate = arc.posts_dir / "2026-08-29_1230_move_reverse"
+    duplicate.mkdir()
+    (duplicate / "post.json").write_text(json.dumps(old.to_row()), encoding="utf-8")
     output = io.StringIO()
     rebuilt = Archive(d, "acct")
     with contextlib.redirect_stdout(output):

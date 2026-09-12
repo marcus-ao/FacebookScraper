@@ -3,7 +3,7 @@ r"""审校台的**只读数据层**：从归档算出任务列表与详情。
 列表以归档索引定位源帖，再读取 post.json 真相；文案同时读取机器与人工账本，
 人工稿优先展示，源文变化保留稿件并提示复核。历史原型状态不参与读取。
 
-**本模块只读，一个字节都不写。** 它碰 ``archive/`` 与 ``state/`` 全是读；
+源帖、译文和发布事实只读；列表会按需重建可删除的 SQLite 展示索引。
 不调用任何付费 API，不启动浏览器。
 
 一条贯穿全文的纪律（REQUIREMENTS.md 第 5.2 节）：
@@ -34,6 +34,7 @@ r"""审校台的**只读数据层**：从归档算出任务列表与详情。
 from __future__ import annotations
 
 import json
+import hashlib
 import mimetypes
 import sys
 from dataclasses import replace
@@ -47,13 +48,14 @@ if str(ROOT) not in sys.path:                          # 支持 `python -m web.a
     sys.path.insert(0, str(ROOT))
 
 import localize_images                                 # noqa: E402
-from core import store                                 # noqa: E402
+from core import store, review, localization                         # noqa: E402
 from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
 from pipeline import engine                            # noqa: E402
 from publish import compose, journal                   # noqa: E402
+from web.api import query_index                   # noqa: E402
 
 # 那三条判据的正则**对象本身**，不是复制品。
 # core.translated 的 review_numeric_flags 只回答"有没有"，界面还需要"在哪"——
@@ -336,6 +338,14 @@ def excerpt(text: str, limit: int = 90) -> str:
     return value if len(value) <= limit else value[:limit] + " …"
 
 
+def tags_revision(tags: list[str]) -> str:
+    return hashlib.sha256(json.dumps(tags, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def has_schedule(source: engine.SourcePost) -> bool:
+    return journal.scheduled_record_for_refs(cfg().state_dir, (source.ref,)) is not None
+
+
 def _image_media(source: engine.SourcePost) -> list[Mapping[str, Any]]:
     media = source.row.get("media")
     if not isinstance(media, list):
@@ -401,20 +411,26 @@ class _Context:
 # ---------------------------------------------------------------------------
 
 def list_tasks(*, days: int = DEFAULT_DAYS,
-               now: datetime | None = None) -> dict:
+               now: datetime | None = None, status: str | None = None,
+               tag: str | None = None, month: str | None = None) -> dict:
     """任务列表。契约见 web/DESIGN.md 第 6 节。
 
     排序：按 ``schedule.at`` 升序（最急的在最上面）；没有排期的排在最后，
     内部按原帖时间倒序（最新的先看）。
     """
     ctx = _Context(days=days, now=now)
-    ordered = sorted((_source_truth(item) for item in ctx.sources.values()),
+    indexed = query_index.candidates(status=status, tag=tag, month=month, now=ctx.now)
+    ids = set(indexed["task_ids"]) if indexed["task_ids"] is not None else None
+    ordered = sorted((_source_truth(item) for item in ctx.sources.values()
+                      if ids is None or task_id_of(item) in ids),
                      key=lambda s: (s.created_at, s.ref))
 
     reviewable = {item.ref: ctx.reviewable(item) for item in ordered}
     already = {item.ref: ctx.scheduled_at(item) for item in ordered}
+    states = {item.ref: _review_state(ctx, item, reviewable[item.ref], already[item.ref])
+              for item in ordered}
     pending = [item for item in ordered
-               if reviewable[item.ref] and already[item.ref] is None]
+               if reviewable[item.ref] and states[item.ref]["status"] in {"pending_review", "edited"}]
     allocated = ctx.allocate_slots(pending)
 
     tasks: list[dict] = []
@@ -426,17 +442,20 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         when = already[source.ref] or allocated.get(source.ref)
         tasks.append({
             "id": task_id,
+            "source_text_sha256": translation.source_text_sha256(source.text),
             "platform": source.platform,
             "thumbnail_url": "/api/tasks/%s/image/0?variant=de" % task_id,
             "text_de_excerpt": excerpt(entry.get("text_de", "")) if entry else "",
             "image_count": len(_image_media(source)),
+            "tags": list(source.row.get("tags") or []),
+            "month": str(source.row.get("created_at") or "")[:7],
+            "review": states[source.ref],
             "schedule": ({"at": _iso(when), "channel": source.platform}
                          if when is not None else None),
             "hard_alerts": alerts,
             "risk_count": len(ctx.risks.get(task_id, ())),
             "author_flag": author_flag,
-            "status": _status(ctx, source, reviewable[source.ref],
-                              already[source.ref]),
+            "status": states[source.ref]["status"],
         })
 
     def sort_key(item: dict):
@@ -444,23 +463,35 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         return (0, at, "") if at else (1, "", item["id"])
 
     tasks.sort(key=sort_key)
+    counts = {state: sum(item["status"] == state for item in tasks)
+              for state in review.STATUSES | {STATUS_NOT_READY}}
+    available_tags = sorted({value for item in tasks for value in item["tags"]})
+    tasks = [item for item in tasks if (not status or item["status"] == status)
+             and (not tag or (not item["tags"] if tag == "__untagged__" else tag in item["tags"]))
+             and (not month or item["month"] == month)]
     return {
         "tasks": tasks,
+        "index": indexed["index"],
         "summary": {
             "total": len(tasks),
             "with_hard_alerts": sum(1 for t in tasks if t["hard_alerts"]),
+            "by_status": counts,
+            "tags": available_tags,
         },
     }
 
 
-def _status(ctx: _Context, source: engine.SourcePost, reviewable: bool,
-            scheduled: datetime | None) -> str:
-    if scheduled is not None:
-        return STATUS_SCHEDULED
+def _review_state(ctx: _Context, source: engine.SourcePost, reviewable: bool,
+                  scheduled: datetime | None) -> dict:
     entry = _effective_translation_of(source)
     if entry and entry.get("is_human"):
-        return STATUS_PENDING_REVIEW if entry.get("stale") else STATUS_EDITED
-    return STATUS_PENDING_REVIEW if reviewable else STATUS_NOT_READY
+        default = STATUS_PENDING_REVIEW if entry.get("stale") else STATUS_EDITED
+    else:
+        default = STATUS_PENDING_REVIEW if reviewable else STATUS_NOT_READY
+    state = review.state_for(source.account_dir, dict(source.row),
+                             default_status=default, scheduled=scheduled is not None)
+    state["snooze_default_days"] = cfg().get("review", "snooze_default_days", 3)
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -561,8 +592,9 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
     shown_text = str(effective.get("text_de") or "") if effective else text_de
 
     scheduled = ctx.scheduled_at(source)
+    state = _review_state(ctx, source, reviewable, scheduled)
     when = scheduled
-    if when is None and reviewable:
+    if when is None and reviewable and state["status"] in {"pending_review", "edited"}:
         slots = ctx.allocate_slots([source])
         when = slots.get(source.ref)
 
@@ -576,10 +608,33 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
     stale = bool(bound_entry) and bound != translation.source_text_sha256(text_en)
 
     coauthors = source.row.get("coauthors")
+    events = review.history(source.account_dir, source.post_id)
+    trail = [{"at": event["recorded_at"], "actor": None,
+              "action": "text_edited" if event["action"] == "edited" else event["action"],
+              "note": event["reason"], "wake_at": event["wake_at"]} for event in events]
+    if human and not any(event["action"] == "edited" for event in events):
+        trail.append({"at": human["recorded_at"], "actor": None, "action": "text_edited",
+                      "revision": human["revision"]})
+    tags = list(source.row.get("tags") or [])
+    localized = localization.effective_draft(source.account_dir, dict(source.row), effective)
+    body_risks = []
+    for risk in ctx.risks.get(task_id, []):
+        start, end = risk["en_span"]
+        phrase = text_en[start:end]
+        at = localized["source_body"].find(phrase) if phrase else -1
+        if at >= 0:
+            body_risks.append(dict(risk, en_span=[at, at + len(phrase)]))
     return {
         "id": task_id,
         "platform": source.platform,
-        "status": _status(ctx, source, reviewable, scheduled),
+        "status": state["status"],
+        "review": state,
+        "tags": tags,
+        "tags_revision": tags_revision(tags),
+        "localization": localized,
+        "localization_validation": localization.validate(localized),
+        "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),
+        "body_risks": body_risks,
         "text": {
             "en": text_en,
             "de_machine": text_de or None,
@@ -608,9 +663,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
             # 详情页上"这篇其实有 4 张图是英文的"就彻底消失了。
             "compose_warnings": _compose_warnings(source, ctx.rules, when),
         },
-        "trail": ([{"at": human["recorded_at"], "actor": None,
-                    "action": "text_edited", "revision": human["revision"]}]
-                  if human else []),
+        "trail": trail,
     }
 
 

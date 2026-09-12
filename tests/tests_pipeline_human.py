@@ -108,7 +108,8 @@ class HumanPipelineTests(unittest.TestCase):
             def image(self, source, index):
                 raise AssertionError('stale human must not cause a paid image request')
 
-        with patch.object(engine, 'publish_rules', return_value=rules):
+        with patch.object(engine, 'publish_rules', return_value=rules), \
+                patch.object(engine, 'active_account_dirs', return_value=[self.arc.base]):
             result = engine.run(account_dirs=[self.arc.base], state_dir=state, settings=settings,
                                 runner=NoPaidCalls(), now=self.now, report=lambda _: None)
         self.assertEqual(result, 0)

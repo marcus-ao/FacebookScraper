@@ -6,8 +6,13 @@
 from __future__ import annotations
 
 import os
+import math
+import re
 import tomllib
+from dataclasses import dataclass
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,6 +57,16 @@ class Config:
     def get(self, section: str, key: str, default=None):
         return self._d.get(section, {}).get(key, default)
 
+    def active_accounts(self) -> tuple[str, ...]:
+        """只有当前监测目标进入自动处理；历史账号仍可显式只读浏览。"""
+        names = []
+        for platform in ("facebook", "instagram"):
+            account = str(self.get("targets", platform, "")).strip().lower()
+            if not account or not re.fullmatch(r"[a-z0-9_.]+", account) or ".." in account:
+                raise ValueError(f"[targets].{platform} 不是有效账号名")
+            names.append(f"{platform[:2]}_{account}")
+        return tuple(names)
+
     # ---- 派生路径 ----
     @property
     def archive_dir(self) -> Path:
@@ -71,6 +86,26 @@ class Config:
     @property
     def debug_port(self) -> int:
         return int(self.get("chrome", "debug_port", 9222))
+
+    @property
+    def detect_profile_dir(self) -> Path:
+        raw = self.get("detect", "profile_dir", "~/.fbscraper-detect")
+        return Path(os.path.expandvars(raw)).expanduser()
+
+    @property
+    def detect_debug_port(self) -> int:
+        return int(self.get("detect", "port", 9224))
+
+    def assert_chrome_profiles_isolated(self) -> None:
+        roles = (("chrome", self.debug_port, self.profile_dir),
+                 ("detect", self.detect_debug_port, self.detect_profile_dir),
+                 ("publish", self.publish_debug_port, self.publish_profile_dir))
+        for i, (name, port, profile) in enumerate(roles):
+            if not 1024 <= port <= 65535:
+                raise SystemExit(f"[{name}] CDP 端口必须在 1024..65535")
+            for other, other_port, other_profile in roles[:i]:
+                if port == other_port or profile.resolve() == other_profile.resolve():
+                    raise SystemExit(f"[{name}] 与 [{other}] 必须使用独立端口和 profile")
 
     @property
     def publish_profile_dir(self) -> Path:
@@ -94,6 +129,7 @@ class Config:
             raise SystemExit(
                 "[publish].profile_dir 与 [chrome].profile_dir 指向同一路径；"
                 "禁止让 DE 发布账号与抓取小号共用浏览器 profile。")
+        self.assert_chrome_profiles_isolated()
 
     @property
     def chrome_exe(self) -> str:
@@ -122,3 +158,86 @@ def cfg() -> Config:
     if _cfg is None:
         _cfg = Config()
     return _cfg
+
+
+@dataclass(frozen=True)
+class MonitorSchedule:
+    """监测与消息静默共用的上海作息；只计算时间，不执行任务。"""
+
+    on_duty_window: tuple[str, str] = ("08:00", "19:00")
+    on_duty_interval_min: float = 60
+    off_duty_interval_min: float = 180
+    jitter_ratio: float = 0.25
+    reconcile_at: str = "07:00"
+    reconcile_jitter_min: float = 30
+    reconcile_scrolls: int = 3
+    reconcile_max_session_seconds: float = 90
+    processing_budget_min: float = 25
+
+    def __post_init__(self):
+        if len(self.on_duty_window) != 2:
+            raise ValueError("on_duty_window 必须包含起止两个 HH:MM")
+        start, end = (self.parse_time(v) for v in self.on_duty_window)
+        self.parse_time(self.reconcile_at)
+        if start >= end:
+            raise ValueError("在岗窗必须是上海同一天内的递增时段")
+        if not all(math.isfinite(value) for value in (
+                self.on_duty_interval_min, self.off_duty_interval_min, self.jitter_ratio,
+                self.reconcile_jitter_min, self.reconcile_max_session_seconds, self.processing_budget_min)):
+            raise ValueError("监测间隔与预算不能为 NaN 或无穷大")
+        if (self.on_duty_interval_min <= 0
+                or self.off_duty_interval_min < self.on_duty_interval_min
+                or not 0 < self.jitter_ratio < 1
+                or self.reconcile_jitter_min <= 0
+                or self.reconcile_scrolls < 1
+                or self.reconcile_max_session_seconds <= 0
+                or self.processing_budget_min < 0):
+            raise ValueError("监测间隔、抖动和兜底预算必须为有效正值")
+        if self.reconcile_deadline_margin_minutes() <= 0:
+            raise ValueError("兜底最晚触发加抓取和处理预算超过在岗截止线；请提前 reconcile_at")
+
+    @staticmethod
+    def parse_time(value: str) -> time:
+        if not isinstance(value, str) or not re.fullmatch(r"\d{2}:\d{2}", value):
+            raise ValueError("时刻必须使用 HH:MM")
+        return time.fromisoformat(value)
+
+    @staticmethod
+    def local(now: datetime) -> datetime:
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("监测时刻必须包含时区")
+        return now.astimezone(ZoneInfo("Asia/Shanghai"))
+
+    def is_on_duty(self, now: datetime) -> bool:
+        start, end = (self.parse_time(v) for v in self.on_duty_window)
+        return start <= self.local(now).time() < end
+
+    def interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:
+        return (self.on_duty_interval_min if self.is_on_duty(now) and not quiet
+                else self.off_duty_interval_min)
+
+    def minimum_interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:
+        return self.interval_minutes(now, quiet=quiet) * (1 - self.jitter_ratio)
+
+    def reconcile_deadline_margin_minutes(self, platform_count: int = 2) -> float:
+        def minute(value):
+            parsed = self.parse_time(value)
+            return parsed.hour * 60 + parsed.minute
+        return (minute(self.on_duty_window[0]) - minute(self.reconcile_at)
+                - self.reconcile_jitter_min - self.processing_budget_min
+                - platform_count * self.reconcile_max_session_seconds / 60)
+
+    @classmethod
+    def load(cls, c: Config | None = None) -> "MonitorSchedule":
+        c = c or cfg()
+        return cls(
+            on_duty_window=tuple(c.get("delta", "on_duty_window", ["08:00", "19:00"])),
+            on_duty_interval_min=float(c.get("delta", "on_duty_interval_min", 60)),
+            off_duty_interval_min=float(c.get("delta", "off_duty_interval_min", 180)),
+            jitter_ratio=float(c.get("delta", "jitter_ratio", 0.25)),
+            reconcile_at=c.get("delta", "reconcile_at", "07:00"),
+            reconcile_jitter_min=float(c.get("delta", "reconcile_jitter_min", 30)),
+            reconcile_scrolls=int(c.get("delta", "reconcile_scrolls", 3)),
+            reconcile_max_session_seconds=float(c.get("delta", "reconcile_max_session_seconds", 90)),
+            processing_budget_min=float(c.get("delta", "processing_budget_min", 25)),
+        )

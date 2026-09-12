@@ -1,17 +1,25 @@
 <script setup>
-import { onMounted, reactive } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { api } from './api.js'
 
 import Icon from './components/Icon.vue'
 import TaskList from './components/TaskList.vue'
 import TaskDetail from './components/TaskDetail.vue'
+import CalendarPanel from './components/CalendarPanel.vue'
 
+const detailView = ref(null)
+function locationState() {
+  const url = new URL(window.location.href)
+  const openId = url.searchParams.get('task')
+  return { openId, view: !openId && url.searchParams.get('view') === 'calendar' ? 'calendar' : 'tasks' }
+}
 const state = reactive({
   tasks: [],
   summary: { total: 0, with_hard_alerts: 0 },
   loading: true,
   error: '',
-  openId: null          // null = 列表页
+  ...locationState(),
+  index: null, calendar: null, calendarBusy: false, calendarError: ''
 })
 
 async function load() {
@@ -21,6 +29,7 @@ async function load() {
     const data = await api.listTasks()
     state.tasks = data.tasks
     state.summary = data.summary
+    state.index = data.index
   } catch (exc) {
     state.error = String(exc.message || exc)
   } finally {
@@ -28,20 +37,56 @@ async function load() {
   }
 }
 
-// 详情页里的动作改完状态后，把那一行就地更新，不整表重拉——
-// 62 行重拉一次要读一遍归档，点一下等半秒的界面用起来是另一回事。
-function patchRow(detail) {
-  const row = state.tasks.find((t) => t.id === detail.id)
-  if (!row) return
-  row.status = detail.status
-  const human = detail.text && detail.text.de_human
-  if (human) {
-    const excerpt = human.replace(/\s+/g, ' ').trim()
-    row.text_de_excerpt = excerpt.length > 90 ? excerpt.slice(0, 90) + ' …' : excerpt
-  }
+function writeLocation() {
+  const url = new URL(window.location.href)
+  if (state.openId) url.searchParams.set('task', state.openId)
+  else url.searchParams.delete('task')
+  if (state.view === 'calendar') url.searchParams.set('view', 'calendar')
+  else url.searchParams.delete('view')
+  window.history.pushState({}, '', url)
 }
-
-onMounted(load)
+function openTask(taskId, alreadyAllowed = false) {
+  if (!alreadyAllowed && detailView.value && !detailView.value.mayLeave()) return
+  state.openId = taskId || null
+  state.view = 'tasks'
+  writeLocation()
+}
+function openCalendar() {
+  if (detailView.value && !detailView.value.mayLeave()) return
+  state.openId = null
+  state.view = 'calendar'
+  writeLocation()
+  loadCalendar()
+}
+async function loadCalendar(refresh = false) {
+  state.calendarBusy = true
+  state.calendarError = ''
+  try { state.calendar = await (refresh ? api.refreshCalendar() : api.calendar()) }
+  catch (exc) {
+    if (Array.isArray(exc.payload?.cards)) state.calendar = exc.payload
+    state.calendarError = exc.message
+  } finally { state.calendarBusy = false }
+}
+function restoreLocation() {
+  const next = locationState()
+  if ((next.openId !== state.openId || next.view !== state.view) && detailView.value && !detailView.value.mayLeave()) {
+    writeLocation()
+    return
+  }
+  Object.assign(state, next)
+  if (state.view === 'calendar') loadCalendar()
+}
+function patchRow(detail) {
+  const row = state.tasks.find((task) => task.id === detail.id)
+  if (!row) return
+  Object.assign(row, { status: detail.status, review: detail.review, tags: detail.tags,
+    schedule: detail.schedule, source_text_sha256: detail.text.source_text_sha256 })
+  const text = detail.text.de_human || detail.text.de_machine || ''
+  const excerpt = text.replace(/\s+/g, ' ').trim()
+  row.text_de_excerpt = excerpt.length > 90 ? excerpt.slice(0, 90) + ' …' : excerpt
+}
+onMounted(() => { load(); if (state.view === 'calendar') loadCalendar(); window.addEventListener('popstate', restoreLocation) })
+onUnmounted(() => window.removeEventListener('popstate', restoreLocation))
 </script>
 
 <template>
@@ -57,10 +102,15 @@ onMounted(load)
 
       <p class="prototype-note">
         <Icon name="info" :size="14" />
-        人工文案可保存；审校通过与排期将在后续接通
+        保存与排期均会留档；自动排期需完成本机核验
       </p>
     </header>
 
+    <nav class="workspace-nav" aria-label="工作区">
+      <button :class="['btn btn-sm', { selected: state.view === 'tasks' }]" :aria-pressed="state.view === 'tasks'" @click="openTask(null)">审校列表</button>
+      <button :class="['btn btn-sm', { selected: state.view === 'calendar' }]" :aria-pressed="state.view === 'calendar'" @click="openCalendar">发布月历</button>
+    </nav>
+    <p v-if="state.index?.stale && state.view === 'tasks'" class="index-note">展示索引暂未更新，当前按归档文件读取。</p>
     <p v-if="state.error" class="banner-error" role="alert">
       <Icon name="alert" :size="15" />
       {{ state.error }}
@@ -70,20 +120,23 @@ onMounted(load)
     </p>
 
     <main>
-      <p v-if="state.loading" class="loading">正在读归档…</p>
+      <CalendarPanel v-if="state.view === 'calendar'" :calendar="state.calendar" :busy="state.calendarBusy" :error="state.calendarError" @refresh="loadCalendar(true)" />
+      <p v-else-if="state.loading" class="loading">正在读归档…</p>
 
       <TaskList
         v-else-if="!state.openId"
         :tasks="state.tasks"
         :summary="state.summary"
-        @open="state.openId = $event"
+        @open="openTask"
+        @changed="patchRow"
       />
 
       <TaskDetail
         v-else
+        ref="detailView"
         :key="state.openId"
         :task-id="state.openId"
-        @back="state.openId = null"
+        @back="openTask(null, true)"
         @changed="patchRow"
       />
     </main>
@@ -140,4 +193,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   font-size: 13px;
 }
 .banner-error .btn { margin-left: auto; }
+.workspace-nav { display: flex; gap: 8px; padding: 10px var(--space-5); background: var(--card); border-bottom: 1px solid var(--border); }
+.workspace-nav .selected { background: var(--primary); color: var(--primary-fg); }
+.index-note { margin: 0; padding: 8px var(--space-5); background: var(--risk-soft); color: #92400e; font-size: 12px; }
 </style>

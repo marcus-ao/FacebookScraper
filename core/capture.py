@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.store import Archive, Post
@@ -220,3 +219,31 @@ def prune_captures(base: Path, keep: int, prefix: str = "_capture_delta_") -> in
         except OSError:
             continue
     return len(stale)
+
+
+def prune_captures_days(base: Path, keep_days: int, *, now: datetime | None = None) -> int:
+    """按文件名中的捕获时刻保留整段排查历史，不因提频缩短保留期。
+
+    仅清理当前账号目录中的标准增量转储。陌生名字、链接及回填文件保留。
+    """
+    if keep_days < 1:
+        raise ValueError("keep_captures_days 至少为 1")
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("capture 清理时刻必须包含时区")
+    base = Path(base)
+    if base.is_symlink() or base.resolve() != base.absolute():
+        raise ValueError("capture 清理目录必须为实际目录，不能经过链接")
+    cutoff = (now - timedelta(days=keep_days)).timestamp()
+    removed = 0
+    for path in base.glob("_capture_delta_*.json"):
+        stamp = path.stem.removeprefix("_capture_delta_")
+        if (not stamp.isdecimal() or int(stamp) >= cutoff or path.is_symlink()
+                or not path.is_file() or path.resolve().parent != base.resolve()):
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            continue
+    return removed

@@ -6,23 +6,20 @@ import html
 import json
 import math
 import os
-import unicodedata
 from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta, timezone
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from core.config import cfg
-from core.store import Archive, post_dirname
-from publish import journal
+from core.store import Archive, post_directory
+from publish import journal, channels
 from publish.compose import ComposeError, _read_post_truth, compose_post
 import translate as translation
 from core.paid_model import FileLock
-from core import paid_model
+from core import paid_model, paid_consent, review
 from core import translated as translated_content
-from core import imagehash
 from pipeline.settings import pipeline_settings
 import localize_images
 import localize_images as image_de
@@ -37,9 +34,6 @@ from tools import publish_post
 STATE_NAME = "pipeline_state.json"
 NEEDS_HUMAN_NAME = "needs_human.jsonl"
 NEEDS_HUMAN_HTML = "needs_human.html"
-PAIR_WINDOW = timedelta(hours=30)
-SIMILARITY_THRESHOLD = 0.90
-DHASH_DISTANCE = 1
 CANDIDATE_ITEM_KINDS = frozenset({
     "material_gate", "unknown_owner", "unknown_collaborator", "unmapped_price",
     "budget_stopped", "offline_gate", "paid_request_unresolved",
@@ -297,77 +291,27 @@ def publish_rules(raw: Mapping[str, Any] | None = None) -> PublishRules:
         source_accounts=source_accounts)
 
 
-def _normalize_text(value: str) -> str:
-    return " ".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
-
-
 def _post_dir(source: SourcePost) -> Path:
-    return source.account_dir / "posts" / post_dirname(
-        source.post_id, str(source.row.get("created_at") or ""))
+    return post_directory(source.account_dir, source.row)
 
 
 def _image_paths(source: SourcePost) -> tuple[Path, ...]:
-    paths: list[Path] = []
-    for item in source.row.get("media") or []:
-        if not isinstance(item, Mapping) or item.get("kind") != "image":
-            continue
-        raw = item.get("local_path")
-        if not isinstance(raw, str) or not raw.strip():
-            continue
-        candidate = source.account_dir / Path(raw.replace("\\", "/"))
-        paths.append(candidate)
-    return tuple(paths)
+    return tuple(
+        source.account_dir / Path(item["local_path"].replace("\\", "/"))
+        for item in source.row.get("media") or []
+        if isinstance(item, Mapping) and item.get("kind") == "image"
+        and isinstance(item.get("local_path"), str) and item["local_path"].strip())
 
 
-def dhash(path: Path) -> int:
-    """素材配对用的 dHash。实现在 core/imagehash，与图片德语化共用同一份。
-
-    ⚠️ 2026-09-02 之前这里独立实现，而 localize_images 另有一份用不同滤波器
-    的同名实现——对同一张图给出不同的值。现在两边共用一份（BILINEAR，
-    依据见 core/imagehash 的模块说明）。
-    """
-    return imagehash.dhash_file(path)
+def _review_paused(source: SourcePost) -> bool:
+    state = review.state_for(source.account_dir, dict(source.row))
+    return state['status'] in {'snoozed', 'skipped', 'handed_off', 'approved', 'scheduled'}
 
 
-def dhash_distance(left: int, right: int) -> int:
-    return imagehash.hamming(left, right)
-
-
-def _media_relation(left: SourcePost, right: SourcePost,
-                    cache: dict[str, tuple[int, ...] | None]
-                    ) -> tuple[bool, bool, tuple[int, ...]]:
-    """返回 (同数量且逐图≤1, 已有对应素材逐图≤1, 距离)。"""
-    def hashes(source: SourcePost) -> tuple[int, ...] | None:
-        if source.ref in cache:
-            return cache[source.ref]
-        paths = _image_paths(source)
-        try:
-            result = tuple(dhash(path) for path in paths)
-        except (OSError, ValueError):
-            result = None
-        cache[source.ref] = result
-        return result
-
-    lhashes, rhashes = hashes(left), hashes(right)
-    if lhashes is None or rhashes is None:
-        return False, False, ()
-    distances = tuple(dhash_distance(a, b) for a, b in zip(lhashes, rhashes))
-    corresponding = bool(distances) and all(value <= DHASH_DISTANCE for value in distances)
-    exact = (len(lhashes) == len(rhashes) and corresponding
-             and len(distances) == len(lhashes))
-    return exact, corresponding, distances
-
-
-def configured_account_pairs() -> frozenset[tuple[str, str]]:
-    """只允许配置中明确属于同一业务目标的 FB/IG 账号互相配对。"""
-    raw = cfg()._d.get("targets", {}) or {}
-    if not isinstance(raw, Mapping):
-        return frozenset()
-    facebook = str(raw.get("facebook") or "").strip().lower()
-    instagram = str(raw.get("instagram") or "").strip().lower()
-    if not facebook or not instagram:
-        return frozenset()
-    return frozenset({(facebook, instagram)})
+def active_account_dirs(account_dirs: Iterable[Path]) -> list[Path]:
+    """自动对账仅消费当前业务账号；历史账号仍参与预算与留档查询。"""
+    active = set(cfg().active_accounts())
+    return [Path(path) for path in account_dirs if Path(path).name in active]
 
 
 def _item_id(kind: str, sources: Iterable[SourcePost], extra: str = "") -> str:
@@ -700,70 +644,11 @@ def reconcile(sources: list[SourcePost], *,
               selected: Mapping[str, str] | None = None,
               account_pairs: Iterable[tuple[str, str]] | None = None
               ) -> ReconcileResult:
-    selected = selected or {}
-    allowed_pairs = {
-        (str(left).strip().lower(), str(right).strip().lower())
-        for left, right in (configured_account_pairs()
-                            if account_pairs is None else account_pairs)
-        if str(left).strip() and str(right).strip()
-    }
-    facebook = [item for item in sources if item.platform == "facebook"]
-    instagram = [item for item in sources if item.platform == "instagram"]
-    hashes: dict[str, tuple[int, ...] | None] = {}
-    edges = []
-    for left in facebook:
-        for right in instagram:
-            if ((left.account.strip().lower(), right.account.strip().lower())
-                    not in allowed_pairs):
-                continue
-            delta = abs(left.created_at - right.created_at)
-            if delta > PAIR_WINDOW:
-                continue
-            similarity = SequenceMatcher(
-                None, _normalize_text(left.text), _normalize_text(right.text)).ratio()
-            media_exact, media_corresponding, distances = _media_relation(
-                left, right, hashes)
-            text_exact = _normalize_text(left.text) == _normalize_text(right.text)
-            exact = text_exact and media_exact
-            suspected = (similarity >= SIMILARITY_THRESHOLD
-                         or (media_corresponding and not exact))
-            if exact or suspected:
-                edges.append((2 if exact else 1, similarity,
-                              -delta.total_seconds(), left, right, distances))
-    edges.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    used: set[str] = set()
-    candidates: list[Candidate] = []
-    human: list[HumanItem] = []
-    for tier, similarity, _delta, left, right, distances in edges:
-        if left.ref in used or right.ref in used:
-            continue
-        pair = (left, right)
-        used.update((left.ref, right.ref))
-        if tier == 2:
-            candidates.append(Candidate(left, pair, "exact_cross_platform"))
-            continue
-        item_id = _item_id(
-            "similar_cross_platform", pair,
-            extra="%.6f:%s" % (similarity, ",".join(map(str, distances))))
-        chosen_ref = selected.get(item_id, "")
-        chosen = next((item for item in pair if item.ref == chosen_ref), None)
-        if chosen is not None:
-            candidates.append(Candidate(chosen, pair, "selected_cross_platform"))
-            continue
-        human.append(HumanItem(
-            item_id=item_id, kind="similar_cross_platform",
-            source_refs=(left.ref, right.ref),
-            summary=("30 小时内正文相似 %.4f；素材 dHash=%s。"
-                     "版本有差异，付费处理前必须选一个。"
-                     % (similarity, list(distances))),
-            details={"similarity": round(similarity, 6),
-                     "dhash_distances": list(distances)}))
-    for source in sources:
-        if source.ref not in used:
-            candidates.append(Candidate(source, (source,), "independent"))
-    candidates.sort(key=lambda item: (item.canonical.created_at,
-                                      item.canonical.ref))
-    return ReconcileResult(tuple(candidates), tuple(human), len(sources))
+    """每个来源单独成为候选；旧选择参数只为读取历史调用保留。"""
+    candidates = tuple(
+        Candidate(source, (source,), "independent")
+        for source in sorted(sources, key=lambda item: (item.created_at, item.ref)))
+    return ReconcileResult(candidates, (), len(sources))
 
 
 def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | None:
@@ -862,6 +747,8 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
             value for value in external
             if value not in rules.trusted_owners[provenance.platform])
         if untrusted:
+            if paid_consent.is_current(provenance.account_dir, dict(source_row)):
+                continue
             return HumanItem(
                 _item_id("unknown_collaborator", candidate.sources,
                          provenance.ref + ":" + "|".join(untrusted)),
@@ -1156,6 +1043,7 @@ def _ready_item(candidate: Candidate, post) -> HumanItem:
          "post_id": source.post_id,
          "platform": source.platform,
          "account_dir": source.account_dir.name,
+         "source_text_sha256": journal.text_sha256(source.text),
          "relation": candidate.relation,
          "publish_fingerprint": fingerprint,
          # ⬇️ 以下只为让人**在批准之前**能判断，不参与任何判据。
@@ -1191,6 +1079,7 @@ def _queue(state_dir: Path, items: Iterable[HumanItem], now: datetime) -> int:
 
 def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
                   settings: Mapping[str, Any], if_stale: bool = False,
+                  detect_updates: bool = True,
                   processing_account_dirs: list[Path] | None = None,
                   budget_account_dirs: list[Path] | None = None,
                   now: datetime | None = None,
@@ -1217,16 +1106,18 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
             account_dirs if processing_account_dirs is None
             else processing_account_dirs)
     }
-    if autonomy == "assisted":
+    if autonomy == "assisted" and detect_updates:
         report("[pipeline] assisted：先跑 delta，再从真相源重新对账。")
         code = runner.delta(if_stale=if_stale)
         if code != 0:
             return code
-    else:
+    elif autonomy == "manual":
         report("[pipeline] manual：只做本地对账，不抓取、不翻译、不调图。")
+    else:
+        report("[pipeline] 本轮监测已完成，直接对账处理本地新内容。")
 
     sources, boundary_issues, out_of_scope = load_sources(
-        account_dirs, activated)
+        active_account_dirs(account_dirs), activated)
     result = reconcile(sources, selected=_resolved_selections(state_dir))
     added = _queue(state_dir, (*boundary_issues, *result.human_items), now)
     report("[pipeline] 激活后来源 %d 条；候选 %d；新增待确认 %d。"
@@ -1253,6 +1144,11 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
     scheduled_refs = journal.scheduled_source_refs(state_dir)
     for candidate in result.candidates:
         if str(candidate.canonical.account_dir.resolve()) not in processing:
+            continue
+        state = review.state_for(candidate.canonical.account_dir, dict(candidate.canonical.row))
+        if state['status'] in {'snoozed', 'skipped', 'handed_off', 'approved', 'scheduled'}:
+            resolve_cleared_items(state_dir, candidate.source_refs,
+                                  kinds=('ready_to_publish',), resolution=state['status'], now=now)
             continue
         refs = set(candidate.source_refs)
         scheduled_overlap = refs & scheduled_refs
@@ -1316,16 +1212,10 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
         if issue is not None:
             _queue(state_dir, (issue,), now)
             continue
-        # 30h 是可配对窗口，不只是同一快照里的筛选条件。窗口尚未闭合时
-        # counterpart/第三条更优边仍可能晚到并改变 greedy 匹配，因此任何候选
-        # （包括眼下已配成 exact 的）都只展示对账，不付费、不生成 ready。
-        if any(source.created_at > now - PAIR_WINDOW
-               for source in candidate.sources):
-            report("[pipeline] 配对窗口尚未闭合，暂缓付费：%s"
-                   % "、".join(candidate.source_refs))
-            continue
         source = candidate.canonical
         try:
+            if _review_paused(source):
+                continue
             if translation_needed(source):
                 assert_budget(budget_dirs, settings, now=now,
                               state_dir=state_dir)
@@ -1339,6 +1229,8 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
                                         % "；".join(after_translation.unknown))
                 assert_budget_after(after_translation, settings)
             for index in pending_image_indices(source):
+                if _review_paused(source):
+                    break
                 assert_budget(budget_dirs, settings, now=now,
                               state_dir=state_dir)
                 if runner.image(source, index) != 0:
@@ -1373,6 +1265,9 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
             _queue(state_dir, (paid_item,), now)
             report("[pipeline] %s" % paid_item.summary)
             return 5
+
+        if _review_paused(source):
+            continue
 
         # 仅用于离线硬闸的未来占位槽；真正槽位在 approve 前读取远端后重分配。
         placeholder_slots = next_slots(now, (), 1, rules)
@@ -1411,6 +1306,7 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
 
 def run(*, account_dirs: list[Path], state_dir: Path,
         settings: Mapping[str, Any], if_stale: bool = False,
+        detect_updates: bool = True,
         processing_account_dirs: list[Path] | None = None,
         budget_account_dirs: list[Path] | None = None,
         now: datetime | None = None, runner: RealStageRunner | None = None,
@@ -1419,7 +1315,7 @@ def run(*, account_dirs: list[Path], state_dir: Path,
     with PipelineOperationLock(Path(state_dir) / "pipeline.lock"):
         return _run_unlocked(
             account_dirs=account_dirs, state_dir=state_dir, settings=settings,
-            if_stale=if_stale,
+            if_stale=if_stale, detect_updates=detect_updates,
             processing_account_dirs=processing_account_dirs,
             budget_account_dirs=budget_account_dirs,
             now=now, runner=runner, report=report)
@@ -1513,7 +1409,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     rules = publish_rules()
     all_dirs = translation.account_dirs(cfg().archive_dir)
     latest_sources, boundary_issues, _out_of_scope = load_sources(
-        all_dirs, activated)
+        active_account_dirs(all_dirs), activated)
     if boundary_issues:
         raise PipelineRunError("最新激活边界对账存在未决来源；请先 pipeline run")
     latest_result = reconcile(
@@ -1555,6 +1451,8 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 or candidate.canonical.ref != details.get("canonical_ref")):
             raise PipelineRunError(
                 "ready 项的最新 canonical/source_refs 已变化；请重新 pipeline run 对账")
+        if _review_paused(candidate.canonical):
+            raise PipelineRunError("这篇已挂起、停止系统处理或进入提交阶段，旧 ready 项不能继续批准。")
         issue = _prepaid_issue(candidate, rules)
         if issue is not None:
             raise PipelineRunError(
@@ -1626,6 +1524,8 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         prepared.append((row, post))
 
     try:
+        for _row, post in prepared:
+            channels.require_independent_channel_evidence((post.platform,))
         bs.require_submission_evidence()
         bs.require_readback_evidence()
     except bs.ProbeRequired as exc:
@@ -1674,6 +1574,9 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     final_batch = []
     for (row, _post), slot in zip(prepared, slots):
         details = row["details"]
+        candidate = current[frozenset(row['source_refs'])]
+        if _review_paused(candidate.canonical):
+            raise PipelineRunError("读取远端槽位期间审校状态发生变化；整批未提交。")
         post = compose_post(
             str(details["post_id"]), slot, archive_root=c.archive_dir,
             account=str(details["account_dir"]),
@@ -1704,6 +1607,8 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
 
     def submit_one(item) -> int:
         row, post, slot = item
+        if _review_paused(current[frozenset(row['source_refs'])].canonical):
+            raise PipelineRunError("发布前审校状态发生变化，本篇未提交。")
         args = [
             "--post-id", post.post_id,
             "--at", slot.isoformat(),

@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 
 from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
+from core import localization
 from publish import evidence
 from publish.business_suite import resolve_ui_timezone
 from core.store import (Archive, ArchivePathError, account_dirs,
@@ -536,22 +537,15 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     if not translation_is_current(source, entry):
         raise _fail(post_id, "译文绑定的英文正文指纹已过期；必须先重译")
 
-    violations = money_preserved(text, text_de)
+    violations = money_preserved(localization.without_urls(text), localization.without_urls(text_de))
     if violations:
         raise _fail(post_id, "金额硬闸未通过：%s" % "；".join(violations))
-    # 标签与金额是 translate.py 里**同一类**「不可改内容规则」，写盘时一起判
-    # （``run_translate`` 把两者的 violations 合成一个列表，任一不过都不写）。
-    # 发布环节必须把两条都再过一次，理由与金额那条完全相同（PUBLISH_PLAN §5.2）：
-    # 人工版独立保存在 translated_human.jsonl。保存允许修改所有正文；
-    # 本批尚未接通平台标签映射的审校确认，发布仍保留原有确定性闸。
-    # 改错标签 = 发出去的德语帖挂错话题/漏掉品牌标签，和改错价格同属对外事故，
-    # 而且 IG 侧的标签是触达路径，不是装饰。
-    # ⚠️ 这与 ``_validate_instagram`` 的标签**数量**上限不是一回事：那道闸问的是
-    # "会不会被 UI 拒绝"，这道闸问的是"还是不是原帖那几个标签"。
-    violations = hashtags_preserved(text, text_de)
-    if violations:
-        raise _fail(post_id, "话题标签硬闸未通过：%s" % "；".join(violations))
-    return text_de
+    draft = localization.effective_draft(arc.base, source, entry)
+    check = localization.validate(draft)
+    if not check['ready']:
+        raise _fail(post_id, "平台文案尚未确认：%s" % "；".join(item['message'] for item in check['issues']))
+    return (localization.render(draft) if draft.get('has_record') or draft.get('links')
+            or localization.extract_urls(text_de) else text_de)
 
 
 def _apply_publish_price_map(source_text: str, text_de: str,
@@ -571,7 +565,7 @@ def _apply_publish_price_map(source_text: str, text_de: str,
     except ValueError as exc:
         raise ComposeError("[publish.price_map] 无效：%s" % exc) from exc
     # 价格表只能改金额，不能借机增删话题标签。
-    violations = hashtags_preserved(source_text, mapped)
+    violations = hashtags_preserved(text_de, mapped)
     if violations:
         raise ComposeError("价格映射破坏话题标签硬闸：%s" % "；".join(violations))
     return mapped
@@ -699,6 +693,32 @@ def _pick_localized(account_dir: Path, candidates: list[Path], *,
     return program[0], False
 
 
+def _check_program_source(account_dir: Path, source: Path, output: Path, *,
+                           post_id: str, position: int) -> None:
+    """只校验已知程序输出的原图依据；人工文件仍由人工审校负责。"""
+    path = account_dir / "images_de.jsonl"
+    output_hash = hashlib.sha256(output.read_bytes()).hexdigest()
+    relative = output.relative_to(account_dir).as_posix()
+    matches = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(row, dict) and row.get("post_id") == post_id
+                and isinstance(row.get("out_path"), str)
+                and row["out_path"].replace("\\", "/") == relative
+                and row.get("output_sha256") == output_hash
+                and row.get("source_sha256")):
+            matches.append(row)
+    if not matches and source.stem != f"{position:02d}":
+        raise _fail(post_id, "第 %d 张源图版本已变化，程序德语图缺少可匹配的原图依据，请重新生成" % position)
+    if matches:
+        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        if not any(row["source_sha256"] == source_hash for row in matches):
+            raise _fail(post_id, "第 %d 张原图已变化，现有程序德语图仍绑定旧源图，请重新生成并审校" % position)
+
+
 def _choose_images(arc: Archive, source: dict, post_dir: Path,
                    warnings: list[str]) -> tuple[
                        tuple[Path, ...],
@@ -731,6 +751,16 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
     except ArchivePathError as exc:
         raise _fail(post_id, str(exc)) from exc
     owned_media_de = _program_owned_media_de(arc.base)
+    latest_images = {}
+    ledger = arc.base / "images_de.jsonl"
+    if ledger.is_file():
+        for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("post_id") == post_id:
+                latest_images[row.get("media_index")] = row
 
     selected: list[Path] = []
     sources: list[Literal["media_de", "original"]] = []
@@ -747,13 +777,23 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
         if media_de.is_dir():
             try:
                 localized = [candidate for candidate in media_de.iterdir()
-                             if candidate.stem == original.stem
+                             if candidate.stem == f"{position:02d}"
                              and candidate.is_file()]
             except OSError as exc:
                 raise _fail(post_id, "无法读取 media_de：%s" % exc) from exc
 
         chosen: Path | None = None
         source_kind: Literal["media_de", "original"] = "original"
+        latest = latest_images.get(position - 1) or {}
+        if latest.get("refine_id"):
+            manual = [path for path in localized if not _is_program_output(arc.base, path, owned_media_de)]
+            if not manual:
+                refined = _relative_archive_path(arc.base, latest.get("out_path", ""), post_id=post_id)
+                expected_stem = f"{position:02d}_v{latest['refine_id']}"
+                if (refined.parent != media_de or refined.stem != expected_stem
+                        or not refined.is_file() or not _is_program_output(arc.base, refined, owned_media_de)):
+                    raise _fail(post_id, "第 %d 张优化图片缺失或已变化，请重新核对" % position)
+                localized = [refined]
         if localized:
             chosen, manual = _pick_localized(
                 arc.base, localized, post_id=post_id, position=position,
@@ -765,6 +805,9 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
                 warnings.append(
                     "第 %d 张用的是**人工放置**的德语图 %s（不是程序产出），"
                     "已按人工优先选用" % (position, chosen.name))
+            else:
+                _check_program_source(arc.base, original, chosen,
+                                      post_id=post_id, position=position)
         if chosen is None:
             chosen = original
             source_kind = "original"

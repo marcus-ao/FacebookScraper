@@ -36,7 +36,8 @@ from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from core.parse import extract, partition_by_owner           # noqa: E402
 from core.store import (Archive, ArchivePathError, Post,      # noqa: E402
-                        assert_physical_direct_path, post_dirname)
+                        assert_physical_direct_path, assert_post_directory,
+                        iter_post_dirs, planned_post_directory)
 
 PREFIX = {"facebook": "fa", "instagram": "in"}
 
@@ -155,9 +156,7 @@ def preflight_replay_paths(base: Path, posts: list[Post],
 
     planned_media: dict[Path, Path] = {}
     for post in posts:
-        target = assert_physical_direct_path(
-            posts_root, posts_root / post_dirname(post.post_id, post.created_at),
-            kind="directory", label=f"kept 帖子目录 {post.post_id}")
+        target = planned_post_directory(base, post)
         assert_physical_direct_path(
             target, target / "post.json", kind="file",
             label=f"kept post.json {post.post_id}")
@@ -175,7 +174,7 @@ def preflight_replay_paths(base: Path, posts: list[Post],
                 continue
             suffix = source.suffix or ".jpg"
             destination = assert_physical_direct_path(
-                target, target / f"{index + 1:02d}{suffix}", kind="file",
+                target, source if source.parent == target else target / f"{index + 1:02d}{suffix}", kind="file",
                 label=f"kept 媒体目标 {post.post_id}[{index}]")
             # 同一路径表示媒体已经位于最终位置，不需要搬。其它既有普通文件
             # 也是冲突，不能依赖 shutil.move 在不同平台上的覆盖语义。
@@ -212,7 +211,7 @@ def isolate_stale_post_dirs(base: Path, posts: list[Post],
     ``_orphan_posts/``；不删除、不覆盖同名历史隔离目录。
 
     ``move=False`` 只返回 ``(源, 目标)`` 计划，不创建目录也不移动，供
-    ``--dry-run`` 展示。每个 kept 只按本轮 ``post_dirname`` 保留唯一的预期
+    ``--dry-run`` 展示。每个 kept 只按稳定目录规划保留唯一的预期
     目录；不能只按 post_id 保留，否则同一帖的 ``undated`` 与 ``dated`` 两个
     真相源会同时留下，reindex 时其中一份仍可能覆盖另一份。
     """
@@ -222,17 +221,14 @@ def isolate_stale_post_dirs(base: Path, posts: list[Post],
     if not _contained(posts_root, base):
         raise ValueError("posts 越过账号归档目录边界")
 
-    kept_names = {post_dirname(post.post_id, post.created_at) for post in posts}
+    kept_dirs = {planned_post_directory(base, post) for post in posts}
     orphan_root = base / "_orphan_posts"
     if not _contained(orphan_root, base):
         raise ValueError("_orphan_posts 越过账号归档目录边界")
 
     planned: list[tuple[Path, Path]] = []
-    for directory in sorted(posts_root.iterdir(), key=lambda p: p.name):
-        if not (directory.is_dir() or directory.is_symlink()):
-            continue
-
-        if not directory.is_symlink() and directory.name in kept_names:
+    for directory in iter_post_dirs(base):
+        if directory in kept_dirs:
             continue
 
         destination = _available_orphan_path(orphan_root, directory.name)
@@ -269,12 +265,11 @@ def relink(posts: list[Post], known: dict[tuple[str, str], str],
                 continue
             want = None
             if move:
-                target = arc.post_dir(post)
+                target = planned_post_directory(base, post)
                 target.mkdir(parents=True, exist_ok=True)
-                assert_physical_direct_path(
-                    arc.posts_dir, target, kind="directory", label="帖子目录")
+                assert_post_directory(base, target)
                 want = assert_physical_direct_path(
-                    target, target / f"{i + 1:02d}{src.suffix or '.jpg'}",
+                    target, src if src.parent == target else target / f"{i + 1:02d}{src.suffix or '.jpg'}",
                     kind="file", label="媒体重连目标")
             if want is not None and src.resolve() != want.resolve():
                 # 文件在孤儿区、或在按旧编号命名的位置：搬到这篇帖子该在的地方。
@@ -443,7 +438,9 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
         rej_path.unlink()
 
     arc = Archive(base.parent, base.name)      # 重新加载（此刻 manifest 为空）
-    written = sum(1 for p in kept if arc.append(p))
+    for post in kept:
+        arc.append(post)
+    written = arc.reindex()
     print("写入 manifest : %d 条" % written)
 
     n_rej = arc.record_rejected(rejected)

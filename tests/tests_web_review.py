@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import sys
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -16,7 +18,7 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import config, translated  # noqa: E402
+from core import config, review, translated  # noqa: E402
 from core.store import post_dirname  # noqa: E402
 from web.api import app as api_app, fake_writer  # noqa: E402
 import localize_images  # noqa: E402
@@ -77,10 +79,12 @@ class WebReviewTests(unittest.TestCase):
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def save(self, text="Von Hand verbessert. #Neakasa", **extra):
+        detail = self.client.get(self.url).json()
         body = {
             "text_de": text,
             "source_text_sha256": translated.source_text_sha256(self.source["text"]),
-            "human_revision": self.client.get(self.url).json()["text"].get("human_revision"),
+            "human_revision": detail["text"].get("human_revision"),
+            "review_revision": detail.get("review", {}).get("revision"),
             **extra,
         }
         return self.client.put(self.url + "/text_de", json=body)
@@ -258,12 +262,258 @@ class WebReviewTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 404, response.text)
         self.assertFalse((self.account / "translated_human.jsonl").exists())
 
-    def test_unimplemented_decisions_never_claim_success(self):
-        for action in ["approve", "skip"]:
-            response = self.client.post(self.url + "/" + action, json={"reason": "test"})
-            self.assertEqual(response.status_code, 501, response.text)
-        self.assertFalse(self.fake_path.exists())
-        self.assertEqual(self.client.get(self.url).json()["status"], "pending_review")
+    def test_approval_without_verified_browser_fails_without_success_record(self):
+        options = self.client.get(self.url + "/approval-options")
+        self.assertEqual(options.status_code, 200, options.text)
+        self.assertFalse(options.json()["available"])
+        self.assertTrue(options.json()["reason"])
+        body = {**self.action_body(), "human_revision": None,
+                "scheduled_at": "2026-09-20T10:00", "content_fingerprint": "not-a-real-fingerprint"}
+        response = self.client.post(self.url + "/approve", json=body)
+        self.assertIn(response.status_code, {400, 409}, response.text)
+        self.assertEqual(review.history(self.account), [])
+
+    def action_body(self, **extra):
+        detail = self.client.get(self.url).json()
+        return {"source_text_sha256": detail["text"]["source_text_sha256"],
+                "review_revision": detail.get("review", {}).get("revision"), **extra}
+
+    def act(self, action, **extra):
+        return self.client.post(self.url + "/review", json=self.action_body(action=action, **extra))
+
+    def test_skip_requires_reason_and_survives_reload(self):
+        self.assertEqual(self.act("skipped", reason=" ").status_code, 400)
+        result = self.act("skipped", reason="德国站没有这个促销")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(self.client.get(self.url).json()["status"], "skipped")
+        self.assertEqual(self.client.get("/api/tasks?status=pending_review").json()["tasks"], [])
+        skipped = self.client.get("/api/tasks?status=skipped").json()["tasks"]
+        self.assertEqual(skipped[0]["review"]["reason"], "德国站没有这个促销")
+
+    def test_snooze_resume_and_stale_review_version(self):
+        old = self.action_body(action="skipped", reason="旧页面决定")
+        result = self.act("snoozed")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["status"], "snoozed")
+        self.assertTrue(result.json()["review"]["wake_at"])
+        self.assertEqual(self.client.post(self.url + "/review", json=old).status_code, 409)
+        resumed = self.act("woke")
+        self.assertEqual(resumed.status_code, 200, resumed.text)
+        self.assertEqual(resumed.json()["status"], "pending_review")
+
+    def test_terminal_decision_blocks_late_text_save(self):
+        self.assertEqual(self.act("skipped", reason="不发").status_code, 200)
+        response = self.save("不应覆盖已结束决定")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertFalse((self.account / "translated_human.jsonl").exists())
+
+    def test_export_zip_contains_current_text_and_explicit_original_fallback(self):
+        self.assertEqual(self.save("Von Hand verbessert. #Neakasa").status_code, 200)
+        result = self.client.post(self.url + "/export", json=self.action_body())
+        self.assertEqual(result.status_code, 200, result.text[:100] if result.status_code != 200 else "")
+        self.assertEqual(result.headers["content-type"], "application/zip")
+        with zipfile.ZipFile(io.BytesIO(result.content)) as package:
+            self.assertEqual(package.read("text_de.txt").decode("utf-8"), "Von Hand verbessert. #Neakasa")
+            metadata = json.loads(package.read("metadata.json"))
+            self.assertTrue(metadata["images"][0]["used_original"])
+            self.assertIn("原图", package.read("README.txt").decode("utf-8"))
+            image = package.read(metadata["images"][0]["file"])
+            self.assertEqual(image, (self.post_dir / "01.jpg").read_bytes())
+        self.assertEqual(self.client.get(self.url).json()["status"], "handed_off")
+        before = len(review.history(self.account))
+        self.assertEqual(self.client.post(self.url + "/export", json=self.action_body()).status_code, 200)
+        self.assertEqual(len(review.history(self.account)), before)
+
+    def test_export_uses_localized_image_and_failed_export_does_not_handoff(self):
+        generated = self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        result = self.client.post(self.url + "/export", json=self.action_body())
+        self.assertEqual(result.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(result.content)) as package:
+            meta = json.loads(package.read("metadata.json"))
+            self.assertFalse(meta["images"][0]["used_original"])
+            self.assertEqual(package.read(meta["images"][0]["file"]), generated)
+
+    def test_export_rejects_missing_or_outside_media_without_changing_state(self):
+        for path in ["../outside.jpg", "missing.jpg"]:
+            with self.subTest(path=path):
+                self.source["media"][0]["local_path"] = path
+                self.write_source()
+                result = self.client.post(self.url + "/export", json=self.action_body())
+                self.assertEqual(result.status_code, 409, result.text)
+                self.assertEqual(self.client.get(self.url).json()["status"], "pending_review")
+
+    def test_handoff_link_can_be_added_later(self):
+        self.assertEqual(self.act("handed_off").status_code, 200)
+        updated = self.act("handoff_link", handoff_url="https://www.facebook.com/posts/456")
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["review"]["handoff_url"], "https://www.facebook.com/posts/456")
+        self.assertEqual(self.act("woke").status_code, 409)
+
+    def localization_body(self, **extra):
+        detail = self.client.get(self.url).json()
+        draft = detail["localization"]
+        return {"body_de": draft["body_de"], "tags": draft["tags"], "links": draft["links"],
+                "hashtags_confirmed": draft["hashtags_confirmed"], "ig_cta": draft["ig_cta"],
+                "source_text_sha256": detail["text"]["source_text_sha256"],
+                "human_revision": detail["text"]["human_revision"],
+                "review_revision": detail["review"]["revision"], "localization_revision": draft["revision"], **extra}
+
+    def save_localization(self, **extra):
+        return self.client.put(self.url + "/localization", json=self.localization_body(**extra))
+
+    def test_localization_saves_three_blocks_as_bound_human_version(self):
+        self.source["text"] += " https://us.example/product #CatLover"
+        self.write_source()
+        self.write_machine("Ein sauberes Zuhause. #Neakasa #CatLover")
+        response = self.save_localization(body_de="Von Menschen geprüft.", tags=["#Neakasa", "#Katzenliebe"],
+            hashtags_confirmed=True, links=[{"source_url": "https://us.example/product",
+                                            "target_url": "https://de.example/product", "confirmed": True}])
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertTrue(detail["localization_validation"]["ready"])
+        self.assertTrue(detail["localization"]["has_record"])
+        self.assertEqual(detail["localization"]["body_de"], "Von Menschen geprüft.")
+        self.assertIn("https://de.example/product", self.human_rows()[-1]["text_de"])
+        self.assertIn("#Katzenliebe", self.human_rows()[-1]["text_de"])
+        self.assertEqual(self.client.get(self.url).json()["localization"]["tags"], ["#Neakasa", "#Katzenliebe"])
+        self.write_machine("Maschine darf die Auswahl nicht ersetzen. #Neakasa #CatLover")
+        self.assertTrue(self.client.get(self.url).json()["localization_validation"]["ready"])
+
+    def test_localization_conflict_does_not_append_any_new_human_version(self):
+        old = self.localization_body()
+        response = self.save_localization(body_de="First human choice.")
+        self.assertEqual(response.status_code, 200, response.text)
+        latest = self.localization_body(body_de="Another choice.")
+        latest["localization_revision"] = old["localization_revision"]
+        self.assertEqual(self.client.put(self.url + "/localization", json=latest).status_code, 409)
+        self.assertEqual(len(self.human_rows()), 1)
+        self.assertEqual(self.client.put(self.url + "/localization", json=old).status_code, 409)
+        self.assertEqual(len(self.human_rows()), 1)
+
+    def test_localization_incomplete_choice_can_save_but_not_claim_ready(self):
+        self.source["text"] += " https://us.example/product #CatLover"
+        self.write_source()
+        self.write_machine("Noch zu prüfen. #Neakasa #CatLover")
+        response = self.save_localization()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["localization_validation"]["ready"])
+        self.assertTrue(response.json()["localization"]["has_record"])
+
+    def test_localization_rejects_hidden_urls_brand_changes_or_dropped_source_link(self):
+        self.source["text"] += " https://us.example/product"
+        self.write_source()
+        self.write_machine("Noch zu prüfen. #Neakasa")
+        for extra in ({"body_de": "URL https://us.example/new"}, {"tags": []}, {"links": []},
+                      {"body_de": "Hashtag #new"}):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.save_localization(**extra).status_code, 400)
+        self.assertFalse((self.account / "translated_human.jsonl").exists())
+
+    def test_instagram_three_blocks_remove_urls_keep_custom_cta_and_warn_only(self):
+        self.source["platform"] = "instagram"
+        self.source["text"] += " https://us.example/product"
+        self.write_source()
+        (self.account / "manifest.jsonl").write_text(json.dumps(self.source) + "\n", encoding="utf-8")
+        self.write_machine("Ein Zuhause. #Neakasa")
+        long_body = "😀" * 2201
+        tags = ["#Neakasa"] + ["#Tag%d" % index for index in range(30)]
+        response = self.save_localization(body_de=long_body, tags=tags, hashtags_confirmed=True,
+                                          ig_cta="Mehr Infos in unserem Profil 🔗")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertEqual(detail["localization_validation"]["hashtag_count"], 31)
+        self.assertEqual(detail["localization"]["body_de"], long_body)
+        self.assertTrue(detail["localization_validation"]["ready"])
+        self.assertEqual(len(detail["localization_validation"]["warnings"]), 2)
+        self.assertNotIn("https://", detail["text"]["de_human"])
+        self.assertIn("Mehr Infos in unserem Profil 🔗", detail["text"]["de_human"])
+
+    def test_refinement_accepts_real_job_and_polling_without_calling_model(self):
+        from pipeline import refinement
+        from unittest.mock import Mock
+        executor = Mock()
+        detail = self.client.get(self.url).json()
+        body = {"kind": "text", "instruction": "更自然，但保留型号", **self.action_body(),
+                "human_revision": detail["text"]["human_revision"]}
+        endpoint = "/api/refinements/task/" + self.task_id
+        with patch.object(refinement, "_executor", executor), patch.object(refinement.engine, "budget_preflight"):
+            response = self.client.post(endpoint, json=body)
+        self.assertEqual(response.status_code, 202, response.text)
+        job = response.json()
+        self.assertEqual(job["status"], "pending")
+        self.assertEqual(executor.submit.call_count, 1)
+        polled = self.client.get("/api/refinements/jobs/" + job["job_id"])
+        self.assertEqual(polled.status_code, 200)
+        self.assertEqual(polled.json()["instruction"], body["instruction"])
+        caps = self.client.get(endpoint).json()
+        self.assertEqual(caps["jobs"][0]["job_id"], job["job_id"])
+        self.assertIn("estimate_basis", caps)
+        with patch.object(refinement, "_executor", executor), patch.object(refinement.engine, "budget_preflight"):
+            repeated = self.client.post(endpoint, json=body)
+        self.assertEqual(repeated.status_code, 409)
+        self.assertEqual(executor.submit.call_count, 1)
+        self.assertFalse((self.account / "translated_human.jsonl").exists())
+
+    def test_refinement_validation_budget_and_templates_are_read_only(self):
+        from pipeline import engine, refinement
+        endpoint = "/api/refinements/task/" + self.task_id
+        body = {"kind": "text", "instruction": "更自然", **self.action_body(), "human_revision": None}
+        with patch.object(refinement, "submit", side_effect=engine.BudgetStopped("测试预算已停止")):
+            self.assertEqual(self.client.post(endpoint, json=body).status_code, 409)
+        self.assertEqual(self.client.post(endpoint, json={**body, "kind": []}).status_code, 400)
+        self.assertEqual(self.client.get("/api/refinements/jobs/" + "0" * 32).status_code, 404)
+        template = self.client.get("/api/templates/text")
+        self.assertEqual(template.status_code, 200)
+        self.assertEqual(template.json()["content"], (ROOT / "prompts" / "translate_de.md").read_text(encoding="utf-8"))
+        self.assertEqual(self.client.put("/api/templates/text", json={"content": "bad"}).status_code, 405)
+
+    def test_hashtag_suggestions_are_candidates_only_and_do_not_save(self):
+        from pipeline import hashtag_suggestions
+        result = {"groups": [{"source_tag": "#CatLover", "protected": False,
+                    "candidates": [{"tag": "#Katzenliebe", "signals": [], "current_signals": []}]}],
+                  "selected": ["#Katzenliebe"], "notice": "未采样，语义建议", "generated_at": "2026-09-12T02:00:00Z"}
+        body = {**self.action_body(), "human_revision": None}
+        with patch.object(hashtag_suggestions, "suggest", return_value=result) as suggest:
+            response = self.client.post("/api/hashtags/task/" + self.task_id, json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["notice"], "未采样，语义建议")
+        self.assertEqual(suggest.call_count, 1)
+        self.assertFalse((self.account / "translated_human.jsonl").exists())
+        self.assertFalse((self.account / "localization.jsonl").exists())
+
+    def test_list_uses_sql_candidates_and_falls_back_only_when_unavailable(self):
+        from web.api import query_index
+        fresh = {"available": True, "stale": False, "rebuilt_at": "2026-09-12T02:00:00Z", "error": None}
+        with patch.object(query_index, "candidates", return_value={"task_ids": [], "index": fresh}) as candidates:
+            response = self.client.get("/api/tasks?tag=Missing")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["tasks"], [])
+        self.assertEqual(response.json()["index"], fresh)
+        self.assertEqual(candidates.call_args.kwargs["tag"], "Missing")
+        stale = {**fresh, "stale": True, "error": "busy"}
+        with patch.object(query_index, "candidates", return_value={"task_ids": None, "index": stale}):
+            response = self.client.get("/api/tasks")
+        self.assertEqual(len(response.json()["tasks"]), 1)
+        self.assertTrue(response.json()["index"]["stale"])
+
+    def test_malformed_review_action_is_client_error(self):
+        for action in (None, [], {}, 123):
+            with self.subTest(action=action):
+                self.assertEqual(self.act(action).status_code, 400)
+
+    def test_tags_edit_persists_filters_and_rejects_old_tags_version(self):
+        detail = self.client.get(self.url).json()
+        body = {"tags": [" M1 Pro ", "Campaign", "M1 Pro"],
+                "tags_revision": detail.get("tags_revision"),
+                "source_text_sha256": detail["text"]["source_text_sha256"]}
+        response = self.client.put(self.url + "/tags", json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["tags"], ["M1 Pro", "Campaign"])
+        persisted = json.loads((self.post_dir / "post.json").read_text(encoding="utf-8"))
+        self.assertEqual(persisted["tags"], ["M1 Pro", "Campaign"])
+        self.assertEqual(len(self.client.get("/api/tasks?tag=M1%20Pro").json()["tasks"]), 1)
+        self.assertEqual(self.client.get("/api/tasks?tag=Other").json()["tasks"], [])
+        self.assertEqual(self.client.put(self.url + "/tags", json={**body, "tags": ["Other"]}).status_code, 409)
 
 
 if __name__ == "__main__":

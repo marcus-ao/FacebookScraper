@@ -1,0 +1,183 @@
+"""运营发起的单篇优化。复用付费执行器，生成结果不替换人工稿。"""
+from __future__ import annotations
+
+import re
+import statistics
+from threading import RLock
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+import localize_images
+import translate
+from core import paid_model, paid_requests, review, translated
+from core.config import cfg
+from core.store import account_dirs, read_post_truth
+from pipeline import engine
+from publish import journal
+
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='content-refine')
+_event_threads = RLock()
+
+
+def _rows() -> list[dict]:
+    if not (cfg().state_dir / 'refinements.jsonl').exists():
+        return []
+    with _event_threads, _events_lock():
+        return paid_model.read_jsonl(cfg().state_dir / 'refinements.jsonl',
+                                    on_corrupt=lambda *args: ValueError('优化记录损坏，请先核对'))
+
+
+def _events_lock():
+    return paid_model.FileLock(cfg().state_dir / 'refinement_events.lock',
+                               busy_message='优化记录正在更新，请稍后重试')
+
+
+def _append(row):
+    with _event_threads, _events_lock():
+        paid_model.append_jsonl(cfg().state_dir / 'refinements.jsonl', row)
+
+
+def latest() -> dict[str, dict]:
+    return {row['job_id']: row for row in _rows()}
+
+
+def job_result(job_id: str) -> dict | None:
+    if not re.fullmatch(r'[0-9a-f]{32}', job_id):
+        raise review.ReviewValidationError('优化任务编号无效')
+    return latest().get(job_id)
+
+
+def capabilities(account_dir: Path, post_id: str) -> dict:
+    """费用为当前有效样本中位数；无样本时明确使用业务测量参考，绝非预算上界。"""
+    settings = localize_images.Settings()
+    costs = []
+    for directory in account_dirs(cfg().archive_dir):
+        for row in localize_images.load_image_state(directory / 'images_de.jsonl').latest.values():
+            usage = row.get('usage')
+            if isinstance(usage, dict):
+                cost = localize_images.image_usage_cost(settings, usage)
+                if cost is not None:
+                    costs.append(cost)
+    jobs = [row for row in latest().values()
+            if row['account'] == Path(account_dir).name and row['post_id'] == post_id and row['kind'] in {'text', 'image'}]
+    counts = {}
+    for row in jobs:
+        if row['kind'] == 'image':
+            key = str(row['media_index'])
+            counts[key] = counts.get(key, 0) + 1
+    return {'max_refine_per_media': settings.max_refine_per_media, 'image_attempts': counts,
+            'estimated_image_usd': round(statistics.median(costs), 4) if costs else 0.211,
+            'estimate_basis': '本地 usage 样本中位数' if costs else '业务测量参考，暂无本地 usage 样本',
+            'estimate_samples': len(costs), 'jobs': jobs}
+
+
+def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_revision=None,
+              initial=False):
+    source, _ = read_post_truth(account_dir, indexed)
+    scheduled = journal.source_ref(source['platform'], source['post_id']) in journal.scheduled_source_refs(cfg().state_dir)
+    state = review.state_for(account_dir, source, scheduled=scheduled)
+    if state['status'] not in {'pending_review', 'edited'}:
+        raise review.ReviewConflict('请先恢复这篇的审校，再发起优化')
+    if translated.source_text_sha256(source['text']) != source_hash:
+        raise review.ReviewConflict('原文已有更新，请重新核对后发起优化')
+    human = translated.load_human_translated(account_dir / 'translated_human.jsonl').get(source['post_id'])
+    if initial and (state.get('revision') != review_revision or (human or {}).get('revision') != human_revision):
+        raise review.ReviewConflict('审校内容已有更新，请刷新后重试')
+    effective = translated.effective_translation(source,
+        translated.load_translated(account_dir / 'translated.jsonl').get(source['post_id']), human)
+    if effective and effective.get('is_human') and effective.get('stale'):
+        raise review.ReviewConflict('请先复核并保存原文变更后的人工稿')
+    if effective and effective.get('stale'):
+        effective = None
+    # 复用与自动处理相同的归属、素材和价格规则，Web 不能绕过付费闸。
+    created = datetime.fromisoformat(source['created_at'].replace('Z', '+00:00'))
+    candidate = engine.SourcePost(source['platform'], account_dir, source, created,
+                                  journal.source_ref(source['platform'], source['post_id']))
+    issue = engine._prepaid_issue(engine.Candidate(candidate, (candidate,), 'independent'), engine.publish_rules())
+    if issue:
+        raise review.ReviewConflict(issue.summary)
+    return source, effective
+
+
+def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
+           source_text_sha256: str, human_revision: str | None,
+           review_revision: str | None, media_index: int | None = None,
+           executor=None) -> dict:
+    if kind not in {'text', 'image'} or not isinstance(instruction, str) or not instruction.strip():
+        raise review.ReviewValidationError('请选择文案或图片，并填写本次优化要求')
+    if len(instruction) > 4000:
+        raise review.ReviewValidationError('优化要求请控制在 4000 字内')
+    account_dir = Path(account_dir)
+    if account_dir.name not in cfg().active_accounts():
+        raise review.ReviewValidationError('此账号已冻结或未配置，不产生新费用')
+    cfg().state_dir.mkdir(parents=True, exist_ok=True)
+    with paid_model.FileLock(cfg().state_dir / 'refinement.lock',
+                             busy_message='有优化请求正在受理，请稍后重试'), review.transaction(account_dir):
+        source, effective = _eligible(account_dir, indexed, source_hash=source_text_sha256,
+            review_revision=review_revision, human_revision=human_revision, initial=True)
+        if kind == 'image' and (not isinstance(media_index, int) or isinstance(media_index, bool)
+                or not 0 <= media_index < len(source.get('media', [])) or effective is None):
+            raise review.ReviewValidationError('请指定已有译文的有效图片序号')
+        previous = [row for row in latest().values()
+                    if row['account'] == account_dir.name and row['post_id'] == source['post_id']]
+        if any(row['status'] in {'pending', 'running'} for row in previous):
+            raise review.ReviewConflict('这篇已有优化任务在处理，请等待结果；重启遗留任务需先核对付费账本')
+        if kind == 'image':
+            count = sum(row['kind'] == 'image' and row.get('media_index') == media_index for row in previous)
+            if count >= localize_images.Settings().max_refine_per_media:
+                raise review.ReviewConflict('这张图片已达到优化次数上限，请下载后交人工处理')
+        engine.budget_preflight()
+        now = datetime.now(timezone.utc).isoformat()
+        row = {'job_id': uuid4().hex, 'account': account_dir.name, 'post_id': source['post_id'],
+               'source_text_sha256': source_text_sha256, 'kind': kind, 'instruction': instruction.strip(),
+               'media_index': media_index, 'status': 'pending', 'recorded_at': now, 'actor': None}
+        _append(row)
+    (executor or _executor).submit(execute, row, source)
+    return row
+
+
+def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
+    """工作线程入口；重启后不会自动重放未闭合请求。测试注入执行器，零真实费用。"""
+    account_dir = cfg().archive_dir / row['account']
+    event = dict(row, status='running', recorded_at=datetime.now(timezone.utc).isoformat())
+    _append(event)
+    try:
+        def preflight():
+            _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
+            engine.budget_preflight()
+        preflight()
+        source, effective = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
+        controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight)
+        if row['kind'] == 'text':
+            settings = translate.Settings()
+            translator = translator or translate.Translator(settings, paid_controller=controller)
+            with translate.TranslationRunLock(cfg().state_dir / 'translate.lock'):
+                ok, failed = translate.run_translate(settings, translator, account_dir, 1, True, False,
+                    scope=frozenset([source['post_id']]), source_rows=[source],
+                    refine_instruction=row['instruction'], refine_id=row['job_id'],
+                    current_body=(effective or {}).get('text_de', ''))
+            if ok != 1 or failed:
+                raise ValueError('文案优化未通过产出检查；已有人工稿保持原样')
+            result = translated.load_translated(account_dir / 'translated.jsonl')[source['post_id']]
+            event['text_de'] = result['text_de']
+        else:
+            settings = localize_images.Settings()
+            editor = editor or localize_images.ImageEditor(settings, paid_controller=controller)
+            with localize_images.ImageRunLock(cfg().state_dir / 'images.lock'):
+                stats = localize_images.run_localize(settings, editor, account_dir, [source], 1, True, False,
+                    row['media_index'], refine_instruction=row['instruction'], refine_id=row['job_id'])
+            if stats.succeeded != 1:
+                raise ValueError('图片优化未通过产出检查；已有图片保持原样')
+            result = localize_images.load_image_state(account_dir / 'images_de.jsonl').latest[
+                (source['post_id'], row['media_index'])]
+            event['out_path'] = result['out_path']
+        event['status'] = 'succeeded'
+    except (Exception, SystemExit) as exc:
+        # 不把 SDK 异常原文（可能含凭据/响应）放进业务界面。
+        event.update(status='failed', error=type(exc).__name__,
+                     message='优化未完成，请检查模型配置、素材和付费记录后再决定是否重试。')
+    event['recorded_at'] = datetime.now(timezone.utc).isoformat()
+    _append(event)
+    return event

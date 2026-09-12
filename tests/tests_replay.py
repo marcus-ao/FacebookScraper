@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory() as temp:
     kept = post("known_link", 3)
     kept.media = [Media(url="https://cdn/known.jpg", kind="image")]
     media_dir = arc.post_dir(kept)
-    media_dir.mkdir()
+    media_dir.mkdir(parents=True)
     outside_media = root / "outside_known_media.jpg"
     outside_media.write_bytes(b"KNOWN MEDIA SENTINEL")
     linked_media = media_dir / "01.jpg"
@@ -254,7 +254,7 @@ for unsafe_leaf in ("post.json", "text.txt"):
         arc = Archive(root, "in_acct")
         kept = post("kept_truth_leaf", 4)
         target = arc.post_dir(kept)
-        target.mkdir()
+        target.mkdir(parents=True)
         outside_leaf = root / ("outside_" + unsafe_leaf.replace(".", "_"))
         outside_leaf.write_bytes(("TRUTH LEAF " + unsafe_leaf).encode())
         os.link(outside_leaf, target / unsafe_leaf)
@@ -304,7 +304,7 @@ with tempfile.TemporaryDirectory() as temp:
     source = source_dir / "source.jpg"
     source.write_bytes(b"ORIGINAL SOURCE")
     target = arc.post_dir(kept)
-    target.mkdir()
+    target.mkdir(parents=True)
     destination = target / "01.jpg"
     destination.write_bytes(b"EXISTING MEDIA SENTINEL")
     row = kept.to_row()

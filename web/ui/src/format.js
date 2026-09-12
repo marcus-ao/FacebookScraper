@@ -22,8 +22,14 @@ export function formatDate(iso) {
 
 export function formatTrailTime(iso) {
   if (!iso) return ''
-  return String(iso).replace('T', ' ').replace(/\+.*$/, '').slice(0, 16)
+  const value = new Date(iso)
+  if (Number.isNaN(value.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).format(value)
 }
+export function formatWakeAt(iso) { return iso ? `${formatTrailTime(iso)} 上海` : '' }
 
 export const PLATFORM_LABEL = { facebook: 'Facebook', instagram: 'Instagram' }
 
@@ -34,9 +40,11 @@ export const STATUS_LABEL = {
   not_ready: '待处理',
   pending_review: '待我审',
   edited: '已修改',
+  snoozed: '已挂起',
   approved: '已通过',
   scheduled: '已排期',
-  skipped: '这篇不发'
+  skipped: '这篇不发',
+  handed_off: '已交人工处理'
 }
 
 export const AUTHOR_KIND_LABEL = {

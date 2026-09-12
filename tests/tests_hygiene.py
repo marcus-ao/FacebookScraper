@@ -148,6 +148,8 @@ print("\n[2] 病因 2 · 没有零引用的定义")
 SYMBOL_EXEMPT = {
     # CLI 入口点由 argparse / __main__ 分派，或供外部按名调用
     "main", "_cli",
+    # pipeline.refinement.capabilities 由 web/api/jobs.py 调用；此扫描器不遍历 web。
+    "capabilities",
 }
 
 definitions: dict[str, list[tuple[str, int]]] = {}
@@ -494,6 +496,44 @@ check(not undocumented,
       "实得 %d 处无说明：%s"
       % (len(undocumented), "、".join(undocumented) or "无"))
 
+
+print("\n[7] SQLite 只做展示索引，业务模块不依赖数据库")
+database_consumers = []
+for name, tree in trees.items():
+    if name == "core.index_db":
+        continue
+    if name.split(".")[0] not in {"core", "routes", "pipeline", "publish", "translate", "localize_images"}:
+        continue
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            modules = [node.module or ""] + ["%s.%s" % (node.module, alias.name) for alias in node.names]
+        elif isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        else:
+            continue
+        if any(module in {"core.index_db", "sqlite3"} or module.startswith("sqlite3.") for module in modules):
+            database_consumers.append("%s:%d" % (name, node.lineno))
+check(not database_consumers,
+      "core/routes/pipeline/publish 及付费执行器不读 DB 做决策，实得：%s"
+      % ("、".join(database_consumers) or "无"))
+
+print("\n[8] 云盘镜像没有下载或反向恢复接口")
+mirror_tree = trees.get("core.mirror")
+reverse_mirror = []
+if mirror_tree is not None:
+    for node in ast.walk(mirror_tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr in {"download", "download_file", "download_all", "restore", "sync_from_cloud"}:
+            reverse_mirror.append(str(node.lineno))
+        if (node.func.attr == "get" and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "http"):
+            permitted = (node.args and isinstance(node.args[0], ast.Constant)
+                         and node.args[0].value == "https://open.feishu.cn/open-apis/drive/v1/files/task_check")
+            if not permitted:
+                reverse_mirror.append(str(node.lineno))
+check(not reverse_mirror, "镜像仅可读取异步任务状态元数据，无云内容反向入口，实得：%s"
+      % ("、".join(reverse_mirror) or "无"))
 
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 sys.exit(1 if fails else 0)

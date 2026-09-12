@@ -2,11 +2,13 @@
 import { computed } from 'vue'
 import {
   AUTHOR_KIND_LABEL, formatDate, formatSchedule, formatTrailTime,
-  PLATFORM_LABEL
+  PLATFORM_LABEL, formatWakeAt
 } from '../format.js'
 import Icon from './Icon.vue'
+import TagEditor from './TagEditor.vue'
 
-const props = defineProps({ detail: { type: Object, required: true } })
+const props = defineProps({ detail: { type: Object, required: true }, editable: { type: Boolean, default: true } })
+const emit = defineEmits(['changed'])
 
 const meta = computed(() => props.detail.meta || {})
 const when = computed(
@@ -15,6 +17,12 @@ const when = computed(
 const ACTION_LABEL = {
   approved: '通过',
   skipped: '标记为不发',
+  snoozed: '暂时挂起',
+  woke: '恢复审校',
+  handed_off: '交由人工处理',
+  handoff_link: '回填手工发布链接',
+  scheduled: '确认已排期',
+  submit_failed: '提交失败，恢复审校',
   text_edited: '修改了德语译文'
 }
 </script>
@@ -58,6 +66,12 @@ const ACTION_LABEL = {
         </dd>
       </div>
     </dl>
+    <TagEditor :detail="detail" :disabled="!editable" @changed="emit('changed', $event)" />
+    <div v-if="detail.review" class="review-context">
+      <p v-if="detail.review.wake_at">恢复审校：{{ formatWakeAt(detail.review.wake_at) }}</p>
+      <p v-if="detail.review.reason">处理理由：{{ detail.review.reason }}</p>
+      <p v-if="detail.review.handoff_url"><a :href="detail.review.handoff_url" target="_blank" rel="noopener noreferrer">查看手工发布的帖子</a></p>
+    </div>
 
     <!-- 组装告警：主要是"缺德语图，已回退原图"。
          能降级的就降级，但必须让人看见。 -->
@@ -71,15 +85,16 @@ const ACTION_LABEL = {
     <!-- actor 留痕。**只在详情页显示**（§10）：列表上显示会诱发互相盯梢，
          几个人的小团队里是负面效果。 -->
     <div class="trail">
-      <h4>最近保存</h4>
+      <h4>操作记录 · 上海时间</h4>
       <ol v-if="detail.trail && detail.trail.length">
         <li v-for="(row, i) in detail.trail" :key="i">
           <span class="at">{{ formatTrailTime(row.at) }}</span>
           <span class="what">{{ ACTION_LABEL[row.action] || row.action }}</span>
           <span v-if="row.note" class="note">「{{ row.note }}」</span>
+          <span v-if="row.wake_at" class="note">恢复审校：{{ formatWakeAt(row.wake_at) }}</span>
         </li>
       </ol>
-      <p v-else class="empty">尚未保存人工文案。</p>
+      <p v-else class="empty">尚无人工操作记录。</p>
     </div>
   </section>
 </template>
@@ -136,4 +151,5 @@ dd.muted, .sub { font-weight: 400; color: var(--muted-fg); }
 .trail .who { font-weight: 600; }
 .trail .note { color: var(--muted-fg); flex-basis: 100%; }
 .trail .empty { margin: 0; font-size: 12px; color: var(--muted-fg); }
+.review-context { font-size: 12px; overflow-wrap: anywhere; color: var(--muted-fg); }
 </style>

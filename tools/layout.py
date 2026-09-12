@@ -1,9 +1,11 @@
 r"""归档布局工具。对应实施计划的 J 组。
 
-三个子命令：
+四个子命令：
 
     python -m tools.layout reindex  <facebook|instagram>   从 posts/ 重建 manifest.jsonl
     python -m tools.layout index    <facebook|instagram>   生成 index.html 总览
+    python -m tools.layout reindex-db                     重建 state/index.sqlite 展示索引
+    python -m tools.layout migrate  <facebook|instagram>   显式迁移旧目录，保留备份
 
 `reindex` 是"文件夹与索引冲突时以文件夹
 为准"那条规则的执行者，随时可跑。`index` 是给业务同事看的那份，随时可重生成。
@@ -15,17 +17,23 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import shutil
 import sys
+from dataclasses import fields
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
+from core import index_db, paid_model                       # noqa: E402
 from core.store import (                                     # noqa: E402
-    Archive, ArchivePathError, assert_physical_direct_path, post_dirname,
+    Archive, ArchivePathError, Post, _atomic_write_text, _new_folder_name,
+    archive_write_lock, assert_physical_direct_path, assert_post_directory,
+    infer_tags, iter_post_dirs,
 )
 
 PREFIX = {"facebook": "fa", "instagram": "in"}
@@ -37,15 +45,141 @@ def archive_base(platform: str):
     return c.archive_dir / f"{PREFIX[platform]}_{account}", account
 
 
-# ⚠️ 2026-09-03 删除了 `migrate`（扁平 media/ → 每帖一个文件夹，222 行）。
-# 它是一次性迁移，已经跑完：归档里 `media/` 目录不复存在、`posts/` 布局已就位、
-# 旧 manifest 的备份 `manifest.jsonl.premigrate` 还在。
-# docs/MANUAL_STEPS.md 也写着「已经跑过，不用再跑」。
-#
-# 它顺带是符号链接/junction 越界防护的一个测试载体，但那套防护的实现
-# （core/store.py::assert_physical_direct_path）没有动，且 tests_store_links.py
-# 在**仍然活着的路径**上（post dir / post.json / 媒体路径 / archive 根）
-# 覆盖着同一个威胁模型。要看迁移代码：git 历史。
+def _migration_events(base: Path) -> dict[str, dict]:
+    path = assert_physical_direct_path(base, base / "layout_migrations.jsonl", kind="file", label="布局迁移记录")
+    latest = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                latest[row["post_id"]] = row
+    return latest
+
+
+def _checked_tree(base: Path, directory: Path) -> None:
+    assert_post_directory(base, directory)
+    for parent, directories, files in os.walk(directory, followlinks=False):
+        for name in directories:
+            assert_physical_direct_path(Path(parent), Path(parent) / name, kind="directory", label="迁移子目录")
+        for name in files:
+            assert_physical_direct_path(Path(parent), Path(parent) / name, kind="file", label="迁移源文件")
+
+
+def _migration_plan(base: Path) -> list[dict]:
+    pending = {pid: event for pid, event in _migration_events(base).items() if event["status"] == "started"}
+    plans = []
+    for directory in iter_post_dirs(base):
+        source_path = assert_physical_direct_path(directory, directory / "post.json", kind="file", label="迁移源帖")
+        if not source_path.exists():
+            continue
+        row = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(row, dict) or not isinstance(row.get("post_id"), str) or not isinstance(row.get("text"), str):
+            raise ArchivePathError("迁移源 post.json schema 无效：%s" % source_path)
+        saved = pending.get(row["post_id"])
+        if saved:
+            plan = dict(saved, row=row)
+            target = base / plan["target"]
+            assert_post_directory(base, target)
+        else:
+            values = {key: value for key, value in row.items() if key in {field.name for field in fields(Post)}}
+            post = Post(**values)
+            name = row.get("folder_name") or _new_folder_name(post)
+            updated = dict(row, folder_name=name, tags=row.get("tags") if isinstance(row.get("tags"), list) else infer_tags(row["text"]))
+            # 规划目标强制月份层级；post_directory 的旧平铺兼容仅用于日常读取。
+            month = name[:7] if name[:4].isdigit() else "undated"
+            target = assert_post_directory(base, base / "posts" / month / name)
+            if directory == target and updated == row:
+                continue
+            plan = {"post_id": row["post_id"], "status": "started", "source": directory.relative_to(base).as_posix(),
+                    "target": target.relative_to(base).as_posix(), "folder_name": name,
+                    "backup": "_layout_backups/" + uuid4().hex, "row": updated}
+        _checked_tree(base, directory)
+        if target.exists() and target != directory:
+            raise ArchivePathError("迁移目标已存在，拒绝覆盖：%s" % target)
+        plan["current"] = directory.relative_to(base).as_posix()
+        plans.append(plan)
+    ids = [plan["post_id"] for plan in plans]
+    if len(ids) != len(set(ids)):
+        raise ArchivePathError("同一 post_id 有多个真相目录，请先核对再迁移")
+    return plans
+
+
+def _remap_paths(value, old_prefix: str, new_prefix: str, *, path_value: bool = False):
+    if isinstance(value, dict):
+        return {key: _remap_paths(item, old_prefix, new_prefix,
+                                 path_value=key in {"local_path", "out_path", "source_rel"})
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_remap_paths(item, old_prefix, new_prefix, path_value=path_value) for item in value]
+    if path_value and isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        if normalized.startswith(old_prefix + "/"):
+            return new_prefix + normalized[len(old_prefix):]
+    return value
+
+
+def _migrate_one(base: Path, plan: dict) -> None:
+    current, target = base / plan["current"], base / plan["target"]
+    ledger = base / "layout_migrations.jsonl"
+    def guard(path):
+        return assert_physical_direct_path(path.parent, path, kind="file", label="迁移账本")
+    event = {key: value for key, value in plan.items() if key not in {"row", "current"}}
+    paid_model.append_jsonl(ledger, event, guard=guard)
+    backup = base / plan["backup"]
+    assert_physical_direct_path(base, backup.parent, kind="directory", label="布局恢复区")
+    assert_physical_direct_path(backup.parent, backup, kind="directory", label="迁移备份")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    marker = backup / ".complete"
+    if not marker.exists():
+        shutil.copytree(current, backup, dirs_exist_ok=True)
+        _atomic_write_text(marker, "complete\n", label="迁移备份完成标记")
+    if current != target:
+        assert_post_directory(base, current)
+        assert_post_directory(base, target)
+        if not current.resolve().is_relative_to(base.resolve()) or not target.resolve().is_relative_to(base.resolve()):
+            raise ArchivePathError("迁移目标超出账号归档目录")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        current.rename(target)
+    row = _remap_paths(plan["row"], plan["source"], plan["target"])
+    row["folder_name"] = plan["folder_name"]
+    if not isinstance(row.get("tags"), list):
+        row["tags"] = infer_tags(row["text"])
+    _atomic_write_text(target / "post.json", json.dumps(row, ensure_ascii=False, indent=2), label="post.json")
+    history = target / "source_history.jsonl"
+    if history.exists():
+        assert_physical_direct_path(target, history, kind="file", label="源版本历史")
+        rewritten = [json.dumps(_remap_paths(json.loads(line), plan["source"], plan["target"]), ensure_ascii=False)
+                     for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
+        _atomic_write_text(history, "\n".join(rewritten) + "\n", label="源版本历史路径迁移")
+    images = assert_physical_direct_path(base, base / "images_de.jsonl", kind="file", label="图片账本")
+    if images.exists():
+        entries = [json.loads(line) for line in images.read_text(encoding="utf-8").splitlines() if line.strip()]
+        seen = {json.dumps(entry, sort_keys=True) for entry in entries}
+        for entry in entries:
+            rewritten = _remap_paths(entry, plan["source"], plan["target"])
+            signature = json.dumps(rewritten, sort_keys=True)
+            if rewritten != entry and signature not in seen:
+                paid_model.append_jsonl(images, rewritten, guard=guard)
+                seen.add(signature)
+    paid_model.append_jsonl(ledger, dict(event, status="completed"), guard=guard)
+
+
+def migrate(base: Path, *, dry_run: bool = True) -> int:
+    """显式迁移旧平铺目录；先备份、记录恢复计划，保留人工文件与图片所有权。"""
+    base = Path(base)
+    if base.name == "in_neakasa.tech":
+        raise ArchivePathError("in_neakasa.tech 已冻结，保持现有布局，不执行迁移")
+    plans = _migration_plan(base)
+    for plan in plans:
+        print("  %s -> %s" % (plan["source"], plan["target"]))
+    if dry_run:
+        return len(plans)
+    with archive_write_lock(base):
+        plans = _migration_plan(base)
+        for plan in plans:
+            _migrate_one(base, plan)
+        Archive(base.parent, base.name).reindex()
+    return len(plans)
 
 
 PAGE = """<!doctype html><html lang="zh"><meta charset="utf-8">
@@ -134,10 +268,21 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
 def main(argv=None) -> int:
     force_utf8()
     ap = argparse.ArgumentParser(description="归档布局工具（J 组）")
-    ap.add_argument("command", choices=("reindex", "index"))
-    ap.add_argument("platform", choices=sorted(PREFIX))
+    ap.add_argument("command", choices=("reindex", "index", "reindex-db", "migrate"))
+    ap.add_argument("platform", choices=sorted(PREFIX), nargs="?")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.command == "reindex-db":
+        database = cfg().state_dir / "index.sqlite"
+        if args.dry_run:
+            print("--dry-run：将从帖子真相源重建展示索引 %s，当前未写盘" % database)
+            return 0
+        count = index_db.rebuild_index(cfg().archive_dir, database, state_dir=cfg().state_dir)
+        print("展示索引已从文件重建：%d 篇；%s" % (count, database))
+        return 0
+    if args.platform is None:
+        ap.error("此命令需要指定 facebook 或 instagram")
 
     base, account = archive_base(args.platform)
     if not base.exists():
@@ -146,6 +291,10 @@ def main(argv=None) -> int:
 
     if args.command == "index":
         return build_index(base, account, args.dry_run)
+    if args.command == "migrate":
+        count = migrate(base, dry_run=args.dry_run)
+        print("%s %d 个帖子目录" % ("将迁移" if args.dry_run else "已迁移", count))
+        return 0
     if args.dry_run:
         print("reindex 没有 dry-run 的意义（它就是把 posts/ 的事实抄进索引）")
         return 1

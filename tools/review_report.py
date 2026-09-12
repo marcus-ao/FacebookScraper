@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
 import localize_images as image_de                  # noqa: E402
 from core.paid_model import FileLockBusy           # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
-                        assert_physical_direct_path, post_dirname, read_post_truth)
+                        assert_physical_direct_path, post_directory, read_post_truth)
 from core.translated import (HumanRevisionConflict, effective_translation,  # noqa: E402
                              hashtags_preserved, image_translation,
                              load_human_translated, load_translated,
@@ -300,9 +300,7 @@ def _review_sources(arc: Archive, notices: list[str]) -> list[dict]:
                 or not isinstance(indexed.get("text"), str)):
             continue
         try:
-            directory = arc.posts_dir / post_dirname(indexed["post_id"], indexed.get("created_at"))
-            assert_physical_direct_path(arc.posts_dir, directory,
-                                        kind="directory", label="审校帖子目录")
+            directory = post_directory(arc.base, indexed)
             if not directory.exists():
                 # 尚未迁移的历史布局仍能离线查看；sync 不会向不存在的目录写副本。
                 rows.append(indexed)
@@ -338,11 +336,8 @@ def sync_text_de(arc_base: Path, rows: list[dict], trans: dict[str, dict], *,
         if not isinstance(row, dict) or not row.get("post_id"):
             continue
         pid = row["post_id"]
-        posts_dir = arc_base / "posts"
-        d = posts_dir / post_dirname(row["post_id"], row.get("created_at"))
         try:
-            assert_physical_direct_path(
-                posts_dir, d, kind="directory", label="译文帖子目录")
+            d = post_directory(arc_base, row)
         except ArchivePathError as exc:
             print(f"    ! 跳过不安全的 text_de.txt 目标：{exc}")
             continue

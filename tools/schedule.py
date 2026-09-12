@@ -36,6 +36,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -45,6 +46,7 @@ from core.console import force_utf8        # noqa: E402
 DAILY_TASK = "FBScraperDelta"
 CATCHUP_TASK = "FBScraperDeltaCatchup"
 ALIVE_TASK = "FBScraperAlive"
+SCHEDULER_TASK = "FBScraperScheduler"
 
 # 任务名保持纯 ASCII：A1 的结论是 cmd 处理非 ASCII 不可靠，
 # 而 schtasks 的任务名会经过命令行。描述走 XML（UTF-16），中文没问题。
@@ -300,13 +302,44 @@ def remove() -> int:
     return rc
 
 
+def scheduler_xml(root: Path | None = None) -> str:
+    """常驻调度器模板：系统只负责启动和崩溃恢复，时间窗口由 Python 管理。
+
+    这里只生成文本。旧每日任务迁移需要人工停用，不能让两个调度源同时提频。
+    InteractiveToken 保证 Chrome 使用人工登录的桌面会话。
+    """
+    root = root or Path(__file__).resolve().parent.parent
+    settings = _settings(network=False, time_limit="PT0S").replace(
+        "  </Settings>",
+        "    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>\n  </Settings>")
+    return '''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="%s">
+  <RegistrationInfo><Description>上海窗口监测常驻进程；只抓取，模型处理需另行显式启用。</Description><URI>\\%s</URI></RegistrationInfo>
+  <Triggers>
+    <BootTrigger><Enabled>true</Enabled><Delay>PT2M</Delay></BootTrigger>
+    <LogonTrigger><Enabled>true</Enabled><UserId>%s</UserId><Delay>PT2M</Delay></LogonTrigger>
+  </Triggers>
+%s
+%s
+  <Actions Context="Author"><Exec>
+    <Command>%s</Command><Arguments>--run</Arguments>
+    <WorkingDirectory>%s</WorkingDirectory>
+  </Exec></Actions>
+</Task>
+''' % (NS, SCHEDULER_TASK, escape(_user()), _principal(), settings,
+       escape(str(root / "scripts" / "run_scheduler.bat")), escape(str(root)))
+
+
 def main(argv=None) -> int:
     force_utf8()
     p = argparse.ArgumentParser(prog="python -m tools.schedule",
                                 description="每日增量的 Windows 计划任务")
-    p.add_argument("action", choices=("xml", "install", "status", "remove"))
+    p.add_argument("action", choices=("xml", "scheduler-xml", "install", "status", "remove"))
     p.add_argument("--dry-run", action="store_true", help="install 时只打印命令")
     args = p.parse_args(argv)
+    if args.action == "scheduler-xml":
+        print(scheduler_xml())
+        return 0
 
     if args.action == "xml":
         for name, xml in plan():

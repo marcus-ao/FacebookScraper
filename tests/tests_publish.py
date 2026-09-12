@@ -81,7 +81,7 @@ def make_fixture(root: Path, *, platform: str = "instagram",
     post_dir = account_dir / "posts" / dirname
     post_dir.mkdir(parents=True)
 
-    text = "Offer stays at $10.\n\n#One #Two"
+    text = "Offer stays at $10.\n\n#Neakasa #P1Pro"
     media = []
     for index in range(1, image_count + 1):
         name = "%02d.jpg" % index
@@ -118,7 +118,7 @@ def make_fixture(root: Path, *, platform: str = "instagram",
     translation = {
         "post_id": post_id,
         "source_text_sha256": source_text_sha256(text),
-        "text_de": "Das Angebot bleibt bei $10.\n\n#One #Two",
+        "text_de": "Das Angebot bleibt bei $10.\n\n#Neakasa #P1Pro",
         "translated_at": "2026-08-31T05:00:00Z",
         "model": "fixture",
         "prompt_version": PROMPT_VERSION,
@@ -630,7 +630,7 @@ with tempfile.TemporaryDirectory() as d:
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot kostet 10 €。\n\n#One #Two")
+    rewrite_translation(fixture, text_de="Das Angebot kostet 10 €。\n\n#Neakasa #P1Pro")
     check(raises(ComposeError,
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
@@ -643,33 +643,31 @@ with tempfile.TemporaryDirectory() as d:
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Eins #Two")
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Eins #P1Pro")
     check(raises(ComposeError,
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
-                 "话题标签"),
-          "发布前再次复用 hashtags_preserved：标签被改写会被拦下，"
+                 "标签"),
+          "发布前品牌型号标签被改写会被拦下，"
           "而不是把改错的标签发到德语主页")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#One")
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Neakasa")
     check(raises(ComposeError,
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
-                 "话题标签"),
-          "标签被删掉一个也算违规——数量、内容、大小写、顺序都必须与原帖一致")
+                 "标签"),
+          "原帖品牌或型号标签被删掉会被拦下")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#Two #One")
-    check(raises(ComposeError,
-                 lambda: compose_post("fixture-post", WHEN, archive_root=root,
-                                      warning_sink=None),
-                 "话题标签"),
-          "只调换顺序同样被拦下：口径与 translate.py 写盘闸完全一致，不放宽")
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#P1Pro #Neakasa")
+    reordered = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    check(reordered.text_de.endswith("#P1Pro #Neakasa"),
+          "品牌型号保持原写法；分区编辑允许运营调整标签顺序")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"

@@ -103,116 +103,28 @@ with tempfile.TemporaryDirectory() as folder:
           "激活边界保留微秒并使用严格大于，不把同一时刻的历史帖纳入")
 
 
-print("\n[2] 跨平台完全重复自动合并；相似/素材一致版本进入待确认")
+print("\n[2] FB/IG 独立处理；相似与相同内容都不互相覆盖")
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
-    fb_row = row("fb1", "facebook", "2026-09-01T10:00:00Z",
-                 "Same caption", "acme")
-    ig_row = row("ig1", "instagram", "2026-09-01T11:00:00Z",
-                 "Same caption", "acme")
-    fb = make_account(root, "fa_acme", [fb_row])
-    ig = make_account(root, "in_acme", [ig_row])
-    # 两边源图设成逐像素相同。
-    source_image = next((fb / "posts").rglob("01.jpg"))
-    target_image = next((ig / "posts").rglob("01.jpg"))
-    target_image.write_bytes(source_image.read_bytes())
-    sources, _, _ = A.load_sources(
-        [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
+    fb = make_account(root, "fa_acme", [row("fb1", "facebook", "2026-09-01T10:00:00Z", "Same caption", "acme")])
+    ig = make_account(root, "in_acme", [row("ig1", "instagram", "2026-09-01T11:00:00Z", "Same caption", "acme", coauthors=["mystery.creator"])])
+    sources, _, _ = A.load_sources([fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
     result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
-    check(len(result.candidates) == 1
-          and result.candidates[0].canonical.platform == "facebook"
-          and set(result.candidates[0].source_refs) == {"facebook:fb1", "instagram:ig1"},
-          "30h 内归一化正文相同、图片数相同、dHash≤1 时自动合并并优先 FB")
-    check(not result.human_items, "完全重复不制造待确认项")
-
-    # canonical 是 FB 自有帖；secondary IG 的未知作者仍必须拦住。
-    ig_row["owner"] = "mystery.creator"
-    ig_row["coauthors"] = ["acme"]
-    (ig / "manifest.jsonl").write_text(json.dumps(ig_row) + "\n", encoding="utf-8")
-    sources, _, _ = A.load_sources(
-        [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
-    merged = A.reconcile(
-        sources, account_pairs=TEST_ACCOUNT_PAIRS).candidates[0]
-    issue = A._prepaid_issue(merged, TEST_RULES)
-    check(issue is not None and issue.kind == "unknown_collaborator"
-          and issue.details.get("source_ref") == "instagram:ig1",
-          "自动合并候选会审全部 source owner，secondary 未知作者不能躲在 FB canonical 后")
-
-    # material/amount 也必须审 secondary；它最终与 canonical 共用 journal。
-    secondary = merged.sources[1]
-    secondary.row["media_complete"] = False
-    issue = A._prepaid_issue(merged, TEST_RULES)
-    check(issue is not None and issue.kind == "material_gate"
-          and issue.details.get("source_ref") == "instagram:ig1",
-          "secondary 轮播不完整时 exact merge 也在付费前失败闭合")
-    secondary.row["media_complete"] = True
-    secondary.row["owner"] = secondary.account
-    secondary.row["coauthors"] = []
-    secondary.row["text"] = "Same caption with $777"
-    issue = A._prepaid_issue(merged, TEST_RULES)
-    check(issue is not None and issue.kind == "unmapped_price"
-          and issue.details.get("source_ref") == "instagram:ig1",
-          "secondary 未映射金额不能躲在 FB canonical 后进入付费阶段")
-
-with tempfile.TemporaryDirectory() as folder:
-    root = Path(folder)
-    own = row("co1", "instagram", "2026-09-01T11:00:00Z",
-              "Caption", "neakasa.tech", coauthors=["mystery.creator"])
-    account = make_account(root, "in_neakasa.tech", [own])
-    source = A.load_sources(
-        [account], datetime(2026, 9, 1, tzinfo=timezone.utc))[0][0]
-    issue = A._prepaid_issue(
-        A.Candidate(source, (source,), "independent"), A.publish_rules())
+    check(len(result.candidates) == 2 and not result.human_items,
+          "旧账号配对参数不再产生合并或选版本人工项")
+    independent = {candidate.canonical.platform: candidate for candidate in result.candidates}
+    check(A._prepaid_issue(independent["facebook"], TEST_RULES) is None,
+          "FB 自有内容不受 IG 合作作者影响")
+    issue = A._prepaid_issue(independent["instagram"], TEST_RULES)
     check(issue is not None and issue.kind == "unknown_collaborator",
-          "owner 是自有账号也会审外部 coauthors，未知合作方进入人工项")
-
-with tempfile.TemporaryDirectory() as folder:
-    root = Path(folder)
-    common = "A long campaign caption with identical product details and hashtags " * 4
-    fb_row = row("fb2", "facebook", "2026-09-01T10:00:00Z",
-                 common + "Buy at example.com", "acme")
-    ig_row = row("ig2", "instagram", "2026-09-01T11:00:00Z",
-                 common + "Use the link in bio", "acme")
-    fb = make_account(root, "fa_acme", [fb_row])
-    ig = make_account(root, "in_acme", [ig_row])
-    next((ig / "posts").rglob("01.jpg")).write_bytes(
-        next((fb / "posts").rglob("01.jpg")).read_bytes())
-    sources, _, _ = A.load_sources(
-        [fb, ig], datetime(2026, 9, 1, tzinfo=timezone.utc))
-    result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
-    item = result.human_items[0]
-    check(item.kind == "similar_cross_platform" and not result.candidates,
-          "正文≥0.90 或素材高度一致但版本不同，付费前进入待确认")
-    selected = A.reconcile(
-        sources, selected={item.item_id: "instagram:ig2"},
-        account_pairs=TEST_ACCOUNT_PAIRS)
-    check(selected.candidates[0].canonical.ref == "instagram:ig2"
-          and set(selected.candidates[0].source_refs) == {
-              "facebook:fb2", "instagram:ig2"},
-          "人工选定版本后才生成 canonical candidate，并保留两个 source_refs")
-
-    unpaired = A.reconcile(sources, account_pairs={("another", "brand")})
-    check(len(unpaired.candidates) == 2 and not unpaired.human_items,
-          "未在显式账号映射中的 FB/IG 即使同文同图也不跨品牌合并")
-
-
-print("\n[3] 真实 8 月 27 日 FB/IG 配对：CTA 不同，必须待确认")
-archive = cfg().archive_dir
-real_dirs = [archive / "fa_neakasaofficial", archive / "in_neakasa.tech"]
-if all(path.is_dir() for path in real_dirs):
-    sources, _, _ = A.load_sources(
-        real_dirs, datetime(2026, 8, 27, tzinfo=timezone.utc))
-    real = A.reconcile(sources)
-    matching = [item for item in real.human_items
-                if "facebook:122123185335379375" in item.source_refs]
-    check(len(matching) == 1, "真实 FB/IG 配对没有被自动挑选")
-    if matching:
-        details = matching[0].details
-        check(details["similarity"] >= .90
-              and details["dhash_distances"] == [0, 0, 0, 0, 0],
-              "真实配对正文高度相似、五张图 dHash 均为 0，但 CTA 差异使其待确认")
-else:
-    check(True, "CI 无真实 archive 时跳过 8 月 27 日标定（本机存在则强制验证）")
+          "IG 独立保留合作作者审核闸")
+    source = independent["instagram"].canonical
+    source.row["media_complete"] = False
+    check(A._prepaid_issue(independent["instagram"], TEST_RULES).kind == "material_gate",
+          "独立帖子仍检查素材完整性")
+    source.row.update(media_complete=True, coauthors=[], text="Sale $777")
+    check(A._prepaid_issue(independent["instagram"], TEST_RULES).kind == "unmapped_price",
+          "独立帖子仍检查未映射金额")
 
 
 print("\n[4] needs_human 追加式、幂等，并派生 HTML")
@@ -349,122 +261,34 @@ with tempfile.TemporaryDirectory() as folder:
         corrupt_blocked = False
     check(corrupt_blocked, "损坏费用 JSONL 失败闭合，不能静默漏算后继续花钱")
 
-print("\n[5b] 30h 配对窗口按跨次真相源成熟，--account 不缩小候选发现")
+print("\n[5b] 新帖立即处理；冻结账号不消费；历史双渠道回执仍幂等")
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
     state = root / "state"
     fb = make_account(root / "archive", "fa_neakasaofficial", [
-        row("fresh-fb", "facebook", "2026-09-01T13:00:00Z",
-            "Same fresh caption", "neakasaofficial")])
-    ig = make_account(root / "archive", "in_neakasa.tech", [
-        row("fresh-ig", "instagram", "2026-09-01T13:30:00Z",
-            "Same fresh caption", "neakasa.tech")])
-    next((ig / "posts").rglob("01.jpg")).write_bytes(
-        next((fb / "posts").rglob("01.jpg")).read_bytes())
-    A.activate(state, g8_verified=True,
-               now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
-    fresh_runner = Runner()
-    fresh_code = A.run(
-        account_dirs=[fb, ig], processing_account_dirs=[fb], state_dir=state,
-        settings={"autonomy": "assisted", "daily_budget_usd": 5,
-                  "monthly_budget_usd": 60},
-        now=datetime(2026, 9, 1, 14, tzinfo=timezone.utc),
-        runner=fresh_runner, report=lambda _message: None)
-    check(fresh_code == 0 and fresh_runner.calls == [("delta", False)],
-          "fresh exact pair 任一来源未满 30h 时仍零翻译/调图/ready")
-
-    mature_runner = Runner()
-    A.run(
-        account_dirs=[fb, ig], processing_account_dirs=[fb], state_dir=state,
-        settings={"autonomy": "assisted", "daily_budget_usd": 5,
-                  "monthly_budget_usd": 60},
-        now=datetime(2026, 9, 3, 20, tzinfo=timezone.utc),
-        runner=mature_runner, report=lambda _message: None)
-    check(("translate", "facebook:fresh-fb") in mature_runner.calls
-          and not any(call[0] == "translate" and "fresh-ig" in str(call)
-                      for call in mature_runner.calls),
-          "成熟后 --account 只限制 canonical 执行；发现仍读取两端并合并一次")
-
-with tempfile.TemporaryDirectory() as folder:
-    root = Path(folder)
-    state = root / "state"
-    other = make_account(root / "archive", "fa_other", [
-        row("other", "facebook", "2026-09-01T13:00:00Z",
-            "Other brand caption", "other")])
-    A.activate(state, g8_verified=True,
-               now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
-    other_runner = Runner()
-    A.run(
-        account_dirs=[other], state_dir=state,
-        settings={"autonomy": "assisted", "daily_budget_usd": 5,
-                  "monthly_budget_usd": 60},
-        now=datetime(2026, 9, 3, 20, tzinfo=timezone.utc),
-        runner=other_runner, report=lambda _message: None)
-    open_kinds = {row.get("kind") for row in A.latest_human_items(state).values()
-                  if row.get("status") == "open"}
-    check(other_runner.calls == [("delta", False)] and "unknown_owner" in open_kinds,
-          "非 [targets] 来源账号即使自有且成熟也零付费/零 ready，进入人工项")
-
-with tempfile.TemporaryDirectory() as folder:
-    root = Path(folder)
-    state = root / "state"
-    fb_row = row("late-fb", "facebook", "2026-09-01T13:00:00Z",
-                 "Late exact caption", "neakasaofficial")
-    ig_row = row("late-ig", "instagram", "2026-09-01T13:30:00Z",
-                 "Late exact caption", "neakasa.tech")
-    fb = make_account(root / "archive", "fa_neakasaofficial", [fb_row])
-    ig = make_account(root / "archive", "in_neakasa.tech", [ig_row])
-    next((ig / "posts").rglob("01.jpg")).write_bytes(
-        next((fb / "posts").rglob("01.jpg")).read_bytes())
-    A.activate(state, g8_verified=True,
-               now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
+        row("fresh-fb", "facebook", "2026-09-01T13:00:00Z", "Fresh caption", "neakasaofficial")])
+    legacy = make_account(root / "archive", "in_neakasa.tech", [
+        row("fresh-ig", "instagram", "2026-09-01T13:30:00Z", "Fresh caption", "neakasa.tech")])
+    A.activate(state, g8_verified=True, now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
+    runner = Runner()
+    A.run(account_dirs=[fb, legacy], state_dir=state,
+          settings={"autonomy": "assisted", "daily_budget_usd": 5, "monthly_budget_usd": 60},
+          now=datetime(2026, 9, 1, 14, tzinfo=timezone.utc), runner=runner,
+          report=lambda _message: None)
+    check(("translate", "facebook:fresh-fb") in runner.calls,
+          "发布仅一小时的来源进入翻译，不再等待 30 小时")
+    check(not any("fresh-ig" in str(call) for call in runner.calls),
+          "冻结 .tech 不再自动翻译或生成图片")
     A.journal.append(state, A.journal.PublishAttempt(
-        post_id="late-fb", platform="facebook",
-        status=A.journal.STATUS_SCHEDULED,
-        scheduled_at="2026-09-02T10:00:00+02:00",
-        recorded_at="2026-09-01T14:00:00+00:00",
-        text_de_sha256="abc", source_refs=("facebook:late-fb",)))
-    late_runner = Runner()
-    A.run(
-        account_dirs=[fb, ig], state_dir=state,
-        settings={"autonomy": "assisted", "daily_budget_usd": 5,
-                  "monthly_budget_usd": 60},
-        now=datetime(2026, 9, 3, 20, tzinfo=timezone.utc),
-        runner=late_runner, report=lambda _message: None)
-    late_rows = [row for row in A.latest_human_items(state).values()
-                 if row.get("kind") == "late_scheduled_overlap"
-                 and row.get("status") == "open"]
-    check(late_runner.calls == [("delta", False)] and len(late_rows) == 1,
-          "成熟 FB 已 scheduled 后迟到 exact IG 写耐久人工闸，零付费/零发布")
-
-    # 即使下一次 greedy/真相源让 IG 暂时变成独立候选，旧人工闸按 ref 交集继续挡。
-    (fb / "manifest.jsonl").write_text("", encoding="utf-8")
-    independent_runner = Runner()
-    A.run(
-        account_dirs=[fb, ig], state_dir=state,
-        settings={"autonomy": "assisted", "daily_budget_usd": 5,
-                  "monthly_budget_usd": 60},
-        now=datetime(2026, 9, 3, 21, tzinfo=timezone.utc),
-        runner=independent_runner, report=lambda _message: None)
-    check(independent_runner.calls == [("delta", False)],
-          "迟到覆盖项未结转时，IG 后续换 pair/独立仍持续阻塞")
-
-    # approve 是显式人工结转：扩展旧 scheduled 的 source_refs，但不碰浏览器。
-    (fb / "manifest.jsonl").write_text(json.dumps(fb_row) + "\n", encoding="utf-8")
-    original_account_dirs = A.translation.account_dirs
-    A.translation.account_dirs = lambda *_args, **_kwargs: [fb, ig]
-    try:
-        code = A.approve(
-            item_ids=[str(late_rows[0]["item_id"])], selections={},
-            state_dir=state, assume_yes=True,
-            now=datetime(2026, 9, 3, 22, tzinfo=timezone.utc))
-    finally:
-        A.translation.account_dirs = original_account_dirs
-    check(code == 0 and A.journal.scheduled_source_refs(state) >= {
-              "facebook:late-fb", "instagram:late-ig"}
-          and A.latest_human_items(state)[late_rows[0]["item_id"]].get(
-              "status") == "resolved",
-          "人工 approve 把迟到 exact ref 标为既有 scheduled 覆盖并明确留 manual_evidence")
+        post_id="fresh-fb", platform="facebook", status=A.journal.STATUS_SCHEDULED,
+        scheduled_at="2026-09-02T10:00:00+02:00", recorded_at="2026-09-01T14:00:00+00:00",
+        text_de_sha256="abc", source_refs=("facebook:fresh-fb", "instagram:fresh-ig")))
+    again = Runner()
+    A.run(account_dirs=[fb, legacy], state_dir=state,
+          settings={"autonomy": "assisted", "daily_budget_usd": 5, "monthly_budget_usd": 60},
+          now=datetime(2026, 9, 1, 15, tzinfo=timezone.utc), runner=again,
+          report=lambda _message: None)
+    check(again.calls == [("delta", False)], "历史覆盖两来源的 scheduled 回执仍防止重复处理")
 
 
 print("\n[6] 德国 10:00/17:00 槽位跨两地 DST 窗口仍正确")
