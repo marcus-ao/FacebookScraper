@@ -7,11 +7,13 @@ import unittest
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import hashtag_rank, hashtag_sampling
 from pipeline import hashtag_suggestions
+from routes import delta
 
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
@@ -78,6 +80,100 @@ class HashtagSamplingTests(unittest.TestCase):
         self.assertIsNone(hashtag_sampling.verified_instagram_count(payloads, "#Hunde"))
         self.assertIsNone(hashtag_sampling.verified_instagram_count(
             [{"edge_hashtag_to_media": {"count": 999}}], "#Katzen"))
+        self.assertIsNone(hashtag_sampling.verified_instagram_count(
+            [{"name": "katzen", "count": 42, "type": "unrelated_object"}], "#Katzen"))
+        self.assertIsNone(hashtag_sampling.verified_instagram_count(
+            [{"name": "katzen", "media_count": 42}], "#Katzen"))
+        self.assertIsNone(hashtag_sampling.verified_instagram_count(
+            [{"name": "katzen", "edge_hashtag_to_media": {"count": 42},
+              "type": "unrelated_object"}], "#Katzen"))
+
+    def _production_config(self, directory, *, failure_budget=3):
+        hashtag_values = {"enabled": True, "peer_accounts": [], "refresh_days": 7,
+                          "max_candidate_tags": 12, "max_peer_accounts": 5}
+
+        class TestConfig:
+            state_dir = Path(directory)
+            detect_debug_port = 9224
+            detect_profile_dir = Path(directory) / "detect"
+
+            def get(self, section, key, default=None):
+                if section == "hashtags":
+                    return hashtag_values.get(key, default)
+                if section == "delta" and key == "failure_budget":
+                    return failure_budget
+                return default
+
+            def __getitem__(self, section):
+                if section == "targets":
+                    return {"facebook": "neakasaofficial", "instagram": "neakasa.global"}
+                raise KeyError(section)
+
+            def assert_chrome_profiles_isolated(self):
+                return None
+
+        return TestConfig()
+
+    def test_persistent_hard_stop_and_failure_budget_block_before_attach(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c = self._production_config(directory)
+            state_path = Path(directory) / "delta_state.json"
+            entry = delta.blank_entry()
+            entry.update(account="neakasa.global", consecutive_failures=3)
+            state = {"instagram": entry, "detect_hard_blocked": {
+                "reason": "HTTP 429", "platform": "instagram", "recorded_at": NOW.isoformat()}}
+            delta.save_state(state_path, state)
+            with patch("core.chrome.attach", new_callable=AsyncMock) as attach:
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                attach.assert_not_awaited()
+
+            state.pop("detect_hard_blocked")
+            delta.save_state(state_path, state)
+            with patch("core.chrome.attach", new_callable=AsyncMock) as attach:
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                attach.assert_not_awaited()
+
+    def test_429_persists_shared_hard_stop_and_failure_before_next_attach(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c = self._production_config(directory)
+            collector = SimpleNamespace(
+                payloads=[], blocked_status=lambda: (429, "https://www.instagram.com/api/graphql"))
+            pw = SimpleNamespace(stop=AsyncMock())
+            browser = SimpleNamespace(close=AsyncMock())
+            with patch("core.chrome.attach", new=AsyncMock(return_value=(pw, browser, object()))) as attach, \
+                    patch.object(delta, "scan_page", new=AsyncMock(
+                        return_value=(collector, "https://www.instagram.com/explore/tags/katzen/"))):
+                result = hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                self.assertTrue(result["errors"])
+                state = delta.load_state(Path(directory) / "delta_state.json")
+                self.assertEqual(state["instagram"]["consecutive_failures"], 1)
+                self.assertEqual(state["detect_hard_blocked"]["platform"], "instagram")
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                self.assertEqual(attach.await_count, 1)
+
+    def test_unknown_payload_failures_accumulate_across_sampler_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c = self._production_config(directory, failure_budget=3)
+            collector = SimpleNamespace(
+                payloads=[{"data": {"name": "unrelated", "count": 12}}],
+                blocked_status=lambda: None)
+            pw = SimpleNamespace(stop=AsyncMock())
+            browser = SimpleNamespace(close=AsyncMock())
+            attach = AsyncMock(return_value=(pw, browser, object()))
+            scan = AsyncMock(return_value=(
+                collector, "https://www.instagram.com/explore/tags/katzen/"))
+            with patch("core.chrome.attach", new=attach), patch.object(delta, "scan_page", new=scan):
+                for _ in range(3):
+                    result = hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                    self.assertEqual(result["instagram"], {})
+                state = delta.load_state(Path(directory) / "delta_state.json")
+                self.assertEqual(state["instagram"]["consecutive_failures"], 3)
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
+                self.assertEqual(attach.await_count, 3)
 
     def test_empty_peer_list_skips_without_calling_fetcher(self):
         called = False

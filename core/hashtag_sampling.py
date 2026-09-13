@@ -162,33 +162,31 @@ def verified_instagram_count(payloads: Iterable[Mapping], tag: str) -> int | Non
     """
     normalized = tag.removeprefix("#").casefold()
 
-    def nodes(value):
+    def hashtag_nodes(value):
         if isinstance(value, Mapping):
-            yield value
+            candidate = value.get("hashtag")
+            if isinstance(candidate, Mapping):
+                yield candidate
             for child in value.values():
-                yield from nodes(child)
+                yield from hashtag_nodes(child)
         elif isinstance(value, list):
             for child in value:
-                yield from nodes(child)
+                yield from hashtag_nodes(child)
 
     for payload in payloads:
-        for node in nodes(payload):
+        for node in hashtag_nodes(payload):
             name = node.get("name")
             if not isinstance(name, str) or name.removeprefix("#").casefold() != normalized:
                 continue
-            candidates = []
             edge = node.get("edge_hashtag_to_media")
-            if isinstance(edge, Mapping):
-                candidates.append(edge.get("count"))
-            candidates.extend((node.get("media_count"), node.get("count")))
-            for count in candidates:
-                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
-                    return count
+            count = edge.get("count") if isinstance(edge, Mapping) else None
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                return count
     return None
 
 
 async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...], c,
-                                settings: SamplingConfig) -> dict:
+                                dcfg, state: dict, state_path: Path) -> dict:
     """Use the isolated detect browser and the repository's capture/parser path."""
     from core.chrome import attach
     from core.parse import extract, partition_by_owner
@@ -196,17 +194,34 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
     from routes import delta
 
     c.assert_chrome_profiles_isolated()
-    dcfg = replace(delta.DeltaConfig.load(c), max_scrolls=0)
     pw = browser = None
     result = {"instagram": {}, "peer_posts": {}, "errors": []}
-    failures = 0
+    entry = state.setdefault("instagram", delta.blank_entry())
+
+    def record_failure(reason: str, *, hard: bool = False) -> None:
+        moment = delta.utcnow()
+        delta.record_failure(entry, moment, reason)
+        if hard:
+            state["detect_hard_blocked"] = {
+                "reason": reason, "platform": "instagram",
+                "recorded_at": delta.iso(moment),
+            }
+        delta.save_state(state_path, state)
+
     try:
-        pw, browser, context = await attach(
-            port=c.detect_debug_port, profile=c.detect_profile_dir,
-            start_script=r"scripts\start_chrome_detect.bat", login_hint="探测小号")
+        try:
+            pw, browser, context = await attach(
+                port=c.detect_debug_port, profile=c.detect_profile_dir,
+                start_script=r"scripts\start_chrome_detect.bat", login_hint="探测小号")
+        except (Exception, SystemExit) as exc:
+            reason = "标签采样附着 detect 浏览器失败（%s）：%s" % (
+                type(exc).__name__, str(exc) or "无错误详情")
+            record_failure(reason)
+            result["errors"].append(reason)
+            return result
         requests = [("tag", tag) for tag in tags] + [("peer", peer) for peer in peers]
         for index, (kind, value) in enumerate(requests):
-            if failures >= dcfg.failure_budget:
+            if delta.budget_exhausted(entry, dcfg.failure_budget):
                 result["errors"].append("连续失败达到抓取预算，已停止本批")
                 break
             url = ("https://www.instagram.com/explore/tags/%s/"
@@ -217,6 +232,7 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
                     delta.scan_page(context, url, dcfg), timeout=dcfg.max_session_seconds)
                 reason = delta.login_wall_reason(final_url, collector.blocked_status())
                 if reason:
+                    record_failure(reason, hard=True)
                     result["errors"].append(reason)
                     break
                 if kind == "tag":
@@ -234,16 +250,24 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
                         "tags": extract_hashtags(post.text or ""),
                         "url": post.permalink or url,
                     } for post in posts]
-                failures = 0
             except (Exception, SystemExit) as exc:
-                failures += 1
-                result["errors"].append("%s:%s:%s" % (kind, value, type(exc).__name__))
+                hard = isinstance(exc, delta.DeltaBlocked) and exc.hard
+                reason = "%s:%s:%s:%s" % (
+                    kind, value, type(exc).__name__, str(exc) or "无错误详情")
+                record_failure(reason, hard=hard)
+                result["errors"].append(reason)
+                if hard:
+                    break
             if index + 1 < len(requests):
                 await delta._pause(dcfg.scroll_pause())
     finally:
         if browser is not None:
-            await browser.close()
-        if pw is not None:
+            try:
+                await browser.close()
+            finally:
+                if pw is not None:
+                    await pw.stop()
+        elif pw is not None:
             await pw.stop()
     return result
 
@@ -261,10 +285,20 @@ def collect_browser_observations(*, tags: Iterable[str] = (), peers: Iterable[st
         raise ValueError("标签采样请求超过配置的单批上限")
     if not tag_names and not peer_names:
         return {"instagram": {}, "peer_posts": {}, "errors": []}
-    from routes.delta import DeltaRunLock
-    with DeltaRunLock(Path(c.state_dir) / "delta.lock"):
+    from routes import delta
+    dcfg = replace(delta.DeltaConfig.load(c), max_scrolls=0)
+    state_path = Path(c.state_dir) / "delta_state.json"
+    with delta.DeltaRunLock(Path(c.state_dir) / "delta.lock"):
+        state = delta.load_state(state_path)
+        delta.bind_target_state(state, c)
+        entry = state.setdefault("instagram", delta.blank_entry())
+        if state.get("detect_hard_blocked"):
+            raise SamplingUnavailable("detect 会话已被登录墙或限流硬停，须人工恢复")
+        if delta.budget_exhausted(entry, dcfg.failure_budget):
+            raise SamplingUnavailable("Instagram 连续失败达到预算，须人工恢复")
         return asyncio.run(_browser_observations(
-            tags=tag_names, peers=peer_names, c=c, settings=settings))
+            tags=tag_names, peers=peer_names, c=c, dcfg=dcfg,
+            state=state, state_path=state_path))
 
 
 def sample_instagram_tags(tags: Iterable[str], *, sampled_at: datetime | None = None,
