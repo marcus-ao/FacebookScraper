@@ -6,6 +6,7 @@ reader 由调用方注入，必须请求 include_cards=True。缓存只能用于
 """
 from __future__ import annotations
 
+from publish.observations import record as record_publication
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from publish.business_suite import (ProbeRequired, RemotePlannerCard, RemoteSlot
 from publish.journal import PublishOperationLock
 from publish.planning import aware_utc
 from publish import business_suite as bs
+from publish import month_inventory
 
 
 async def read_live_inventory() -> RemoteSlotInventory:
@@ -32,11 +34,10 @@ async def read_live_inventory() -> RemoteSlotInventory:
             port=config.publish_debug_port, profile=config.publish_profile_dir,
             start_script=r"scripts\start_chrome_publish.bat", login_hint="DE 发布账号")
         page = await context.new_page()
-        return await bs.read_remote_slot_inventory(
+        return await month_inventory.read(
             page, ui_timezone=str(config.get("publish", "ui_timezone", "")),
             business_timezone=str(config.get("publish", "timezone", "Europe/Berlin")),
-            timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)),
-            include_cards=True)
+            timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)))
     finally:
         try:
             if page is not None:
@@ -72,7 +73,7 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
             "cards_loaded": inventory.cards_loaded,
             "cards": [{"at": _moment(card.at).isoformat(), "channels": list(card.channels),
                        "remote_ids": dict(card.remote_ids), "rendered": card.rendered,
-                       "card_sha256": card.card_sha256} for card in inventory.cards]}
+                       "card_sha256": card.card_sha256, 'delivery': card.delivery} for card in inventory.cards]}
 
 
 def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
@@ -93,9 +94,11 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
                        for channel, remote in row["remote_ids"].items())
                 or not isinstance(row["rendered"], str) or not isinstance(row["card_sha256"], str)):
             raise ValueError("月历卡片格式无效")
+        if row.get('delivery', 'unknown') not in {'unknown', 'scheduled', 'published'}:
+            raise ValueError('月历公开发布状态无效')
         cards.append(RemotePlannerCard(_moment(row["at"]), tuple(channels),
                                       tuple(sorted(row["remote_ids"].items())),
-                                      row["rendered"], row["card_sha256"]))
+                                      row["rendered"], row["card_sha256"], row.get('delivery', 'unknown')))
     return RemoteSlotInventory(
         tuple(_moment(at) for at in data["occupied"]), data["ui_timezone"],
         date.fromisoformat(data["visible_start"]) if data.get("visible_start") else None,
@@ -188,6 +191,8 @@ async def refresh_cache(path: Path, reader, *, state_dir: Path,
                 return {**read_cache(path, now=attempted), "refresh_status": "failed",
                         "refresh_error": code, "last_attempt_at": attempted.isoformat()}
         atomic_write_json(path, record, guard=_guard)
+        if record['refresh_status'] == 'refreshed':
+            record_publication(state_dir, inventory, observed)
         return read_cache(path, now=now or clock())
     except Exception:
         return {**read_cache(path, now=attempted), "refresh_status": "failed",

@@ -1944,8 +1944,8 @@ async def upload(multiple, count):
 chooser, notes = asyncio.run(upload(True, 5))
 check(chooser.files is not None and len(chooser.files) == 5,
       "G3 走 file chooser 通道交 5 张图，全程没有写死 input[type=file] 选择器")
-check(any("缩略图数量没有被程序核对过" in note for note in notes),
-      "G3 **不假装**验过缩略图：那个容器没进 dump，如实交回给人复核")
+check(any("尚未核对缩略图数量" in note and "media.verify_upload" in note for note in notes),
+      "G3 上传入口说明尚未核验：生产 workflow 另行核对缩略图，旧调用方仍需人工复核")
 check(raises(PublishStepError, lambda: asyncio.run(upload(False, 5)),
              "只收 1 个文件"),
       "G3 控件只收单文件却要传 5 张时停下，不默默只传一张")

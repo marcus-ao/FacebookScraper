@@ -13,7 +13,6 @@ from __future__ import annotations
 import ipaddress
 import json
 import math
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -23,7 +22,7 @@ from pathlib import Path
 import httpx
 
 from core.config import cfg
-from core.paid_model import FileLock, FileLockBusy, atomic_write_json
+from core.paid_model import FileLock, FileLockBusy, atomic_write_json, ModelCredentials
 from core.store import assert_physical_direct_path
 
 _TYPES = {"hosting", "isp", "education", "government", "business", "unknown"}
@@ -154,7 +153,7 @@ class NetworkEvidence:
     def __init__(self, path: Path, settings: NetworkEvidenceSettings, *, http=None, environ=None):
         self.path, self.settings = Path(path), settings
         self.http, self._owned = http, False
-        self.environ = os.environ if environ is None else environ
+        self.environ = environ
 
     def close(self):
         if self._owned and self.http is not None:
@@ -197,7 +196,8 @@ class NetworkEvidence:
                              next_due_at=(at + timedelta(minutes=self.settings.interval_minutes)).isoformat())
                 atomic_write_json(self.path, state, guard=_safe)
                 error, row = None, None
-                token = self.environ.get("IPINFO_TOKEN", "")
+                token = (ModelCredentials('IPINFO_TOKEN').optional_value() if self.environ is None
+                         else self.environ.get('IPINFO_TOKEN', ''))
                 if not isinstance(token, str) or not token.strip():
                     error = "missing_token"
                 else:

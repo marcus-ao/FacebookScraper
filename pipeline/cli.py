@@ -1,27 +1,16 @@
-r"""L 组：把四个阶段的真相源重新对账。**不建立发布任务队列。**
+r"""五阶段的只读状态、激活边界与 CLI 入口。
 
-    python -m pipeline status        各阶段积压 + 最近一次成功 + 本月花费
-    python -m pipeline preflight     上线预检：还差什么 + 激活后每天会发生什么
-    python -m pipeline check-alive   死人开关：太久没有成功运行就告警
-    python -m pipeline activate      G8 通过后原子记录“只处理此后新帖”的边界
-    python -m pipeline run           manual/assisted 对账并从真相源恢复中断
-    python -m pipeline approve       批量确认待处理项，并在确认后逐篇提交
+    python -m pipeline status           业务阶段、积压与费用事实
+    python -m pipeline preflight --json  与 Web / 发布入口共用的只读能力判据
+    python -m pipeline check-alive       业务成功记录过期时发本机告警
+    python -m pipeline activate          核验单渠道验收后记录新内容边界
+    python -m pipeline run               manual/assisted 对账与受控内容处理
+    python -m pipeline serve             常驻监测；模型、采样、投递在独立执行器
+    python -m pipeline approve           已确认内容的发布入口
 
-前两个只读子命令**零网络、零费用、零写盘**（`check-alive` 唯一的副作用是
-`core.notify` 那条告警，它本来就要落 `state/alerts.log`）。
-
-### 三条设计约束，改这个文件之前先读
-
-1. **不建第五个真相源。** 四个阶段"做完了没有"全都是内容寻址的，
-   每次运行现算即可（`PIPELINE_PLAN` 第 2 节）。所以这里**没有** `pipeline` 自己的
-   队列文件、没有缓存、没有索引。
-2. **不重写别人的判据，调他们已有的入口。**
-   待译走 :func:`translate.pending`，待调图走 :func:`localize_images.build_jobs`。
-   `publish/compose.py` 因为跨组边界另写了一份 `media_de` 所有权判定，
-   结果就是 CR-48 那种"两组对同一个目录有两套语义"。**这里不重复那个代价。**
-3. **不打自己不知道的数。** 没有真相源的阶段一律显示 ``—`` 并在脚注里说明，
-   **不显示 0** —— 0 会被读成"没有积压"，而实际含义是"这个阶段还没接上"。
-   这条与 CR-19 同源：静默的 0 比缺失更危险。
+status / preflight 不访问网络、不发送付费请求、不写业务状态。
+文件与追加账本保存业务事实；处理请求标记只用于进程协调与恢复，SQLite 只供查询。
+恢复先核对请求与产物，结果不确定时不隐含重放。缺失的观测显示未知，不能显示为零。
 """
 from __future__ import annotations
 
@@ -50,11 +39,11 @@ from core import paid_requests                      # noqa: E402
 from core.heartbeat import HeartbeatSettings, heartbeat_status  # noqa: E402
 from core.network_evidence import (NetworkEvidenceSettings, network_evidence_status,  # noqa: E402
                                    detection_failure_kind)  # noqa: E402
-from publish import business_suite as bs             # noqa: E402
 from publish.compose import (                        # noqa: E402
     _PROBE_REQUIRED_OBSERVATIONS as required)
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
-                            DAILY_TASK)
+                            DAILY_TASK, SCHEDULER_TASK, _task_state)
+from publish.capabilities import checks as capability_checks  # noqa: E402
 from pipeline import engine as pipeline_assisted     # noqa: E402
 from pipeline import engine as assisted              # noqa: E402
 
@@ -96,7 +85,7 @@ def last_successful_run(state_dir: Path | None = None
     所以只认**运行标记**：
 
     - `state/delta_state.json` 的各平台 ``last_success`` —— 抓到 0 篇也会更新它，
-      这正是我们要的语义。**今天它是唯一在真跑的东西。**
+      这正是我们要的语义。它证明抓取运行成功，不代表后续本地化或发布成功。
     - `state/pipeline_state.json` 的 ``last_successful_run`` —— L1a 的
       ``pipeline run`` 落地之后才会有这个文件。**现在不存在是正常的**，
       所以这里只把它当补充证据，缺了不报错。
@@ -573,7 +562,7 @@ def _probe_observation_gaps() -> tuple[str, ...]:
     configured = cfg().get("publish", "ui_probe_dump", "")
     if not isinstance(configured, str) or not configured.strip():
         return ("[publish].ui_probe_dump 为空",)
-    path = cfg().state_dir / configured.strip()
+    path = ROOT / cfg().get('paths', 'state', 'state') / configured.strip()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -588,32 +577,21 @@ def _probe_observation_gaps() -> tuple[str, ...]:
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
     """G6/G6c 三道生产闸。直接调 business_suite 的判据（导入不会启动浏览器）。"""
-    out = []
-    for label, fn in (("账号上下文", bs.require_account_context_evidence),
-                      ("提交按钮 + 成功信号", bs.require_submission_evidence),
-                      ("Planner 回读", bs.require_readback_evidence)):
-        try:
-            fn()
-        except Exception as exc:                      # noqa: BLE001
-            out.append((label, False, str(exc).splitlines()[0]))
-        else:
-            out.append((label, True, "证据齐全并已回查"))
-    return out
+    return [(item['name'], item['available'], item['reason'] or '证据已回查') for item in capability_checks()]
 
 
 def _task_states() -> list[tuple[str, str]]:
-    import subprocess
-
     out = []
-    for name in (DAILY_TASK, CATCHUP_TASK, ALIVE_TASK):
+    for name in (SCHEDULER_TASK, DAILY_TASK, CATCHUP_TASK, ALIVE_TASK):
         try:
-            result = subprocess.run(
-                ["schtasks", "/Query", "/TN", name],
-                capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError) as exc:
-            out.append((name, "查不了（%s）" % exc))
+            result = _task_state(name)
+        except (OSError, ValueError):
+            out.append((name, '状态无法读取'))
             continue
-        out.append((name, "已注册" if result.returncode == 0 else "未注册"))
+        label = ('未注册' if not result['registered'] else
+                 '启用' if result.get('enabled') is True else
+                 '停用' if result.get('enabled') is False else '状态无法解析')
+        out.append((name, label))
     return out
 
 
@@ -678,7 +656,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     **零网络、零费用、零写盘。** 回答两个问题：
 
     1. 现在离"能激活"还差哪几件，每件差什么；
-    2. **激活之后每天到底会发生什么** —— 用生产同一套判据，
+    2. **激活之后如何处理新内容** —— 用生产同一套判据，
        拿最近 ``days`` 天的真实归档当"假如那时就激活了"跑一遍。
 
     第 2 问是这条命令存在的理由。三道闸全开、G8 也过了，流水线照样可能
@@ -688,7 +666,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     """
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    state_dir = cfg().state_dir
+    state_dir = ROOT / cfg().get('paths', 'state', 'state')
     print("=== 上线预检（只读：零网络、零费用、零写盘）===\n")
 
     ready = True
@@ -697,11 +675,6 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         ready = ready and ok
         print("    %s %-22s %s" % ("[开]" if ok else "[关]", label, detail))
 
-    try:
-        assisted.channels.require_independent_channel_evidence(('facebook',))
-    except assisted.bs.ProbeRequired as exc:
-        ready = False
-        print("    [关] 单渠道选择：%s" % exc)
     verified = cfg().get("publish", "ui_constraints_verified", False) is True
     gaps = () if verified else _probe_observation_gaps()
     ready = ready and verified
@@ -892,10 +865,16 @@ def main(argv=None) -> int:
         help="只写 state\\alerts.log，不弹桌面通知（自动化验收用）")
 
     preflight_parser = sub.add_parser(
-        "preflight", help="上线预检：还差什么 + 激活后每天会发生什么（只读）")
+        "preflight", help="上线预检：还差什么 + 激活后的处理范围（只读）")
+    preflight_parser.add_argument("--json", action="store_true", help="输出与页面共用的五阶段只读 JSON")
     preflight_parser.add_argument(
         "--days", type=int, default=90,
         help="拿最近 N 天归档当「假如那时就激活了」预演（默认 90）")
+
+    recovery_parser = sub.add_parser('recover-processing', help='核账后关闭中断批次；不会重新调用模型')
+    recovery_parser.add_argument('--batch-id', required=True)
+    recovery_parser.add_argument('--version', required=True, help='preflight --json 中的 state_revision')
+    recovery_parser.add_argument('--outputs-reviewed', action='store_true', help='已核对本批模型产物')
 
     activate_parser = sub.add_parser(
         "activate", help="G8 通过后原子记录发布边界；不会补发历史")
@@ -923,11 +902,27 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
 
+    if args.command == 'recover-processing':
+        from core.monitoring import MonitoringJournal
+        try:
+            now = datetime.now(timezone.utc)
+            result = MonitoringJournal(cfg().state_dir, now=now, inspect_running=False).recover(
+                batch_id=args.batch_id, expected_revision=args.version, now=now, outputs_reviewed=args.outputs_reviewed)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        except (ValueError, RuntimeError) as exc:
+            print(str(exc))
+            return 2
+
     if args.command == "check-alive":
         return run_check_alive(popup=not args.no_popup)
 
     if args.command == "preflight":
         try:
+            if args.json:
+                from pipeline.runtime_status import snapshot
+                print(json.dumps(snapshot(), ensure_ascii=False, indent=2))
+                return 0
             return run_preflight(days=max(1, args.days))
         except (PipelineConfigError, ArchivePathError, OSError) as exc:
             print("[!] 预检失败：%s" % exc)

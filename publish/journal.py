@@ -158,6 +158,8 @@ class PublishAttempt:
     readback_diagnostics: dict = field(default_factory=dict)
     channels_verified: tuple[str, ...] = ()
     manual_evidence: bool = False
+    snapshot_id: str = ''
+    source_fingerprint: str = ''
 
     def __post_init__(self) -> None:
         if not (self.post_id or "").strip():
@@ -223,6 +225,8 @@ def _compat_row(row: dict) -> dict:
     out.setdefault("verification", "")
     out.setdefault("channels_verified", [])
     out.setdefault("manual_evidence", False)
+    out.setdefault('snapshot_id', '')
+    out.setdefault('source_fingerprint', '')
     return out
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core import config, review, store, translated  # noqa: E402
+from core import config, index_db, review, store, translated  # noqa: E402
 from publish import journal  # noqa: E402
 from web.api import query_index  # noqa: E402
 
@@ -78,6 +78,32 @@ class QueryIndexTests(unittest.TestCase):
             recorded_at=self.now.isoformat(), scheduled_at=(self.now + timedelta(days=1)).isoformat(),
             text_de_sha256='fixture'))
         self.assertEqual(query_index.candidates(status='scheduled', now=self.now)['task_ids'], ['in_neakasa.global/1'])
+
+    def test_frozen_account_neither_enters_the_index_nor_makes_it_dirty(self):
+        """冻结账号的 1,020 篇占了冷启动全部成本，而列表永远显示不到它们。
+
+        这里同时钉住两件事：它不进候选，**而且**它变化不会让展示索引判脏重建 ——
+        后者才是 `GET /api/tasks` 那 7 秒的来源。
+        """
+        frozen = store.Archive(self.root / 'archive', 'in_neakasa.tech')
+        legacy = store.Post('9', 'instagram', 'neakasa.tech', 'Legacy', '2026-09-11T10:00:00Z',
+                            tags=['M1 Pro'])
+        frozen.append(legacy)
+        self.assertEqual([path.name for path in index_db.display_account_dirs(self.root / 'archive')],
+                         ['in_neakasa.global'])
+        self.assertEqual(query_index.candidates(tag='M1 Pro', now=self.now)['task_ids'],
+                         ['in_neakasa.global/1'])
+
+        metadata = (self.root / 'state' / 'index.meta.json').read_bytes()
+        store.update_post_tags(frozen.base, legacy.to_row(), ['S1 Pro'])
+        result = query_index.candidates(now=self.now)
+        self.assertFalse(result['index']['stale'])
+        self.assertEqual((self.root / 'state' / 'index.meta.json').read_bytes(), metadata)
+
+        # CLI 的 reindex-db 走的就是这一行；范围与 Web 不一致会让两边来回重建。
+        self.assertEqual(index_db.rebuild_index(
+            self.root / 'archive', self.root / 'state' / 'index.sqlite',
+            state_dir=self.root / 'state'), 2)
 
 
 if __name__ == '__main__':

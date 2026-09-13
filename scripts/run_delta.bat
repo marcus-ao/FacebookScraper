@@ -23,17 +23,13 @@ set "PYTHONIOENCODING=utf-8"
 REM scripts\ lives one level below the project root -- go up first.
 cd /d "%~dp0.."
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [!] .venv not found. Run setup.bat first.
-  exit /b 1
-)
 
 if not exist "state" mkdir "state"
 
 REM The run header (timestamp) is printed by Python, not by echo:
 REM cmd writes %DATE% in the console code page, which would put GBK bytes
 REM in the middle of an otherwise UTF-8 log file.
-".venv\Scripts\python.exe" -m routes.delta %* >> "state\delta.log" 2>&1
+call "%~dp0run_python.bat" -m routes.delta %* >> "state\delta.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\delta.log"
 

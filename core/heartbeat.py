@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 import threading
 from contextlib import contextmanager
@@ -20,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from core.config import cfg
-from core.paid_model import FileLock, FileLockBusy, atomic_write_json
+from core.paid_model import FileLock, FileLockBusy, atomic_write_json, ModelCredentials
 from core.store import assert_physical_direct_path
 
 
@@ -145,7 +144,7 @@ class Heartbeat:
         self.path, self.settings = Path(path), settings
         self.http = http
         self._owns_http = http is None
-        self.environ = os.environ if environ is None else environ
+        self.environ = environ
 
     def close(self):
         if self.http is not None and self._owns_http:
@@ -153,7 +152,8 @@ class Heartbeat:
             self.http = None
 
     def _send(self) -> str | None:
-        url = self.environ.get(self.settings.url_env, "")
+        url = (ModelCredentials(self.settings.url_env).optional_value() if self.environ is None
+               else self.environ.get(self.settings.url_env, ""))
         if not isinstance(url, str) or not url.strip():
             return "missing_url"
         url = url.strip()

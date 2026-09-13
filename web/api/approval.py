@@ -9,10 +9,17 @@ from fastapi.responses import JSONResponse
 
 from core import review
 from pipeline import approval
-from publish import business_suite as bs, compose
+from publish import business_suite as bs, compose, records
+from starlette.concurrency import run_in_threadpool
 from web.api import reader
 
 router = APIRouter()
+
+
+@router.post('/api/tasks/{task_id:path}/publication/reconcile')
+async def reconcile_publication(task_id: str):
+    source = _source(task_id)
+    return await run_in_threadpool(records.recover, source.account_dir, dict(source.row))
 
 
 def _source(task_id):

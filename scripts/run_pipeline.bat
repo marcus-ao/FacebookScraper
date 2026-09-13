@@ -34,10 +34,6 @@ set "PYTHONIOENCODING=utf-8"
 REM scripts\ lives one level below the project root -- go up first.
 cd /d "%~dp0.."
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [!] .venv not found. Run setup.bat first.
-  exit /b 1
-)
 
 if not exist "state" mkdir "state"
 
@@ -48,23 +44,23 @@ if /i "%~1"=="check-alive" goto :alive
 if /i "%~1"=="run" goto :run
 if "%~1"=="" goto :interactive
 
-".venv\Scripts\python.exe" -m pipeline %*
+call "%~dp0run_python.bat" -m pipeline %*
 exit /b %ERRORLEVEL%
 
 :alive
-".venv\Scripts\python.exe" -m pipeline %* >> "state\pipeline.log" 2>&1
+call "%~dp0run_python.bat" -m pipeline %* >> "state\pipeline.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\pipeline.log"
 exit /b %RC%
 
 :run
-".venv\Scripts\python.exe" -m pipeline %* >> "state\pipeline.log" 2>&1
+call "%~dp0run_python.bat" -m pipeline %* >> "state\pipeline.log" 2>&1
 set "RC=%ERRORLEVEL%"
 echo [exit=%RC%]>> "state\pipeline.log"
 exit /b %RC%
 
 :interactive
-".venv\Scripts\python.exe" -m pipeline status
+call "%~dp0run_python.bat" -m pipeline status
 set "RC=%ERRORLEVEL%"
 echo.
 pause

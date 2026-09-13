@@ -107,11 +107,27 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(event["status"], "snoozed")
         self.assertEqual(event["wake_at"], first["wake_at"])
 
-    def test_malformed_tail_does_not_hide_saved_decision(self):
+    def test_malformed_tail_blocks_decisions_without_changing_ledger(self):
         self.change("skipped", reason="已确认不发")
-        with (self.account / "review_items.jsonl").open("ab") as handle:
+        path = self.account / "review_items.jsonl"
+        with path.open("ab") as handle:
             handle.write(b'\n{"broken":')
-        self.assertEqual(review.state_for(self.account, self.source)["status"], "skipped")
+        before = path.read_bytes()
+        with self.assertRaisesRegex(review.ReviewConflict, "审校记录.*损坏"):
+            review.state_for(self.account, self.source)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_corrupt_only_record_never_becomes_an_unreviewed_post(self):
+        (self.account / "review_items.jsonl").write_bytes(b'{"status":"skipped"\n')
+        with self.assertRaises(review.ReviewConflict):
+            review.state_for(self.account, self.source)
+
+    def test_record_from_other_account_is_not_accepted(self):
+        record = self.change("skipped", reason="不发")
+        record["account"] = "fa_other"
+        (self.account / "review_items.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+        with self.assertRaises(review.ReviewConflict):
+            review.state_for(self.account, self.source)
 
     def test_wake_due_ignores_posts_already_scheduled(self):
         self.change("snoozed")

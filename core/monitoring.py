@@ -6,7 +6,9 @@ window; it can never make a configured interval shorter.
 """
 from __future__ import annotations
 
+from core import paid_requests
 import json
+import hashlib
 import math
 import threading
 import time
@@ -195,12 +197,14 @@ def batch_budget_minutes(schedule: MonitorSchedule, platform_count: int,
 class MonitoringJournal:
     """Append scan facts and maintain one durable processing-batch marker."""
 
-    def __init__(self, state_dir: Path, *, now: datetime):
+    def __init__(self, state_dir: Path, *, now: datetime, inspect_running: bool = True):
         self.state_dir = Path(state_dir)
         self.facts_path = self.state_dir / "monitoring_facts.jsonl"
         self.processing_path = self.state_dir / "processing_state.json"
         self.processing_lock_path = self.state_dir / "processing_state.lock"
         self._thread_lock = threading.RLock()
+        if not inspect_running:
+            return
         event = None
         with self._processing_lock():
             state = self._read_processing_status()
@@ -293,7 +297,7 @@ class MonitoringJournal:
     @staticmethod
     def _new_batch(now: datetime, history: dict | None = None) -> dict:
         return {"version": 1, "batch_id": uuid4().hex, "status": "pending",
-                "requested_at": now.isoformat(), "platforms": {}, **(history or {})}
+                "requested_at": now.isoformat(), "platforms": {}, 'operation_tracked': True, **(history or {})}
 
     def request(self, now: datetime, platform: str, kind: str, discovered: int,
                 skipped: dict[str, int], *, image_count: int | None = None) -> dict:
@@ -311,7 +315,7 @@ class MonitoringJournal:
                 history = {key: current[key] for key in (
                     "last_success_duration_minutes", "last_success_posts", "last_success_images")
                            if key in current}
-                current = self._new_batch(now, history)
+                current = current.get('next_batch') or self._new_batch(now, history)
             self._merge_request(current, now, platform, kind, discovered, skipped, image_count)
             atomic_write_json(self.processing_path, current)
             return current
@@ -325,7 +329,7 @@ class MonitoringJournal:
                            requires_manual_recovery=False)
             atomic_write_json(self.processing_path, current)
         self.fact("processing_started", now, batch_id=current["batch_id"],
-                  platforms=sorted(current["platforms"]))
+                  platforms=sorted(current["platforms"]), requested_at=current.get('requested_at'))
         return current
 
     def finish(self, batch: dict, now: datetime, *, code: int | None,
@@ -342,7 +346,7 @@ class MonitoringJournal:
             else:
                 status, event, manual = "ready", "content_ready", False
             current.update(status=status, finished_at=now.isoformat(), exit_code=code,
-                           ready_count=int(ready_count), requires_manual_recovery=manual)
+                           ready_count=int(ready_count), requires_manual_recovery=manual, worker_finished=True)
             if status == "ready":
                 started = parse_ts(current.get("started_at"))
                 duration = max(0.0, (now - started).total_seconds() / 60) if started else 0.0
@@ -365,6 +369,37 @@ class MonitoringJournal:
         self.fact(event, now, batch_id=batch["batch_id"], exit_code=code,
                   ready_count=int(ready_count))
         return current
+
+    @staticmethod
+    def revision(row):
+        return hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def recover(self, *, batch_id, expected_revision, now, outputs_reviewed=False):
+        """Close a stopped batch after reconciliation. Never enqueue paid work."""
+        with self._processing_lock():
+            current = self._read_processing_status()
+            if current.get('batch_id') != batch_id or self.revision(current) != expected_revision:
+                raise ValueError('处理批次已有变化，请刷新后核对')
+            if current.get('status') not in {'running', 'interrupted', 'uncertain'}:
+                return current
+            if not current.get('worker_finished') and worker_alive(current.get('owner')) is not False:
+                raise ValueError('尚不能确认处理已退出，不关闭批次')
+            if not current.get('operation_tracked'):
+                raise ValueError('旧批次缺少请求关联，请先人工核对历史账本，不能自动恢复')
+            events = [e for e in paid_requests.load_events(self.state_dir) if e.get('operation_id') == batch_id]
+            requests = {e['request_id']: e for e in events}
+            usage = {e['request_id'] for e in events if e['event'] == paid_requests.EVENT_USAGE}
+            if any(e['event'] in paid_requests._GLOBAL_BLOCKING or
+                   e['event'] == paid_requests.EVENT_ACCEPTED and e['request_id'] not in usage for e in requests.values()):
+                raise ValueError('付费请求或用量尚未核对，保持阻塞；请先核账')
+            if requests and outputs_reviewed is not True:
+                raise ValueError('此批次已经调用模型，请先核对已保存的文案与图片')
+            self.fact('processing_recovered', now, batch_id=batch_id, paid_request_ids=list(requests),
+                      outputs_reviewed=outputs_reviewed is True, actor=None)
+            current.update(status='failed', requires_manual_recovery=False, recovered_at=now.isoformat(),
+                           recovery_reason='中断批次已关闭；保留已生成内容，新请求另行受理')
+            atomic_write_json(self.processing_path, current)
+            return current
 
     def activity_summary(self, now: datetime) -> dict | None:
         target = MonitorSchedule.local(now).date()

@@ -491,22 +491,26 @@ with tempfile.TemporaryDirectory() as folder:
     session = SimpleNamespace(new_page=AsyncMock(return_value=page), stop=AsyncMock())
     account = bs.AccountContext(True, TARGET_FB, True, TARGET_IG, True, True)
     with patch.object(workflow, "cfg", return_value=config), \
+            patch.object(workflow.snapshots, 'ensure', return_value=SimpleNamespace(**vars(post), snapshot_id='')), \
+            patch.object(workflow.records, 'queue_approved'), \
+            patch.object(workflow.records, 'project'), \
             patch.object(workflow, "attach", AsyncMock(return_value=(session, None, session))), \
             patch.object(workflow.channels, "require_independent_channel_evidence", return_value=None), \
+            patch.object(workflow.capabilities, 'require', return_value=None), \
+            patch.object(workflow.channels, 'select', AsyncMock(return_value={'channel': 'facebook', 'account': 'fixture'})), \
+            patch.object(workflow.channels, 'verify_before_submit', AsyncMock()), \
             patch.object(workflow, "check_live_slot", AsyncMock()), \
-            patch.object(bs, "require_submission_evidence", return_value=None), \
-            patch.object(bs, "require_readback_evidence", return_value=None), \
-            patch.object(bs, "require_account_context_evidence", return_value=object()), \
-            patch.object(bs, "snapshot_scheduled_matches", AsyncMock(return_value=
+            patch.object(workflow.month_readback, "baseline", AsyncMock(return_value=
                          bs.ScheduledBaseline(when.isoformat(), 0))), \
             patch.object(bs, "open_composer", AsyncMock(return_value=page)), \
-            patch.object(bs, "ensure_logged_in", AsyncMock(return_value=account)), \
             patch.object(bs, "upload_images", AsyncMock(return_value=())), \
             patch.object(bs, "fill_caption", AsyncMock()), \
             patch.object(bs, "set_schedule", AsyncMock(return_value="fixture-time")), \
             patch.object(bs, "submit", AsyncMock(return_value=
                          bs.SubmitResult(True, True, success_signal="fixture-success"))), \
-            patch.object(bs, "verify_scheduled", AsyncMock(return_value=truncated_readback)):
+            patch.object(workflow.month_readback, "verify", AsyncMock(return_value=truncated_readback)), \
+            patch.object(workflow.media, 'verify_upload', AsyncMock(return_value={'image_count': 1})), \
+            patch.object(workflow.channel_evidence, 'require', return_value={'context_ids': {'asset_id': '123', 'business_id': '456'}}):
         outcome = asyncio.run(workflow.execute(
             post, when, ui_timezone="America/Los_Angeles", timeout=0.1,
             stamp="fixture", submit_enabled=True))

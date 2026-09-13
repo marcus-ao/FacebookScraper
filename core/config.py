@@ -45,11 +45,24 @@ def per_platform(raw, platform: str, default):
 
 
 class Config:
-    def __init__(self, path: Path | str | None = None):
+    def __init__(self, path: Path | str | None = None, *, runtime_path: Path | str | None = None):
         p = Path(path) if path else ROOT / "config.toml"
         if not p.exists():
             raise SystemExit(f"缺少配置文件 {p}")
         self._d = tomllib.loads(p.read_text(encoding="utf-8"))
+        self.path = p.resolve()
+        self._file_stamp = (p.stat().st_mtime_ns, p.stat().st_size)
+        self.runtime_path = Path(runtime_path).resolve() if runtime_path else None
+        if self.runtime_path and self.runtime_path.exists():
+            local = tomllib.loads(self.runtime_path.read_text(encoding='utf-8'))
+            allowed = {'paths': {'archive', 'state'}, 'runtime': {'python', 'env_file', 'backup_manifest'}}
+            for section, values in local.items():
+                if section not in allowed or not isinstance(values, dict) or set(values) - allowed[section]:
+                    raise ValueError('本机配置只能绑定路径，不能覆盖业务规则：' + section)
+                for key, value in values.items():
+                    if not isinstance(value, str) or not value.strip() or not Path(value).is_absolute():
+                        raise ValueError(f'本机配置 {section}.{key} 必须为绝对路径')
+                self._d.setdefault(section, {}).update(values)
 
     def __getitem__(self, k: str):
         return self._d[k]
@@ -156,7 +169,11 @@ _cfg: Config | None = None
 def cfg() -> Config:
     global _cfg
     if _cfg is None:
-        _cfg = Config()
+        _cfg = Config(runtime_path=os.environ.get('FBSCRAPER_RUNTIME_CONFIG') or ROOT / 'config.local.toml')
+    elif hasattr(_cfg, '_file_stamp'):
+        current = _cfg.path.stat()
+        if (current.st_mtime_ns, current.st_size) != _cfg._file_stamp:
+            _cfg = Config(_cfg.path, runtime_path=_cfg.runtime_path)
     return _cfg
 
 

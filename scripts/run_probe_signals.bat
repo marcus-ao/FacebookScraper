@@ -25,13 +25,8 @@ set "PYTHONIOENCODING=utf-8"
 
 cd /d "%~dp0.."
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [!] .venv not found. Run setup.bat first.
-  pause
-  exit /b 1
-)
 
-".venv\Scripts\python.exe" "tools\_scaffolding\probe_signals.py" %*
+call "%~dp0run_python.bat" "tools\_scaffolding\probe_signals.py" %*
 set "RC=%ERRORLEVEL%"
 echo.
 pause

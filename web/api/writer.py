@@ -12,6 +12,8 @@ def _source(task_id: str):
     source = reader.source_post(task_id)
     if source is None:
         raise HTTPException(status_code=404, detail="任务不存在")
+    if source.account_dir.name not in cfg().active_accounts():
+        raise review.ReviewConflict('此账号已冻结，历史归档只读')
     return source
 
 

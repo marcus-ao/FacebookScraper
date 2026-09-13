@@ -13,8 +13,38 @@ from contextlib import closing
 from pathlib import Path
 
 from core import paid_model, review, translated
+from core.config import cfg
 from core.store import (ArchivePathError, _archive_row_error, _post_quality_rank,
                         assert_physical_direct_path, iter_post_dirs)
+
+
+def display_account_dirs(archive_root: Path, *, include_frozen: bool = False) -> list[Path]:
+    """展示索引覆盖的账号：只有 `[targets]` 里当前在跑的那两个。
+
+    ⛔ **这是唯一一处定义。** `web/api/query_index.py` 算源文件指纹时也用它 ——
+    两边各枚举一遍的话，CLI `reindex-db` 建出的 DB 会和 Web 期望的不是同一份，
+    指纹永远对不上，于是每个列表请求都触发一次全量重建。
+
+    为什么不是全部账号：冻结的 `in_neakasa.tech` 有 1,020 篇，它只读、不进流水线，
+    **审校台列表永远显示不到它**。实测一次冷路径 `GET /api/tasks` 7.24 秒、
+    列表却是空的，成本就在这 1,020 篇上：`_display_rows` 每篇调一次
+    `review.state_for`（各重读一遍整个审校账本，1,067 次共 1.75 秒），
+    指纹那趟再 stat 一遍每篇 `post.json`。
+
+    判据与 `pipeline.engine.active_account_dirs` 是同一条（`Config.active_accounts`），
+    但这里不能 import pipeline —— `tests_hygiene.py` 第 6 条的分层不允许 core 往上够。
+    """
+    archive_root = Path(archive_root)
+    if not archive_root.exists():
+        return []
+    assert_physical_direct_path(archive_root.parent, archive_root,
+                                kind="directory", label="索引归档根目录")
+    active = set(cfg().active_accounts())
+    return [assert_physical_direct_path(archive_root, account_dir,
+                                        kind="directory", label="索引账号目录")
+            for account_dir in sorted(archive_root.iterdir())
+            if (account_dir.name in active or (include_frozen and account_dir.name.startswith(('fa_', 'in_')))) and account_dir.is_dir()
+            and (account_dir / "posts").exists()]
 
 
 def _scheduled_display_refs(state_dir: Path | None) -> set[str]:
@@ -60,16 +90,10 @@ def _account_rows(account_dir: Path) -> list[dict]:
     return list(selected.values())
 
 
-def _display_rows(archive_root: Path, state_dir: Path | None) -> list[dict]:
+def _display_rows(archive_root: Path, state_dir: Path | None, *, include_frozen: bool = False) -> list[dict]:
     rows = []
     scheduled_refs = _scheduled_display_refs(state_dir)
-    if not archive_root.exists():
-        return rows
-    assert_physical_direct_path(archive_root.parent, archive_root, kind="directory", label="索引归档根目录")
-    for account_dir in sorted(archive_root.iterdir()):
-        if not account_dir.is_dir() or not (account_dir / "posts").exists():
-            continue
-        assert_physical_direct_path(archive_root, account_dir, kind="directory", label="索引账号目录")
+    for account_dir in display_account_dirs(archive_root, include_frozen=include_frozen):
         machine = translated.load_translated(account_dir / "translated.jsonl")
         human = translated.load_human_translated(account_dir / "translated_human.jsonl")
         for source in _account_rows(account_dir):
@@ -91,14 +115,15 @@ def _display_rows(archive_root: Path, state_dir: Path | None) -> list[dict]:
     return rows
 
 
-def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None = None) -> int:
+def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None = None,
+                  include_frozen: bool = False) -> int:
     """从文件完整重建；读取或写入失败时保留上一份数据库，不部分更新。"""
     archive_root, db_path = Path(archive_root), Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     assert_physical_direct_path(db_path.parent, db_path, kind="file", label="展示索引数据库")
     lock = assert_physical_direct_path(db_path.parent, db_path.with_suffix(".lock"), kind="file", label="索引写入锁")
     with paid_model.FileLock(lock, busy_message="展示索引正在重建，请稍后重试"):
-        rows = _display_rows(archive_root, Path(state_dir) if state_dir is not None else None)
+        rows = _display_rows(archive_root, Path(state_dir) if state_dir is not None else None, include_frozen=include_frozen)
         temporary: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(dir=db_path.parent, prefix=".index-", suffix=".tmp", delete=False) as handle:
@@ -133,6 +158,43 @@ def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None =
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
     return len(rows)
+
+
+def check_consistency(archive_root: Path, db_path: Path, *, state_dir: Path | None = None,
+                      include_frozen: bool = False) -> dict:
+    expected = {row['id']: row for row in _display_rows(archive_root, state_dir, include_frozen=include_frozen)}
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+        integrity = connection.execute('PRAGMA quick_check').fetchone()[0]
+        actual = {key: json.loads(raw) for key, raw in connection.execute('SELECT task_id, row_json FROM posts')}
+    missing, extra = sorted(expected.keys() - actual.keys()), sorted(actual.keys() - expected.keys())
+    changed = sorted(key for key in expected.keys() & actual.keys() if expected[key] != actual[key])
+    return {'consistent': integrity == 'ok' and not (missing or extra or changed),
+            'missing': missing, 'extra': extra, 'changed': changed, 'integrity': integrity, 'total': len(expected)}
+
+
+def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=None,
+               page: int = 1, limit: int = 50) -> dict:
+    if not 1 <= limit <= 100 or page < 1:
+        raise ValueError('历史查询每页 1–100 篇，页数从 1 开始')
+    filters, values = [], []
+    for column, value in [("json_extract(row_json, '$.platform')", platform), ('month', month), ('status', status)]:
+        if value:
+            filters.append(column + ' = ?')
+            values.append(value)
+    if tag == '__untagged__':
+        filters.append('NOT EXISTS (SELECT 1 FROM post_tags t WHERE t.task_id = posts.task_id)')
+    elif tag:
+        filters.append('EXISTS (SELECT 1 FROM post_tags t WHERE t.task_id = posts.task_id AND t.tag = ?)')
+        values.append(tag)
+    where = ' WHERE ' + ' AND '.join(filters) if filters else ''
+    with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+        total = connection.execute('SELECT count(*) FROM posts' + where, values).fetchone()[0]
+        rows = [json.loads(row[0]) for row in connection.execute(
+            'SELECT row_json FROM posts' + where + ' ORDER BY created_at DESC, task_id LIMIT ? OFFSET ?',
+            [*values, limit, (page - 1) * limit])]
+        tags = [row[0] for row in connection.execute('SELECT DISTINCT tag FROM post_tags ORDER BY tag')]
+        months = [row[0] for row in connection.execute('SELECT DISTINCT month FROM posts ORDER BY month DESC')]
+    return {'rows': rows, 'total': total, 'tags': tags, 'months': months}
 
 
 def query_posts(db_path: Path, *, account: str | None = None, month: str | None = None,

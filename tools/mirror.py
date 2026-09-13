@@ -50,7 +50,7 @@ def main(argv=None) -> int:
             except Exception as exc:
                 failures += 1
                 print('原帖镜像待重试：%s/%s（%s）' % (directory.name, source['post_id'], type(exc).__name__))
-    service.queue_state(state_dir, now=now)
+    service.queue_state(state_dir, now=now, config_path=c.path)
     client = DriveClient.from_environment()
     try:
         result = service.dispatch(client, now=now)

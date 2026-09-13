@@ -27,7 +27,7 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from core.config import ROOT
+from core.config import ROOT, cfg
 
 __all__ = [
     "FileLock", "FileLockBusy",
@@ -122,7 +122,7 @@ class ModelCredentials:
         key = os.environ.get(self.env_name, "").strip()
         if key:
             return key, "环境变量 %s" % self.env_name
-        env_file = ROOT / ".env"
+        env_file = Path(cfg().get('runtime', 'env_file', str(ROOT / '.env')))
         if env_file.exists():
             for line in env_file.read_text(encoding="utf-8-sig").splitlines():
                 line = line.strip()
@@ -132,6 +132,10 @@ class ModelCredentials:
                 if name.strip() == self.env_name:
                     return value.strip().strip('"').strip("'"), "%s 文件" % env_file.name
         return "", ""
+
+    def optional_value(self) -> str:
+        """Read an optional credential without logging its value or raising SystemExit."""
+        return self._raw()[0]
 
     def api_key(self) -> str:
         key, _ = self._raw()

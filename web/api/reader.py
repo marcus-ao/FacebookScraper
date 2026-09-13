@@ -329,14 +329,20 @@ class _Context:
     """一次请求内的取数上下文。构造一次，列表与详情共用。"""
 
     def __init__(self, *, days: int = DEFAULT_DAYS,
-                 now: datetime | None = None) -> None:
+                 now: datetime | None = None, selected_sources=None) -> None:
         self.now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         self.rules = engine.publish_rules()
         self.state_dir = cfg().state_dir
-        self.account_dirs = store.account_dirs(cfg().archive_dir)
+        # 只看 `[targets]` 当前在跑的账号。冻结的 `in_neakasa.tech` 今天是靠
+        # 90 天窗口碰巧挡在外面的（它最后一篇 2026-06），窗口一放宽就会漏进审校队列
+        # —— 而它按业务决定已经「只读、不进流水线」。判据与 pipeline 那边同一条。
+        self.account_dirs = engine.active_account_dirs(
+            store.account_dirs(cfg().archive_dir))
         horizon = self.now - timedelta(days=days)
-        sources, _issues, self.out_of_scope = engine.load_sources(
-            self.account_dirs, horizon)
+        if selected_sources is None:
+            sources, _issues, self.out_of_scope = engine.load_sources(self.account_dirs, horizon)
+        else:
+            sources, self.out_of_scope = selected_sources, []
         self.sources: dict[str, engine.SourcePost] = {
             task_id_of(item): item for item in sources}
         self.risk_scans, self.risks = load_risks(self.state_dir, self.sources)
@@ -383,12 +389,15 @@ class _Context:
 
 def list_tasks(*, days: int = DEFAULT_DAYS,
                now: datetime | None = None, status: str | None = None,
-               tag: str | None = None, month: str | None = None) -> dict:
+               tag: str | None = None, month: str | None = None, platform: str | None = None,
+               scope: str = 'review', page: int = 1, limit: int | None = None) -> dict:
     """任务列表。契约见 web/DESIGN.md 第 6 节。
 
     排序：按 ``schedule.at`` 升序（最急的在最上面）；没有排期的排在最后，
     内部按原帖时间倒序（最新的先看）。
     """
+    if scope == 'history':
+        return history_tasks(now=now, status=status, tag=tag, month=month, platform=platform, page=page, limit=limit or 50)
     ctx = _Context(days=days, now=now)
     indexed = query_index.candidates(status=status, tag=tag, month=month, now=ctx.now)
     ids = set(indexed["task_ids"]) if indexed["task_ids"] is not None else None
@@ -440,9 +449,14 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
     available_tags = sorted({value for item in tasks for value in item["tags"]})
     tasks = [item for item in tasks if (not status or item["status"] == status)
              and (not tag or (not item["tags"] if tag == "__untagged__" else tag in item["tags"]))
-             and (not month or item["month"] == month)]
+             and (not month or item["month"] == month)
+             and (not platform or item['platform'] == platform)]
+    total = len(tasks)
+    visible = tasks[(page-1)*limit:page*limit] if limit else tasks
     return {
-        "tasks": tasks,
+        "tasks": visible,
+        "pagination": {'page': page, 'limit': limit, 'total': total},
+        "range": {'scope': 'review', 'days': days, 'month': month, 'platform': platform},
         "index": indexed["index"],
         "summary": {
             "total": len(tasks),
@@ -451,6 +465,24 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "tags": available_tags,
         },
     }
+
+
+def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None, page=1, limit=50):
+    result = query_index.history_page(now=now, status=status, tag=tag, month=month,
+                                     platform=platform, page=page, limit=limit)
+    tasks = []
+    for row in result['rows']:
+        tasks.append({'id': row['id'], 'platform': row['platform'], 'month': row['month'],
+                      'created_at': row.get('created_at'), 'account': row['account_dir'],
+                      'read_only': row['account_dir'] not in cfg().active_accounts(),
+                      'text_de_excerpt': excerpt(row.get('text_de') or row.get('text') or ''),
+                      'tags': row['tags'], 'status': row['status'],
+                      'image_count': len(row.get('media') or []),
+                      'thumbnail_url': '/api/tasks/' + row['id'] + '/image/0?variant=de'})
+    return {'tasks': tasks, 'index': result['index'], 'scope': 'history',
+            'range': {'scope': 'history', 'days': None, 'month': month, 'platform': platform},
+            'pagination': {'page': page, 'limit': limit, 'total': result['total']},
+            'summary': {'total': result['total'], 'tags': result['tags'], 'months': result['months']}}
 
 
 def _review_state(ctx: _Context, source: engine.SourcePost, reviewable: bool,
@@ -549,11 +581,10 @@ def _compose_warnings(source: engine.SourcePost,
 def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
                 now: datetime | None = None) -> dict | None:
     """一条任务的完整详情；找不到返回 ``None``。契约见第 6 节。"""
-    ctx = _Context(days=days, now=now)
-    source = ctx.sources.get(task_id)
+    source = source_post(task_id)
     if source is None:
         return None
-    source = _source_truth(source)
+    ctx = _Context(days=days, now=now, selected_sources=[source])
 
     entry = _translation_of(source)
     human = _human_translation_of(source)
@@ -589,6 +620,14 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
                       "revision": human["revision"]})
     tags = list(source.row.get("tags") or [])
     localized = localization.effective_draft(source.account_dir, dict(source.row), effective)
+    publications = journal.history_for(ctx.state_dir, source.post_id, platform=source.platform)
+    publication = publications[-1] if publications else None
+    from publish.observations import status as delivery_status
+    from core.paid_consent import fingerprint as source_fingerprint
+    try:
+        full_source_fingerprint, fingerprint_error = source_fingerprint(dict(source.row), source.account_dir), None
+    except (OSError, ValueError, RuntimeError):
+        full_source_fingerprint, fingerprint_error = None, '源文件或图片尚不能完整核对'
     body_risks = []
     for risk in ctx.risks.get(task_id, []):
         start, end = risk["en_span"]
@@ -598,6 +637,9 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
             body_risks.append(dict(risk, en_span=[at, at + len(phrase)]))
     return {
         "id": task_id,
+        "read_only": source.account_dir.name not in cfg().active_accounts(),
+        "publication": publication,
+        "delivery": delivery_status(ctx.state_dir, publication),
         "platform": source.platform,
         "status": state["status"],
         "review": state,
@@ -615,6 +657,9 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
             "human_revision": human["revision"] if human else None,
             "source_text_sha256": translation.source_text_sha256(text_en),
             "stale": stale,
+            "machine_current": translation.translation_is_current(dict(source.row), entry),
+            "machine_prompt_version": entry.get('prompt_version') if entry else None,
+            "current_prompt_version": translation.PROMPT_VERSION,
         },
         "highlights": build_highlights(text_en, shown_text) if shown_text else [],
         "risks": ctx.risks.get(task_id, []),
@@ -624,6 +669,10 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "schedule": ({"at": _iso(when), "channel": source.platform}
                      if when is not None else None),
         "meta": {
+            'platform': source.platform, 'account': source.row.get('account'),
+            'source_text_sha256': journal.text_sha256(source.text),
+            'source_fingerprint': full_source_fingerprint, 'fingerprint_error': fingerprint_error,
+            'snapshot_id': publication.get('snapshot_id') if publication else None,
             "permalink": source.row.get("permalink"),
             "created_at": source.row.get("created_at"),
             "owner": source.row.get("owner"),
@@ -641,9 +690,23 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
 
 
 def source_post(task_id: str) -> engine.SourcePost | None:
-    """按列表中的任务标识查源帖，绝不把客户端标识拼成文件路径。"""
-    source = _Context().sources.get(task_id)
-    return _source_truth(source) if source is not None else None
+    """按账号和帖子身份直接读源文件，历史链接不受日常队列窗口限制。"""
+    parts = task_id.split('/')
+    if len(parts) != 2 or not parts[1] or len(parts[1]) > 500 or '\\' in parts[1] or '..' in parts[1]:
+        return None
+    account, pid = parts
+    directory = next((path for path in store.account_dirs(cfg().archive_dir) if path.name == account), None)
+    if directory is None:
+        return None
+    platform = {'fa': 'facebook', 'in': 'instagram'}.get(account[:2])
+    if not platform:
+        return None
+    indexed = {'post_id': pid, 'platform': platform, 'account': account[3:], 'created_at': None}
+    if not (store.post_directory(directory, indexed) / 'post.json').exists():
+        return None
+    row, _ = store.read_post_truth(directory, indexed)
+    created = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00')) if row.get('created_at') else datetime.min.replace(tzinfo=timezone.utc)
+    return engine.SourcePost(platform, directory, row, created, journal.source_ref(platform, pid))
 
 
 # ---------------------------------------------------------------------------
@@ -659,8 +722,7 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
     的行为一致（缺德语图不是"没有图"，是"用了原图"）。降级不会被藏起来：
     详情页的 ``images[].de_present`` 与元信息里的组装告警都会说出来。
     """
-    ctx = _Context(days=days, now=now)
-    source = ctx.sources.get(task_id)
+    source = source_post(task_id)
     if source is None or index < 0:
         return None
     source = _source_truth(source)

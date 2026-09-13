@@ -39,7 +39,7 @@ function time(at) {
     <header class="calendar-heading">
       <div>
         <h2>{{ calendar?.month_ui || '' }} 发布月历</h2>
-        <p>以柏林时间查看 Business Suite 中的排期，也包含人工在后台创建的帖子。</p>
+        <p>以柏林时间查看 Business Suite 中的排期和已发布内容，也包含人工在后台创建的帖子。</p>
       </div>
       <button class="btn btn-sm" :disabled="busy || !calendar?.refresh_available" @click="$emit('refresh')">
         {{ busy ? '正在读取…' : '刷新月历' }}
@@ -83,6 +83,7 @@ function time(at) {
             <summary>
               <strong>{{ time(card.at) }}</strong>
               <span>{{ card.channels.length ? card.channels.map(channel => channels[channel]).join(' / ') : '渠道待确认' }}</span>
+              <span>{{ card.delivery === 'published' ? '已观测到公开发布' : card.delivery === 'scheduled' ? '已创建定时任务' : '发布状态待核验' }}</span>
               <span class="calendar-excerpt">{{ card.rendered || '正文未提供' }}</span>
             </summary>
             <p class="calendar-fulltext">{{ card.rendered || '正文未提供' }}</p>

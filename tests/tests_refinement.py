@@ -50,6 +50,17 @@ class RefinementTests(unittest.TestCase):
         self.executor.submit.assert_not_called()
         self.assertFalse(refinement.latest())
 
+    def test_executor_failure_closes_job_and_allows_a_new_request(self):
+        self.executor.submit.side_effect = RuntimeError('executor stopped')
+        with self.assertRaises(review.ReviewConflict):
+            self.submit()
+        job = next(iter(refinement.latest().values()))
+        self.assertEqual(job['status'], 'failed')
+        self.assertEqual(job['error'], 'executor_unavailable')
+        self.executor.submit.side_effect = None
+        next_job = self.submit()
+        self.assertNotEqual(next_job['job_id'], job['job_id'])
+
     def test_fourth_image_refinement_is_rejected(self):
         for _ in range(3):
             row = self.submit('image')

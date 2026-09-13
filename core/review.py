@@ -65,26 +65,34 @@ def history(account_dir: Path, post_id: str | None = None) -> list[dict]:
         return []
     events = []
     with path.open("rb") as handle:
-        for line in handle:
+        for number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
             try:
+                if not line.endswith(b'\n'):
+                    raise ValueError('incomplete record')
                 event = json.loads(line.decode("utf-8"))
                 if (not isinstance(event, dict) or event.get("status") not in STATUSES
                         or event.get("action") not in ACTIONS
                         or not isinstance(event.get("post_id"), str)
+                        or not event.get("post_id")
+                        or event.get("account") != Path(account_dir).name
+                        or event.get("platform") not in {"facebook", "instagram"}
                         or not re.fullmatch(r"[0-9a-f]{64}", event.get("source_text_sha256", ""))):
-                    continue
+                    raise ValueError('invalid review record')
                 UUID(event["revision"])
                 _moment(event["recorded_at"])
                 if event["status"] == "snoozed":
                     if not event.get("wake_at"):
-                        continue
+                        raise ValueError('missing wake time')
                     _moment(event["wake_at"])
                 if event["status"] == "skipped" and not str(event.get("reason") or "").strip():
-                    continue
+                    raise ValueError('missing skip reason')
                 if post_id is None or event["post_id"] == post_id:
                     events.append(event)
-            except (ValueError, KeyError, TypeError, AttributeError, UnicodeError):
-                continue
+            except (ValueError, KeyError, TypeError, AttributeError, UnicodeError) as exc:
+                raise ReviewConflict(
+                    f"审校记录第 {number} 行损坏或未写完；请先核对，不能按未审核继续处理") from exc
     return events
 
 
@@ -144,9 +152,11 @@ class transaction:
     def change(self, indexed: dict, action: str, *, expected_revision: str | None,
                expected_source_sha256: str, reason: str = "", wake_at=None,
                handoff_url: str = "", now=None, scheduled: bool = False,
-               snooze_days: int = 3, default_status: str = "pending_review") -> dict:
+               snooze_days: int = 3, default_status: str = "pending_review", snapshot_id: str = '') -> dict:
         if not isinstance(action, str) or action not in ACTIONS:
             raise ReviewValidationError("未知的审校动作")
+        if snapshot_id and not re.fullmatch(r'[0-9a-f]{32}', snapshot_id):
+            raise ReviewValidationError('批准快照编号无效')
         source, current = self.validate(
             indexed, expected_revision=expected_revision, expected_source_sha256=expected_source_sha256,
             default_status=default_status, scheduled=scheduled)
@@ -194,6 +204,7 @@ class transaction:
             "recorded_at": moment.isoformat(), "actor": None, "reason": reason,
             "wake_at": deadline.isoformat() if deadline is not None else None,
             "handoff_url": handoff_url or current.get("handoff_url") or "",
+            "snapshot_id": snapshot_id or current.get('snapshot_id') or '',
         }
         append_jsonl(_path(self.account_dir), event, guard=lambda path: _path(path.parent))
         return event

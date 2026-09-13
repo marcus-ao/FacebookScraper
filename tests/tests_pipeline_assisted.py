@@ -12,6 +12,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from activation_fixtures import activate as fixture_activate
 
 from pipeline import engine as A
 from core.config import cfg
@@ -64,17 +65,17 @@ def row(post_id: str, platform: str, created: str, text: str,
 print("[1] activate 是一次性原子边界，激活前历史零候选")
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
-    first = A.activate(
+    first = fixture_activate(A,
         state, g8_verified=True,
         now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
-    second = A.activate(
+    second = fixture_activate(A,
         state, g8_verified=True,
         now=datetime(2026, 9, 2, 12, tzinfo=timezone.utc))
     check(first == second and A.activation_time(state) == first,
           "重复 activate 不移动边界，避免历史重新进入候选")
     check((state / A.STATE_NAME).is_file(), "激活边界原子落 pipeline_state.json")
     try:
-        A.activate(Path(folder) / "other", g8_verified=False)
+        fixture_activate(A, Path(folder) / "other", g8_verified=False)
     except A.PipelineRunError:
         blocked = True
     else:
@@ -190,7 +191,7 @@ with tempfile.TemporaryDirectory() as folder:
     account = make_account(root / "archive", "fa_neakasaofficial", [
         row("n1", "facebook", "2026-09-01T13:00:00Z",
             "No price here", "neakasaofficial")])
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     runner = Runner()
     code = A.run(
@@ -208,7 +209,7 @@ with tempfile.TemporaryDirectory() as folder:
     account = make_account(root / "archive", "fa_neakasaofficial", [
         row("n2", "facebook", "2026-09-01T13:00:00Z",
             "No price here", "neakasaofficial")])
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     runner = Runner()
     code = A.run(
@@ -235,7 +236,7 @@ with tempfile.TemporaryDirectory() as folder:
         "usage": {"input_tokens": 100000000, "output_tokens": 100000000,
                   "prompt_cache_hit_tokens": 0},
     }) + "\n", encoding="utf-8")
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     runner = Runner()
     code = A.run(
@@ -269,7 +270,7 @@ with tempfile.TemporaryDirectory() as folder:
         row("fresh-fb", "facebook", "2026-09-01T13:00:00Z", "Fresh caption", "neakasaofficial")])
     legacy = make_account(root / "archive", "in_neakasa.tech", [
         row("fresh-ig", "instagram", "2026-09-01T13:30:00Z", "Fresh caption", "neakasa.tech")])
-    A.activate(state, g8_verified=True, now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
+    fixture_activate(A, state, g8_verified=True, now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     runner = Runner()
     A.run(account_dirs=[fb, legacy], state_dir=state,
           settings={"autonomy": "assisted", "daily_budget_usd": 5, "monthly_budget_usd": 60},
@@ -369,7 +370,7 @@ with tempfile.TemporaryDirectory() as folder:
 
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     ready = A.HumanItem(
         "ready-stale", "ready_to_publish", ("facebook:missing",), "ready",
@@ -388,7 +389,7 @@ with tempfile.TemporaryDirectory() as folder:
 
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     for item in (
             A.HumanItem("ready-a", "ready_to_publish",
@@ -407,7 +408,7 @@ with tempfile.TemporaryDirectory() as folder:
 
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
-    A.activate(state, g8_verified=True,
+    fixture_activate(A, state, g8_verified=True,
                now=datetime(2026, 9, 1, 12, tzinfo=timezone.utc))
     item = A.HumanItem(
         "ready-scheduled", "ready_to_publish", ("facebook:f",), "ready", {})
@@ -473,7 +474,7 @@ with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
     verified = cfg().get("publish", "ui_constraints_verified", False) is True
     blockers = A.activation_blockers(state)
-    check(any("published.jsonl" in item for item in blockers),
+    check(any("单渠道真实验收记录" in item for item in blockers),
           "没有任何 scheduled 记录时，激活闸拦住（G8 从未真机通过）")
     check(verified != any("ui_constraints_verified" in item
                           for item in blockers),
@@ -484,8 +485,8 @@ with tempfile.TemporaryDirectory() as folder:
         recorded_at="2026-09-01T13:00:00+00:00",
         text_de_sha256="abc", source_refs=("facebook:g8",)))
     after = A.activation_blockers(state)
-    check(not any("published.jsonl" in item for item in after),
-          "有了 scheduled 记录，G8 那条闸放行")
+    check(any("单渠道真实验收记录" in item for item in after),
+          "历史双渠道 scheduled 仅保留防重，不替代单渠道验收")
     prepared_only = Path(folder + "-prepared")
     prepared_only.mkdir()
     A.journal.append(prepared_only, A.journal.PublishAttempt(
@@ -493,7 +494,7 @@ with tempfile.TemporaryDirectory() as folder:
         scheduled_at="2026-09-10T10:00:00+02:00",
         recorded_at="2026-09-01T13:00:00+00:00",
         text_de_sha256="abc", source_refs=("facebook:g8",)))
-    check(any("published.jsonl" in item
+    check(any("单渠道真实验收记录" in item
               for item in A.activation_blockers(prepared_only)),
           "只有 prepared 不算 G8 通过 —— prepared 可能只留下一个草稿")
 

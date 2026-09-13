@@ -37,6 +37,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from activation_fixtures import activate as fixture_activate
 
 from pipeline import engine as A          # noqa: E402
 import translate as translation        # noqa: E402
@@ -188,7 +189,7 @@ with tempfile.TemporaryDirectory() as folder:
               tint=(210, 40, 30), pattern=5)
 
     boundary = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
-    A.activate(state, g8_verified=True, now=boundary)
+    fixture_activate(A, state, g8_verified=True, now=boundary)
     # 配对窗口是 30 小时；两篇都要"成熟"才会进入付费阶段。
     now = datetime(2026, 9, 3, 20, tzinfo=timezone.utc)
     settings = {"autonomy": "assisted", "daily_budget_usd": 5,
@@ -282,10 +283,10 @@ with tempfile.TemporaryDirectory() as folder:
         visible_start=date(2026, 9, 1), visible_end=date(2026, 9, 30))
     with patch.object(A, "cfg", lambda: ArchiveOverride(cfg(), archive)), \
             patch.object(A, "attach", AsyncMock(return_value=(session, None, session))), \
-            patch.object(A.channels, "require_independent_channel_evidence", return_value=None), \
+            patch('publish.capabilities.require', return_value=None), \
             patch.object(bs, "require_submission_evidence", return_value=None), \
             patch.object(bs, "require_readback_evidence", return_value=None), \
-            patch.object(bs, "read_remote_slot_inventory", AsyncMock(return_value=inventory)), \
+            patch.object(A.month_inventory, "read", AsyncMock(return_value=inventory)), \
             patch.object(publish_post, "main", side_effect=AssertionError("不得真实提交")), \
             contextlib.redirect_stdout(io.StringIO()) as approval_output:
         approved = A.approve(

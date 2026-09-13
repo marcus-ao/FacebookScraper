@@ -163,6 +163,30 @@ class MirrorTests(unittest.TestCase):
             self.assertEqual(client.task_status('move-task'), 'success')
         self.assertEqual(len(requests), 5)
 
+    def test_config_and_large_evidence_are_versioned_without_hourly_repacking(self):
+        state = self.root / 'state'
+        state.mkdir()
+        config = self.root / 'config.toml'
+        config.write_bytes(b'# operator policy\n[review]\nsnooze_default_days = 3\n')
+        shot = state / 'proof.png'
+        shot.write_bytes(b'first screenshot')
+        (state / 'published.jsonl').write_bytes(b'{"status":"scheduled"}\n')
+        self.service.queue_state(state, config_path=config, now=self.now)
+        self.service.dispatch(self.drive, now=self.now)
+        first = list(self.drive.files)
+        raw = next(content for _, name, content in first if name == 'state.zip')
+        with zipfile.ZipFile(io.BytesIO(raw)) as backup:
+            self.assertEqual(backup.read('config.toml'), config.read_bytes())
+            self.assertNotIn('proof.png', backup.namelist())
+        self.assertEqual(sum(name == 'proof.png' for _, name, _ in first), 1)
+        self.service.queue_state(state, config_path=config, now=self.now + timedelta(hours=2))
+        self.service.dispatch(self.drive, now=self.now + timedelta(hours=2))
+        self.assertEqual(self.drive.files, first)
+        shot.write_bytes(b'changed screenshot')
+        self.service.queue_state(state, config_path=config, now=self.now + timedelta(hours=4))
+        self.service.dispatch(self.drive, now=self.now + timedelta(hours=4))
+        self.assertEqual(sum(name == 'proof.png' for _, name, _ in self.drive.files), 2)
+
     def test_large_files_use_prepare_parts_and_finish_without_overwrite_token(self):
         blocks = []
         def handle(request):

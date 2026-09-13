@@ -32,7 +32,8 @@ max_scrolls = 0
 reconcile_at = "07:00"
 reconcile_jitter_min = 30
 reconcile_scrolls = 3
-# 两个平台总扫描上限3分钟，加25分钟处理，最晚07:58结束。
+# 每平台扫描上限90秒。processing_budget_min 是整批处理预算的下限，
+# 调度器还计入两个平台扫描及已知待处理批次，必要时前移晨间兜底；不提高频率。
 reconcile_max_session_seconds = 90
 processing_budget_min = 25
 request_gap_seconds = 8
@@ -58,11 +59,12 @@ max_peer_accounts = 10
 #
 # ⚠️ **值在同一天改过一次。** 第一版是 FB 7 / IG 21，那是按"IG 已经一个多月
 # 没发新帖"算的——而那个认知是错的：合作帖被误判丢弃了（见 CODE_REVIEW 的
-# CR-19）。修完之后重新统计，**两个账号其实都是日更**：
+# CR-19）。修完之后重新统计，当时的 FB 与 IG .tech 历史账号接近日更：
 #
 #              篇数   最新一帖     近一年间隔中位   p95     近一年 >7 天的间隔
 #   Facebook     46   2026-08-25   1.00 天         3.00    0 次
 #   Instagram  1019   2026-08-27   0.99 天         4.03    2 次
+# 这是 2026-08-30 的历史样本；.global 切换后的覆盖率与窗口必须另行统计，不能借用。
 #
 # 于是 IG 从 21 天收到 10 天：21 天意味着真坏了要三周才报出来，
 # 而 10 天每年大约只误报一次（近一年 >10 天的正常间隔只出现过 1 次）。
@@ -323,8 +325,8 @@ marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
 ig_bio_url = ""  # 德国站稳定聚合页；业务配置后只读展示，空值不猜
 min_channel_gap_min = 90  # 同一目标渠道的排期间隔
 # ---- G 组：Business Suite 定时发布。真实 UI 见 docs/HANDOFF.md 第 5 节 ----
-# 范围（用户 2026-08-31 拍板）：FB DE Page + IG DE 同时发；**不补发历史**；
-# 只用最新几篇做端到端验证；上线后跟每日增量走。
+# 当前范围：FB 来源只进入 FB DE，IG .global 来源只进入 IG DE，各自审校选期。
+# 旧双渠道记录保留防重；历史归档查询不自动翻译或补发。
 
 # DE 站的发布目标（用户 2026-08-31 提供）。
 #
@@ -348,7 +350,7 @@ instagram_account = "neakasa.de"
 # ⚠️ **发布必须用独立的 Chrome profile，这是红线不是优化项。**
 # 抓取小号被封是本项目唯一不可恢复的失败模式（回填与增量会同时断掉）。
 # 把持有 DE 发布权的账号和抓取小号放进同一个浏览器指纹里，等于把两件事绑成一件。
-# 这两项与 [chrome] 的对应项是**并列**关系，不是覆盖：两个 Chrome 同时开着。
+# 三个独立角色分别为 [chrome] 回填、[detect] 监测和 [publish] 发布，端口/profile 不可混用。
 profile_dir = "~/.fbscraper-publish"
 debug_port = 9223
 
@@ -518,12 +520,12 @@ facebook = ["neakasaofficial"]
 instagram = ["neakasa.tech", "neakasa.global"]
 
 [publish.schedule_rule]
-# 德国受众时间，全年每天固定两个槽。代码按 Europe/Berlin 生成，
-# 再换算为上面的 America/Los_Angeles UI 时刻，并在提交后回读。
+# 柏林当地时间的常用候选，运营可在设置页修改；并非只能选这些时刻。
+# 实际选期受实测月份窗口及同渠道90分钟间隔约束，提交前再次读取远端占用。
 times = ["10:00", "17:00"]
 
 [pipeline]
-# ---- L 组：流水线编排与自治级别。分流规则见 docs/OPTIMIAZATION.md S1-1 ----
+# ---- 流水线编排与自治级别。五阶段现状见 docs/OPTIMIAZATION.md ----
 # 2026-09-01 起由 pipeline run 全量消费。manual 只对账；assisted 会在每个
 # 付费请求前后按真实 usage 检查预算，并生成待确认项，但不会自行打开发布浏览器。
 
@@ -531,23 +533,20 @@ times = ["10:00", "17:00"]
 # 这个项目的风险是不对称的：抓取被封不可恢复、发布不可回滚，
 # 而翻译和调图错了只是重跑。所以按阶段分别放开。
 #
-#   manual      只做本地对账，不触发增量/翻译/调图/发布（**今天就在这一档**）
-#   assisted    抓取、翻译、调图自动；发布停在"待确认"，人批量点头
-#   supervised  发布也自动，但只发"零风险帖"，命中分流规则的进人工队列
-#   autonomous  全自动，只有硬闸拦
+#   manual      只做本地对账，不触发增量/翻译/调图/发布
+#   assisted    在既有激活边界、付费许可与预算内处理新帖；逐篇人工审校和选期
+#   supervised / autonomous  保留名称以识别旧配置，本轮不开放无人审核发布
 #
 # 固定路径：先通过 G8 并 activate，再切 assisted；计划任务仍由用户显式安装。
-# supervised / autonomous 本轮故意失败闭合，后续分流规则验收后再开放。
+# supervised / autonomous 本轮故意失败闭合。
 # ⚠️ 不建议直接跳到 autonomous。理由和 [delta] 那七条缓解措施一样：
 #    这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
 autonomy = "assisted"
 
-# ---- 死人开关（当前最大的可观测性缺口）----
+# ---- 业务长时间未成功的本机告警 ----
 # core/integrity.py 检查的是「**账号**有没有在发新帖」，
-# **没有任何东西检查「我们的流水线还在不在跑」**。
-# 计划任务被禁用、.venv 被删、笔记本两周没开机 —— 今天全都是静默的，
-# 而「没跑」和「跑了但没新内容」在输出上长得一模一样。
-# 这个项目已经吃过同型的亏：合作帖丢了 263 篇，输出里一个字都没有。
+# check-alive 根据业务成功记录判断；常驻进程状态另行展示。
+# 电脑断电时本机任务也不能告警，需要 [heartbeat] 外部服务检测缺席。
 #
 # 超过这个天数没有一次成功的 pipeline run 就告警。
 # 3 天：留出周末合盖不开机的余量，又不至于让故障潜伏一周。
@@ -562,13 +561,22 @@ dead_man_days = 3
 # ⚠️ **账单必须按真实 usage 外推，不许按字符数或张数猜。**
 # CR-40 的教训：F 组按字符估给出 US$1.08–5.41，真实是 US$23.73，
 # 低估一个数量级 —— 漏掉了主导项。两个阶段的真实 usage 都逐条写在
-# translated.jsonl / images_de.jsonl 里，直接读它们。
+# paid_requests.jsonl 里；旧业务 usage 只用于兼容历史统计，不能隐藏新失败请求费用。
 monthly_budget_usd = 60
 daily_budget_usd = 5
 
 [paths]
 archive = "archive"
 state = "state"
+
+[review]
+# 「挂起」默认到期几个上海工作日后回到待审列表（按周一至周五数，不猜调休）。
+# 3 是定下来的：比「明天」长，够她真的去把事情问清楚；比「一周」短，
+# 不至于忘了这回事 —— 带到期提醒的挂起不是死信箱，它会自己回来。
+# 这是 REQUIREMENTS 第 5.3 节二分里的「运营」类参数，可以改；
+# 代码三处默认值（web/api/reader.py、writer.py、ReviewActions.vue）只是兜底，
+# 真正生效的是这里。
+snooze_default_days = 3
 
 [feishu]
 # 管理员批准自建应用、配置两个接收组及可访问的审校台地址后再启用。
@@ -592,7 +600,8 @@ enabled = false
 url_env = "HEARTBEAT_URL"
 interval_minutes = 5
 timeout_seconds = 3
-# 最长模型批次可能占用约25分钟；外部服务的缺席阈值也应覆盖正常处理耗时。
+# 模型、采样和投递已移出监测主循环。此阈值衡量外部心跳缺席，
+# 不用它冒充内容处理成功，也不把单篇预算当作整批耗时。
 stale_after_minutes = 45
 
 [calendar]

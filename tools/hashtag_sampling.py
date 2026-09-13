@@ -58,6 +58,8 @@ def _parse_args(argv=None):
     proof.add_argument("--output", help="默认 state/trends_export_proof.json")
     reset = sub.add_parser("trends-reset", help="人工确认 429/challenge 已解除后清除持久硬停")
     reset.add_argument("--reason", required=True, help="人工核对说明")
+    reset.add_argument('--version', required=True, help='trends-status 返回的当前记录版本')
+    sub.add_parser('trends-status', help='只读停止/导出状态及恢复所需版本')
     instagram = sub.add_parser("instagram-json", help="导入公开标签页的全球累计量级 JSON")
     instagram.add_argument("--input", required=True,
                            help='对象：{"#Tag":{"count":123,"url":"https://www.instagram.com/..."}}')
@@ -75,8 +77,12 @@ def main(argv=None) -> int:
     force_utf8()
     args = _parse_args(argv)
     c = cfg()
+    if args.command == 'trends-status':
+        state = trends_export.load_state(c)
+        print(json.dumps(dict(state, revision=trends_export.state_revision(state)), ensure_ascii=False, indent=2))
+        return 0
     if args.command == "trends-reset":
-        state = trends_export.reset_block(c, reason=args.reason)
+        state = trends_export.reset_block(c, reason=args.reason, expected_revision=args.version)
         print("已人工恢复 Trends 导出硬停：%s" % state["recovered_at"])
         return 0
     if args.command == "trends-proof":
@@ -101,14 +107,14 @@ def main(argv=None) -> int:
         proof = json.loads(Path(args.proof).read_text(encoding="utf-8"))
         artifact = trends_export.export_public_csv(
             request, proof=proof, c=c, now=sampled_at)
-        raw = Path(artifact["raw_path"]).read_text(encoding="utf-8-sig")
+        raw = Path(artifact["raw_path"]).read_bytes().decode('utf-8-sig')
         rows = hashtag_sampling.import_trends_csv(
             raw, candidate_group=args.group, tags=args.tag, geo=args.geo,
             time_range=request.time_range, sampled_at=sampled_at,
             export_context=artifact["export_context"])
         print("原始 CSV：%s（sha256=%s）" % (artifact["raw_path"], artifact["sha256"]))
     elif args.command == "trends-csv":
-        raw = Path(args.input).read_text(encoding="utf-8-sig")
+        raw = Path(args.input).read_bytes().decode('utf-8-sig')
         context = None
         if args.context:
             metadata = json.loads(Path(args.context).read_text(encoding="utf-8"))

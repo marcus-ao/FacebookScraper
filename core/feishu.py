@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,14 +17,18 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from core.config import MonitorSchedule, cfg
-from core.paid_model import FileLock, atomic_write_json
+from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 
-KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system'}
+KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning'}
 TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
-          'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理'}
+          'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况'}
 
 
 class FeishuError(RuntimeError):
+    pass
+
+
+class FeishuAuthError(FeishuError):
     pass
 
 
@@ -73,7 +76,8 @@ class FeishuClient:
 
     @classmethod
     def from_environment(cls):
-        return cls(os.environ.get('FEISHU_APP_ID', ''), os.environ.get('FEISHU_APP_SECRET', ''))
+        return cls(ModelCredentials('FEISHU_APP_ID').optional_value(),
+                   ModelCredentials('FEISHU_APP_SECRET').optional_value())
 
     def close(self):
         self.http.close()
@@ -94,8 +98,11 @@ class FeishuClient:
 
     def _headers(self) -> dict:
         if time.monotonic() >= self.expires:
-            data = self._post('auth/v3/tenant_access_token/internal',
-                              json={'app_id': self.app_id, 'app_secret': self.app_secret})
+            try:
+                data = self._post('auth/v3/tenant_access_token/internal',
+                                  json={'app_id': self.app_id, 'app_secret': self.app_secret})
+            except FeishuError as exc:
+                raise FeishuAuthError('飞书认证未通过，请核对应用凭据与管理员授权') from exc
             self.token = str(data.get('tenant_access_token') or '')
             if not self.token:
                 raise FeishuError('飞书认证响应缺少 tenant_access_token')
@@ -130,8 +137,8 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings)
     for payload in payloads:
         if payload.get('image_key'):
             elements.append({'tag': 'img', 'img_key': payload['image_key'],
-                             'alt': {'tag': 'plain_text', 'content': '原帖首图'}, 'mode': 'fit_horizontal'})
-        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'text', 'risk', 'next_step')
+                             'alt': {'tag': 'plain_text', 'content': payload.get('image_note', '帖子首图')}, 'mode': 'fit_horizontal'})
+        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'text', 'image_note', 'risk', 'next_step')
                  if payload.get(key)]
         elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': '\n'.join(parts)[:1600]}})
         if payload.get('task_id'):
@@ -171,8 +178,13 @@ class Outbox:
         if not self.path.exists():
             return {'schema_version': 1, 'events': {}, 'deliveries': {}}
         data = json.loads(self.path.read_text(encoding='utf-8'))
-        if not isinstance(data.get('events'), dict) or not isinstance(data.get('deliveries'), dict):
+        if (not isinstance(data, dict) or not isinstance(data.get('events'), dict)
+                or not isinstance(data.get('deliveries'), dict)):
             raise FeishuError('飞书投递记录损坏，请先核对；未发送消息')
+        for row in data['deliveries'].values():
+            if (not isinstance(row, dict) or row.get('status') not in {'pending', 'retry', 'sent', 'uncertain', 'cancelled'}
+                    or not isinstance(row.get('events'), list) or not isinstance(row.get('card'), dict)):
+                raise FeishuError('飞书投递条目损坏，请保留现场核对')
         return data
 
     def enqueue(self, event_id: str, kind: str, payload: dict, now: datetime) -> bool:
@@ -181,10 +193,66 @@ class Outbox:
         with self._lock():
             data = self._load()
             if event_id in data['events']:
+                assigned = [item for item in data['deliveries'].values() if event_id in item['events']]
+                # Only a never-attempted notification can follow newer human edits.
+                # Once any recipient was attempted, its event set, card and UUID remain immutable.
+                if (kind == data['events'][event_id]['kind'] and not any(item['attempts'] for item in assigned)
+                        and data['events'][event_id]['payload'] != payload):
+                    data['events'][event_id]['payload'] = payload
+                    data['deliveries'] = {key: item for key, item in data['deliveries'].items()
+                                          if event_id not in item['events']}
+                    atomic_write_json(self.path, data)
                 return False
             data['events'][event_id] = {'kind': kind, 'payload': payload, 'created_at': _iso(now)}
             atomic_write_json(self.path, data)
         return True
+
+    def status(self) -> dict:
+        """Safe read-only delivery health; no recipient IDs, credentials or message bodies."""
+        try:
+            data = self._load()
+        except (OSError, ValueError, TypeError, FeishuError):
+            return {'enabled': self.settings.enabled, 'status': 'state_unreadable', 'counts': {}}
+        counts = {}
+        deliveries = []
+        for identifier, row in data['deliveries'].items():
+            counts[row['status']] = counts.get(row['status'], 0) + 1
+            deliveries.append({'delivery_id': identifier, **{key: row.get(key) for key in
+                               ('kind', 'status', 'attempts', 'created_at', 'next_at', 'error', 'sent_at', 'preview_error')},
+                               'version': self._version(row), 'task_ids': [data['events'][key]['payload'].get('task_id')
+                                   for key in row['events'] if key in data['events']]})
+        return {'enabled': self.settings.enabled, 'status': 'disabled' if not self.settings.enabled else
+                'needs_attention' if any(counts.get(key) for key in ('retry', 'uncertain')) else 'ready',
+                'counts': counts, 'deliveries': deliveries[-100:]}
+
+    @staticmethod
+    def _version(row):
+        return hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def resolve(self, identifier, *, action, expected_version, message_id='', now):
+        """Record a human-checked result; this call never sends a message."""
+        if action not in {'delivered', 'not_delivered'}:
+            raise ValueError('请选择已确认送达或已核对未送达')
+        if action == 'delivered' and (not isinstance(message_id, str) or not message_id.strip() or len(message_id) > 200):
+            raise ValueError('请填写核对后的飞书消息 ID')
+        with self._lock():
+            data = self._load()
+            row = data['deliveries'].get(identifier)
+            if not row or self._version(row) != expected_version or row['status'] not in {'retry', 'uncertain'}:
+                raise FeishuError('消息状态已有变化，请刷新后再核对')
+            stamp = _iso(now)
+            row.setdefault('resolutions', []).append({'action': action, 'recorded_at': stamp, 'actor': None})
+            if action == 'delivered':
+                row.update(status='sent', message_id=message_id.strip(), sent_at=stamp)
+            else:
+                # Cancellation after review means the reminder is obsolete. Keep
+                # its original card/UUID and close it instead of reviving old work.
+                obsolete = any(data['events'][key].get('cancelled_at') for key in row['events'])
+                row.update(status='cancelled' if obsolete else 'retry', next_at=stamp,
+                           retry_authorized_at=stamp)
+            row.pop('error', None)
+            atomic_write_json(self.path, data)
+        return self.status()
 
     def started_at(self, now: datetime) -> datetime:
         """第一次启用的本地边界；不把旧发布回执当成今天的新消息。"""
@@ -221,34 +289,42 @@ class Outbox:
         sent = 0
         with self._lock():
             data = self._load()
-            assigned = {event_id for item in data['deliveries'].values()
-                        if item['status'] != 'cancelled' for event_id in item['events']}
             for kind in sorted(KINDS):
                 if kind != 'system' and not self.schedule.is_on_duty(now):
                     continue
-                ids = [key for key, item in data['events'].items()
-                       if key not in assigned and item['kind'] == kind and not item.get('cancelled_at')]
                 recipients = (self.settings.technical_recipients if kind == 'system' else self.settings.recipients)
-                # 白天逐篇提醒；离岗期间积压的内容在早班合并，十篇一组防止卡片过大。
-                overnight = [key for key in ids if kind == 'ready' and not self.schedule.is_on_duty(
-                    datetime.fromisoformat(data['events'][key]['created_at']))]
-                groups = [overnight[offset:offset + 10] for offset in range(0, len(overnight), 10)]
-                groups.extend([key] for key in ids if key not in overnight)
-                for group in groups:
-                    payloads = [dict(data['events'][key]['payload']) for key in group]
-                    for payload in payloads:
-                        if kind == 'ready' and prepare_payload is not None:
-                            try:
-                                prepare_payload(payload)
-                            except Exception:
-                                # 图片上传失败时照常提醒；完整图文仍可由审校链接打开。
-                                payload['next_step'] = '预览图暂未加载，请进入审校台查看完整素材。'
-                    card = notification_card(kind, payloads, self.settings)
-                    for recipient in dict.fromkeys(recipients):
-                        delivery_id = hashlib.sha256((recipient + '\0' + '\0'.join(group)).encode()).hexdigest()[:32]
+                for recipient in dict.fromkeys(recipients):
+                    assigned = {event_id for item in data['deliveries'].values()
+                                if item['status'] != 'cancelled' and item['recipient'] == recipient for event_id in item['events']}
+                    ids = [key for key, item in data['events'].items()
+                           if key not in assigned and item['kind'] == kind and not item.get('cancelled_at')]
+                    # Recipient success never masks another recipient's missing reminder.
+                    overnight = [key for key in ids if kind == 'ready' and not self.schedule.is_on_duty(
+                        datetime.fromisoformat(data['events'][key]['created_at']))]
+                    groups = [overnight[offset:offset + 10] for offset in range(0, len(overnight), 10)]
+                    groups.extend([key] for key in ids if key not in overnight)
+                    for group in groups:
+                        payloads = [dict(data['events'][key]['payload']) for key in group]
+                        for payload in payloads:
+                            if kind == 'ready' and prepare_payload is not None:
+                                try:
+                                    prepare_payload(payload)
+                                except Exception as exc:
+                                    payload['next_step'] = '预览图暂未加载，请进入审校台查看完整素材。'
+                                    payload['preview_error'] = 'authentication' if isinstance(exc, FeishuAuthError) else 'image_upload_failed'
+                        card = notification_card(kind, payloads, self.settings)
+                        seed = recipient + '\0' + '\0'.join(group)
+                        delivery_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
+                        version = 1
+                        while delivery_id in data['deliveries']:
+                            # A cancelled attempt remains immutable history. This is
+                            # a new reminder after a confirmed result, not a retry.
+                            delivery_id = hashlib.sha256((seed + ':v' + str(version)).encode()).hexdigest()[:32]
+                            version += 1
                         data['deliveries'][delivery_id] = {
                             'events': group, 'kind': kind, 'recipient': recipient, 'card': card,
-                            'status': 'pending', 'attempts': 0, 'next_at': stamp, 'created_at': stamp}
+                            'status': 'pending', 'attempts': 0, 'next_at': stamp, 'created_at': stamp,
+                            'preview_error': next((p['preview_error'] for p in payloads if p.get('preview_error')), None)}
             # 先固定每次投递的事件集合与 UUID，重启后不会把新条目混入未确认的请求。
             atomic_write_json(self.path, data)
             for delivery_id, item in data['deliveries'].items():
@@ -256,7 +332,7 @@ class Outbox:
                     continue
                 if item['kind'] != 'system' and not self.schedule.is_on_duty(now):
                     continue
-                if item['attempts'] and now - datetime.fromisoformat(item['created_at']) >= timedelta(minutes=50):
+                if item['attempts'] and now - datetime.fromisoformat(item.get('retry_authorized_at', item['created_at'])) >= timedelta(minutes=50):
                     # 不无限依赖远端去重时间窗；旧不确定请求交由人核对，避免重复催促。
                     item['status'] = 'uncertain'
                     atomic_write_json(self.path, data)
@@ -269,7 +345,7 @@ class Outbox:
                     if not message_id:
                         raise FeishuError('未获得投递回执')
                 except Exception as exc:
-                    item['error'] = type(exc).__name__
+                    item['error'] = str(exc) if isinstance(exc, FeishuError) else type(exc).__name__
                     item['status'] = 'retry'
                 else:
                     item.update(status='sent', message_id=message_id, sent_at=stamp)

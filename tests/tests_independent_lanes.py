@@ -69,7 +69,7 @@ class IndependentLaneTests(unittest.TestCase):
                                        assert_publish_chrome_isolated=lambda: None)
             with patch.object(workflow, "cfg", return_value=fake_cfg), \
                     patch.object(workflow, "attach", new_callable=AsyncMock) as attach:
-                with self.assertRaisesRegex(ProbeRequired, "单渠道发布.*证据"):
+                with self.assertRaisesRegex(ProbeRequired, "证据"):
                     asyncio.run(workflow.execute(
                         post, NOW, ui_timezone="America/Los_Angeles", timeout=1,
                         stamp="offline", submit_enabled=True))

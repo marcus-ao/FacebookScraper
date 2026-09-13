@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import statistics
+import time
+from contextlib import contextmanager
 from threading import RLock
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -11,7 +13,8 @@ from uuid import uuid4
 
 import localize_images
 import translate
-from core import paid_model, paid_requests, review, translated
+from core import paid_consent, paid_model, paid_requests, review, translated
+from core.process_identity import current_worker, worker_alive
 from core.config import cfg
 from core.store import account_dirs, read_post_truth
 from pipeline import engine
@@ -30,8 +33,24 @@ def _rows() -> list[dict]:
 
 
 def _events_lock():
-    return paid_model.FileLock(cfg().state_dir / 'refinement_events.lock',
-                               busy_message='优化记录正在更新，请稍后重试')
+    return _wait_lock('refinement_events.lock')
+
+
+@contextmanager
+def _wait_lock(name):
+    # These locks cover local ledger reads/writes only. A queued worker remains
+    # pending while another short transaction finishes; no paid request has begun.
+    lock = paid_model.FileLock(cfg().state_dir / name, busy_message='内容任务正在领取')
+    while True:
+        try:
+            lock.__enter__()
+            break
+        except paid_model.FileLockBusy:
+            time.sleep(.02)
+    try:
+        yield
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def _append(row):
@@ -46,7 +65,66 @@ def latest() -> dict[str, dict]:
 def job_result(job_id: str) -> dict | None:
     if not re.fullmatch(r'[0-9a-f]{32}', job_id):
         raise review.ReviewValidationError('优化任务编号无效')
-    return latest().get(job_id)
+    row = latest().get(job_id)
+    return public_job(row) if row else None
+
+
+def public_job(row: dict) -> dict:
+    result = dict(row)
+    events = [event for event in paid_requests.load_events(cfg().state_dir)
+              if event.get('operation_id') == row['job_id']]
+    result['paid_request_ids'] = list(dict.fromkeys(event['request_id'] for event in events))
+    result['cost_usd'] = sum(float(event.get('cost_usd') or 0) for event in events
+                             if event['event'] == paid_requests.EVENT_USAGE)
+    if row['status'] in {'pending', 'running'}:
+        alive = worker_alive(row.get('worker'))
+        result['worker_state'] = 'alive' if alive else ('exited' if alive is False else 'unknown')
+        if alive is False:
+            result.update(status='interrupted', message='处理进程已退出，请先核对费用和已保存的产物')
+    return result
+
+
+def recover(job_id: str, *, expected_updated_at: str) -> dict:
+    """Only reconcile durable results. This endpoint never sends a model request."""
+    job_result(job_id)  # validate identifier before taking the mutation lock
+    with paid_model.FileLock(cfg().state_dir / 'refinement.lock', busy_message='内容任务正在更新'):
+        row = latest().get(job_id)
+        if row is None:
+            raise review.ReviewValidationError('未找到内容任务')
+        if row['recorded_at'] != expected_updated_at:
+            raise review.ReviewConflict('任务状态已变化，请刷新后核对')
+        if row['status'] not in {'pending', 'running'}:
+            return public_job(row)
+        if worker_alive(row.get('worker')) is not False:
+            raise review.ReviewConflict('尚不能确认原处理进程已退出，不能关闭任务')
+        if not row.get('operation_tracked'):
+            raise review.ReviewConflict('旧任务缺少付费请求关联，请先人工核对旧账本和产物')
+        events = [event for event in paid_requests.load_events(cfg().state_dir)
+                  if event.get('operation_id') == job_id]
+        requests = {event['request_id']: event for event in events}
+        if any(event['event'] in paid_requests._GLOBAL_BLOCKING for event in requests.values()):
+            raise review.ReviewConflict('存在结果或费用不确定的付费请求，请先核账，不能重新调用模型')
+        usage_ids = {event['request_id'] for event in events if event['event'] == paid_requests.EVENT_USAGE}
+        if any(event['event'] == paid_requests.EVENT_ACCEPTED and event['request_id'] not in usage_ids for event in requests.values()):
+            raise review.ReviewConflict('付费请求缺少用量凭据，请先核对实际费用')
+        event = dict(row, status='failed', error='interrupted_after_request' if requests else 'interrupted_before_request',
+                     message='中断任务已关闭；已保存的内容和费用保留，可另行受理未完成的工作',
+                     recorded_at=datetime.now(timezone.utc).isoformat())
+        directory = cfg().archive_dir / row['account']
+        if row['kind'] == 'text':
+            result = translated.load_translated(directory / 'translated.jsonl').get(row['post_id'])
+            if result and result.get('refine_id') == job_id and result.get('text_de'):
+                event.update(status='succeeded', error=None, text_de=result['text_de'], message='已找回本次保存的文案')
+        elif row['kind'] == 'image':
+            result = localize_images.load_image_state(directory / 'images_de.jsonl').latest.get(
+                (row['post_id'], row['media_index']))
+            if result and result.get('refine_id') == job_id:
+                path = (directory / result.get('out_path', '')).resolve()
+                if path.is_relative_to(directory.resolve()) and path.is_file():
+                    if journal.file_sha256(path) == result.get('output_sha256'):
+                        event.update(status='succeeded', error=None, out_path=result['out_path'], message='已找回本次保存的图片')
+        _append(event)
+        return public_job(event)
 
 
 def capabilities(account_dir: Path, post_id: str) -> dict:
@@ -70,7 +148,7 @@ def capabilities(account_dir: Path, post_id: str) -> dict:
     return {'max_refine_per_media': settings.max_refine_per_media, 'image_attempts': counts,
             'estimated_image_usd': round(statistics.median(costs), 4) if costs else 0.211,
             'estimate_basis': '本地 usage 样本中位数' if costs else '业务测量参考，暂无本地 usage 样本',
-            'estimate_samples': len(costs), 'jobs': jobs}
+            'estimate_samples': len(costs), 'jobs': [public_job(row) for row in jobs]}
 
 
 def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_revision=None,
@@ -133,23 +211,36 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
         row = {'job_id': uuid4().hex, 'account': account_dir.name, 'post_id': source['post_id'],
                'source_text_sha256': source_text_sha256, 'kind': kind, 'instruction': instruction.strip(),
                'media_index': media_index, 'status': 'pending', 'recorded_at': now, 'actor': None}
+        row.update(worker=current_worker(), operation_tracked=True,
+                   source_fingerprint=paid_consent.fingerprint(source, account_dir))
         _append(row)
-    (executor or _executor).submit(execute, row, source)
+    try:
+        (executor or _executor).submit(execute, row, source)
+    except Exception as exc:
+        _append(dict(row, status='failed', error='executor_unavailable',
+                     message='处理线程未启动，本次未调用模型，请重新受理'))
+        raise review.ReviewConflict('处理线程未启动，本次未调用模型') from exc
     return row
 
 
 def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
     """工作线程入口；重启后不会自动重放未闭合请求。测试注入执行器，零真实费用。"""
     account_dir = cfg().archive_dir / row['account']
-    event = dict(row, status='running', recorded_at=datetime.now(timezone.utc).isoformat())
-    _append(event)
+    with _wait_lock('refinement.lock'):
+        current = latest().get(row['job_id'])
+        if current is None or current['status'] != 'pending':
+            return current or row
+        event = dict(row, status='running', recorded_at=datetime.now(timezone.utc).isoformat())
+        _append(event)
     try:
         def preflight():
-            _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
+            source, _ = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
+            if row.get('source_fingerprint') and paid_consent.fingerprint(source, account_dir) != row['source_fingerprint']:
+                raise review.ReviewConflict('源文、作者或原图已经改变，请重新核对')
             engine.budget_preflight()
         preflight()
         source, effective = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
-        controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight)
+        controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight, operation_id=row['job_id'])
         if row['kind'] == 'text':
             settings = translate.Settings()
             translator = translator or translate.Translator(settings, paid_controller=controller)

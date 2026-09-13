@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+import tomllib
 import zipfile
 import zlib
 from dataclasses import dataclass
@@ -127,6 +128,38 @@ def _stamp(now: datetime) -> str:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError('镜像时刻必须带时区')
     return now.astimezone(timezone.utc).isoformat()
+
+
+# --------------------------------------------------------------------------
+# state 备份的范围
+# --------------------------------------------------------------------------
+# F2-4 给「`state/` 一起镜像」的理由只有一条：`published.jsonl`（112 KB）
+# **不可重建**，丢了会让已发过的帖子再发一遍 —— 原话是「成本可忽略」。
+#
+# 但这份快照是**按小时重跑**的，而真实 state/ 里 2026-09-12 实测
+# 166 MB 中有 163.8 MB 是 228 张 PNG（probe 截图 + 提交/失败证据）。
+# 全收的后果：PNG 压不动，每小时冻结一份 166 MB 的 zip，base64 进 spool
+# 是 222 MB/次 ≈ 5.3 GB/天，spool 和 snapshots 都没有回收口，
+# 云盘那边还会每月多出 ~720 个 `快照_vN` 目录。那条「成本可忽略」就不成立了。
+#
+# 所以范围收成「能校验完整性的账本 + 纯文本日志」：
+# :func:`MirrorService._stable_state_bytes` 本来也只会校验 .json / .jsonl，
+# 对 PNG 没有任何完整性概念 —— 它只能赌读取期间文件没变。
+# 新增的账本会自动进快照，二进制排查产物不进。
+STATE_BACKUP_SUFFIXES = ('.json', '.jsonl', '.log')
+
+#: probe dump 另有一条独立理由：HANDOFF §8 明写换机器必须重录一次探查，
+#: 它是机器绑定的，镜像它既贵又没有用。
+STATE_BACKUP_SKIP_FILE = re.compile(r'^publish_probe_.*\.json$')
+
+#: 按目录排除的：mirror_spool 会让快照递归吃自己；另外三个是 PNG 证据目录，
+#: 要留证的话应该**各自上传一次**，不是每小时跟着整包重传。
+STATE_BACKUP_SKIP_DIRS = ('mirror_spool', 'publish_attempts', 'publish_failures',
+                          'publish_snapshots', 'runtime-backups')
+
+#: 超过这个大小就失败闭合。账本涨到几十 MB 意味着范围又漏进了 bulk 文件，
+#: 这时候要的是一条「备份未完成」的告警，不是每小时静默上传一个 GB 级对象。
+STATE_BACKUP_MAX_BYTES = 32 * 1024 * 1024
 
 
 def _json_bytes(value) -> bytes:
@@ -313,8 +346,15 @@ class MirrorService:
             return self._queue(self._load(), key, placement,
                                '03_已发布' if stage == 'scheduled' else '02_待发布', frozen, identity, now)
 
-    def queue_state(self, state_dir: Path, *, now: datetime) -> bool:
-        """按配置间隔备份 state 原始字节，排除锁、派生 DB 和镜像自身，避免递归。"""
+    @staticmethod
+    def _backs_up(name: str) -> bool:
+        """只收能校验完整性的账本；理由见 STATE_BACKUP_SUFFIXES 那段。"""
+        return (name.endswith(STATE_BACKUP_SUFFIXES)
+                and not name.startswith(('mirror_queue.', '.mirror_queue.', 'index.sqlite'))
+                and not STATE_BACKUP_SKIP_FILE.match(name))
+
+    def queue_state(self, state_dir: Path, *, now: datetime, config_path: Path | None = None) -> bool:
+        """按配置间隔备份不可重建的 state 账本；排除派生 DB、锁与镜像自身。"""
         if not self.settings.mirror_state:
             return False
         state_dir = Path(state_dir)
@@ -327,26 +367,69 @@ class MirrorService:
                     return False
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                if config_path is not None:
+                    content = self._stable_state_bytes(Path(config_path))
+                    tomllib.loads(content.decode('utf-8'))
+                    archive.writestr(zipfile.ZipInfo('config.toml'), content)
                 for parent, directories, names in os.walk(state_dir, followlinks=False):
-                    directories[:] = sorted(name for name in directories if name != 'mirror_spool')
+                    directories[:] = sorted(name for name in directories
+                                            if name not in STATE_BACKUP_SKIP_DIRS
+                                            and not name.endswith('_screenshots'))
                     for name in directories:
                         assert_physical_direct_path(Path(parent), Path(parent) / name, kind='directory', label='待备份 state 子目录')
                     for name in sorted(names):
-                        if (name.startswith('mirror_queue.') or name.startswith('.mirror_queue.')
-                                or name.startswith('index.sqlite') or name.endswith(('.lock', '.tmp'))):
+                        if not self._backs_up(name):
                             continue
                         path = self._guard(Path(parent) / name)
                         relative = path.relative_to(state_dir).as_posix()
                         info = zipfile.ZipInfo(relative)
                         info.compress_type = zipfile.ZIP_DEFLATED
                         archive.writestr(info, self._stable_state_bytes(path))
+                # Small mutable receipts stay in the ledger backup. Frozen image
+                # bytes are uploaded separately once per content version below.
+                snapshots = state_dir / 'publish_snapshots'
+                if snapshots.exists():
+                    assert_physical_direct_path(state_dir, snapshots, kind='directory', label='冻结快照备份')
+                    for directory in sorted(snapshots.iterdir()):
+                        assert_physical_direct_path(snapshots, directory, kind='directory', label='冻结版本')
+                        for name in ('snapshot.json', 'receipt.json', 'projection.json'):
+                            path = self._guard(directory / name)
+                            if path.exists():
+                                archive.writestr(zipfile.ZipInfo(path.relative_to(state_dir).as_posix()),
+                                                 self._stable_state_bytes(path))
             payload = buffer.getvalue()
+            if len(payload) > STATE_BACKUP_MAX_BYTES:
+                raise MirrorError('state 账本备份达到 %.1f MB，超过 %d MB 上限；'
+                                  '请先核对是否有 bulk 文件落进了 state 根目录，本次未创建备份'
+                                  % (len(payload) / 1e6, STATE_BACKUP_MAX_BYTES // 1024 // 1024))
             placement = {'name': 'state', 'month': '_state', 'tag': now.strftime('%Y-%m')}
             changed = self._queue(data, '_state/' + now.strftime('%Y-%m'), placement, '快照',
                                   {'state.zip': payload}, {'sha256': _digest(payload)}, now)
+            changed = self._queue_evidence(data, state_dir, now) or changed
             data['last_state_at'] = _stamp(now)
             self._save(data)
             return changed
+
+    def _queue_evidence(self, data, state_dir, now):
+        """Version each evidence file independently; no hourly image ZIP duplication."""
+        changed = False
+        for parent, directories, names in os.walk(state_dir, followlinks=False):
+            directories[:] = sorted(name for name in directories if name not in {'mirror_spool', 'runtime-backups'})
+            for name in directories:
+                assert_physical_direct_path(Path(parent), Path(parent) / name, kind='directory', label='证据目录')
+            for name in sorted(names):
+                relative = (Path(parent) / name).relative_to(state_dir)
+                if not (Path(name).suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp'}
+                        or STATE_BACKUP_SKIP_FILE.match(name)
+                        or relative.parts[0] == 'publish_snapshots' and name in {'text_de.txt', '元信息.json'}):
+                    continue
+                path = self._guard(Path(parent) / name)
+                content = self._stable_state_bytes(path)
+                identity = {'path': relative.as_posix(), 'sha256': _digest(content)}
+                placement = {'name': _name(relative.as_posix()), 'month': '_evidence', 'tag': relative.parts[0] if len(relative.parts) > 1 else 'screenshots'}
+                changed = self._queue(data, '_evidence/' + relative.as_posix(), placement,
+                                      '版本', {name: content}, identity, now) or changed
+        return changed
 
     @staticmethod
     def _stable_state_bytes(path: Path) -> bytes:

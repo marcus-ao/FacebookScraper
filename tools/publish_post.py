@@ -41,6 +41,7 @@ from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from publish import business_suite as bs                     # noqa: E402
 from publish import journal                                  # noqa: E402
+from publish import records                                  # noqa: E402
 from publish import workflow                                 # noqa: E402
 from publish.compose import (ComposeError,                   # noqa: E402
                              _validated_probe_dump, compose_post)
@@ -178,6 +179,7 @@ def _manual_resolve(state_dir: Path, post_id: str, *, scheduled: bool) -> int:
                       if scheduled else
                       "人工证据：未排期；关闭此前模糊/未回读状态"))
             path = journal.append(state_dir, record)
+            records.project(record)
     except RuntimeError as exc:
         print("人工结转未开始：%s" % exc)
         return 3

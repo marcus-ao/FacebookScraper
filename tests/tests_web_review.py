@@ -410,6 +410,12 @@ class WebReviewTests(unittest.TestCase):
         self.assertFalse((self.account / "translated_human.jsonl").exists())
 
     def test_instagram_three_blocks_remove_urls_keep_custom_cta_and_warn_only(self):
+        relative = self.post_dir.relative_to(self.account)
+        self.account = self.account.rename(self.root / 'archive' / 'in_neakasa.global')
+        self.post_dir = self.account / relative
+        self.task_id = self.account.name + '/' + self.post_id
+        self.url = '/api/tasks/' + self.task_id
+        self.source['account'] = self.source['owner'] = 'neakasa.global'
         self.source["platform"] = "instagram"
         self.source["text"] += " https://us.example/product"
         self.write_source()

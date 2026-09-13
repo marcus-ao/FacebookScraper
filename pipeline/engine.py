@@ -1,6 +1,7 @@
 r"""G9 assisted 对账流水线：每次从各阶段真相源重建，不建立发布任务队列。"""
 from __future__ import annotations
 
+from publish import capabilities
 import hashlib
 import html
 import json
@@ -14,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from core.config import cfg
 from core.store import Archive, post_directory
-from publish import journal, channels
+from publish import journal
 from publish.compose import ComposeError, _read_post_truth, compose_post
 import translate as translation
 from core.paid_model import FileLock
@@ -29,6 +30,7 @@ from core.chrome import attach
 from routes import delta
 # 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
 from publish import business_suite as bs
+from publish import month_inventory
 from tools import publish_post
 
 
@@ -179,27 +181,8 @@ def activation_time(state_dir: Path) -> datetime | None:
 
 
 def activation_blockers(state_dir: Path) -> tuple[str, ...]:
-    """G8 通过与否是**可机检的**，不必靠 `--g8-verified` 那句自觉。
-
-    激活早了不是"顺序不好看"，是**真花钱**：``assisted`` 的 run 会先付费
-    翻译、再付费调图，最后才在 ``compose_post`` 的
-    ``require_verified_ui_constraints`` 上失败闭合 —— 每一篇都这样，
-    而且每天跑一次。所以这两条在激活那一刻就要拦住。
-
-    返回空元组表示可以激活；否则每条是一句"缺什么、怎么补"。
-    """
-    blockers: list[str] = []
-    if cfg().get("publish", "ui_constraints_verified", False) is not True:
-        blockers.append(
-            "[publish].ui_constraints_verified 仍是 false —— assisted 会先花钱"
-            "翻译/调图，再逐篇卡在离线硬闸上。先按 docs/MANUAL_STEPS.md 第 3.4 节"
-            "量完 14 个 UI 上限。")
-    if not journal.scheduled_source_refs(state_dir):
-        blockers.append(
-            "state/published.jsonl 里没有任何 status=scheduled 记录 —— "
-            "G8 从未在真机上成功过。先跑 run_publish_post.bat --post-id <id> "
-            "--at <ISO> --submit；若排期是你手工点的，用 --mark-scheduled 结转。")
-    return tuple(blockers)
+    """Share capability and single-channel acceptance checks with Web and CLI."""
+    return capabilities.activation_blockers(state_dir)
 
 
 def activate(state_dir: Path, *, g8_verified: bool,
@@ -215,6 +198,9 @@ def activate(state_dir: Path, *, g8_verified: bool,
         existing = _parse_aware(state.get("activated_at"))
         if existing is not None:
             return existing
+        blockers = activation_blockers(state_dir)
+        if blockers:
+            raise PipelineRunError('首次激活尚未满足验收条件：' + '；'.join(blockers))
         state.update({
             "schema_version": 1,
             "activated_at": now.isoformat(timespec="microseconds").replace(
@@ -1055,6 +1041,7 @@ def _ready_item(candidate: Candidate, post) -> HumanItem:
          "post_id": source.post_id,
          "platform": source.platform,
          "account_dir": source.account_dir.name,
+         "source_created_at": source.created_at.isoformat(),
          "source_text_sha256": journal.text_sha256(source.text),
          "relation": candidate.relation,
          "publish_fingerprint": fingerprint,
@@ -1537,9 +1524,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
 
     try:
         for _row, post in prepared:
-            channels.require_independent_channel_evidence((post.platform,))
-        bs.require_submission_evidence()
-        bs.require_readback_evidence()
+            capabilities.require(post.platform)
     except bs.ProbeRequired as exc:
         raise PipelineRunError(str(exc)) from exc
     c = cfg()
@@ -1553,7 +1538,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 start_script=r"scripts\start_chrome_publish.bat",
                 login_hint="DE 发布账号")
             page = await context.new_page()
-            return await bs.read_remote_slot_inventory(
+            return await month_inventory.read(
                 page, ui_timezone=rules.ui_timezone,
                 business_timezone=rules.timezone,
                 timeout=float(c.get("publish", "ui_timeout_seconds",

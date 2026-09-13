@@ -58,6 +58,13 @@ async function submit() {
     await load()
   } finally { submitting.value = false }
 }
+async function recover() {
+  submitting.value = true
+  error.value = ''
+  try { await api.reconcilePublication(props.detail.id); emit('changed', await api.getTask(props.detail.id)); await load() }
+  catch (exc) { error.value = exc.message }
+  finally { submitting.value = false }
+}
 onMounted(load)
 watch(() => props.detail, load)
 </script>
@@ -78,7 +85,13 @@ watch(() => props.detail, load)
       <button class="btn btn-primary" :disabled="disabled" @click="submit">{{ submitting ? '正在提交并核验…' : '通过并创建排期' }}</button>
     </div>
     <p v-if="minimum && maximum" class="help">可选范围：{{ minimum.replace('T', ' ') }} 至 {{ maximum.replace('T', ' ') }}（柏林）。</p>
+    <div v-if="eligible && when && options?.default_times?.length" class="suggestions"><span>当天常用时间：</span><button v-for="time in options.default_times" :key="time" class="btn btn-sm" :disabled="editing || submitting || !options.available" @click="when = when.slice(0, 10) + 'T' + time">{{ time }} 柏林</button></div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <div v-if="detail.publication || detail.status === 'approved'" class="help">
+      <p v-if="detail.publication">发布尝试：{{ detail.publication.attempt_id }} · {{ detail.publication.status === 'scheduled' ? '定时任务已确认' : '等待核验' }}</p>
+      <p v-if="detail.status === 'scheduled'">{{ detail.delivery?.message || '尚无远端公开发布观测' }}</p>
+      <button class="btn btn-sm" :disabled="submitting || editing" @click="recover">核对并补齐本地回执</button>
+    </div>
     <div v-if="suggestions.length" class="suggestions"><span>可以改选：</span><button v-for="value in suggestions" :key="value" class="btn btn-sm" @click="when = berlinInput(value)">{{ berlinInput(value).replace('T', ' ') }} 柏林</button></div>
   </section>
 </template>

@@ -1,6 +1,8 @@
 """常驻入口的应用组装：监测、处理、到期唤醒与飞书；不自动批准发布。"""
 from __future__ import annotations
 
+from pipeline.runtime_status import record_process_tick
+from pipeline import hashtag_suggestions
 import asyncio
 import hashlib
 import json
@@ -14,11 +16,10 @@ from core.mirror import DriveClient, MirrorService, MirrorSettings
 from core.monitoring import MonitoringJournal, SKIP_REASONS
 from core.paid_model import atomic_write_json
 from core.network_evidence import NetworkEvidence, NetworkEvidenceSettings, network_evidence_status
-from core import notify, review
+from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
-from pipeline import engine
+from pipeline import engine, notifications
 from publish import journal, planner_cache
-import localize_images
 
 
 class Runtime:
@@ -32,6 +33,10 @@ class Runtime:
         self.processing_executor = ThreadPoolExecutor(max_workers=1,
                                                       thread_name_prefix='content-processing')
         self.processing_future = None
+        self.sampling_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='hashtag-sampling')
+        self.sampling_future = None
+        self.delivery_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='workflow-delivery')
+        self.delivery_future = None
         self.settings = FeishuSettings.load()
         self.outbox = Outbox(self.c.state_dir / 'feishu_outbox.json', self.settings)
         self.client = None
@@ -49,8 +54,16 @@ class Runtime:
 
     def close(self):
         self.processing_executor.shutdown(wait=False, cancel_futures=False)
+        self.sampling_executor.shutdown(wait=False, cancel_futures=True)
+        self.delivery_executor.shutdown(wait=False, cancel_futures=True)
         self.heartbeat.close()
         self.network.close()
+        if self.delivery_future is not None:
+            self.delivery_future.add_done_callback(lambda _: self._close_delivery_clients())
+        else:
+            self._close_delivery_clients()
+
+    def _close_delivery_clients(self):
         if self.drive is not None:
             self.drive.close()
         if self.client is not None:
@@ -137,24 +150,36 @@ class Runtime:
         batch = self.processing.claim(now)
         if batch is None:
             return None
-        self.processing_future = self.processing_executor.submit(self._process_batch, batch)
+        try:
+            self.processing_future = self.processing_executor.submit(self._process_batch, batch)
+        except Exception:
+            self.processing.finish(batch, self.clock(), code=1)
+            self._system('processing-executor:' + batch['batch_id'], '内容执行线程未启动，本次未调用模型。', now)
         return self.processing_future
 
     def _process_batch(self, batch: dict):
         started = self.clock()
-        before = sum(1 for item in engine.latest_human_items(self.c.state_dir).values()
-                     if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish')
         try:
+            before = {key for key, item in engine.latest_human_items(self.c.state_dir).items()
+                      if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish'}
             directories = account_dirs(self.c.archive_dir)
             code = 0
             if directories:
-                code = engine.run(account_dirs=directories, state_dir=self.c.state_dir,
-                                  settings=engine.pipeline_settings(), now=started,
-                                  detect_updates=False)
-            after = sum(1 for item in engine.latest_human_items(self.c.state_dir).values()
-                        if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish')
-            result = self.processing.finish(batch, self.clock(), code=int(code or 0),
-                                            ready_count=max(0, after - before))
+                with paid_requests.operation_scope(batch['batch_id']):
+                    code = engine.run(account_dirs=directories, state_dir=self.c.state_dir,
+                                      settings=engine.pipeline_settings(), now=started,
+                                      detect_updates=False)
+            after = {key: item for key, item in engine.latest_human_items(self.c.state_dir).items()
+                     if item.get('status') == 'open' and item.get('kind') == 'ready_to_publish'}
+            newly_ready = after.keys() - before
+            finished = self.clock()
+            for key in newly_ready:
+                details = after[key].get('details') or {}
+                if details.get('canonical_ref') and details.get('source_created_at'):
+                    self.processing.fact('post_content_ready', finished, batch_id=batch['batch_id'],
+                        source_ref=details['canonical_ref'], source_created_at=details['source_created_at'],
+                        item_id=key, requested_at=batch.get('requested_at'))
+            result = self.processing.finish(batch, finished, code=int(code or 0), ready_count=len(newly_ready))
             if code:
                 self._system(f'processing:{started.date()}:{code}',
                              f'本轮内容处理未完成（退出码 {code}），请检查流水线日志与付费请求记录。',
@@ -175,6 +200,9 @@ class Runtime:
 
     def maintenance(self, now: datetime):
         """投递故障留在本地日志，不改变抓取或发布状态。"""
+        record_process_tick(now)
+        self.c = cfg()
+        self.refresh_hashtags(now)
         try:
             directories = engine.active_account_dirs(account_dirs(self.c.archive_dir))
             scheduled = journal.scheduled_source_refs(self.c.state_dir)
@@ -193,6 +221,21 @@ class Runtime:
             if evidence['stability'] == 'changed' or evidence['network_type'] in {'hosting', 'anonymous'}:
                 self._system(f'network-change:{now.date()}:{evidence["latest"]["ip"]}',
                     '观测到出口变化或提供方标记的代理/托管网络，请核对 Chrome 是否使用了同一出口。', now)
+        if self.delivery_future is None or self.delivery_future.done():
+            previous, self.delivery_future = self.delivery_future, None
+            if previous is not None:
+                try:
+                    previous.result()
+                except Exception as exc:
+                    notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
+            try:
+                self.delivery_future = self.delivery_executor.submit(self._deliver, now)
+            except Exception as exc:
+                notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
+
+    def _deliver(self, now):
+        # Browser readback, image upload and archive mirrors have bounded network
+        # waits, but a batch can contain many files. Keep them off the monitor loop.
         self.refresh_calendar(now)
         if self.mirror_settings.enabled:
             try:
@@ -220,12 +263,11 @@ class Runtime:
             return
         directory, indexed = origin
         source, _ = read_post_truth(directory, indexed)
-        if journal.text_sha256(source['text']) != payload.get('source_text_sha256'):
+        current, path = notifications.material(directory, source)
+        payload.update(current)
+        payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
+        if path is None:
             return
-        media = next((item for item in source.get('media', []) if item.get('kind') == 'image'), None)
-        if media is None:
-            return
-        path, _ = localize_images._source_from_manifest(directory, source, media)
         if path.stat().st_size >= 10 * 1024 * 1024:
             raise ValueError('通知图片过大')
         content = path.read_bytes()
@@ -245,6 +287,21 @@ class Runtime:
             cache[digest] = key
             atomic_write_json(cache_path, cache)
         payload['image_key'] = key
+
+    def refresh_hashtags(self, now):
+        if self.sampling_future is not None:
+            if not self.sampling_future.done():
+                return
+            try:
+                self.sampling_future.result()
+            except Exception:
+                notify.notify('标签采样暂未完成', '继续保留语义候选，请查看运行状态。', popup=False)
+            self.sampling_future = None
+        try:
+            if hashtag_suggestions.weekly_refresh_due(now=now, c=self.c):
+                self.sampling_future = self.sampling_executor.submit(hashtag_suggestions.weekly_refresh, now=now, c=self.c)
+        except Exception:
+            notify.notify('标签采样未启动', '请检查采样配置；监测继续运行。', popup=False)
 
     def refresh_calendar(self, now: datetime):
         if not self.calendar_enabled:
@@ -273,7 +330,7 @@ class Runtime:
                     self._system(f'mirror-source:{directory.name}:{source.get("post_id")}:{now.date()}',
                                  f'有一篇源帖尚未镜像（{type(exc).__name__}），请检查本地素材。', now)
         try:
-            self.mirror.queue_state(self.c.state_dir, now=now)
+            self.mirror.queue_state(self.c.state_dir, now=now, config_path=self.c.path)
         except (OSError, ValueError, RuntimeError) as exc:
             self._system(f'mirror-state:{now.date()}',
                          f'状态备份等待稳定文件（{type(exc).__name__}）；已冻结的镜像继续投递。', now)
@@ -299,7 +356,7 @@ class Runtime:
         self.thumbnail_sources = {directory.name + '/' + source['post_id']: (directory, source)
                                   for directory, source in sources.values()}
         scheduled = journal.scheduled_source_refs(self.c.state_dir)
-        pending = []
+        pending = {}
         valid_ready = set()
         for event in engine.latest_human_items(self.c.state_dir).values():
             if event.get('status') != 'open':
@@ -320,29 +377,53 @@ class Runtime:
             if (event.get('kind') == 'ready_to_publish'
                     and details.get('source_text_sha256') != journal.text_sha256(source['text'])):
                 continue
+            entry = pending.setdefault(refs[0], {'source': source, 'directory': directory,
+                'state': state, 'recorded_at': event['recorded_at'], 'notes': []})
+            entry['recorded_at'] = min(entry['recorded_at'], event['recorded_at'])
+            if event['kind'] != 'ready_to_publish' and event.get('summary'):
+                entry['notes'].append(event['summary'])
+
+        for ref, item in pending.items():
+            source, directory, state = item['source'], item['directory'], item['state']
+            current, _ = notifications.material(directory, source)
             payload = {'task_id': directory.name + '/' + source['post_id'],
                        'platform': source['platform'], 'account': source['account'],
-                       'created_at': source['created_at'],
-                       'permalink': source.get('permalink'),
-                       'source_text_sha256': journal.text_sha256(source['text']),
-                       'text': f"{details.get('image_count', 0)} 张图\n" + (details.get('text_de_preview') or ''),
-                       'risk': ('\n'.join(details.get('warnings') or [])
-                                if event['kind'] == 'ready_to_publish' else event.get('summary', ''))}
-            revision = state.get('revision') or ''
-            event_id = 'ready:' + event['item_id'] + ':' + revision
+                       'created_at': source['created_at'], 'permalink': source.get('permalink'),
+                       'processing_notes': item['notes'], **current}
+            payload['risk'] = '\n'.join(dict.fromkeys([*item['notes'], current['risk']])).strip()
+            event_id = 'ready:' + ref + ':' + payload['source_text_sha256'] + ':' + (state.get('revision') or '')
             valid_ready.add(event_id)
             self.outbox.enqueue(event_id, 'ready', payload, now)
-            pending.append(event)
 
         # 只在当前 14/18 点小时内补发当次提醒，重启不会追着补昨天的两轮。
         local = MonitorSchedule.local(now)
         if pending and local.hour in {14, 18} and self.outbox.schedule.is_on_duty(now):
-            earliest = min(datetime.fromisoformat(item['recorded_at'].replace('Z', '+00:00')) for item in pending)
+            earliest = min(datetime.fromisoformat(item['recorded_at'].replace('Z', '+00:00')) for item in pending.values())
             hours = max(0, int((now - earliest).total_seconds() // 3600))
             backlog_id = f'backlog:{local.date()}:{local.hour}'
             valid_ready.add(backlog_id)
             self.outbox.enqueue(backlog_id, 'backlog',
                                 {'text': f'当前 {len(pending)} 篇待审，最早一篇已等待 {hours} 小时。'}, now)
+
+        if local.hour == 8 and self.outbox.schedule.is_on_duty(now):
+            activity = self.activity_summary(now)
+            processing = self.processing_status()
+            abnormal = processing.get('status') in {'failed', 'interrupted', 'uncertain'}
+            if activity or pending or abnormal:
+                text = []
+                if activity:
+                    text.append(f"发现 {activity['discovered']} 篇，晨间补抓 {activity['reconcile_discovered']} 篇。")
+                    labels = {'video': '视频', 'mixed': '混合媒体', 'text_only': '无静态图片',
+                              'media_incomplete': '图片未齐', 'unknown': '范围待确认'}
+                    text.extend(f"分类跳过 {labels.get(key, key)}：{count}" for key, count in activity['skipped'].items() if count)
+                if pending:
+                    text.append(f'当前 {len(pending)} 篇待审。')
+                duration = processing.get('last_success_duration_minutes')
+                if duration is not None:
+                    text.append(f'最近整批处理用时 {duration:.1f} 分钟。')
+                if abnormal:
+                    text.append('内容处理需要核对：' + str(processing.get('recovery_reason') or processing['status']))
+                self.outbox.enqueue(f'morning:{local.date()}', 'morning', {'text': '\n'.join(text)}, now)
 
         self.outbox.retain_ready(valid_ready, now)
 
@@ -370,9 +451,14 @@ class Runtime:
             recorded_at = datetime.fromisoformat(attempt['recorded_at'].replace('Z', '+00:00'))
             if recorded_at >= started_at:
                 self.outbox.enqueue(f'{kind}:{attempt["attempt_id"]}', kind, payload, now)
-            if (status == journal.STATUS_SCHEDULED and attempt.get('source_text_sha256')
-                    and attempt['source_text_sha256'] != journal.text_sha256(source['text'])):
-                digest = hashlib.sha256(source['text'].encode()).hexdigest()[:16]
-                self.outbox.enqueue(f'source-changed:{attempt["attempt_id"]}:{digest}', 'schedule_failed',
-                                    dict(payload, text='已排期帖的原文发生变化，远端排期保持原样。',
-                                         next_step='请比较新原文与已排内容，人工决定是否调整。'), now)
+            if status == journal.STATUS_SCHEDULED:
+                if attempt.get('source_fingerprint'):
+                    digest = paid_consent.fingerprint(source, directory)
+                    changed = digest != attempt['source_fingerprint']
+                else:
+                    digest = journal.text_sha256(source['text'])
+                    changed = bool(attempt.get('source_text_sha256') and attempt['source_text_sha256'] != digest)
+                if changed:
+                    self.outbox.enqueue(f'source-changed:{attempt["attempt_id"]}:{digest}', 'schedule_failed',
+                        dict(payload, text='已排期帖的源文或图片内容、数量、顺序发生变化，远端排期保持原样。',
+                             next_step='请比较新源内容与批准快照，人工决定是否调整。'), now)

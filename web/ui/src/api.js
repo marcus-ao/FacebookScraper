@@ -37,10 +37,12 @@ const json = (body) => ({
 })
 
 export const api = {
+  settings: () => request('/api/settings'),
+  saveSettings: (values, version) => request('/api/settings', { ...json({ values, version }), method: 'PUT' }),
   calendar: () => request('/api/calendar'),
   refreshCalendar: () => request('/api/calendar/refresh', json({})),
 
-  listTasks: () => request('/api/tasks'),
+  listTasks: (params = {}) => request('/api/tasks?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '' && value != null))),
 
   getTask: (taskId) => request(`/api/tasks/${idPath(taskId)}`),
 
@@ -61,6 +63,12 @@ export const api = {
 
   approvalOptions: taskId => request(`/api/tasks/${idPath(taskId)}/approval-options`),
   approve: (taskId, body) => request(`/api/tasks/${idPath(taskId)}/approve`, json(body)),
+  reconcilePublication: taskId => request(`/api/tasks/${idPath(taskId)}/publication/reconcile`, json({})),
+  runtime: () => request('/api/runtime'),
+  recoverProcessing: (batch, outputsReviewed) => request('/api/runtime/processing/recover',
+    json({ batch_id: batch.batch_id, version: batch.state_revision, outputs_reviewed: outputsReviewed })),
+  resolveNotification: (item, action, messageId = '') => request(`/api/runtime/notifications/${encodeURIComponent(item.delivery_id)}/resolve`,
+    json({ action, version: item.version, message_id: messageId })),
 
   refinementCapabilities: taskId => request(`/api/refinements/task/${idPath(taskId)}`),
   initialCapabilities: taskId => request(`/api/initial-translation/task/${idPath(taskId)}`),
@@ -68,6 +76,7 @@ export const api = {
   initialJob: jobId => request(`/api/initial-translation/jobs/${encodeURIComponent(jobId)}`),
   refine: (taskId, body) => request(`/api/refinements/task/${idPath(taskId)}`, json(body)),
   refinementJob: jobId => request(`/api/refinements/jobs/${encodeURIComponent(jobId)}`),
+  recoverContentJob: job => request(`/api/content-jobs/${encodeURIComponent(job.job_id)}/recover`, json({ expected_updated_at: job.recorded_at })),
   template: kind => request(`/api/templates/${kind}`),
   suggestHashtags: (taskId, body) => request(`/api/hashtags/task/${idPath(taskId)}`, json(body)),
 

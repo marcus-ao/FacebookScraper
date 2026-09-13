@@ -19,7 +19,6 @@ import 翻译执行器（连着 openai SDK 和整个批处理循环）才能判�
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import unicodedata
@@ -30,7 +29,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from core import paid_model
-from core.store import assert_physical_direct_path
+from core.store import assert_physical_direct_path, source_text_digest
 
 # 提示词版本。改了提示词就把它 +1：译文行里记着这个值，
 # 于是"这批译文是旧提示词产出的"变成可查的事实，而不是靠记忆。
@@ -55,10 +54,15 @@ class HumanRevisionConflict(ValueError):
 # --------------------------------------------------------------------------
 
 def source_text_sha256(text: str) -> str:
-    """绑定模型实际收到的正文（strip 后 UTF-8），防止旧译文错配新正文。"""
+    """绑定模型实际收到的正文，防止旧译文错配新正文。
+
+    口径本身住在 :func:`core.store.source_text_digest`（那里说明了为什么）。
+    这一层只多一道类型闸：读方拿到的是 manifest 里的任意 JSON 值，
+    不是字符串时要在调 API 之前停下来，而不是让 sha256 抛 AttributeError。
+    """
     if not isinstance(text, str):
         raise SourceTextError("manifest 的 text 必须是字符串；已停止，未调用 API")
-    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+    return source_text_digest(text)
 
 
 def translation_is_current(source: dict, translated: dict | None) -> bool:

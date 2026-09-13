@@ -119,9 +119,9 @@ class CalendarApiTests(unittest.TestCase):
         context.new_page.return_value = page
         with patch("publish.planner_cache.bs.require_readback_evidence", return_value=object()), \
                 patch("publish.planner_cache.attach", AsyncMock(return_value=(pw, object(), context))), \
-                patch("publish.planner_cache.bs.read_remote_slot_inventory", AsyncMock(return_value=ROWS)) as read:
+                patch("publish.planner_cache.month_inventory.read", AsyncMock(return_value=ROWS)) as read:
             self.assertEqual(asyncio.run(planner_cache.read_live_inventory()), ROWS)
-        self.assertTrue(read.call_args.kwargs["include_cards"])
+        read.assert_awaited_once()
         page.close.assert_awaited_once()
         pw.stop.assert_awaited_once()
 

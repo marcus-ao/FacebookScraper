@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from activation_fixtures import activate as fixture_activate
 
 import tests_web_review as fixtures
 from core.config import cfg
@@ -146,7 +147,7 @@ class RuntimeRecoveryTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.state = cfg().state_dir
-        engine.activate(self.state, g8_verified=True, now=NOW)
+        fixture_activate(engine, self.state, g8_verified=True, now=NOW)
 
     def test_successful_scan_records_facts_and_durable_pending_batch(self):
         def detector(kind, platform):

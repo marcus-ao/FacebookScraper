@@ -104,9 +104,10 @@ def _proof_payload(request: ExportRequest, observation: Mapping, recorded_at: da
         raise ValueError("控件证据缺少观察页面")
     _validate_request_url(request, observed_url)
     control = observation.get("control")
-    if (not isinstance(control, Mapping) or control.get("role") not in {"button", "link"}
+    if (not isinstance(control, Mapping) or control.get("role") != 'button'
             or not isinstance(control.get("accessible_name"), str)
-            or not control["accessible_name"].strip() or control.get("exact") is not True
+            or control['accessible_name'].strip().casefold() not in {'download csv', 'export csv', 'csv'}
+            or control.get("exact") is not True
             or control.get("count") != 1):
         raise ValueError("必须录到唯一、精确命名的 CSV 导出可访问控件")
     return {"schema_version": 1, "kind": PROOF_KIND,
@@ -150,28 +151,39 @@ def state_path(c) -> Path:
 def load_state(c) -> dict:
     try:
         value = json.loads(state_path(c).read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError, TypeError):
+        if not isinstance(value, dict):
+            raise ValueError('expected object')
+        return value
+    except FileNotFoundError:
         return {}
+    except (OSError, ValueError, TypeError) as exc:
+        raise TrendsExportUnavailable('Trends 停止记录无法读取，保留现场且不访问页面') from exc
 
 
 def save_state(c, value: Mapping) -> None:
     paid_model.atomic_write_json(state_path(c), dict(value), indent=2, sort_keys=True)
 
 
-def reset_block(c=None, *, reason: str, now: datetime | None = None) -> dict:
+def state_revision(state: Mapping) -> str:
+    return hashlib.sha256(json.dumps(dict(state), sort_keys=True, ensure_ascii=False,
+                                     separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def reset_block(c=None, *, reason: str, expected_revision: str, now: datetime | None = None) -> dict:
     if c is None:
         from core.config import cfg  # 延迟导入：状态恢复允许注入临时目录而不初始化生产配置。
         c = cfg()
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("人工恢复必须记录核对说明")
-    state = load_state(c)
-    if state.get("status") != "blocked":
-        raise TrendsExportUnavailable("Trends 导出当前没有待恢复的硬停")
-    moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    state.update(status="recovered", recovered_at=moment.isoformat(),
-                 recovery_reason=reason.strip())
-    save_state(c, state)
+    from routes import delta  # 延迟导入：恢复与采样在同一进程锁内进行版本核验。
+    with delta.DeltaRunLock(Path(c.state_dir) / 'delta.lock'):
+        state = load_state(c)
+        if state.get("status") != "blocked" or expected_revision != state_revision(state):
+            raise TrendsExportUnavailable("Trends 停止记录已变化，请重新读取并核对当前版本")
+        moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        state.update(status="recovered", recovered_at=moment.isoformat(),
+                     recovery_reason=reason.strip(), actor=None)
+        save_state(c, state)
     return state
 
 

@@ -1,6 +1,7 @@
 """真实付费模型的英文语义风险预扫，以及可审计的状态视图。"""
 from __future__ import annotations
 
+from core.config import cfg
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -100,7 +101,6 @@ def result_for(account_dir: Path, source: dict, *, state_dir: Path | None = None
     if not isinstance(source, dict) or not isinstance(source.get("post_id"), str):
         raise ValueError("风险结果需要带 post_id 的源帖")
     if state_dir is None:
-        from core.config import cfg  # 延迟导入，保持纯读取测试可注入目录。
         state_dir = cfg().state_dir
     task_id = "%s/%s" % (Path(account_dir).name, source["post_id"])
     return current_view(state_dir, task_id, str(source.get("text") or ""),

@@ -191,6 +191,7 @@ class RemotePlannerCard:
     remote_ids: tuple[tuple[str, str], ...] = ()
     rendered: str = ""
     card_sha256: str = ""
+    delivery: str = 'unknown'
 
 
 @dataclass(frozen=True)
@@ -310,7 +311,7 @@ async def assert_page_usable(page, *, timeout: float = PAGE_HEALTH_TIMEOUT) -> N
 # G1-1 入口
 # ---------------------------------------------------------------------------
 
-async def open_composer(context, *, timeout: float = DEFAULT_UI_TIMEOUT):
+async def open_composer(context, *, asset_context: dict, timeout: float = DEFAULT_UI_TIMEOUT):
     """开一个**新**标签页，按 G1 录到的路径进 composer，返回该 page。
 
     为什么自己开新页而不复用已有标签页：见 :func:`assert_page_usable`。
@@ -320,10 +321,18 @@ async def open_composer(context, *, timeout: float = DEFAULT_UI_TIMEOUT):
     **不直接 goto composer URL**：没有证据表明直接打开那个地址能得到
     一个可用的新草稿。
     """
+    from urllib.parse import urlencode
+    # 延迟导入：资产导航只在真实 composer 组装时需要，纯文案/时区检查不依赖它。
+    from publish.asset_context import context_ids
+    calendar_url = selectors.CONTENT_CALENDAR_URL + '?' + urlencode(asset_context)
+    if context_ids(calendar_url) != asset_context:
+        raise ProbeRequired('打开编辑器前缺少唯一的已录证资产标识')
     page = await context.new_page()
-    await page.goto(selectors.CONTENT_CALENDAR_URL,
+    await page.goto(calendar_url,
                     wait_until="domcontentloaded", timeout=_ms(timeout))
     await assert_page_usable(page)
+    if context_ids(page.url) != asset_context:
+        raise ProbeRequired('月历跳转后的业务资产与录证不一致')
 
     create = locator_for(page, "create_post_button")
     try:
@@ -344,6 +353,8 @@ async def open_composer(context, *, timeout: float = DEFAULT_UI_TIMEOUT):
         # 所以这里当成**可选**的一步：出现就点，不出现不报错。
         await _click_if_present(page, "composer_done_button", timeout=timeout)
         await caption.first.wait_for(state="visible", timeout=_ms(timeout))
+    if context_ids(page.url) != asset_context:
+        raise ProbeRequired('编辑器跳转后的业务资产与录证不一致')
     return page
 
 
@@ -516,9 +527,8 @@ async def upload_images(page, paths: list[Path], *,
     3. ``chooser.is_multiple()`` 是一条真回读：只收单文件却要传 5 张时
        当场失败，而不是默默只传上去一张。
 
-    ⛔ 仍然没有解决的是"缩略图数量对不对"——composer 的缩略图容器没进 dump
-    （G1 缺口 ``composer_upload_thumbnails``），所以这一条以**返回提示**的方式
-    交给人复核，绝不假装已经验过。
+    本函数只证明文件交给了上传控件。生产 workflow 随后调用 media.verify_upload
+    核验已上传的缩略图数量、视觉顺序；旧调用方仍收到人工复核提示。
     """
     files = [Path(item) for item in paths]
     if not files:
@@ -563,8 +573,7 @@ async def upload_images(page, paths: list[Path], *,
     return (
         "已把 %d 张图交给上传控件（%s）。" % (
             len(files), "、".join(item.name for item in files)),
-        "⚠️ **缩略图数量没有被程序核对过**：composer 的缩略图容器没进 G1 dump"
-        "（缺口 composer_upload_thumbnails）。提交前请人眼数一遍。",
+        "⚠️ 此上传入口尚未核对缩略图数量；调用方需完成 media.verify_upload 或人工核验。",
     )
 
 
@@ -809,7 +818,8 @@ async def _settle_pairs(date_locator, group_locator, *, timeout: float) -> None:
 
 async def set_schedule(page, when: datetime, *, ui_timezone: str,
                        timeout: float = DEFAULT_UI_TIMEOUT,
-                       verify_device: bool = True) -> str:
+                       verify_device: bool = True,
+                       target_channels: tuple[str, ...] | None = None) -> str:
     """打开定时开关、设好日期与时刻，并**回读 UI 显示的值比对**。
 
     时区是整组最容易错的一步（PUBLISH_PLAN 3.3）。**用户 2026-09-01 实测的结论是：
@@ -871,6 +881,8 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
     await _settle_pairs(date_locator, group_locator, timeout=timeout)
     date_inputs = await date_locator.all()
     groups = await group_locator.all()
+    if target_channels is not None and (len(target_channels) != 1 or len(date_inputs) != 1 or len(groups) != 1):
+        raise PublishStepError('单渠道必须且只能有一套排期控件；已停止，未提交')
     if not date_inputs or not groups or len(date_inputs) != len(groups):
         raise PublishStepError(
             "排期控件配不成对：日期框 %d 个、时间控件 %d 个。"

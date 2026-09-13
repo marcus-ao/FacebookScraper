@@ -110,8 +110,56 @@ class TrendsExportTests(unittest.TestCase):
         state = trends_export.load_state(self.c)
         self.assertEqual(state["status"], "blocked")
         self.assertEqual(state["http_status"], 429)
-        recovered = trends_export.reset_block(self.c, reason="operator verified challenge cleared", now=NOW)
+        recovered = trends_export.reset_block(self.c, reason="operator verified challenge cleared", now=NOW,
+                                               expected_revision=trends_export.state_revision(state))
         self.assertEqual(recovered["status"], "recovered")
+
+    def test_old_reset_cannot_clear_new_block_and_corrupt_stop_never_allows_access(self):
+        from routes import delta
+        old = {'status': 'blocked', 'reason': 'old'}
+        current = {'status': 'blocked', 'reason': 'new'}
+        trends_export.save_state(self.c, current)
+        with self.assertRaises(trends_export.TrendsExportUnavailable):
+            trends_export.reset_block(self.c, reason='checked old', now=NOW,
+                                     expected_revision=trends_export.state_revision(old))
+        self.assertEqual(trends_export.load_state(self.c), current)
+        with delta.DeltaRunLock(self.c.state_dir / 'delta.lock'):
+            with self.assertRaises(delta.DeltaRunAlreadyActive):
+                trends_export.reset_block(self.c, reason='checked', now=NOW,
+                                         expected_revision=trends_export.state_revision(current))
+        trends_export.state_path(self.c).write_text('{bad', encoding='utf-8')
+        with self.assertRaises(trends_export.TrendsExportUnavailable):
+            trends_export.export_public_csv(self.request, proof=self.proof, c=self.c,
+                browser_runner=lambda **_: self.fail('corrupt stop must block before browser'))
+
+    def test_non_csv_controls_and_incomplete_context_cannot_be_trusted(self):
+        for role, name in [('link', 'Sign in'), ('button', 'Sign in'), ('button', 'Download report')]:
+            observation = {'method': 'passive_accessibility_snapshot', 'observed_url': self.request.url,
+                'control': {'role': role, 'accessible_name': name, 'exact': True, 'count': 1}}
+            with self.assertRaises(ValueError):
+                trends_export.create_control_proof(self.request, observation, recorded_at=NOW)
+        raw = 'Week,Katzen,Katzenspielzeug,Katzentoilette\n2026-09-01,10,20,30\n'
+        context = dict(self.request.context(), verified=True, source_sha256='arbitrary')
+        with self.assertRaises(ValueError):
+            hashtag_sampling.import_trends_csv(raw, candidate_group='#Cats', tags=self.request.tags, geo='DE',
+                time_range=self.request.time_range, sampled_at=NOW, export_context=context)
+
+    def test_actual_cli_preserves_crlf_and_bom_in_export_and_import(self):
+        from tools import hashtag_sampling as cli
+        raw = b'\xef\xbb\xbfWeek,Katzen,Katzenspielzeug,Katzentoilette\r\n2026-09-01,10,20,30\r\n'
+        proof_path = self.c.state_dir / 'proof.json'
+        proof_path.write_text(json.dumps(self.proof), encoding='utf-8')
+        output = self.c.state_dir / 'samples.jsonl'
+        args = ['trends-public', '--group', '#Cats', '--start', '2026-09-01', '--end', '2026-09-07',
+                '--proof', str(proof_path), '--output', str(output)]
+        for tag in self.request.tags:
+            args += ['--tag', tag]
+        with patch.object(cli, 'cfg', return_value=self.c), patch.object(trends_export, '_playwright_download',
+                AsyncMock(return_value={'body': raw, 'final_url': self.request.url, 'suggested_filename': 'multiTimeline.csv'})):
+            self.assertEqual(cli.main(args), 0)
+        rows = [json.loads(line) for line in output.read_text('utf-8').splitlines()]
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(row['source_sha256'] == hashlib.sha256(raw).hexdigest() for row in rows))
 
     def test_success_preserves_raw_csv_hash_and_verified_context_for_import(self):
         raw = (b"Week,Katzen,Katzenspielzeug,Katzentoilette\r\n"

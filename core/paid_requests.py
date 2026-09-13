@@ -10,6 +10,8 @@ import json
 import math
 import os
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from pathlib import Path
@@ -35,12 +37,24 @@ _GLOBAL_BLOCKING = {
     EVENT_STARTED, EVENT_USAGE, EVENT_UNCERTAIN, EVENT_USAGE_UNKNOWN,
 }
 
+_operation = ContextVar('paid_operation', default=None)
+
+
+@contextmanager
+def operation_scope(operation_id):
+    """Bind synchronous stage CLIs to the durable batch that requested them."""
+    token = _operation.set(operation_id)
+    try:
+        yield
+    finally:
+        _operation.reset(token)
+
 
 class PaidRequestBlocked(RuntimeError):
     """账本/预算不能证明下一次请求安全，失败闭合。"""
 
 
-def PaidRequestLock(path: Path) -> FileLock:   # noqa: N802（保留原名，调用点不变）
+def PaidRequestLock(path: Path) -> FileLock:   # noqa: N802 - preserve the public factory name
     """所有文本与图片付费入口共用的一把跨进程锁。"""
     return FileLock(path, error_type=PaidRequestBlocked,
                     busy_message="另一个翻译/调图付费请求正在进行；本次未发请求")
@@ -51,6 +65,7 @@ class PaidReceipt:
     request_id: str
     job_key: str
     stage: str
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -169,6 +184,7 @@ def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
         "request_id": receipt.request_id,
         "job_key": receipt.job_key,
         "stage": receipt.stage,
+        "operation_id": receipt.operation_id,
         "recorded_at": _now_text(),
     }
 
@@ -188,9 +204,10 @@ class RequestController:
     """
 
     def __init__(self, state_dir: Path, *,
-                 preflight: Callable[[], None]) -> None:
+                 preflight: Callable[[], None], operation_id: str | None = None) -> None:
         self.state_dir = Path(state_dir)
         self.preflight = preflight
+        self.operation_id = _operation.get() or operation_id
 
     def run(self, *, stage: str, job_key: str, source_ref: str,
             media_index: int | None, model: str,
@@ -198,7 +215,7 @@ class RequestController:
             usage_errors: Callable[[Mapping[str, Any]], list[str]],
             usage_cost: Callable[[Mapping[str, Any]], float | None]
             ) -> tuple[Any, PaidReceipt]:
-        receipt = PaidReceipt(str(uuid.uuid4()), job_key, stage)
+        receipt = PaidReceipt(str(uuid.uuid4()), job_key, stage, self.operation_id)
         with PaidRequestLock(self.state_dir / LOCK_NAME):
             try:
                 self.preflight()

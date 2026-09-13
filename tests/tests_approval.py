@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, review, translated
@@ -29,7 +30,7 @@ class ApprovalTests(unittest.TestCase):
         self.fixture.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         c = verified_probe_config(config.cfg(), self.fixture.root / 'state')
         patch.object(config, '_cfg', c).start()
-        engine.activate(c.state_dir, g8_verified=True, now=NOW - timedelta(days=2))
+        fixture_activate(engine, c.state_dir, g8_verified=True, now=NOW - timedelta(days=2))
         self.post = compose.compose_post(self.source['post_id'], TARGET, archive_root=config.cfg().archive_dir,
             account=self.account.name, now=NOW, require_verified_ui_constraints=True, warning_sink=None)
         self.params = {'scheduled_at': TARGET, 'source_text_sha256': translated.source_text_sha256(self.source['text']),
@@ -38,7 +39,7 @@ class ApprovalTests(unittest.TestCase):
                                                 cards=(), cards_loaded=True)
 
     def allow_fixture_evidence(self):
-        patch.object(approval.channels, 'require_independent_channel_evidence', return_value=None).start()
+        patch('publish.capabilities.require', return_value=None).start()
         patch.object(bs, 'require_submission_evidence', return_value=None).start()
         patch.object(bs, 'require_readback_evidence', return_value=None).start()
 
@@ -117,13 +118,19 @@ class ApprovalTests(unittest.TestCase):
         context = SimpleNamespace(new_page=AsyncMock(return_value=page), stop=AsyncMock())
         submit = AsyncMock()
         with ExitStack() as stack:
+            stack.enter_context(patch.object(workflow.channels, 'select', AsyncMock(return_value={'channel': 'facebook', 'account': 'fixture'})))
+            stack.enter_context(patch.object(workflow.channels, 'verify_before_submit', AsyncMock()))
+            stack.enter_context(patch.object(workflow.media, 'verify_upload', AsyncMock(return_value={'image_count': 1})))
             stack.enter_context(patch.object(workflow, 'attach', AsyncMock(return_value=(context, None, context))))
             stack.enter_context(patch.object(workflow, '_screenshot', AsyncMock(return_value='')))
             stack.enter_context(patch.object(workflow, 'check_live_slot',
                 AsyncMock(side_effect=bs.PublishStepError('刚有其他人排入同一时段'))))
             stack.enter_context(patch.object(bs, 'require_account_context_evidence', return_value=object()))
+            stack.enter_context(patch.object(workflow.channel_evidence, 'require',
+                return_value={'context_ids': {'asset_id': '123', 'business_id': '456'}}))
+            stack.enter_context(patch.object(workflow.month_readback, 'baseline',
+                AsyncMock(return_value=bs.ScheduledBaseline(TARGET.isoformat(), 0))))
             responses = {'open_composer': page, 'ensure_logged_in': SimpleNamespace(notes=()),
-                'snapshot_scheduled_matches': bs.ScheduledBaseline(TARGET.isoformat(), 0),
                 'upload_images': (), 'fill_caption': None, 'set_schedule': 'fixture-time',
                 'capture_failure': SimpleNamespace(screenshot=None, lines=lambda: [])}
             for name, result in responses.items():

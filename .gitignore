@@ -1,6 +1,7 @@
 archive/
 state/
 .env
+config.local.toml
 __pycache__/
 *.pyc
 .fbscraper-chrome/
@@ -10,7 +11,7 @@ _deprecated/__pycache__/
 venv/
 .ruff_cache/
 .history/
-# 审校台原型自己的状态（假写入端唯一写的文件）与前端构建产物/依赖。
+# 历史原型状态（生产接口已不使用）与前端构建产物/依赖。
 # dist/ 是开发机构建出来手工拷到生产机的，不进版本库。
 web/_fake_state.json
 web/ui/node_modules/

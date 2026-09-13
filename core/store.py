@@ -316,6 +316,22 @@ def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
     return dirs
 
 
+def source_text_digest(text: str) -> str:
+    """源帖正文的版本指纹：strip 后 UTF-8 的 sha256。
+
+    ⛔ **这是唯一一处定义。** `core.translated.source_text_sha256` 转调它，
+    审校账本、本地化账本、标签保存与 Web 的 409 判据全都落在这一个口径上。
+    住在 store 而不是 translated，只是因为 translated 已经 import store，
+    反过来就是环（`tests_hygiene.py` 第 6 条会红）。
+
+    一度两边各写一遍 `sha256(text.strip())`。它们当时算出来一样，所以没人会
+    发现哪天只改了一边 —— 而同一段逻辑在两个文件里各写一遍正是
+    `tests_hygiene.py` 病因 3 记着的那个病（`_is_fatal_api_error` 语义分叉，
+    一次 429 让翻译整批崩、调图只算单条失败，两天没人发现）。
+    """
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
 def _folder_month(folder_name: str) -> str:
     return folder_name[:7] if re.match(r"^\d{4}-\d{2}-\d{2}_", folder_name) else "undated"
 
@@ -469,7 +485,7 @@ def update_post_tags(account_dir: Path, indexed: dict, tags: list[str], *,
         current, directory = read_post_truth(account_dir, indexed)
         if expected_tags is not _UNSET and (current.get("tags") or []) != expected_tags:
             raise ArchiveRevisionConflict("标签已有新版本，请重新载入后保存")
-        source_hash = hashlib.sha256(current["text"].strip().encode("utf-8")).hexdigest()
+        source_hash = source_text_digest(current["text"])
         if expected_source_sha256 is not None and source_hash != expected_source_sha256:
             raise ArchiveRevisionConflict("源帖已更新，请重新载入后保存标签")
         row = dict(current, tags=normalized)

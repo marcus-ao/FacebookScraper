@@ -13,7 +13,14 @@ let alive = true
 let polling = false
 let timer = null
 const running = computed(() => ['pending', 'running'].includes(job.value?.status))
-const labels = { pending: '已受理，等待处理', running: '正在翻译并处理图片', succeeded: '本轮处理完成', failed: '处理尚未完成' }
+const labels = { pending: '已受理，等待处理', running: '正在翻译并处理图片', succeeded: '本轮处理完成', failed: '处理尚未完成', interrupted: '处理已中断，待核对' }
+async function recover() {
+  submitting.value = true
+  error.value = ''
+  try { job.value = await api.recoverContentJob(job.value); await refresh() }
+  catch (exc) { error.value = exc.message }
+  finally { submitting.value = false }
+}
 async function refresh() {
   try {
     const result = await api.initialCapabilities(props.detail.id)
@@ -78,6 +85,8 @@ onUnmounted(() => { alive = false; clearInterval(timer) })
     <p v-else-if="capability.reason" class="help">{{ capability.reason }}</p>
     <p v-if="editing" class="help">请先保存或放弃正在编辑的文案，再开始处理。</p>
     <p v-if="job" role="status">{{ labels[job.status] }}<span v-if="job.message"> · {{ job.message }}</span></p>
+    <p v-if="job?.paid_request_ids?.length" class="help">已记录费用 US${{ Number(job.cost_usd || 0).toFixed(4) }} · 请求 {{ job.paid_request_ids.join('、') }}</p>
+    <button v-if="job?.status === 'interrupted'" class="btn btn-sm" :disabled="submitting" @click="recover">核对并恢复本地状态（不重新生成）</button>
     <p v-if="error" role="alert">{{ error }}</p>
     <button v-if="error || running" class="btn btn-sm" @click="refresh">刷新处理状态</button>
   </section>

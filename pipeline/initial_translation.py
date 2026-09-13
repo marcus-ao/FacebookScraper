@@ -49,7 +49,7 @@ def capabilities(account_dir: Path, indexed: dict) -> dict:
         result['third_party'] = bool(owners - rules.trusted_owners[source['platform']])
         jobs = [row for row in refinement.latest().values() if row['kind'] == 'initial'
                 and row['account'] == account_dir.name and row['post_id'] == source['post_id']]
-        result['job'] = jobs[-1] if jobs else None
+        result['job'] = refinement.public_job(jobs[-1]) if jobs else None
         result['needs_consent'] = result['third_party'] and not paid_consent.is_current(account_dir, source)
         source, candidate = _check(account_dir, source, allow_consent=True)
         result['source_fingerprint'] = paid_consent.fingerprint(source, account_dir)
@@ -82,6 +82,7 @@ def submit(account_dir: Path, indexed: dict, *, source_fingerprint: str, source_
                'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256,
                'consent_revision': consent['revision'], 'status': 'pending', 'actor': None,
                'recorded_at': datetime.now(timezone.utc).isoformat()}
+        row.update(worker=refinement.current_worker(), operation_tracked=True)
         refinement._append(row)
     try:
         (executor or refinement._executor).submit(execute, row, source)
@@ -99,7 +100,7 @@ def job_result(job_id: str) -> dict | None:
 def execute(row: dict, indexed: dict, *, translator=None, editor=None,
             risk_scanner=None) -> dict:
     account_dir = cfg().archive_dir / row['account']
-    with paid_model.FileLock(cfg().state_dir / 'refinement.lock', busy_message='内容任务正在领取'):
+    with refinement._wait_lock('refinement.lock'):
         current = job_result(row['job_id'])
         if current is None or current['status'] != 'pending':
             return current or row
@@ -113,7 +114,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None,
             engine.budget_preflight()
         preflight()
         source, candidate = _check(account_dir, indexed)
-        controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight)
+        controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight, operation_id=row['job_id'])
         if engine.translation_needed(candidate.canonical):
             scan = risk_scanner or risk_scan.scan_source
             scan_result = scan(

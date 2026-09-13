@@ -19,10 +19,18 @@ let polling = false
 const running = computed(() => ['pending', 'running'].includes(job.value?.status))
 const eligible = computed(() => ['pending_review', 'edited', 'not_ready'].includes(props.detail.status) && !props.detail.text.stale)
 const remaining = computed(() => Math.max(0, (capabilities.value?.max_refine_per_media ?? 0) - (capabilities.value?.image_attempts?.[mediaIndex.value] || 0)))
-const unavailable = computed(() => submitting.value || running.value || props.editing || !eligible.value || !instruction.value.trim()
+const unavailable = computed(() => submitting.value || running.value || job.value?.status === 'interrupted' || props.editing || !eligible.value || !instruction.value.trim()
   || (kind.value === 'image' && (!capabilities.value || !remaining.value)))
 const price = computed(() => Number(capabilities.value?.estimated_image_usd || 0).toFixed(3))
-const jobLabel = { pending: '已受理，等待处理', running: '正在生成', succeeded: '生成完成', failed: '生成未完成' }
+const jobLabel = { pending: '已受理，等待处理', running: '正在生成', succeeded: '生成完成', failed: '生成未完成', interrupted: '处理已中断，待核对' }
+
+async function recover() {
+  submitting.value = true
+  error.value = ''
+  try { job.value = await api.recoverContentJob(job.value); await loadCapabilities() }
+  catch (exc) { error.value = exc.message }
+  finally { submitting.value = false }
+}
 
 async function loadCapabilities() {
   try {
@@ -96,10 +104,14 @@ onUnmounted(() => { alive = false; clearInterval(timer) })
     <div v-if="job" class="job">
       <p>{{ job.kind === 'image' ? `图片 ${Number(job.media_index) + 1}` : '文案' }} · {{ jobLabel[job.status] }}</p>
       <p class="help">本次要求：{{ job.instruction }}</p>
+      <p v-if="job.paid_request_ids?.length" class="help">已记录费用 US${{ Number(job.cost_usd || 0).toFixed(4) }} · 请求 {{ job.paid_request_ids.join('、') }}</p>
+      <p v-if="job.status === 'interrupted'" class="error">{{ job.message }} <button class="btn btn-sm" :disabled="submitting" @click="recover">核对并恢复本地状态</button><span class="help">此操作只核对记录，不会重新生成。</span></p>
+      <p v-if="job.worker_state === 'unknown'" class="help">旧任务缺少进程依据，需要人工核对。</p>
       <template v-if="job.kind === 'text' && job.status === 'succeeded'">
         <pre class="candidate">{{ job.body_de }}</pre>
         <button class="btn btn-sm" :disabled="job.source_text_sha256 !== detail.text.source_text_sha256 || !eligible" @click="emit('candidate', job)">采用到正文编辑区</button>
         <span class="help">标签与链接选择保留，确认后请保存。</span>
+        <p v-if="job.source_text_sha256 !== detail.text.source_text_sha256" class="error">源文已更新，这个候选已失效，请基于当前源文重新优化。</p>
       </template>
       <p v-if="job.kind === 'image' && job.status === 'succeeded'" class="help">新版图片已生成；若归档里已有人工图片，页面继续优先显示人工图片。</p>
       <p v-if="job.status === 'failed'" class="error">{{ job.message }} <span v-if="job.error">（{{ job.error }}）</span></p>

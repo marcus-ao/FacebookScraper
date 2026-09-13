@@ -131,7 +131,8 @@ def _verified_export_context(context: Mapping | None, *, candidate_group: str,
             or context.get("candidate_group") != candidate_group
             or context.get("time_range") != time_range or not isinstance(actual, list)
             or {str(name).removeprefix("#").casefold() for name in actual} != expected
-            or not isinstance(context.get("source_sha256"), str)):
+            or any(not isinstance(context.get(key), str) or not re.fullmatch(r'[a-f0-9]{64}', context[key])
+                   for key in ('source_sha256', 'text_sha256', 'proof_sha256'))):
         raise ValueError("Trends 导出上下文与候选、地域或时间范围不一致")
     return True
 
@@ -197,7 +198,7 @@ def import_trends_csv(value: str, *, candidate_group: str, tags: Iterable[str],
               for tag, value in averages.items()}
     moment = _aware(sampled_at)
     text_sha256 = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    if export_context is not None and export_context.get("text_sha256", text_sha256) != text_sha256:
+    if export_context is not None and export_context.get("text_sha256") != text_sha256:
         raise ValueError("Trends CSV 原文哈希与导出上下文不一致")
     source_sha256 = (export_context["source_sha256"] if export_context is not None
                      else text_sha256)

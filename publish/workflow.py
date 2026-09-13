@@ -8,9 +8,11 @@ from zoneinfo import ZoneInfo
 
 from core.chrome import attach
 from core.config import cfg
+from core import notify
 from publish import business_suite as bs
-from publish import journal, channels
+from publish import journal, channels, snapshots, records, capabilities
 from publish import planning
+from publish import channel_evidence, month_inventory, month_readback, media
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,8 @@ def new_attempt(post, when: datetime, *, ui_timezone: str,
         final_text_sha256=journal.text_sha256(post.text_de),
         image_sha256=tuple(journal.file_sha256(path) for path in post.image_paths),
         ui_scheduled_at=when.astimezone(ZoneInfo(ui_timezone)).isoformat(),
+        snapshot_id=getattr(post, 'snapshot_id', ''),
+        source_fingerprint=getattr(post, 'source_fingerprint', ''),
     )
 
 
@@ -76,8 +80,8 @@ async def _screenshot(page, attempt_id: str, phase: str, *,
 
 async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeout: float):
     """在单次提交意图落盘前再读远端；缓存从不参与最终裁决。"""
-    inventory = await bs.read_remote_slot_inventory(page, ui_timezone=ui_timezone,
-        business_timezone='Europe/Berlin', timeout=timeout, include_cards=True)
+    inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
+        business_timezone='Europe/Berlin', timeout=timeout)
     decision = planning.evaluate_slot(when, post.platform, inventory,
         now=datetime.now().astimezone(), window=planning.configured_window(post.platform))
     if not decision.allowed:
@@ -96,26 +100,22 @@ async def _execute_unlocked(
     c = cfg()
     target_channels = target_channels or (post.platform,)
     c.assert_publish_chrome_isolated()
-    channels.require_independent_channel_evidence(target_channels)
     bs.assert_ui_time_unambiguous(when, ui_timezone)
     if submit_enabled:
-        # 必须在附着浏览器前证明三类证据都已回填。
-        bs.require_submission_evidence()
-        bs.require_readback_evidence()
+        capabilities.require(post.platform)
+    else:
+        channels.require_independent_channel_evidence(target_channels)
 
     base = new_attempt(
         post, when, ui_timezone=ui_timezone, source_refs=source_refs,
         target_channels=target_channels)
     pw = page = planner_page = None
     pre_submit_baseline: bs.ScheduledBaseline | None = None
-    account_spec = None
     step = "附着发布 Chrome"
     notes: list[str] = []
     prepared: journal.PublishAttempt | None = None
     current = base
     try:
-        if submit_enabled:
-            account_spec = bs.require_account_context_evidence()
         pw, _browser, context = await attach(
             port=c.publish_debug_port,
             profile=c.publish_profile_dir,
@@ -126,10 +126,10 @@ async def _execute_unlocked(
             step = "G6 提交前 Planner 基线"
             print("[0/7] 提交前确认远端没有同槽/同文案/同素材卡片 …")
             planner_page = await context.new_page()
-            pre_submit_baseline = await bs.snapshot_scheduled_matches(
+            pre_submit_baseline = await month_readback.baseline(
                 planner_page, when, post.text_de, ui_timezone=ui_timezone,
                 target_channels=target_channels,
-                expected_image_count=len(post.image_paths), timeout=timeout)
+                timeout=timeout)
             if pre_submit_baseline.match_count:
                 raise bs.PublishStepError(
                     "提交前已经存在 %d 张同条件排期卡片；为防旧卡冒充本次结果，"
@@ -138,57 +138,22 @@ async def _execute_unlocked(
 
         step = "G1-1 打开 composer"
         print("[1/7] 新开标签页进 composer …")
-        page = await bs.open_composer(context, timeout=timeout)
+        page = await bs.open_composer(context,
+            asset_context=channel_evidence.require(post.platform)['context_ids'], timeout=timeout)
 
         step = "G2 登录态与目标主页"
         print("[2/7] 核对登录态与目标主页 …")
-        # ⚠️ **这里故意不传 account_spec。** 见下面 [3/7] 之后那一段：
-        # 已录证的那条 heading 要等 FB 预览渲染出内容才存在，空 composer 上没有。
-        account = await bs.ensure_logged_in(
-            page,
-            page_name=str(c.get("publish", "facebook_page_name", "") or ""),
-            instagram_account=str(c.get("publish", "instagram_account", "") or ""),
-            account_spec=None,
-            timeout=timeout)
-        notes.extend(account.notes)
-        for note in account.notes:
-            print("    " + note)
+        selection = await channels.select(page, target_channels, timeout=timeout)
+        notes.append('已核对单渠道目标：' + selection['channel'] + ' / ' + selection['account'])
 
         step = "G3 图片上传"
         print("[3/7] 交图（%d 张）…" % len(post.image_paths))
         upload_notes = await bs.upload_images(page, list(post.image_paths), timeout=timeout)
-        notes.extend(upload_notes)
-        for note in upload_notes:
+        media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
+        notes.extend(upload_notes[:1])
+        notes.append('已核对编辑器图片数量、顺序和视觉相似度；排期详情图片仍需人工核对。')
+        for note in notes[-2:]:
             print("    " + note)
-
-        if account_spec is not None:
-            # ⚠️⚠️ **严格账号核对必须放在上传之后，这不是随手挪的。**
-            #
-            # 已录证的 `composer_account_context` 是 FB 预览里那条
-            # `heading 'Neakasa Deutschland'`，而**预览面板要有内容才渲染它**：
-            # dump 里它第一次出现在 evidence_order=31，紧跟在
-            # `Add photo/video`（交互 #12，ord=29）之后。空 composer 上
-            # 等 30 秒也等不到 —— 2026-09-01 第一次 G8 真机跑就是这样失败的。
-            #
-            # 挪到上传之后**没有放松这道闸**：
-            #   - 上传素材到 composer **不会发布任何东西**；
-            #   - 闸仍然在**点提交之前**，发错主页依旧发不出去；
-            #   - 而且此刻读到的就是"即将提交的这一屏"，比空屏时更有说服力。
-            # ⛔ 不要为了"更早拦住"把它挪回上传前 —— 那里没有证据可读。
-            step = "G2b 严格核对目标主页（预览渲染后）"
-            print("    核对目标主页（FB 预览渲染后才读得到）…")
-            strict = await bs.ensure_logged_in(
-                page,
-                page_name=str(c.get("publish", "facebook_page_name", "") or ""),
-                instagram_account=str(
-                    c.get("publish", "instagram_account", "") or ""),
-                account_spec=account_spec,
-                timeout=timeout)
-            account = strict
-            for note in strict.notes:
-                if note not in notes:
-                    notes.append(note)
-                    print("    " + note)
 
         step = "G4 文案填写"
         print("[4/7] 填正文并逐字符回读 …")
@@ -197,7 +162,8 @@ async def _execute_unlocked(
         step = "G5 定时设置"
         print("[5/7] 设排期并回读 …")
         ui_readback = await bs.set_schedule(
-            page, when, ui_timezone=ui_timezone, timeout=timeout)
+            page, when, ui_timezone=ui_timezone, timeout=timeout, target_channels=target_channels)
+        await channels.verify_before_submit(page, target_channels)
         prepared_shot = await _screenshot(
             page, base.attempt_id, "prepared", state_dir=c.state_dir,
             timeout=timeout)
@@ -205,6 +171,7 @@ async def _execute_unlocked(
             base, journal.STATUS_PREPARED,
             recorded_at=datetime.now().astimezone().isoformat(),
             ui_readback=ui_readback, step=step, screenshot=prepared_shot,
+            readback_diagnostics={'composer_media': media_check},
             note=("已填到提交前，等待人工点击提交" if not submit_enabled
                   else "离线硬闸和 G2–G5 回读通过，准备自动提交"),
             warnings=tuple(base.warnings) + tuple(notes))
@@ -217,6 +184,7 @@ async def _execute_unlocked(
         step = "提交前实时复核同渠道间隔"
         await check_live_slot(planner_page or page, post, when,
                               ui_timezone=ui_timezone, timeout=timeout)
+        await channels.verify_before_submit(page, target_channels)
         step = "G6 单次提交"
         # 先把“即将允许一次点击”的意图耐久化为禁止自动重试态，再调用 click。
         # 否则机器恰好在 click 已送达、SubmitResult/下一行 journal 尚未落盘时
@@ -261,7 +229,7 @@ async def _execute_unlocked(
         print("[7/7] 重新进入内容日历并回读排期卡片 …")
         readback_path = (Path(c.state_dir) / "publish_attempts" /
                          ("%s_scheduled.png" % base.attempt_id))
-        readback = await bs.verify_scheduled(
+        readback = await month_readback.verify(
             planner_page or page, when, post.text_de, ui_timezone=ui_timezone,
             target_channels=target_channels, timeout=timeout,
             expected_image_count=len(post.image_paths),
@@ -277,7 +245,7 @@ async def _execute_unlocked(
                 readback_signal="",
                 remote_id=readback.remote_id or unverified.remote_id,
                 verification=readback.error,
-                readback_diagnostics=readback.diagnostics,
+                readback_diagnostics=dict(readback.diagnostics, composer_media=media_check),
                 channels_verified=readback.channels,
                 note=(readback.error
                       + "；禁止自动重试，必须人工确认远端是否已经排期"))
@@ -292,13 +260,13 @@ async def _execute_unlocked(
             step=step, screenshot=readback.screenshot,
             success_signal=unverified.success_signal,
             readback_signal=readback.success_signal,
-            readback_diagnostics=readback.diagnostics,
+            readback_diagnostics=dict(readback.diagnostics, composer_media=media_check),
             remote_id=(readback.remote_id or unverified.remote_id),
             remote_ids=tuple(
                 part for part in str(readback.remote_id or "").split(";")
                 if part),
-            verification=("目标时刻、完整最终正文、%d 张图与目标渠道"
-                          "均已从内容日历回读" % len(post.image_paths)),
+            verification=("目标时刻、完整最终正文与目标渠道已从内容日历回读；"
+                          "已核对编辑器 %d 张图的数量与视觉顺序，排期详情的图片仍需人工核对" % len(post.image_paths)),
             channels_verified=readback.channels,
             note="自动回读确认已排期")
         journal.append(c.state_dir, scheduled)
@@ -354,7 +322,18 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
             if status != journal.STATUS_PREPARED or not force:
                 raise bs.PublishStepError(
                     "锁内重查发现未闭合状态 %s；本次零浏览器操作" % status)
-        return await _execute_unlocked(
+        if submit_enabled:
+            capabilities.require(post.platform)
+        else:
+            channels.require_independent_channel_evidence(target_channels)
+        post = snapshots.ensure(post)
+        records.queue_approved(post.snapshot_id)
+        outcome = await _execute_unlocked(
             post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
             submit_enabled=submit_enabled, source_refs=refs,
             target_channels=target_channels)
+        try:
+            records.project(outcome.attempt)
+        except Exception:
+            notify.notify('发布回执留档待补齐', '发布账本保留结果；请核对快照后恢复本地状态，勿重复提交。', popup=False)
+        return outcome

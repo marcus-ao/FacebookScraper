@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from core import review
 from core.config import cfg
@@ -23,7 +24,7 @@ class ServiceTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.now = datetime.now(timezone.utc)
         self.state = cfg().state_dir
-        engine.activate(self.state, g8_verified=True, now=self.now - timedelta(days=2))
+        fixture_activate(engine, self.state, g8_verified=True, now=self.now - timedelta(days=2))
 
     def test_two_platform_scans_process_once_without_duplicate_detection(self):
         def detect(kind, platform):
@@ -156,6 +157,7 @@ class ServiceTests(unittest.TestCase):
         runtime.outbox.enqueue('test-alert', 'system', {'text': '请检查会话'}, self.now)
         with patch('pipeline.service.read_post_truth', side_effect=ValueError('invalid')):
             runtime.maintenance(self.now)
+            runtime.delivery_future.result(timeout=5)
         self.assertGreater(runtime.client.send_card.call_count, 0)
 
     def test_stale_human_translation_gets_review_notification(self):

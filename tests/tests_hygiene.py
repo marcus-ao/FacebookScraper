@@ -112,7 +112,17 @@ def config_keys() -> list[str]:
 
 sources = {p: p.read_text(encoding="utf-8")
            for p in python_files(include_tests=True, include_scaffolding=True)}
-all_python = "\n".join(sources.values())
+
+# `web/` 不进模块图、不进重复检测 —— 它是叶子，而且 reader/writer 本来就该薄。
+# 但**配置键的读取方可以住在那里**：`[review].snooze_default_days` 就只被
+# `web/api/reader.py` 与 `writer.py` 读。只扫 core/routes/publish/pipeline 的话，
+# 这条检查会把一个真在生效的键报成「改了不生效的旋钮」，而下一个人面前只有
+# 两条错路：删掉键，或者加一条豁免。于是这个键干脆**从来没写进 config.toml**，
+# 代码里三处默认值各自写了个 3 —— 这条检查本来就是为了防住这种事。
+# 只扩 `is_read` 的文本语料；`sources` 不动，另外几条检查的边界照旧。
+WEB_SOURCES = [p for p in (ROOT / "web").rglob("*.py") if "__pycache__" not in p.parts]
+all_python = "\n".join([*sources.values(),
+                        *(p.read_text(encoding="utf-8") for p in WEB_SOURCES)])
 
 def is_read(token: str) -> bool:
     """键名以字符串字面量出现即算被读到（``cfg().get("delta", "max_scrolls")``）。"""
@@ -148,8 +158,6 @@ print("\n[2] 病因 2 · 没有零引用的定义")
 SYMBOL_EXEMPT = {
     # CLI 入口点由 argparse / __main__ 分派，或供外部按名调用
     "main", "_cli",
-    # pipeline.refinement.capabilities 由 web/api/jobs.py 调用；此扫描器不遍历 web。
-    "capabilities",
 }
 
 definitions: dict[str, list[tuple[str, int]]] = {}
@@ -163,7 +171,8 @@ for path in python_files(include_tests=False, include_scaffolding=False):
             definitions.setdefault(node.name, []).append((rel(path), node.lineno))
 
 references = collections.Counter()
-for text in sources.values():
+# Web 是实际生产调用者。引用统计纳入叶子入口，定义扫描/依赖图边界不变。
+for text in [*sources.values(), *(path.read_text(encoding='utf-8') for path in WEB_SOURCES)]:
     for match in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text):
         references[match.group()] += 1
 

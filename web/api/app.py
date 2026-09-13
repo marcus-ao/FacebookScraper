@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.console import force_utf8                    # noqa: E402
-from web.api import reader, writer, jobs, approval, calendar                     # noqa: E402
+from web.api import reader, writer, jobs, approval, calendar, settings, runtime                     # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
 from core import review, translated, localization                     # noqa: E402
 from core.paid_model import FileLockBusy                 # noqa: E402
@@ -35,6 +35,8 @@ app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
 app.include_router(jobs.router)
 app.include_router(approval.router)
 app.include_router(calendar.router)
+app.include_router(settings.router)
+app.include_router(runtime.router)
 
 DIST = ROOT / "web" / "ui" / "dist"
 
@@ -65,9 +67,13 @@ async def review_validation(request: Request, exc: Exception) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/tasks")
-def get_tasks(status: str | None = None, tag: str | None = None, month: str | None = None) -> JSONResponse:
+def get_tasks(status: str | None = None, tag: str | None = None, month: str | None = None,
+              platform: str | None = Query(None, pattern='^(facebook|instagram)$'),
+              scope: str = Query('review', pattern='^(review|history)$'),
+              page: int = Query(1, ge=1), limit: int | None = Query(None, ge=1, le=100)) -> JSONResponse:
     """任务列表。契约见 PROTOTYPE_DESIGN.md 第 6 节。"""
-    payload = reader.list_tasks(status=status, tag=tag, month=month)
+    payload = reader.list_tasks(status=status, tag=tag, month=month, platform=platform,
+                                scope=scope, page=page, limit=limit)
     return JSONResponse(payload)
 
 

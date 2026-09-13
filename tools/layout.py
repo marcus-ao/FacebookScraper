@@ -5,6 +5,7 @@ r"""归档布局工具。对应实施计划的 J 组。
     python -m tools.layout reindex  <facebook|instagram>   从 posts/ 重建 manifest.jsonl
     python -m tools.layout index    <facebook|instagram>   生成 index.html 总览
     python -m tools.layout reindex-db                     重建 state/index.sqlite 展示索引
+                                                          （只含 [targets] 当前账号）
     python -m tools.layout migrate  <facebook|instagram>   显式迁移旧目录，保留备份
 
 `reindex` 是"文件夹与索引冲突时以文件夹
@@ -275,11 +276,14 @@ def main(argv=None) -> int:
 
     if args.command == "reindex-db":
         database = cfg().state_dir / "index.sqlite"
+        scope = "、".join(cfg().active_accounts())
         if args.dry_run:
-            print("--dry-run：将从帖子真相源重建展示索引 %s，当前未写盘" % database)
+            print("--dry-run：将从帖子真相源重建展示索引 %s（只含 %s），当前未写盘"
+                  % (database, scope))
             return 0
         count = index_db.rebuild_index(cfg().archive_dir, database, state_dir=cfg().state_dir)
-        print("展示索引已从文件重建：%d 篇；%s" % (count, database))
+        # 范围必须与 Web 侧一致（index_db.display_account_dirs），否则两边来回重建。
+        print("展示索引已从文件重建：%d 篇（只含 %s）；%s" % (count, scope, database))
         return 0
     if args.platform is None:
         ap.error("此命令需要指定 facebook 或 instagram")

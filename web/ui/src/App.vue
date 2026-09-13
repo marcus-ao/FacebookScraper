@@ -6,12 +6,18 @@ import Icon from './components/Icon.vue'
 import TaskList from './components/TaskList.vue'
 import TaskDetail from './components/TaskDetail.vue'
 import CalendarPanel from './components/CalendarPanel.vue'
+import HistoryPanel from './components/HistoryPanel.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
+import RuntimePanel from './components/RuntimePanel.vue'
 
 const detailView = ref(null)
+const settingsView = ref(null)
+function mayLeave() { return (!detailView.value || detailView.value.mayLeave()) && (!settingsView.value || settingsView.value.mayLeave()) }
 function locationState() {
   const url = new URL(window.location.href)
   const openId = url.searchParams.get('task')
-  return { openId, view: !openId && url.searchParams.get('view') === 'calendar' ? 'calendar' : 'tasks' }
+  const view = url.searchParams.get('view')
+  return { openId, view: ['calendar', 'history', 'settings', 'runtime'].includes(view) ? view : 'tasks' }
 }
 const state = reactive({
   tasks: [],
@@ -41,22 +47,46 @@ function writeLocation() {
   const url = new URL(window.location.href)
   if (state.openId) url.searchParams.set('task', state.openId)
   else url.searchParams.delete('task')
-  if (state.view === 'calendar') url.searchParams.set('view', 'calendar')
+  if (state.view !== 'tasks') url.searchParams.set('view', state.view)
   else url.searchParams.delete('view')
   window.history.pushState({}, '', url)
 }
 function openTask(taskId, alreadyAllowed = false) {
-  if (!alreadyAllowed && detailView.value && !detailView.value.mayLeave()) return
+  if (!alreadyAllowed && !mayLeave()) return
   state.openId = taskId || null
-  state.view = 'tasks'
+  if (state.view !== 'history') state.view = 'tasks'
   writeLocation()
 }
 function openCalendar() {
-  if (detailView.value && !detailView.value.mayLeave()) return
+  if (!mayLeave()) return
   state.openId = null
   state.view = 'calendar'
   writeLocation()
   loadCalendar()
+}
+function openHistory() {
+  if (!mayLeave()) return
+  state.openId = null
+  state.view = 'history'
+  writeLocation()
+}
+function openReviews() {
+  if (!mayLeave()) return
+  state.view = 'tasks'
+  openTask(null, true)
+  load()
+}
+function openSettings() {
+  if (!mayLeave()) return
+  state.openId = null
+  state.view = 'settings'
+  writeLocation()
+}
+function openRuntime() {
+  if (!mayLeave()) return
+  state.openId = null
+  state.view = 'runtime'
+  writeLocation()
 }
 async function loadCalendar(refresh = false) {
   state.calendarBusy = true
@@ -69,7 +99,7 @@ async function loadCalendar(refresh = false) {
 }
 function restoreLocation() {
   const next = locationState()
-  if ((next.openId !== state.openId || next.view !== state.view) && detailView.value && !detailView.value.mayLeave()) {
+  if ((next.openId !== state.openId || next.view !== state.view) && !mayLeave()) {
     writeLocation()
     return
   }
@@ -107,8 +137,11 @@ onUnmounted(() => window.removeEventListener('popstate', restoreLocation))
     </header>
 
     <nav class="workspace-nav" aria-label="工作区">
-      <button :class="['btn btn-sm', { selected: state.view === 'tasks' }]" :aria-pressed="state.view === 'tasks'" @click="openTask(null)">审校列表</button>
+      <button :class="['btn btn-sm', { selected: state.view === 'tasks' }]" :aria-pressed="state.view === 'tasks'" @click="openReviews">审校列表</button>
+      <button :class="['btn btn-sm', { selected: state.view === 'history' }]" :aria-pressed="state.view === 'history'" @click="openHistory">历史归档</button>
       <button :class="['btn btn-sm', { selected: state.view === 'calendar' }]" :aria-pressed="state.view === 'calendar'" @click="openCalendar">发布月历</button>
+      <button :class="['btn btn-sm', { selected: state.view === 'settings' }]" :aria-pressed="state.view === 'settings'" @click="openSettings">运营设置</button>
+      <button :class="['btn btn-sm', { selected: state.view === 'runtime' }]" :aria-pressed="state.view === 'runtime'" @click="openRuntime">运行状态</button>
     </nav>
     <p v-if="state.index?.stale && state.view === 'tasks'" class="index-note">展示索引暂未更新，当前按归档文件读取。</p>
     <p v-if="state.error" class="banner-error" role="alert">
@@ -121,6 +154,9 @@ onUnmounted(() => window.removeEventListener('popstate', restoreLocation))
 
     <main>
       <CalendarPanel v-if="state.view === 'calendar'" :calendar="state.calendar" :busy="state.calendarBusy" :error="state.calendarError" @refresh="loadCalendar(true)" />
+      <SettingsPanel v-else-if="state.view === 'settings'" ref="settingsView" />
+      <RuntimePanel v-else-if="state.view === 'runtime'" />
+      <HistoryPanel v-else-if="state.view === 'history' && !state.openId" @open="openTask" />
       <p v-else-if="state.loading" class="loading">正在读归档…</p>
 
       <TaskList

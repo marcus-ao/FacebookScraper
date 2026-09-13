@@ -69,7 +69,7 @@ function hasUnsavedChanges() {
   return draft.value !== baseline.body_de || ['tags', 'links', 'hashtags_confirmed', 'ig_cta'].some(key =>
     JSON.stringify(localizationDraft.value[key]) !== JSON.stringify(baseline[key]))
 }
-const canEdit = computed(() => !['approved', 'scheduled', 'skipped', 'handed_off'].includes(detail.value?.status))
+const canEdit = computed(() => !detail.value?.read_only && !['approved', 'scheduled', 'skipped', 'handed_off'].includes(detail.value?.status))
 function applyDetail(value) {
   detail.value = value
   saved.value = false
@@ -272,6 +272,8 @@ watch(() => props.taskId, load)
           <span v-if="detail.text.stale" class="tag tag-error">
             <Icon name="alert" :size="12" /> 原文已变更，请复核
           </span>
+          <span v-else-if="detail.text.de_machine && detail.text.machine_current === false && !detail.text.de_human" class="tag tag-risk"
+                title="旧机器译文仍可查阅；请重新翻译或保存已人工复核的文案，系统不会自动付费重做历史内容。">旧提示词译文，待复核</span>
         </span>
 
         <!-- 标记计数 + 逐个跳。红黄分开数，因为它们是两件事。 -->
@@ -301,7 +303,7 @@ watch(() => props.taskId, load)
             <button v-if="canEdit" class="btn btn-sm" @click="startEdit">
               <Icon name="pencil" :size="13" /> 编辑德语
             </button>
-            <ReviewActions :detail="detail" @changed="applyDetail" />
+            <ReviewActions v-if="!detail.read_only" :detail="detail" @changed="applyDetail" />
           </template>
           <template v-else>
             <button class="btn btn-sm" :disabled="saving" @click="discard">放弃修改</button>
@@ -335,7 +337,8 @@ watch(() => props.taskId, load)
       </div>
 
       <!-- ---------- 正文对比 ---------- -->
-      <InitialTranslationPanel :detail="detail" :editing="editing" @changed="applyDetail" />
+      <p v-if="detail.read_only" role="status">这是冻结账号的历史归档，可查阅来源和处理记录。</p>
+      <InitialTranslationPanel v-else :detail="detail" :editing="editing" @changed="applyDetail" />
       <TextCompare
         :en="detail.localization.source_body"
         :de="currentText"
@@ -375,10 +378,10 @@ watch(() => props.taskId, load)
           :images="detail.images"
           @progress="unseenImages = $event"
         />
-        <MetaPanel :detail="detail" :editable="!editing" @changed="applyDetail" />
+        <MetaPanel :detail="detail" :editable="!editing && !detail.read_only" @changed="applyDetail" />
       </div>
-      <ApprovalPanel :detail="detail" :editing="editing" @changed="applyDetail" />
-      <RefinementPanel :detail="detail" :editing="editing" @candidate="adoptCandidate" @changed="applyDetail" />
+      <ApprovalPanel v-if="!detail.read_only" :detail="detail" :editing="editing" @changed="applyDetail" />
+      <RefinementPanel v-if="!detail.read_only" :detail="detail" :editing="editing" @candidate="adoptCandidate" @changed="applyDetail" />
     </template>
   </div>
 </template>

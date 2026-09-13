@@ -17,13 +17,8 @@ set "PYTHONIOENCODING=utf-8"
 REM scripts\ lives one level below the project root -- go up first.
 cd /d "%~dp0.."
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [!] .venv not found. Run setup.bat first.
-  pause
-  exit /b 1
-)
 
-".venv\Scripts\python.exe" -m routes.backfill %*
+call "%~dp0run_python.bat" -m routes.backfill %*
 set "RC=%ERRORLEVEL%"
 echo.
 pause

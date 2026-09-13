@@ -168,6 +168,8 @@ class DePost:
     source_author_name: str | None
     warnings: tuple[str, ...]
     post_dir: Path
+    snapshot_id: str = ''
+    source_fingerprint: str = ''
 
     @property
     def is_collaboration(self) -> bool:

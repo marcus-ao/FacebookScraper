@@ -14,6 +14,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from activation_fixtures import activate as fixture_activate
 
 from core import translated  # noqa: E402
 from core.console import force_utf8  # noqa: E402
@@ -95,7 +96,7 @@ class HumanPipelineTests(unittest.TestCase):
                         trusted_owners={'facebook': frozenset({'acme'}), 'instagram': frozenset()},
                         source_accounts={'facebook': 'acme', 'instagram': 'acme'})
         state = self.root / 'state'
-        engine.activate(state, g8_verified=True, now=datetime(2026, 9, 1, tzinfo=timezone.utc))
+        fixture_activate(engine, state, g8_verified=True, now=datetime(2026, 9, 1, tzinfo=timezone.utc))
         settings = dict(engine.pipeline_settings(), autonomy='assisted')
 
         class NoPaidCalls:

@@ -11,6 +11,18 @@ from web.api import reader
 router = APIRouter()
 
 
+@router.post('/api/content-jobs/{job_id}/recover')
+async def recover_content_job(job_id: str, request: Request):
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeError):
+        raise review.ReviewValidationError('请提供要核对的任务版本')
+    if not isinstance(body, dict) or not isinstance(body.get('expected_updated_at'), str):
+        raise review.ReviewValidationError('缺少任务版本，请刷新后重试')
+    return await run_in_threadpool(refinement.recover, job_id,
+                                  expected_updated_at=body['expected_updated_at'])
+
+
 def _source(task_id):
     source = reader.source_post(task_id)
     if source is None:
