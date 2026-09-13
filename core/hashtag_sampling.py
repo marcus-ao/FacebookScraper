@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import csv
 import hashlib
 import io
-import json
 import math
 import re
 from collections import Counter
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping
 from urllib.parse import quote
@@ -35,7 +35,7 @@ class SamplingConfig:
     @classmethod
     def load(cls, c=None) -> "SamplingConfig":
         if c is None:
-            from core.config import cfg
+            from core.config import cfg  # 延迟导入：允许纯解析调用注入隔离配置。
             c = cfg()
 
         def value(key, default):
@@ -79,15 +79,6 @@ def _number(value: str) -> float | None:
     return number if math.isfinite(number) and number >= 0 else None
 
 
-def _date(value: str) -> datetime:
-    text = value.strip()
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError("Trends CSV 时间索引无效") from exc
-    return parsed
-
-
 def _declared_range(value: str) -> tuple[datetime, datetime]:
     match = re.fullmatch(r"\s*(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})\s*", value)
     if not match:
@@ -98,8 +89,56 @@ def _declared_range(value: str) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _trend_column(value: str) -> tuple[str, str | None]:
+    text = value.strip()
+    match = re.fullmatch(r"(.+?):\s*\(([^()]*)\)", text)
+    if match:
+        return match.group(1).strip().removeprefix("#").casefold(), match.group(2).strip()
+    return text.removeprefix("#").casefold(), None
+
+
+def _period_bounds(value: str, grain: str) -> tuple[date, date]:
+    text = value.strip()
+    try:
+        if grain in {"day", "date"}:
+            point = date.fromisoformat(text)
+            return point, point
+        if grain == "week":
+            parts = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(?:\s+-\s+(\d{4}-\d{2}-\d{2}))?", text)
+            if not parts:
+                raise ValueError
+            start = date.fromisoformat(parts.group(1))
+            end = date.fromisoformat(parts.group(2)) if parts.group(2) else start + timedelta(days=6)
+            if end < start or (end - start).days > 7:
+                raise ValueError
+            return start, end
+        if grain == "month" and re.fullmatch(r"\d{4}-\d{2}", text):
+            year, month = (int(part) for part in text.split("-"))
+            start = date(year, month, 1)
+            return start, date(year, month, calendar.monthrange(year, month)[1])
+    except ValueError as exc:
+        raise ValueError("Trends CSV 时间索引无效") from exc
+    raise ValueError("Trends CSV 采样粒度暂不支持，不能猜测时间窗口")
+
+
+def _verified_export_context(context: Mapping | None, *, candidate_group: str,
+                             names: tuple[str, ...], time_range: str) -> bool:
+    if context is None:
+        return False
+    expected = {name.removeprefix("#").casefold() for name in names}
+    actual = context.get("tags")
+    if (context.get("verified") is not True or context.get("geo") != "DE"
+            or context.get("candidate_group") != candidate_group
+            or context.get("time_range") != time_range or not isinstance(actual, list)
+            or {str(name).removeprefix("#").casefold() for name in actual} != expected
+            or not isinstance(context.get("source_sha256"), str)):
+        raise ValueError("Trends 导出上下文与候选、地域或时间范围不一致")
+    return True
+
+
 def import_trends_csv(value: str, *, candidate_group: str, tags: Iterable[str],
-                      geo: str, time_range: str, sampled_at: datetime) -> list[dict]:
+                      geo: str, time_range: str, sampled_at: datetime,
+                      export_context: Mapping | None = None) -> list[dict]:
     """导入网页同一张比较图的 CSV；每批只属于一个英文候选组。"""
     names = tuple(dict.fromkeys(str(tag) for tag in tags))
     if geo != "DE" or not candidate_group or len(names) < 2:
@@ -112,36 +151,56 @@ def import_trends_csv(value: str, *, candidate_group: str, tags: Iterable[str],
     if header_index is None:
         raise ValueError("找不到 Google Trends 时间序列表头")
     header = [cell.strip() for cell in rows[header_index]]
-    missing = [tag for tag in names if tag not in header]
+    trusted_context = _verified_export_context(
+        export_context, candidate_group=candidate_group,
+        names=names, time_range=time_range)
+    columns = [_trend_column(cell) for cell in header[1:]]
+    normalized_columns = [name for name, _ in columns]
+    wanted = {tag: tag.removeprefix("#").casefold() for tag in names}
+    missing = [tag for tag, key in wanted.items() if key not in normalized_columns]
     if missing:
         raise ValueError("Trends CSV 缺少同组候选列：%s" % "、".join(missing))
-    if len(set(header)) != len(header):
+    if len(set(normalized_columns)) != len(normalized_columns):
         raise ValueError("Trends CSV 表头包含重复列")
-    indexes = {tag: header.index(tag) for tag in names}
+    indexes = {tag: normalized_columns.index(key) + 1 for tag, key in wanted.items()}
+    regions = [columns[index - 1][1] for index in indexes.values()]
+    if any(region is not None and region.casefold() != "germany" for region in regions):
+        raise ValueError("Trends CSV 候选列地域不是 Germany，不能标为 DE")
+    if not trusted_context and any(region is None for region in regions):
+        raise ValueError("Trends CSV 缺少可验证的 Germany 地域列或导出上下文")
     values: dict[str, list[float]] = {tag: [] for tag in names}
-    dates: list[datetime] = []
+    periods: list[tuple[date, date]] = []
+    grain = header[0].strip().casefold()
     for row in rows[header_index + 1:]:
         if not row or not any(cell.strip() for cell in row):
             continue
-        when = _date(row[0])
+        period = _period_bounds(row[0], grain)
         samples = {tag: (_number(row[index]) if index < len(row) else None)
                    for tag, index in indexes.items()}
         if any(number is None for number in samples.values()):
             raise ValueError("Trends CSV 每个日期必须含同组候选的完整数值")
-        dates.append(when)
+        periods.append(period)
         for tag in names:
             values[tag].append(samples[tag])
-    if not dates or len(set(dates)) != len(dates) or dates != sorted(dates):
+    if not periods or len(set(periods)) != len(periods) or periods != sorted(periods):
         raise ValueError("Trends CSV 时间索引必须完整、唯一且递增")
-    actual_start = dates[0].replace(tzinfo=None)
-    actual_end = dates[-1].replace(tzinfo=None)
-    if actual_start != declared_start or actual_end != declared_end:
+    if any(current[0] != previous[1] + timedelta(days=1)
+           for previous, current in zip(periods, periods[1:])):
+        raise ValueError("Trends CSV 时间采样存在缺口或重叠")
+    requested_start, requested_end = declared_start.date(), declared_end.date()
+    if not (periods[0][0] <= requested_start <= periods[0][1]
+            and periods[-1][0] <= requested_end <= periods[-1][1]):
         raise ValueError("Trends CSV 数据日期与声明时间范围不一致")
     averages = {tag: sum(items) / len(items) for tag, items in values.items()}
     maximum = max(averages.values())
     scores = {tag: (0.0 if maximum == 0 else round(100 * value / maximum, 4))
               for tag, value in averages.items()}
     moment = _aware(sampled_at)
+    text_sha256 = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    if export_context is not None and export_context.get("text_sha256", text_sha256) != text_sha256:
+        raise ValueError("Trends CSV 原文哈希与导出上下文不一致")
+    source_sha256 = (export_context["source_sha256"] if export_context is not None
+                     else text_sha256)
     batch = hashlib.sha256((candidate_group + "\0" + geo + "\0" + time_range
                             + "\0" + value).encode("utf-8")).hexdigest()
     return [{
@@ -149,7 +208,9 @@ def import_trends_csv(value: str, *, candidate_group: str, tags: Iterable[str],
         "comparison_group": candidate_group, "sample_batch": batch,
         "time_range": time_range, "sampled_at": moment.isoformat(),
         "stale_after": (moment + timedelta(days=7)).isoformat(),
-        "source": "Google Trends CSV export", "source_url": TRENDS_EXPORT_HELP,
+        "source": "Google Trends public CSV export",
+        "source_url": (export_context.get("source_url") if export_context else TRENDS_EXPORT_HELP),
+        "source_sha256": source_sha256,
         "metric_scope": "DE_search_interest_normalized_within_candidate_group",
     } for tag in names]
 
@@ -185,13 +246,26 @@ def verified_instagram_count(payloads: Iterable[Mapping], tag: str) -> int | Non
     return None
 
 
+async def close_browser_session(playwright, browser) -> None:
+    """Close an attached CDP session and always stop its Playwright driver."""
+    if browser is None:
+        if playwright is not None:
+            await playwright.stop()
+        return
+    try:
+        await browser.close()
+    finally:
+        if playwright is not None:
+            await playwright.stop()
+
+
 async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...], c,
                                 dcfg, state: dict, state_path: Path) -> dict:
     """Use the isolated detect browser and the repository's capture/parser path."""
-    from core.chrome import attach
-    from core.parse import extract, partition_by_owner
-    from core.translated import extract_hashtags
-    from routes import delta
+    from core.chrome import attach  # 延迟导入：CSV 离线导入不应加载 Playwright。
+    from core.parse import extract, partition_by_owner  # 延迟导入：仅浏览器 peer 路径需要帖子解析器。
+    from core.translated import extract_hashtags  # 延迟导入：仅 peer 帖子转换需要正文标签解析。
+    from routes import delta  # 延迟导入：仅生产浏览器路径依赖增量状态和节奏。
 
     c.assert_chrome_profiles_isolated()
     pw = browser = None
@@ -261,14 +335,7 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
             if index + 1 < len(requests):
                 await delta._pause(dcfg.scroll_pause())
     finally:
-        if browser is not None:
-            try:
-                await browser.close()
-            finally:
-                if pw is not None:
-                    await pw.stop()
-        elif pw is not None:
-            await pw.stop()
+        await close_browser_session(pw, browser)
     return result
 
 
@@ -276,7 +343,7 @@ def collect_browser_observations(*, tags: Iterable[str] = (), peers: Iterable[st
                                  c=None, settings: SamplingConfig | None = None) -> dict:
     """Blocking production adapter; callers run it in a dedicated worker thread."""
     if c is None:
-        from core.config import cfg
+        from core.config import cfg  # 延迟导入：离线调用可注入临时配置且不初始化全局路径。
         c = cfg()
     settings = settings or SamplingConfig.load(c)
     tag_names = tuple(dict.fromkeys(str(tag) for tag in tags))
@@ -285,7 +352,7 @@ def collect_browser_observations(*, tags: Iterable[str] = (), peers: Iterable[st
         raise ValueError("标签采样请求超过配置的单批上限")
     if not tag_names and not peer_names:
         return {"instagram": {}, "peer_posts": {}, "errors": []}
-    from routes import delta
+    from routes import delta  # 延迟导入：只有实际浏览器采样才争用增量锁和状态。
     dcfg = replace(delta.DeltaConfig.load(c), max_scrolls=0)
     state_path = Path(c.state_dir) / "delta_state.json"
     with delta.DeltaRunLock(Path(c.state_dir) / "delta.lock"):
@@ -393,10 +460,3 @@ def collect_peer_usage(accounts: Iterable[str], *, fetcher: Callable[[str], Iter
         "metric_scope": "configured_DE_peer_accounts_recent_posts",
     } for tag, count in sorted(counts.items())]
     return {"status": "sampled", "count": len(rows), "rows": rows}
-
-
-def rows_from_json(value: str) -> list[dict]:
-    data = json.loads(value)
-    if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
-        raise ValueError("采样 JSON 必须是对象数组")
-    return data

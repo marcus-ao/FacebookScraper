@@ -23,7 +23,7 @@ KEEP = {"brands": [], "models": []}
 class HashtagSamplingTests(unittest.TestCase):
     def test_trends_csv_normalizes_one_candidate_group_in_one_batch(self):
         rows = hashtag_sampling.import_trends_csv(
-            "Category: All categories\nWeek,#Katzen,#Katzenliebe,#Hauskatzen\n"
+            "Category: All categories\nWeek,#Katzen: (Germany),#Katzenliebe: (Germany),#Hauskatzen: (Germany)\n"
             "2026-08-30,20,40,10\n2026-09-06,40,80,20\n",
             candidate_group="#Cats", tags=("#Katzen", "#Katzenliebe", "#Hauskatzen"),
             geo="DE", time_range="2026-08-30 2026-09-06", sampled_at=NOW)
@@ -34,12 +34,30 @@ class HashtagSamplingTests(unittest.TestCase):
     def test_trends_rejects_missing_candidate_samples_and_mislabeled_dates(self):
         with self.assertRaisesRegex(ValueError, "完整"):
             hashtag_sampling.import_trends_csv(
-                "Week,#A,#B\n2026-09-01,100,\n2026-09-08,,10\n",
+                "Week,#A: (Germany),#B: (Germany)\n2026-09-01,100,\n2026-09-08,,10\n",
                 candidate_group="#X", tags=("#A", "#B"), geo="DE",
                 time_range="2026-09-01 2026-09-08", sampled_at=NOW)
+
+    def test_trends_accepts_germany_columns_and_week_month_coverage(self):
+        weekly = hashtag_sampling.import_trends_csv(
+            "Week,#A: (Germany),#B: (Germany)\n"
+            "2026-08-31,20,40\n2026-09-07,40,80\n",
+            candidate_group="#X", tags=("#A", "#B"), geo="DE",
+            time_range="2026-09-01 2026-09-07", sampled_at=NOW)
+        self.assertEqual([row["trend_score"] for row in weekly], [50.0, 100.0])
+        monthly = hashtag_sampling.import_trends_csv(
+            "Month,#A: (Germany),#B: (Germany)\n2026-08,10,20\n2026-09,20,40\n",
+            candidate_group="#X", tags=("#A", "#B"), geo="DE",
+            time_range="2026-08-15 2026-09-12", sampled_at=NOW)
+        self.assertEqual(len(monthly), 2)
+        with self.assertRaisesRegex(ValueError, "地域"):
+            hashtag_sampling.import_trends_csv(
+                "Day,#A: (United States),#B: (United States)\n2026-09-01,10,20\n",
+                candidate_group="#X", tags=("#A", "#B"), geo="DE",
+                time_range="2026-09-01 2026-09-01", sampled_at=NOW)
         with self.assertRaisesRegex(ValueError, "时间范围"):
             hashtag_sampling.import_trends_csv(
-                "Week,#A,#B\n1999-01-01,100,10\n",
+                "Week,#A: (Germany),#B: (Germany)\n1999-01-01,100,10\n",
                 candidate_group="#X", tags=("#A", "#B"), geo="DE",
                 time_range="2026-09-01 2026-09-08", sampled_at=NOW)
 
