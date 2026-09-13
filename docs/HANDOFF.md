@@ -1,15 +1,16 @@
 # 项目交接
 
-**交接基线：2026-09-12，提交 `c67c56a`。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准；本文件保存动代码前必须知道的边界和真实证据。
+**交接记录：2026-09-12；规划基线 `c67c56a`，当前继续集成。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准；本文件保存工作边界、日期明确的历史和新证据范围。
 
 ## 1. 当前工作区事实
 
 - 工作分支是 `codex/business-workflow`，在 `.worktrees/business-workflow` 开发。
-- 基线之外已有 6 个未提交代码文件；接手者要先看 `git status`，不得覆盖或把它们误算成文档改动。
-- 当前 worktree 没有 `archive/` 和 `state/` 运行数据。
-- 原工作区历史归档是 Facebook 47 篇、旧 IG `in_neakasa.tech` 1020 篇。新目标 `neakasa.global` 尚无本 worktree 真实基线。
-- 规划阶段记录为 47 个离线测试脚本和前端构建通过；没有本轮 live run。不要把离线测试写成真实验收。
-- 接续原 archive/state 之前先做完整备份和一致性核验，保留旧 `published.jsonl`、付费账本和激活边界。
+- 规划起点有 config/mirror/store/translated/hygiene/query_index 六处既有未提交修订；现在又有多批并行集成修改。先看 `git status`，只提交自己范围，不覆盖既有修改。
+- 本 worktree 已由忽略入库的 `config.local.toml` 绑定原 archive/state/.env/解释器。核验备份在 worktree `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；包含运行配置核验，凭据不进证据报告。
+- 原激活 `2026-09-03T09:00:58.277710Z` 保留。当前原归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，不是 `.global` 回填基线；不能重新 activate 或清空发布历史。
+- 规划阶段 47 脚本/build 和本轮各批定向测试分别保留。监测 `205c660`/`20d917a` 的 56 项定向验证及复审通过；风险/采样 `d0649d1`/`5eca730` 已有实现与测试，采样仍补 C7 停机/count 证据修复。最终完整 Python/build/浏览器回归尚未完成。
+- 9222/9224 已启动；9224 访问 `.global` 真实 HTTP 429，原 `delta_state.json` 已记 `detect_hard_blocked` 与失败，未重试。后续先人工核对会话/出口，保留状态，不再请求试运气。
+- 9223 已登录并观察目标 FB `Neakasa Deutschland`、IG `neakasa.de`；已存单渠道/月历控件证据，尚无本轮新提交回读。飞书无应用凭据，镜像/外部心跳未启用，运营从飞书到排期尚未验收。
 
 ## 2. 红线
 
@@ -23,6 +24,7 @@
 8. 发布前先冻结并展示具体文案、图片、账号、单一渠道和时刻，等用户确认后才能提交。
 9. `review_items.jsonl`、`paid_requests.jsonl`、`published.jsonl` 的坏数据必须失败闭合。不得把损坏当空文件继续运行。
 10. 凭据只在本机配置，不写日志、dump、截图或版本库。
+11. 出口类型和稳定性是 F1-8 预检要求，展示 ASN、近期出口变化、采样时间/过期/未知；不把旧网络提醒当当前合格证据。
 
 ## 3. 架构与真相源
 
@@ -49,22 +51,20 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 ## 4. 当前关键缺口
 
-以下是当前缺口，不是延期项：
+按 [OPTIMIAZATION.md](OPTIMIAZATION.md) 分代码与真实验收，不沿用旧缺口快照：
 
-- 进程退出后的孤儿模型任务仍缺安全恢复、费用核对和终态分类；
-- 审校账本坏行会被静默忽略；
-- 历史 UI 尚未落实“只展示最近 90 天”；
-- 月末/跨月可选范围仍缺动态适配；
-- 常驻 scheduler 只有 XML 生成，没有当前安装 CLI；旧 `tools.schedule install` 不适用；
-- 风险预扫描仍是手写夹具；真实 hashtag samplers 不存在；
-- 飞书还缺发送时当前内容投影、完整业务去重和每日摘要；
-- 不是所有发布入口都已证明使用同一不可变快照；
-- 单渠道勾选、目标账号和回读没有真实 probe 证据；
-- 企业飞书、云盘和 Business Suite 的端到端真实联调尚未完成。
+- 已补严格审校账本读取、模型恢复、源图内容指纹、冻结快照/恢复投影、历史分页/旧详情、SQLite 实际一致性和 runtime binding，并有定向测试；最终共同回归仍待完成。
+- scheduler 已有 install/status/disable/enable；上个完整月发帖窗、样本/覆盖不足保留、整批截止预算和独立执行器已有定向证据。实际安装/停用/恢复未验收。
+- 风险真实调用路径、三类采样已经实现；IG 累计/同类账号采样尚有 C7 持久停机与结构证据修复，真实 CSV/模型/平台采样仍未验收。
+- 设置两项 CAS 与注释保留已有代码；新增 `controlled_fields`、`editable_help` 呈现受控字段说明，设置和冻结恢复 12 项定向测试通过，浏览器全流程另验。
+- 飞书两组、当前首图/摘要/检查、按帖汇总/晨报、固定 UUID/内容的不确定重试，镜像入口失败恢复、周期备份仍按各验收单元补齐。
+- 完整月历、手工项/延迟加载、范围动态适配、只读公开状态、长文/多图/链接/CTA 与单渠道提交回读仍集成；只录控件不能升级。
+- 第八批 API 明确历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和五阶段只读状态；版本化离线浏览器入口与最终整套验收不能遗漏。
+- `.global` 回填、企业飞书/云盘/外部心跳与运营端到端仍依赖人工会话/权限和具体发布确认。
 
 生产迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
-## 5. 抓取侧真实事实
+## 5. 2026-08/09 抓取侧历史事实
 
 ### Instagram
 
@@ -100,7 +100,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_378622.json
 ```
 
-该文件不在当前 worktree，且没有单渠道切换交互。保留下列发现作为历史事实；任何新选择器仍需新 probe。
+该旧文件来自原运行目录，绑定后的入口可能可读，但它没有单渠道切换交互。下列只作 2026-09-01 历史事实；新的选择器需对应本机新录证据。
 
 ### Composer
 
@@ -138,12 +138,21 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 |---|---|
 | 单帖图片 | 最多 10 张 |
 | 画幅比 | 4:5 至 1.91:1 |
-| IG 正文 | UI 提示最多 2200 characters；代码可继续保守按 UTF-8 bytes |
+| IG 正文 | UI 提示最多 2200 characters；旧代码曾保守按 bytes。当前已确认契约是字符计数，不能沿用 bytes 代替 |
 | hashtags | 最多 30 个 |
 | 定时下限 | 当时未观察到最小提前量 |
 | 定时上限 | 当时日期选择器不能跨当前可见月份 |
 
 “不能跨月”是当时 UI 事实，不是永久业务决定。每次真实联调要记录当前 UI 覆盖范围，代码需支持月度适配。
+
+### 2026-09-12 本轮新增观察
+
+- 单渠道控件：`state/channel_controls.json`；被动 v2 探查：`state/publish_probe_20260912_205317_056051.json`。已观察 FB `Neakasa Deutschland` 与 IG `neakasa.de`，尚无本轮新 Schedule 提交回读。
+- 月历控件：`state/planner_controls.json`；截图：`planner_month_20260913T043415712413.png`。35 个日期格证明控件可定位，不证明整月业务内容读取完整。
+- 真实详情页可由头部 Facebook/Instagram 图标、`Published on` 与合作作者信息区分渠道；未来两个仅显示时刻的项经 tooltip 确认为推荐时段，须排除于帖子/占用数。
+- 整月 inventory 仍在核验。完整读取需覆盖所有格子/时刻条目、手工任务和延迟加载，不能用 shell 就绪或已读一周声明空档。实际公开状态只读记录，没有充分依据显示 unknown。
+
+探查与提交是不同证据。最终两篇具体内容经用户确认后，分别完成 FB-only/IG-only 排期及回读；还要覆盖长文、多图、FB 链接、IG CTA 和运营从飞书开卡片到收到排期回执的完整流程。
 
 ## 7. 内容安全规则
 

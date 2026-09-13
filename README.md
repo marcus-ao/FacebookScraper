@@ -6,9 +6,9 @@
 
 ## 当前基线（2026-09-12）
 
-当前提交基线是 `c67c56a`。规划阶段曾通过 47 个离线测试脚本和一次前端构建；这说明离线契约在当时成立，不代表浏览器、模型、飞书、云盘或企业账号已经真实联调成功。
+规划基线是 `c67c56a`，当时 47 个离线测试脚本和一次前端构建通过。本轮按已接受的五阶段、八批计划继续实施；监测、恢复、历史、风险/采样、设置和通知已有新增代码与定向测试，最终完整 Python、build 和版本化浏览器回归尚未完成。
 
-这个 worktree 目前没有 `archive/` 或 `state/` 运行数据。原工作区留有 Facebook 47 篇和旧目标 `in_neakasa.tech` 的 Instagram 1020 篇历史归档；它们是历史事实，不是新目标 `neakasa.global` 的当前基线，也不能直接复制后当成真实验收。
+这个 worktree 已通过忽略入库的 `config.local.toml` 接续原 archive/state/.env/解释器。核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，不能当作 `.global` 回填证据。
 
 状态词统一为：
 
@@ -16,15 +16,17 @@
 |---|---|
 | **代码未完成** | 所需行为或失败闭合尚不存在 |
 | **离线通过** | 有离线测试或构建证据，但没有真实外部系统证据 |
-| **待真实联调** | 代码入口存在，仍需真实账号、浏览器、凭据或远端回执 |
+| **待真实联调** | 该验收行代码前置具备，剩余是真实账号、人工操作、权限或远端证据 |
 | **真实通过** | 有注明日期和来源的真实证据 |
 | **明确延期** | 业务已决定本轮不做，不应与缺陷混为一谈 |
 
 已存在的离线能力包括响应拦截与回放、本地归档、德语翻译和图片本地化、付费账本、人工审校写入、七态审校流、Planner 缓存、调度器、飞书与云盘适配层、Business Suite 证据闸。它们仍需按 [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md) 的清单完成缺口并逐项真实联调。
 
-以下事项尚不能宣称完成：孤儿模型任务恢复、损坏审校账本的失败闭合、只展示最近 90 天的历史界面、跨月排期适配、当前调度器的安装流程、真实风险预扫描、真实标签采样、飞书当前内容/去重/日报、所有发布入口的不可变快照投影、单渠道选择与回读证据，以及企业飞书、云盘和 Business Suite 的端到端联调。
+当前主要待办是完整月历与真实单渠道回读、标签采样的剩余安全修复、飞书当前内容/按帖汇总/固定尝试消息、镜像恢复与周期备份、接口/UI 完整契约及最终联合回归。详细功能编号与代码/外部依赖分别见实施清单；不能用部分测试通过关闭整项。
 
-## 不会再变化的业务口径
+真实联调已启动但没有本轮新排期回读：9223 已登录并观察 FB `Neakasa Deutschland`、IG `neakasa.de`，已保存控件证据；35 日期格录证也不等于整月已读完。9222/9224 已启动，9224 访问 `.global` 实际返回 HTTP 429，已持久停机且未重试，须人工核对会话/出口。企业飞书缺凭据，云盘镜像和外部心跳未启用，运营从飞书到排期的完整流程尚未验收。
+
+## 已确认的业务口径
 
 - Facebook 与 Instagram 是两条独立车道。一篇来源帖只进入对应渠道，不跨平台合并，也不依赖 composer 默认双选。
 - 当前目标是 Facebook `neakasaofficial` 与 Instagram `neakasa.global`。`.global` 时间线上的合作帖全部抓取，不按合作方白名单过滤。
@@ -34,6 +36,8 @@
 - 人工文案和人工图片优先，机器不得覆盖。付费调用必须同时满足统一预算和来源许可；请求是否已被远端计费不确定时，先核账再决定是否重放。
 - 每张图最多受理三次优化。挂起默认三个上海工作日。本轮所有审校事件的 `actor` 固定为 `null`。
 - 飞书云盘只接收本地单向镜像。内容更新时新增版本，不覆盖旧版；只允许用冻结内容补送缺失的旧版本。
+- 飞书业务消息和开发者告警分两个接收组；卡片取当前有效德语首图/摘要/检查，原图回退明示，已尝试消息的 UUID 和内容冻结。
+- 历史支持服务端分页、总数、平台/月/tag 筛选，90 天外详情仍可读；查询不会启动翻译。风险与标签分别保留来源、版本和采样时间，三个标签来源都在范围内。
 - `scheduled` 只表示 Business Suite 排期已被回读确认，不表示帖子已经公开发布。
 - 所有发布入口都必须冻结同一份最终文案、图片、渠道和时刻；任何可能提交的动作之前都要给用户看具体内容并获得确认。
 
@@ -48,13 +52,14 @@ scripts\setup.bat
 离线查看调度计划，不访问浏览器：
 
 ```powershell
-.venv\Scripts\python.exe -m pipeline.scheduler --preview
+scripts\run_scheduler.bat --preview
+scripts\run_pipeline.bat preflight --json
 ```
 
 启动审校台：
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
+scripts\run_python.bat -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
 ```
 
 若 `web/ui/dist/` 不存在，在开发机执行：
@@ -65,7 +70,7 @@ npm install
 npm run build
 ```
 
-生产运行不需要 Node；但生产迁移本轮明确延期。当前 worktree 没有运行数据，打开审校台只能验证服务和空状态，不能证明业务数据正确。
+生产运行静态构建不需要 Node，生产迁移本轮明确延期。启动包装入口读取同一本机运行绑定；审校台现在连到真实数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。
 
 ## 运行入口
 
@@ -81,7 +86,7 @@ npm run build
 | 调度器 | `scripts\run_scheduler.bat` | 默认预览；真实运行需显式参数 |
 | 审校台 | `web.api.app:app` | 写入真实追加式真相源 |
 
-`python -m tools.schedule install` 安装的是旧的每日任务组合，不是当前常驻调度器。当前调度器只能先生成 `scheduler-xml`，再由人在 Windows 任务计划程序中检查并导入；详见 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
+`tools.schedule install` 是旧每日任务组合。当前入口为 `scheduler-install`、`scheduler-status`、`scheduler-disable`、`scheduler-enable`，另保留 `scheduler-xml`。代码已做离线任务命令验证，真实安装/停用/恢复仍待前置通过后验收；步骤见 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
 
 ## 数据边界
 
@@ -108,11 +113,11 @@ state/
 
 `post.json`、人工文案、审校决定、付费账本和发布账本决定业务事实。`manifest.jsonl`、SQLite、HTML、Planner 缓存和云盘镜像都是派生物，冲突时不得反向覆盖本地真相源。
 
-正式接续原工作区数据之前，先按 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md) 备份和核验 `archive/`、`state/`，保留旧发布记录和激活边界。凭据只放本机 `.env` 或本机配置，不写日志、不进版本库。
+再次接续或恢复时，先按 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md) 备份和核验 archive、state、运行配置及本机环境的受控副本，保留旧发布记录和激活边界。周期账本备份与大型媒体/probe 按版本保存另行验收；已做一次备份不能代替周期恢复能力。凭据不进日志和版本库。
 
 ## 真实证据的边界
 
-2026-09-01 的 Business Suite 探查文件曾真实记录 composer 与 Planner 行为，细节保留在 [docs/HANDOFF.md](docs/HANDOFF.md)。那份证据没有记录单渠道勾选交互，所以不能据此实现或宣称单渠道发布。新的选择器和成功判据只能来自新录制的真实 dump；截图里看见文字不等于存在可用的 DOM/可访问性定位。
+2026-09-01 的 composer/Planner 探查保留在 [docs/HANDOFF.md](docs/HANDOFF.md)，未含单渠道交互。2026-09-12 新增单渠道与月历控件录证，但尚未证明长文、多图、FB 链接、IG CTA 和两篇实际排期回读。选择器和成功判据对应真实 dump；截图可见文字不等于可定位元素，控件可定位不等于端到端通过。
 
 ## 本轮明确延期
 
