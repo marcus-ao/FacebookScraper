@@ -1,9 +1,11 @@
 """Monitoring recovery and Windows scheduler lifecycle; no browser, model, or task mutation."""
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import tests_web_review as fixtures
 from core.config import cfg
+from core.monitoring import MonitoringJournal
 from core.process_identity import current_worker
 from pipeline import engine
 from pipeline.service import Runtime
@@ -18,6 +21,123 @@ from tools import schedule
 
 
 NOW = datetime(2026, 9, 12, 1, 0, tzinfo=timezone.utc)
+EMPTY_SKIPS = {'video': 0, 'mixed_media': 0, 'no_media': 0, 'no_text': 0}
+
+
+class MonitoringJournalQueueTests(unittest.TestCase):
+    def test_requests_during_running_batch_are_accumulated_into_successor(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = MonitoringJournal(Path(td), now=NOW)
+            journal.request(NOW, 'facebook', 'delta', 1, EMPTY_SKIPS, image_count=1)
+            running = journal.claim(NOW)
+
+            journal.request(NOW + timedelta(minutes=1), 'instagram', 'delta', 2,
+                            {**EMPTY_SKIPS, 'video': 1}, image_count=3)
+            journal.request(NOW + timedelta(minutes=2), 'instagram', 'reconcile', 3,
+                            {**EMPTY_SKIPS, 'video': 2}, image_count=4)
+            journal.request(NOW + timedelta(minutes=3), 'facebook', 'delta', 2,
+                            EMPTY_SKIPS, image_count=2)
+
+            pending = journal.finish(running, NOW + timedelta(minutes=4), code=0)
+            self.assertEqual(pending['status'], 'pending')
+            self.assertNotEqual(pending['batch_id'], running['batch_id'])
+            self.assertEqual(pending['platforms']['instagram']['discovered'], 5)
+            self.assertEqual(pending['platforms']['instagram']['image_count'], 7)
+            self.assertEqual(pending['platforms']['instagram']['skipped']['video'], 3)
+            self.assertEqual(pending['platforms']['facebook']['discovered'], 2)
+            self.assertEqual(journal.claim(NOW + timedelta(minutes=5))['batch_id'],
+                             pending['batch_id'])
+
+    def test_uncertain_running_batch_is_not_replayed_when_successor_exists(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = MonitoringJournal(Path(td), now=NOW)
+            journal.request(NOW, 'facebook', 'delta', 1, EMPTY_SKIPS)
+            running = journal.claim(NOW)
+            journal.request(NOW + timedelta(minutes=1), 'instagram', 'delta', 2,
+                            EMPTY_SKIPS)
+
+            uncertain = journal.finish(running, NOW + timedelta(minutes=2), code=None,
+                                       error='crashed')
+
+            self.assertEqual(uncertain['status'], 'uncertain')
+            self.assertEqual(uncertain['batch_id'], running['batch_id'])
+            self.assertEqual(uncertain['next_batch']['platforms']['instagram']['discovered'], 2)
+            self.assertIsNone(journal.claim(NOW + timedelta(minutes=3)))
+
+    def test_concurrent_requests_do_not_lose_same_platform_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = MonitoringJournal(Path(td), now=NOW)
+
+            def request(index):
+                return journal.request(NOW + timedelta(seconds=index), 'facebook', 'delta', 1,
+                                       {**EMPTY_SKIPS, 'no_text': 1}, image_count=2)
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(request, range(24)))
+
+            pending = journal.processing_status()
+            self.assertEqual(pending['platforms']['facebook']['discovered'], 24)
+            self.assertEqual(pending['platforms']['facebook']['image_count'], 48)
+            self.assertEqual(pending['platforms']['facebook']['skipped']['no_text'], 24)
+
+    def test_requests_from_separate_processes_share_the_state_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td)
+            gate = state / 'go'
+            code = "\n".join((
+                "import sys, time",
+                "from datetime import datetime, timezone",
+                "from pathlib import Path",
+                "from core.monitoring import MonitoringJournal",
+                "state, gate = Path(sys.argv[1]), Path(sys.argv[2])",
+                "while not gate.exists(): time.sleep(0.005)",
+                "journal = MonitoringJournal(state, now=datetime.now(timezone.utc))",
+                "journal.request(datetime.now(timezone.utc), 'facebook', 'delta', 1, {}, image_count=1)",
+            ))
+            children = [subprocess.Popen(
+                [sys.executable, '-c', code, str(state), str(gate)],
+                cwd=Path(__file__).resolve().parent.parent,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            ) for _ in range(8)]
+            gate.touch()
+            for child in children:
+                stdout, stderr = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0,
+                                 (stdout + stderr).decode(errors='replace'))
+
+            pending = MonitoringJournal(state, now=NOW).processing_status()
+            self.assertEqual(pending['platforms']['facebook']['discovered'], 8)
+
+    def test_only_one_process_can_claim_a_paid_batch(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td)
+            journal = MonitoringJournal(state, now=NOW)
+            journal.request(NOW, 'facebook', 'delta', 1, EMPTY_SKIPS)
+            gate = state / 'claim-go'
+            code = "\n".join((
+                "import sys, time",
+                "from datetime import datetime, timezone",
+                "from pathlib import Path",
+                "from core.monitoring import MonitoringJournal",
+                "state, gate = Path(sys.argv[1]), Path(sys.argv[2])",
+                "journal = MonitoringJournal(state, now=datetime.now(timezone.utc))",
+                "while not gate.exists(): time.sleep(0.005)",
+                "batch = journal.claim(datetime.now(timezone.utc))",
+                "print('claimed' if batch else 'skipped', flush=True)",
+                "time.sleep(0.2) if batch else None",
+            ))
+            children = [subprocess.Popen(
+                [sys.executable, '-c', code, str(state), str(gate)],
+                cwd=Path(__file__).resolve().parent.parent,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            ) for _ in range(8)]
+            gate.touch()
+            outcomes = []
+            for child in children:
+                stdout, stderr = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0, stderr.decode(errors='replace'))
+                outcomes.append(stdout.decode().strip())
+            self.assertEqual(outcomes.count('claimed'), 1)
 
 
 class RuntimeRecoveryTests(unittest.TestCase):
@@ -129,6 +249,35 @@ class SchedulerTaskLifecycleTests(unittest.TestCase):
             self.assertTrue(schedule._task_state(schedule.SCHEDULER_TASK)['enabled'])
         self.assertNotIn('text', run.call_args.kwargs)
 
+    def test_task_query_reads_settings_enabled_instead_of_trigger_enabled(self):
+        payload = ('<Task xmlns="%s"><Triggers><LogonTrigger><Enabled>true</Enabled>'
+                   '</LogonTrigger></Triggers><Settings><Enabled>false</Enabled>'
+                   '</Settings></Task>') % schedule.NS
+        with patch.object(schedule.subprocess, 'run', return_value=self.result(
+                stdout=payload.encode('utf-16'))):
+            state = schedule._task_state(schedule.SCHEDULER_TASK)
+        self.assertTrue(state['registered'])
+        self.assertIs(state['enabled'], False)
+
+    def test_task_query_keeps_missing_or_invalid_settings_enabled_unknown(self):
+        fixtures = (
+            '<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger>'
+            '</Triggers><Settings /></Task>',
+            '<Task><Settings><Enabled>sometimes</Enabled></Settings></Task>',
+        )
+        for payload in fixtures:
+            with self.subTest(payload=payload), patch.object(
+                    schedule.subprocess, 'run', return_value=self.result(stdout=payload)):
+                self.assertIsNone(schedule._task_state(schedule.SCHEDULER_TASK)['enabled'])
+
+    def test_resume_refuses_legacy_conflict_before_mutating_scheduler(self):
+        with patch.object(schedule.sys, 'platform', 'win32'), \
+                patch.object(schedule, '_legacy_scheduler_conflicts', return_value=[{
+                    'name': schedule.DAILY_TASK, 'registered': True, 'enabled': True,
+                }]), patch.object(schedule.subprocess, 'run') as run:
+            self.assertEqual(schedule.scheduler_set_enabled(True), 2)
+        run.assert_not_called()
+
     def test_install_status_disable_and_resume_target_only_persistent_task(self):
         install = getattr(schedule, 'scheduler_install', None)
         status = getattr(schedule, 'scheduler_status', None)
@@ -152,9 +301,12 @@ class SchedulerTaskLifecycleTests(unittest.TestCase):
             self.assertEqual(enabled(True), 0)
         creates = [argv for argv in calls if '/Create' in argv]
         changes = [argv for argv in calls if '/Change' in argv]
+        runtime_actions = [argv for argv in calls if '/End' in argv or '/Run' in argv]
         self.assertEqual(len(creates), 1)
         self.assertEqual(creates[0][3], schedule.SCHEDULER_TASK)
         self.assertEqual([argv[-1] for argv in changes], ['/DISABLE', '/ENABLE'])
+        self.assertEqual([argv[1] for argv in runtime_actions], ['/End', '/Run'])
+        self.assertTrue(all(argv[3] == schedule.SCHEDULER_TASK for argv in runtime_actions))
 
 
 if __name__ == '__main__':

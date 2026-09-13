@@ -137,6 +137,57 @@ class MonitoringTests(unittest.TestCase):
                     runner.schedule.on_duty_window[0]), local.tzinfo)
                 self.assertLessEqual(local, duty - timedelta(minutes=183))
 
+    def test_cross_midnight_reconcile_keeps_its_target_morning_deadline(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            state = Path(td) / "state"
+            state.mkdir()
+            config._d["paths"]["state"] = str(state)
+            (state / "processing_state.json").write_text(json.dumps({
+                "version": 1,
+                "status": "ready",
+                "platforms": {
+                    "facebook": {"discovered": 10, "image_count": 10},
+                    "instagram": {"discovered": 10, "image_count": 10},
+                },
+            }), encoding="utf-8")
+            now = datetime(2026, 9, 11, 16, 0, tzinfo=timezone.utc)  # 上海 9 月 12 日 00:00
+            with Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
+                           config=config, clock=lambda: now,
+                           rng=random.Random(1)) as runner:
+                job = runner.state["jobs"]["reconcile:facebook"]
+                planned = parse_ts(job["next_at"])
+                deadline = parse_ts(job["deadline_at"])
+
+                self.assertEqual(runner.schedule.local(deadline).isoformat(),
+                                 "2026-09-13T08:00:00+08:00")
+                self.assertEqual(job["budget_minutes"], 503.0)
+                self.assertGreaterEqual((deadline - planned).total_seconds() / 60, 503.0)
+                self.assertFalse(runner._reconcile_expired(job, planned))
+
+    def test_reconcile_budget_can_move_execution_across_multiple_calendar_days(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            state = Path(td) / "state"
+            state.mkdir()
+            config._d["paths"]["state"] = str(state)
+            (state / "processing_state.json").write_text(json.dumps({
+                "version": 1, "status": "ready", "platforms": {},
+                "last_success_duration_minutes": 3000,
+            }), encoding="utf-8")
+            now = datetime(2026, 9, 11, 16, 0, tzinfo=timezone.utc)
+            with Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
+                           config=config, clock=lambda: now,
+                           rng=random.Random(2)) as runner:
+                job = runner.state["jobs"]["reconcile:instagram"]
+                planned = parse_ts(job["next_at"])
+                deadline = parse_ts(job["deadline_at"])
+
+                self.assertGreaterEqual((deadline - planned).total_seconds() / 60, 3003.0)
+                self.assertGreaterEqual((runner.schedule.local(deadline).date()
+                                         - runner.schedule.local(now).date()).days, 2)
+                self.assertFalse(runner._reconcile_expired(job, planned))
+
     def test_delta_first_screen_and_window_minimum(self):
         d = delta.DeltaConfig.load()
         self.assertEqual(d.max_scrolls, 0)
@@ -364,6 +415,10 @@ class MonitoringTests(unittest.TestCase):
                            clock=lambda: now, rng=random.Random(2)) as scheduler:
                 for job in scheduler.state["jobs"].values():
                     job["next_at"] = (utc(23) - timedelta(days=1)).isoformat()
+                    if job["kind"] == "reconcile":
+                        local = scheduler.schedule.local(now)
+                        job["deadline_at"] = local.replace(
+                            hour=8, minute=0, second=0, microsecond=0).isoformat()
                 scheduler.tick()
             self.assertEqual(sorted(calls), [("delta", "facebook"), ("delta", "instagram")])
 

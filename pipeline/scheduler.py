@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import random
 import time
 from datetime import datetime, timedelta, timezone
@@ -78,6 +79,9 @@ class Scheduler:
                     or value.get("platform") not in delta.PLATFORMS
                     or key != f"{value['kind']}:{value['platform']}"):
                 raise ValueError("scheduler 作业身份损坏；不能猜测要访问的平台")
+            if (value.get("kind") == "reconcile" and "deadline_at" in value
+                    and parse_ts(value.get("deadline_at")) is None):
+                raise ValueError("scheduler 早班截止时刻损坏；不能猜测兜底所属业务日")
         return data
 
     def _save(self):
@@ -139,23 +143,48 @@ class Scheduler:
             self.schedule.on_duty_window[0]), local.tzinfo)
         return max(timedelta(), configured_latest - (duty - timedelta(minutes=budget)))
 
-    def _next_reconcile(self, now: datetime) -> datetime:
+    def _next_reconcile_plan(self, now: datetime) -> tuple[datetime, datetime, float]:
         local = self.schedule.local(now)
-        base = datetime.combine(local.date(), self.schedule.parse_time(self.schedule.reconcile_at), local.tzinfo)
-        earliest = base - timedelta(minutes=self.schedule.reconcile_jitter_min)
-        latest = base + timedelta(minutes=self.schedule.reconcile_jitter_min)
-        shift = self._reconcile_shift(local, self._batch_budget())
-        if shift:
-            # 整体前移随机窗口，保留抖动宽度，同时给两平台扫描和整批处理留足预算。
-            earliest -= shift
-            latest -= shift
-        # 已过窗口就只安排明天；尚在窗口时从剩余区间抽取，不突然追补昨天。
-        if now >= latest:
-            earliest += timedelta(days=1)
-            latest += timedelta(days=1)
+        budget = self._batch_budget()
+        target = local.date()
+        while True:
+            base = datetime.combine(target, self.schedule.parse_time(
+                self.schedule.reconcile_at), local.tzinfo)
+            earliest = base - timedelta(minutes=self.schedule.reconcile_jitter_min)
+            latest = base + timedelta(minutes=self.schedule.reconcile_jitter_min)
+            shift = self._reconcile_shift(base, budget)
+            if shift:
+                # 整体前移随机窗口，保留抖动宽度，同时给两平台扫描和整批处理留足预算。
+                earliest -= shift
+                latest -= shift
+            if now < latest:
+                break
+            # 大批次可能把窗口前移到前一日甚至更早；逐日寻找尚未错过的目标早班。
+            target += timedelta(days=1)
         lower = max(now, earliest)
-        return (lower + timedelta(seconds=self.rng.uniform(
-            0, (latest - lower).total_seconds()))).astimezone(timezone.utc)
+        planned = lower + timedelta(seconds=self.rng.uniform(
+            0, (latest - lower).total_seconds()))
+        deadline = datetime.combine(target, self.schedule.parse_time(
+            self.schedule.on_duty_window[0]), local.tzinfo)
+        return planned.astimezone(timezone.utc), deadline.astimezone(timezone.utc), budget
+
+    def _next_reconcile(self, now: datetime) -> datetime:
+        return self._next_reconcile_plan(now)[0]
+
+    def _infer_reconcile_deadline(self, job: dict) -> datetime:
+        """Migrate an old draw by finding the first morning its saved budget can serve."""
+        planned = parse_ts(job["next_at"])
+        baseline = batch_budget_minutes(self.schedule, len(delta.PLATFORMS))
+        budget = job.get("budget_minutes", baseline)
+        if (not isinstance(budget, (int, float)) or isinstance(budget, bool)
+                or not math.isfinite(budget) or budget < baseline):
+            budget = baseline
+        ready = self.schedule.local(planned + timedelta(minutes=budget))
+        deadline = datetime.combine(ready.date(), self.schedule.parse_time(
+            self.schedule.on_duty_window[0]), ready.tzinfo)
+        if ready > deadline:
+            deadline += timedelta(days=1)
+        return deadline.astimezone(timezone.utc)
 
     def _ensure_jobs(self, now):
         sample_month = (self.schedule.local(now).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
@@ -171,11 +200,17 @@ class Scheduler:
                 key = f"{kind}:{platform}"
                 current = self.state["jobs"].get(key)
                 if not current or current.get("account") != account:
-                    next_at = self._next_delta(now, platform) if kind == "delta" else self._next_reconcile(now)
+                    if kind == "delta":
+                        next_at = self._next_delta(now, platform)
+                        deadline = budget = None
+                    else:
+                        next_at, deadline, budget = self._next_reconcile_plan(now)
                     current = {"kind": kind, "platform": platform, "account": account,
                                "next_at": next_at.isoformat()}
                     if kind == "reconcile":
-                        current["budget_minutes"] = self._batch_budget()
+                        current.update(budget_minutes=budget, deadline_at=deadline.isoformat())
+                elif kind == "reconcile" and parse_ts(current.get("deadline_at")) is None:
+                    current["deadline_at"] = self._infer_reconcile_deadline(current).isoformat()
                 expected[key] = current
         self.state["jobs"] = expected
         self._tighten_reconcile_jobs()
@@ -192,8 +227,9 @@ class Scheduler:
                 old = baseline
             if required <= old:
                 continue
-            planned = self.schedule.local(parse_ts(job["next_at"]))
-            extra = self._reconcile_shift(planned, required) - self._reconcile_shift(planned, old)
+            deadline = self.schedule.local(parse_ts(job["deadline_at"]))
+            extra = (self._reconcile_shift(deadline, required)
+                     - self._reconcile_shift(deadline, old))
             if extra > timedelta():
                 job["next_at"] = (parse_ts(job["next_at"]) - extra).isoformat()
             job["budget_minutes"] = required
@@ -209,12 +245,12 @@ class Scheduler:
         return self.snapshot()
 
     def _reconcile_expired(self, job, now):
-        local = self.schedule.local(now)
-        deadline = datetime.combine(local.date(), self.schedule.parse_time(
-            self.schedule.on_duty_window[0]), local.tzinfo)
+        self.schedule.local(now)
+        deadline = parse_ts(job.get("deadline_at"))
+        if deadline is None:
+            deadline = self._infer_reconcile_deadline(job)
         budget = self._batch_budget()
-        planned_day = self.schedule.local(parse_ts(job["next_at"])).date()
-        return local.date() != planned_day or now > deadline - timedelta(minutes=budget)
+        return now > deadline - timedelta(minutes=budget)
 
     def tick(self) -> list[dict]:
         if not self._held:
@@ -245,14 +281,15 @@ class Scheduler:
                 expired = self._reconcile_expired(job, started)
                 # 先推进到明天，避免本轮在 ±窗口内又排一次深扫。
                 tomorrow = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                following = self._next_reconcile(tomorrow)
+                following, following_deadline, following_budget = self._next_reconcile_plan(tomorrow)
             else:
                 expired = False
                 following = self._next_delta(started, platform)
             job.update(next_at=following.isoformat(), last_started=started.isoformat(),
                        last_exit_code=None, last_error=None)
             if kind == "reconcile":
-                job["budget_minutes"] = self._batch_budget()
+                job.update(budget_minutes=following_budget,
+                           deadline_at=following_deadline.isoformat())
             self._save()
             if expired:
                 result = {"kind": kind, "platform": platform, "exit_code": None,
@@ -272,8 +309,12 @@ class Scheduler:
             job["last_finished"] = finished.isoformat()
             # 回调耗时跨过下一轮时也不立刻追补；按完成时刻重新排下轮。
             if parse_ts(job["next_at"]) <= finished:
-                job["next_at"] = (self._next_delta(finished, platform) if kind == "delta"
-                                  else self._next_reconcile(finished)).isoformat()
+                if kind == "delta":
+                    job["next_at"] = self._next_delta(finished, platform).isoformat()
+                else:
+                    following, following_deadline, following_budget = self._next_reconcile_plan(finished)
+                    job.update(next_at=following.isoformat(), budget_minutes=following_budget,
+                               deadline_at=following_deadline.isoformat())
             self.state["last_tick"] = finished.isoformat()
             self._save()
             results.append(result)

@@ -339,14 +339,15 @@ def _task_state(name: str) -> dict:
         return {"name": name, "registered": False, "enabled": False}
     try:
         root = ET.fromstring(result.stdout or "")
-        enabled = root.findtext(".//{%s}Enabled" % NS)
+        enabled = root.findtext("./{%s}Settings/{%s}Enabled" % (NS, NS))
         if enabled is None:
-            enabled = root.findtext(".//Enabled")
+            enabled = root.findtext("./Settings/Enabled")
     except ET.ParseError:
         return {"name": name, "registered": True, "enabled": None,
                 "error": "task_xml_unreadable"}
+    normalized = str(enabled).strip().lower() if enabled is not None else ""
     return {"name": name, "registered": True,
-            "enabled": str(enabled).strip().lower() == "true"}
+            "enabled": True if normalized == "true" else False if normalized == "false" else None}
 
 
 def _legacy_scheduler_conflicts() -> list[dict]:
@@ -393,12 +394,24 @@ def scheduler_status() -> int:
 
 
 def scheduler_set_enabled(enabled: bool) -> int:
-    """Pause/resume without deleting the persistent task definition."""
+    """Stop or immediately resume the persistent scheduler and its definition."""
     if not sys.platform.startswith("win"):
         print("[!] 常驻计划任务只在 Windows 上有意义。")
         return 1
+    if enabled:
+        conflicts = _legacy_scheduler_conflicts()
+        if conflicts:
+            print("[!] 旧增量任务仍启用：%s。未恢复常驻任务，避免重复抓取。"
+                  % ", ".join(item["name"] for item in conflicts))
+            return 2
     flag = "/ENABLE" if enabled else "/DISABLE"
     result = subprocess.run(["schtasks", "/Change", "/TN", SCHEDULER_TASK, flag],
+                            capture_output=True, text=True)
+    print("  " + (((result.stdout or "") + (result.stderr or "")).strip() or "(no output)"))
+    if result.returncode:
+        return int(result.returncode)
+    action = "/Run" if enabled else "/End"
+    result = subprocess.run(["schtasks", action, "/TN", SCHEDULER_TASK],
                             capture_output=True, text=True)
     print("  " + (((result.stdout or "") + (result.stderr or "")).strip() or "(no output)"))
     return int(result.returncode)

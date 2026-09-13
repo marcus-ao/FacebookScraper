@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from core.config import MonitorSchedule
 from core.integrity import parse_ts
-from core.paid_model import append_jsonl, atomic_write_json
+from core.paid_model import FileLock, FileLockBusy, append_jsonl, atomic_write_json
 from core.process_identity import current_worker, worker_alive
 
 
@@ -196,94 +199,169 @@ class MonitoringJournal:
         self.state_dir = Path(state_dir)
         self.facts_path = self.state_dir / "monitoring_facts.jsonl"
         self.processing_path = self.state_dir / "processing_state.json"
-        state = self.processing_status()
-        if state.get("status") == "running":
-            alive = worker_alive(state.get("owner"))
-            if alive is False:
-                state.update(status="interrupted", interrupted_at=now.isoformat(),
-                             requires_manual_recovery=True,
-                             recovery_reason="原处理进程已退出；可能已经产生付费请求，未自动重放")
-                event = "processing_interrupted"
-            elif alive is None:
-                state.update(status="uncertain", inspected_at=now.isoformat(),
-                             requires_manual_recovery=True,
-                             recovery_reason="无法确认原处理进程身份；核对付费请求前不自动重放")
-                event = "processing_recovery_unknown"
-            else:
-                return
-            atomic_write_json(self.processing_path, state)
+        self.processing_lock_path = self.state_dir / "processing_state.lock"
+        self._thread_lock = threading.RLock()
+        event = None
+        with self._processing_lock():
+            state = self._read_processing_status()
+            if state.get("status") == "running":
+                alive = worker_alive(state.get("owner"))
+                if alive is False:
+                    state.update(status="interrupted", interrupted_at=now.isoformat(),
+                                 requires_manual_recovery=True,
+                                 recovery_reason="原处理进程已退出；可能已经产生付费请求，未自动重放")
+                    event = "processing_interrupted"
+                elif alive is None:
+                    state.update(status="uncertain", inspected_at=now.isoformat(),
+                                 requires_manual_recovery=True,
+                                 recovery_reason="无法确认原处理进程身份；核对付费请求前不自动重放")
+                    event = "processing_recovery_unknown"
+                if event is not None:
+                    atomic_write_json(self.processing_path, state)
+        if event is not None:
             self.fact(event, now, batch_id=state.get("batch_id"))
+
+    @contextmanager
+    def _processing_lock(self):
+        """Serialize read-modify-write state transitions across threads and processes."""
+        with self._thread_lock:
+            while True:
+                lock = FileLock(self.processing_lock_path,
+                                busy_message="内容处理状态正由另一个进程更新")
+                try:
+                    lock.__enter__()
+                    break
+                except FileLockBusy:
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                lock.__exit__(None, None, None)
 
     def fact(self, event: str, now: datetime, **details) -> dict:
         row = {"event": event, "recorded_at": now.astimezone(timezone.utc).isoformat(), **details}
         append_jsonl(self.facts_path, row)
         return row
 
-    def processing_status(self) -> dict:
+    def _read_processing_status(self) -> dict:
         try:
             data = json.loads(self.processing_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {"version": 1, "status": "idle", "platforms": {}}
         if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("platforms"), dict):
             raise ValueError("内容处理标记损坏；保留现场，不自动运行付费步骤")
+        successor = data.get("next_batch")
+        if successor is not None and (not isinstance(successor, dict)
+                or successor.get("version") != 1 or successor.get("status") != "pending"
+                or not isinstance(successor.get("platforms"), dict)):
+            raise ValueError("后继内容处理标记损坏；保留现场，不自动运行付费步骤")
         return data
+
+    def processing_status(self) -> dict:
+        return self._read_processing_status()
+
+    @staticmethod
+    def _merge_request(batch: dict, now: datetime, platform: str, kind: str,
+                       discovered: int, skipped: dict[str, int], image_count: int | None) -> None:
+        discovered = max(0, int(discovered))
+        images = max(discovered, int(image_count or 0))
+        incoming_skips = {key: max(0, int(skipped.get(key, 0))) for key in SKIP_REASONS}
+        previous = batch["platforms"].get(platform)
+        if not isinstance(previous, dict):
+            batch["platforms"][platform] = {
+                "kind": kind, "kinds": [kind], "discovered": discovered,
+                "image_count": images, "skipped": incoming_skips,
+                "scanned_at": now.isoformat(),
+            }
+            return
+        kinds = set(previous.get("kinds") or [previous.get("kind")])
+        kinds.discard(None)
+        kinds.add(kind)
+        previous.update(
+            kind=kind,
+            kinds=sorted(kinds),
+            discovered=max(0, int(previous.get("discovered", 0))) + discovered,
+            image_count=max(0, int(previous.get("image_count", 0))) + images,
+            scanned_at=now.isoformat(),
+        )
+        old_skips = previous.get("skipped") if isinstance(previous.get("skipped"), dict) else {}
+        previous["skipped"] = {
+            key: max(0, int(old_skips.get(key, 0))) + incoming_skips[key]
+            for key in SKIP_REASONS
+        }
+
+    @staticmethod
+    def _new_batch(now: datetime, history: dict | None = None) -> dict:
+        return {"version": 1, "batch_id": uuid4().hex, "status": "pending",
+                "requested_at": now.isoformat(), "platforms": {}, **(history or {})}
 
     def request(self, now: datetime, platform: str, kind: str, discovered: int,
                 skipped: dict[str, int], *, image_count: int | None = None) -> dict:
-        current = self.processing_status()
-        if current.get("status") in {"running", "interrupted", "uncertain"}:
+        with self._processing_lock():
+            current = self._read_processing_status()
+            if current.get("status") in {"running", "interrupted", "uncertain"}:
+                pending = current.get("next_batch")
+                if not isinstance(pending, dict) or pending.get("status") != "pending":
+                    pending = self._new_batch(now)
+                    current["next_batch"] = pending
+                self._merge_request(pending, now, platform, kind, discovered, skipped, image_count)
+                atomic_write_json(self.processing_path, current)
+                return current
+            if current.get("status") != "pending":
+                history = {key: current[key] for key in (
+                    "last_success_duration_minutes", "last_success_posts", "last_success_images")
+                           if key in current}
+                current = self._new_batch(now, history)
+            self._merge_request(current, now, platform, kind, discovered, skipped, image_count)
+            atomic_write_json(self.processing_path, current)
             return current
-        if current.get("status") != "pending":
-            history = {key: current[key] for key in (
-                "last_success_duration_minutes", "last_success_posts", "last_success_images")
-                       if key in current}
-            current = {"version": 1, "batch_id": uuid4().hex, "status": "pending",
-                       "requested_at": now.isoformat(), "platforms": {}, **history}
-        current["platforms"][platform] = {
-            "kind": kind, "discovered": int(discovered),
-            "image_count": max(int(discovered), int(image_count or 0)),
-            "skipped": {key: int(skipped.get(key, 0)) for key in SKIP_REASONS},
-            "scanned_at": now.isoformat(),
-        }
-        atomic_write_json(self.processing_path, current)
-        return current
 
     def claim(self, now: datetime) -> dict | None:
-        current = self.processing_status()
-        if current.get("status") != "pending":
-            return None
-        current.update(status="running", started_at=now.isoformat(), owner=current_worker(),
-                       requires_manual_recovery=False)
-        atomic_write_json(self.processing_path, current)
+        with self._processing_lock():
+            current = self._read_processing_status()
+            if current.get("status") != "pending":
+                return None
+            current.update(status="running", started_at=now.isoformat(), owner=current_worker(),
+                           requires_manual_recovery=False)
+            atomic_write_json(self.processing_path, current)
         self.fact("processing_started", now, batch_id=current["batch_id"],
                   platforms=sorted(current["platforms"]))
         return current
 
     def finish(self, batch: dict, now: datetime, *, code: int | None,
                ready_count: int = 0, error: str | None = None) -> dict:
-        current = self.processing_status()
-        if current.get("batch_id") != batch.get("batch_id") or current.get("status") != "running":
-            raise ValueError("内容处理标记已变化；不能覆盖恢复决定")
-        if error is not None:
-            status, event, manual = "uncertain", "processing_uncertain", True
-        elif code:
-            status, event, manual = "failed", "processing_failed", False
-        else:
-            status, event, manual = "ready", "content_ready", False
-        current.update(status=status, finished_at=now.isoformat(), exit_code=code,
-                       ready_count=int(ready_count), requires_manual_recovery=manual)
-        if status == "ready":
-            started = parse_ts(current.get("started_at"))
-            duration = max(0.0, (now - started).total_seconds() / 60) if started else 0.0
-            current.update(
-                last_success_duration_minutes=duration,
-                last_success_posts=sum(int(item.get("discovered", 0))
-                                       for item in current["platforms"].values()),
-                last_success_images=sum(int(item.get("image_count", 0))
-                                        for item in current["platforms"].values()))
-        if error:
-            current["error"] = error
-        atomic_write_json(self.processing_path, current)
+        with self._processing_lock():
+            current = self._read_processing_status()
+            if (current.get("batch_id") != batch.get("batch_id")
+                    or current.get("status") != "running"):
+                raise ValueError("内容处理标记已变化；不能覆盖恢复决定")
+            if error is not None:
+                status, event, manual = "uncertain", "processing_uncertain", True
+            elif code:
+                status, event, manual = "failed", "processing_failed", False
+            else:
+                status, event, manual = "ready", "content_ready", False
+            current.update(status=status, finished_at=now.isoformat(), exit_code=code,
+                           ready_count=int(ready_count), requires_manual_recovery=manual)
+            if status == "ready":
+                started = parse_ts(current.get("started_at"))
+                duration = max(0.0, (now - started).total_seconds() / 60) if started else 0.0
+                current.update(
+                    last_success_duration_minutes=duration,
+                    last_success_posts=sum(int(item.get("discovered", 0))
+                                           for item in current["platforms"].values()),
+                    last_success_images=sum(int(item.get("image_count", 0))
+                                            for item in current["platforms"].values()))
+            if error:
+                current["error"] = error
+            successor = current.get("next_batch")
+            if status != "uncertain" and isinstance(successor, dict):
+                for key in ("last_success_duration_minutes", "last_success_posts",
+                            "last_success_images"):
+                    if key in current:
+                        successor[key] = current[key]
+                current = successor
+            atomic_write_json(self.processing_path, current)
         self.fact(event, now, batch_id=batch["batch_id"], exit_code=code,
                   ready_count=int(ready_count))
         return current
