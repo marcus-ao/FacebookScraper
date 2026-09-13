@@ -404,6 +404,8 @@ class MonitoringJournal:
     def activity_summary(self, now: datetime) -> dict | None:
         target = MonitorSchedule.local(now).date()
         discovered = reconcile_discovered = 0
+        reconcile_skipped = 0
+        reconcile_skipped_platforms = set()
         skipped = dict.fromkeys(SKIP_REASONS, 0)
         try:
             lines = self.facts_path.read_text(encoding="utf-8").splitlines()
@@ -414,7 +416,16 @@ class MonitoringJournal:
                 continue
             row = json.loads(line)
             recorded = parse_ts(row.get("recorded_at"))
-            if recorded is None or MonitorSchedule.local(recorded).date() != target:
+            if recorded is None:
+                continue
+            if row.get("event") == "scan_skipped" and row.get("kind") == "reconcile":
+                # Large processing budgets may move this scan to the previous day.
+                # Its missed coverage still belongs to the saved target morning.
+                if row.get("business_date", str(MonitorSchedule.local(recorded).date())) == str(target):
+                    reconcile_skipped += 1
+                    reconcile_skipped_platforms.add(row["platform"])
+                continue
+            if MonitorSchedule.local(recorded).date() != target:
                 continue
             if row.get("event") == "content_discovered":
                 count = int(row.get("count", 0))
@@ -424,7 +435,9 @@ class MonitoringJournal:
             if row.get("event") == "scan_finished":
                 for key in SKIP_REASONS:
                     skipped[key] += int((row.get("skipped") or {}).get(key, 0))
-        if discovered == 0 and not any(skipped.values()):
+        if discovered == 0 and not any(skipped.values()) and reconcile_skipped == 0:
             return None
         return {"date": str(target), "discovered": discovered,
-                "reconcile_discovered": reconcile_discovered, "skipped": skipped}
+                "reconcile_discovered": reconcile_discovered, "skipped": skipped,
+                "reconcile_skipped": reconcile_skipped,
+                "reconcile_skipped_platforms": sorted(reconcile_skipped_platforms)}

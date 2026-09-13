@@ -260,25 +260,26 @@ class Scheduler:
         self._ensure_jobs(now)
         due = sorted((key for key, job in self.state["jobs"].items()
                       if parse_ts(job["next_at"]) <= now),
-                     key=lambda key: self.state["jobs"][key]["next_at"])
-        reconciled_platforms = {self.state["jobs"][key]["platform"] for key in due
-                               if self.state["jobs"][key]["kind"] == "reconcile"
-                               and not self._reconcile_expired(self.state["jobs"][key], now)}
-        for key in list(due):
-            job = self.state["jobs"][key]
-            if job["kind"] == "delta" and job["platform"] in reconciled_platforms:
-                job["next_at"] = self._next_delta(now, job["platform"]).isoformat()
-                job["coalesced_with"] = "reconcile"
-                due.remove(key)
+                     key=lambda key: (self.state["jobs"][key]["kind"] != "reconcile",
+                                      self.state["jobs"][key]["next_at"]))
+        reconciled_platforms = set()
         self._save()
         results = []
         for key in due:
             job = self.state["jobs"][key]
             kind, platform = job["kind"], job["platform"]
             started = self.clock()
+            if kind == "delta" and platform in reconciled_platforms:
+                # Only an attempted deep scan replaces this ordinary probe. A job
+                # can expire while the other platform is running earlier in tick.
+                job["next_at"] = self._next_delta(started, platform).isoformat()
+                job["coalesced_with"] = "reconcile"
+                self._save()
+                continue
             if kind == "reconcile":
                 local = self.schedule.local(started)
                 expired = self._reconcile_expired(job, started)
+                deadline = parse_ts(job["deadline_at"])
                 # 先推进到明天，避免本轮在 ±窗口内又排一次深扫。
                 tomorrow = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
                 following, following_deadline, following_budget = self._next_reconcile_plan(tomorrow)
@@ -293,9 +294,15 @@ class Scheduler:
             self._save()
             if expired:
                 result = {"kind": kind, "platform": platform, "exit_code": None,
-                          "skipped": "已错过早班处理截止线，保留下次兜底"}
+                          "skipped": "已错过早班处理截止线，保留下次兜底",
+                          "started_at": started.isoformat(), "deadline_at": deadline.isoformat(),
+                          "business_date": str(self.schedule.local(deadline).date())}
                 job["last_error"] = result["skipped"]
             else:
+                if kind == "reconcile":
+                    # An attempted failure still consumes this probe: do not spend
+                    # another failure-budget attempt through the co-due delta.
+                    reconciled_platforms.add(platform)
                 try:
                     rc = self.callback(kind, platform)
                     result = {"kind": kind, "platform": platform, "exit_code": int(rc or 0)}
@@ -318,6 +325,8 @@ class Scheduler:
             self.state["last_tick"] = finished.isoformat()
             self._save()
             results.append(result)
+        if self.maintenance is not None:
+            self.maintenance(self.clock(), results)
         return results
 
 
@@ -345,12 +354,12 @@ def main(argv=None) -> int:
         from pipeline.service import Runtime
         runtime = Runtime(process=args.process, detector=default_callback)
         runner.callback = runtime.scan
+        runner.maintenance = runtime.maintenance
         with runner:
             while True:
                 for result in runner.tick():
                     print(json.dumps(result, ensure_ascii=False), flush=True)
                 now = datetime.now(timezone.utc)
-                runtime.maintenance(now)
                 runtime.start_processing(now)
                 if args.once:
                     return 0

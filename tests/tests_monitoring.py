@@ -422,6 +422,116 @@ class MonitoringTests(unittest.TestCase):
                 scheduler.tick()
             self.assertEqual(sorted(calls), [("delta", "facebook"), ("delta", "instagram")])
 
+    def test_reconcile_expiring_behind_other_platform_keeps_ordinary_probe(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            config._d["paths"]["state"] = td
+            config._d["paths"]["archive"] = td
+            clock = [utc(23, 31) - timedelta(days=1)]  # Shanghai 07:31; cutoff 07:32.
+            path = Path(td) / "scheduler.json"
+            calls = []
+
+            def scan(kind, platform):
+                saved = json.loads(path.read_text(encoding="utf-8"))
+                calls.append((kind, platform, parse_ts(saved["jobs"][f"{kind}:{platform}"]["next_at"])))
+                if (kind, platform) == ("reconcile", "facebook"):
+                    clock[0] += timedelta(minutes=2)
+                return 0
+
+            with Scheduler(path, scan, config=config, clock=lambda: clock[0],
+                           rng=random.Random(2)) as scheduler:
+                deadline = clock[0].replace(hour=0, minute=0) + timedelta(days=1)
+                for job in scheduler.state["jobs"].values():
+                    job["next_at"] = (clock[0] - timedelta(minutes=2 if job["kind"] == "delta" else 1)).isoformat()
+                    if job["kind"] == "reconcile":
+                        job["deadline_at"] = deadline.isoformat()
+                results = scheduler.tick()
+                self.assertEqual([(kind, platform) for kind, platform, _ in calls],
+                                 [("reconcile", "facebook"), ("delta", "instagram")])
+                self.assertTrue(all(next_at > clock[0] for _, _, next_at in calls))
+                skipped = [result for result in results if result.get("skipped")]
+                self.assertEqual(len(skipped), 1)
+                self.assertEqual(skipped[0]["platform"], "instagram")
+                self.assertEqual(parse_ts(skipped[0]["deadline_at"]), deadline)
+                self.assertEqual(skipped[0]["business_date"], "2026-09-12")
+                self.assertEqual(parse_ts(skipped[0]["started_at"]), clock[0])
+                self.assertEqual(scheduler.tick(), [])
+                self.assertEqual(len(calls), 2)
+
+    def test_maintenance_observes_saved_results_even_when_next_tick_is_idle(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            config._d["paths"]["state"] = td
+            config._d["paths"]["archive"] = td
+            now = utc(12)
+            path = Path(td) / "scheduler.json"
+            observations = []
+
+            def maintenance(observed_at, results):
+                observations.append((observed_at, results, json.loads(path.read_text(encoding="utf-8"))))
+
+            with Scheduler(path, lambda *_args: 0, config=config,
+                           clock=lambda: now, rng=random.Random(2), maintenance=maintenance) as scheduler:
+                job = scheduler.state["jobs"]["reconcile:facebook"]
+                job.update(next_at=(utc(23) - timedelta(days=1)).isoformat(),
+                           deadline_at=utc(0).isoformat())
+                results = scheduler.tick()
+                scheduler.tick()
+            self.assertEqual(len(observations), 2)
+            self.assertEqual(observations[0][:2], (now, results))
+            self.assertTrue(results[0].get("skipped"))
+            self.assertGreater(parse_ts(observations[0][2]["jobs"]["reconcile:facebook"]["next_at"]), now)
+            self.assertEqual(observations[1][1], [])
+
+    def test_failed_reconcile_does_not_spend_another_probe_attempt(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = Config()
+            config._d["paths"]["state"] = td
+            config._d["paths"]["archive"] = td
+            now = utc(23) - timedelta(days=1)
+            calls = []
+
+            def scan(kind, platform):
+                calls.append((kind, platform))
+                if platform == "facebook":
+                    raise RuntimeError("offline scan failure")
+                return 2
+
+            with Scheduler(Path(td) / "scheduler.json", scan, config=config,
+                           clock=lambda: now, rng=random.Random(2)) as scheduler:
+                for job in scheduler.state["jobs"].values():
+                    job["next_at"] = now.isoformat()
+                results = scheduler.tick()
+            self.assertEqual(calls, [("reconcile", "facebook"), ("reconcile", "instagram")])
+            self.assertEqual([result["exit_code"] for result in results], [1, 2])
+
+    def test_morning_summary_reports_missed_reconcile_without_new_posts(self):
+        from core.monitoring import MonitoringJournal
+        with tempfile.TemporaryDirectory() as td:
+            journal = MonitoringJournal(Path(td), now=utc(0), inspect_running=False)
+            journal.fact("scan_skipped", utc(23, 33) - timedelta(days=1), kind="reconcile",
+                         platform="instagram", reason="missed deadline", business_date="2026-09-12")
+            journal.fact("scan_skipped", utc(23, 34) - timedelta(days=1), kind="reconcile",
+                         platform="facebook", reason="missed deadline", business_date="2026-09-12")
+            summary = journal.activity_summary(utc(0))
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["discovered"], 0)
+            self.assertEqual(summary["reconcile_skipped"], 2)
+            self.assertEqual(summary["reconcile_skipped_platforms"], ["facebook", "instagram"])
+            self.assertIsNone(journal.activity_summary(utc(0) + timedelta(days=1)))
+
+    def test_missed_reconcile_summary_uses_target_morning_across_midnight(self):
+        from core.monitoring import MonitoringJournal
+        with tempfile.TemporaryDirectory() as td:
+            previous_evening = utc(12) - timedelta(days=1)  # Shanghai Sep 11, 20:00.
+            journal = MonitoringJournal(Path(td), now=previous_evening, inspect_running=False)
+            journal.fact("scan_skipped", previous_evening, kind="reconcile", platform="instagram",
+                         reason="missed shifted deadline", business_date="2026-09-12")
+            summary = journal.activity_summary(utc(0))  # The budget belongs to Sep 12, 08:00.
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["reconcile_skipped"], 1)
+            self.assertIsNone(journal.activity_summary(previous_evening))
+
     def test_crashed_process_releases_os_lock_and_keeps_random_plan(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "scheduler.json"
