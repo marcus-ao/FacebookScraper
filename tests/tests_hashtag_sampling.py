@@ -4,12 +4,14 @@ from __future__ import annotations
 import tempfile
 import sys
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import hashtag_rank, hashtag_sampling
+from pipeline import hashtag_suggestions
 
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
@@ -22,10 +24,22 @@ class HashtagSamplingTests(unittest.TestCase):
             "Category: All categories\nWeek,#Katzen,#Katzenliebe,#Hauskatzen\n"
             "2026-08-30,20,40,10\n2026-09-06,40,80,20\n",
             candidate_group="#Cats", tags=("#Katzen", "#Katzenliebe", "#Hauskatzen"),
-            geo="DE", time_range="2026-08-30 2026-09-12", sampled_at=NOW)
+            geo="DE", time_range="2026-08-30 2026-09-06", sampled_at=NOW)
         self.assertEqual([row["trend_score"] for row in rows], [50.0, 100.0, 25.0])
         self.assertEqual(len({row["sample_batch"] for row in rows}), 1)
         self.assertTrue(all(row["comparison_group"] == "#Cats" for row in rows))
+
+    def test_trends_rejects_missing_candidate_samples_and_mislabeled_dates(self):
+        with self.assertRaisesRegex(ValueError, "完整"):
+            hashtag_sampling.import_trends_csv(
+                "Week,#A,#B\n2026-09-01,100,\n2026-09-08,,10\n",
+                candidate_group="#X", tags=("#A", "#B"), geo="DE",
+                time_range="2026-09-01 2026-09-08", sampled_at=NOW)
+        with self.assertRaisesRegex(ValueError, "时间范围"):
+            hashtag_sampling.import_trends_csv(
+                "Week,#A,#B\n1999-01-01,100,10\n",
+                candidate_group="#X", tags=("#A", "#B"), geo="DE",
+                time_range="2026-09-01 2026-09-08", sampled_at=NOW)
 
     def test_trends_from_different_groups_or_batches_are_not_compared(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -56,6 +70,14 @@ class HashtagSamplingTests(unittest.TestCase):
         self.assertEqual(row["geo"], "global")
         self.assertEqual(row["metric_scope"], "global_cumulative_posts")
         self.assertNotIn("DE", row["source"])
+
+    def test_verified_payload_count_requires_matching_hashtag_identity(self):
+        payloads = [{"data": {"hashtag": {"name": "katzen",
+                    "edge_hashtag_to_media": {"count": 123456}}}}]
+        self.assertEqual(hashtag_sampling.verified_instagram_count(payloads, "#Katzen"), 123456)
+        self.assertIsNone(hashtag_sampling.verified_instagram_count(payloads, "#Hunde"))
+        self.assertIsNone(hashtag_sampling.verified_instagram_count(
+            [{"edge_hashtag_to_media": {"count": 999}}], "#Katzen"))
 
     def test_empty_peer_list_skips_without_calling_fetcher(self):
         called = False
@@ -89,6 +111,65 @@ class HashtagSamplingTests(unittest.TestCase):
         failed = hashtag_sampling.collect_peer_usage(["broken"], fetcher=fetcher, sampled_at=NOW)
         self.assertEqual(failed["status"], "unavailable")
         self.assertEqual(failed["rows"], [])
+
+    def test_sampling_config_validates_peers_and_production_results_degrade(self):
+        c = SimpleNamespace(get=lambda section, key, default=None: {
+            "enabled": True, "peer_accounts": ["katzen_de", "tier.pflege"],
+            "refresh_days": 7, "max_candidate_tags": 12, "max_peer_accounts": 5,
+        }.get(key, default))
+        settings = hashtag_sampling.SamplingConfig.load(c)
+        self.assertEqual(settings.peer_accounts, ("katzen_de", "tier.pflege"))
+
+        sampled = hashtag_sampling.sample_instagram_tags(
+            ("#Katzen",), sampled_at=NOW, c=c,
+            browser_runner=lambda **kwargs: {"instagram": {
+                "#Katzen": {"count": 42,
+                    "url": "https://www.instagram.com/explore/tags/katzen/"}},
+                "peer_posts": {}, "errors": []})
+        self.assertEqual(sampled[0]["media_count"], 42)
+        with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+            hashtag_sampling.sample_instagram_tags(
+                ("#Katzen",), sampled_at=NOW, c=c,
+                browser_runner=lambda **kwargs: {
+                    "instagram": {}, "peer_posts": {}, "errors": ["unknown DOM"]})
+
+    def test_weekly_peer_hook_is_due_once_and_writes_real_collector_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            values = {
+                "enabled": True, "peer_accounts": ["katzen_de"],
+                "refresh_days": 7, "max_candidate_tags": 12, "max_peer_accounts": 5,
+            }
+            c = SimpleNamespace(
+                state_dir=Path(directory),
+                get=lambda section, key, default=None: values.get(key, default))
+            calls = []
+
+            def runner(**kwargs):
+                calls.append(kwargs["peers"])
+                return {"instagram": {}, "peer_posts": {"katzen_de": [{
+                    "created_at": (NOW - timedelta(days=1)).isoformat(),
+                    "tags": ["#Katzen"], "url": "https://instagram.com/p/1",
+                }]}, "errors": []}
+
+            self.assertTrue(hashtag_suggestions.weekly_refresh_due(now=NOW, c=c))
+            result = hashtag_suggestions.weekly_refresh(now=NOW, c=c, browser_sampler=runner)
+            self.assertEqual(result["status"], "sampled")
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(calls, [("katzen_de",)])
+            self.assertFalse(hashtag_suggestions.weekly_refresh_due(now=NOW, c=c))
+            self.assertEqual(
+                hashtag_suggestions.weekly_refresh(now=NOW, c=c, browser_sampler=runner)["status"],
+                "not_due")
+
+    def test_weekly_peer_hook_skips_empty_list_without_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            values = {"enabled": True, "peer_accounts": [], "refresh_days": 7,
+                      "max_candidate_tags": 12, "max_peer_accounts": 5}
+            c = SimpleNamespace(state_dir=Path(directory),
+                get=lambda section, key, default=None: values.get(key, default))
+            result = hashtag_suggestions.weekly_refresh(
+                now=NOW, c=c, browser_sampler=lambda **kwargs: self.fail("browser called"))
+            self.assertEqual(result["status"], "skipped")
 
 
 if __name__ == "__main__":

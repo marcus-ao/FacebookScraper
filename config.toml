@@ -45,6 +45,14 @@ autostart_chrome = true
 keep_captures_days = 7
 min_own_posts = 3
 
+[hashtags]
+# 候选量级和德国同类账号只使用探测小号浏览器；名单为空时周采样直接跳过。
+enabled = true
+peer_accounts = []
+refresh_days = 7
+max_candidate_tags = 20
+max_peer_accounts = 10
+
 [integrity]
 # 连续 N 天零新增即告警。按平台分开（用户 2026-08-30 拍板要分开）。
 #

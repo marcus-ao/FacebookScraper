@@ -32,6 +32,12 @@ class FakeCaller:
         return self.response
 
 
+class MissingLocalKeyCaller(FakeCaller):
+    @property
+    def client(self):
+        raise SystemExit("missing local key")
+
+
 class RiskScanTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -94,6 +100,25 @@ class RiskScanTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["risks"], [])
 
+    def test_local_key_is_validated_before_paid_request_started(self):
+        result = risk_scan.scan_source(
+            self.root, task_id="fa_brand/no-key", source_ref="facebook:no-key",
+            source_text="Ordinary caption", controller=self.controller,
+            caller=MissingLocalKeyCaller('{"risks": []}'), prompt_path=self.prompt, now=NOW)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(paid_requests.load_events(self.root), [])
+
+    def test_risk_scan_cost_is_part_of_monthly_text_model_cost(self):
+        caller = FakeCaller('{"risks": []}')
+        caller.s.cost_rates = {"input": 1_000_000, "cache_read": 0, "output": 1_000_000}
+        risk_scan.scan_source(
+            self.root, task_id="fa_brand/cost", source_ref="facebook:cost",
+            source_text="Ordinary caption", controller=self.controller,
+            caller=caller, prompt_path=self.prompt, now=NOW)
+        month = paid_requests.ledger_month_snapshot(self.root, month="2026-09")
+        self.assertEqual(month.translation_usd, 30.0)
+        self.assertEqual(month.unknown, ())
+
     def test_source_or_prompt_version_change_makes_old_result_stale(self):
         risk_scan.scan_source(
             self.root, task_id="fa_brand/4", source_ref="facebook:4",
@@ -108,6 +133,18 @@ class RiskScanTests(unittest.TestCase):
         changed_prompt = risk_scan.current_view(
             self.root, "fa_brand/4", "Original", prompt_path=self.prompt)
         self.assertEqual(changed_prompt["status"], "stale")
+
+    def test_outer_whitespace_change_invalidates_exact_risk_spans(self):
+        risk_scan.scan_source(
+            self.root, task_id="fa_brand/spans", source_ref="facebook:spans",
+            source_text="sucks", controller=self.controller,
+            caller=FakeCaller('{"risks":[{"kind":"pun","start":0,"end":5,'
+                              '"quote":"sucks","label":"double meaning"}]}'),
+            prompt_path=self.prompt, now=NOW)
+        changed = risk_scan.current_view(
+            self.root, "fa_brand/spans", "  sucks", prompt_path=self.prompt)
+        self.assertEqual(changed["status"], "stale")
+        self.assertEqual(changed["risks"], [])
 
     def test_review_reader_exposes_scan_status_and_never_reads_demo_fixture(self):
         fixture = fixtures.WebReviewTests()

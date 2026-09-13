@@ -10,7 +10,7 @@ def refresh_candidates(tags, path, *, sampler=None) -> dict:
     try:
         rows = sampler(tuple(dict.fromkeys(tags)))
         return {'status': 'sampled', 'count': append_samples(path, rows)}
-    except Exception:
+    except (Exception, SystemExit):
         return {'status': 'unavailable', 'count': 0, 'reason': '采样未完成，仍可按语义手选'}
 
 

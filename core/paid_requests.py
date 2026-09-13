@@ -388,7 +388,7 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
         if not start <= when.astimezone(timezone.utc) < end:
             continue
         stage = row.get("stage")
-        if stage == "translation":
+        if stage in {"translation", "risk_scan"}:
             text_cost += cost
         elif stage == "image":
             image_cost += cost

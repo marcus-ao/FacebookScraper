@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import translate
-from core import paid_model, paid_requests, translated
+from core import paid_model, paid_requests
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +51,7 @@ def _load(state_dir: Path) -> list[dict]:
 def _base_view(source_text: str, prompt_sha256: str) -> dict:
     return {
         "status": "not_scanned", "risks": [],
-        "source_text_sha256": translated.source_text_sha256(source_text),
+        "source_text_sha256": _digest(source_text),
         "prompt_sha256": prompt_sha256, "prompt_version": PROMPT_VERSION,
         "source": None, "scanned_at": None,
         "message": "尚未进行英文语义风险预扫；请人工检查双关、歧义和美国特定表达。",
@@ -147,7 +147,9 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
         return existing
     prompt, prompt_sha256 = _prompt(prompt_path)
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    source_sha256 = translated.source_text_sha256(source_text)
+    # Risk coordinates and model input bind to the exact raw UTF-8 text.  The
+    # translation digest strips outer whitespace and cannot protect offsets.
+    source_sha256 = _digest(source_text)
     source = {"kind": "paid_model", "provider": "unknown", "model": "unknown"}
     row: dict[str, Any] = {
         "schema_version": 1, "task_id": task_id, "source_ref": source_ref,
@@ -164,6 +166,11 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
         source.update(provider=str(getattr(settings, "provider", "unknown")),
                       model=str(getattr(settings, "model", "unknown")))
         row["source"] = source
+        # Translator constructs credentials/client lazily.  Validate locally
+        # before RequestController writes `started`, because a missing key did
+        # not make a provider request and must not become an uncertain charge.
+        if getattr(type(caller), "client", None) is not None:
+            _ = caller.client
         response, receipt = controller.run(
             stage="risk_scan", job_key=job_key, source_ref=source_ref,
             media_index=None, model=source["model"],
