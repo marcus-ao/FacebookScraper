@@ -85,6 +85,20 @@ class PublicationRecoveryTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(review.ReviewConflict):
                 snapshots.ensure(replace(frozen, **changes))
 
+    def test_source_version_normalizes_whitespace_but_final_caption_remains_exact(self):
+        from core.translated import source_text_sha256
+        from publish import snapshots
+        source = dict(self.f.source, text='  ' + self.f.source['text'] + '\n')
+        post = replace(self.f.post, source_text=source['text'], text_de='  ' + self.f.post.text_de + '\n')
+        expected = journal.text_sha256(post.text_de) + ':' + ','.join(journal.file_sha256(p) for p in post.image_paths)
+        frozen, _, directory = snapshots.freeze(post, source, expected_fingerprint=expected)
+        row = workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles')
+        metadata = json.loads((directory / 'snapshot.json').read_text('utf-8'))
+        self.assertEqual(row.source_text_sha256, source_text_sha256(self.f.source['text']))
+        self.assertEqual(metadata['source_text_sha256'], row.source_text_sha256)
+        self.assertEqual(row.final_text_sha256, journal.text_sha256(post.text_de))
+        self.assertNotEqual(row.final_text_sha256, journal.text_sha256(post.text_de.strip()))
+
     def test_snapshot_image_order_is_bound_to_approved_fingerprint(self):
         from publish import snapshots
         other = self.f.post.image_paths[0].with_name('02.jpg')

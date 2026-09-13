@@ -128,6 +128,8 @@ class RiskScanTests(unittest.TestCase):
             self.root, "fa_brand/4", "Changed", prompt_path=self.prompt)
         self.assertEqual(changed_source["status"], "stale")
         self.assertEqual(changed_source["risks"], [])
+        shifted = risk_scan.current_view(self.root, 'fa_brand/4', ' Original', prompt_path=self.prompt)
+        self.assertEqual(shifted['status'], 'stale')
 
         self.prompt.write_text("A new risk prompt version.", encoding="utf-8")
         changed_prompt = risk_scan.current_view(
@@ -145,6 +147,22 @@ class RiskScanTests(unittest.TestCase):
             self.root, "fa_brand/spans", "  sucks", prompt_path=self.prompt)
         self.assertEqual(changed["status"], "stale")
         self.assertEqual(changed["risks"], [])
+
+    def test_padded_source_scan_stays_current_and_preserves_raw_offsets(self):
+        source = '  sucks\n'
+        result = risk_scan.scan_source(
+            self.root, task_id='fa_brand/padded', source_ref='facebook:padded',
+            source_text=source, controller=self.controller,
+            caller=FakeCaller('{"risks":[{"kind":"pun","start":2,"end":7,'
+                              '"quote":"sucks","label":"double meaning"}]}'),
+            prompt_path=self.prompt, now=NOW)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['risks'][0]['en_span'], [2, 7])
+        row = json.loads((self.root / risk_scan.STATE_NAME).read_text('utf-8'))
+        self.assertEqual(row['source_text_sha256'], risk_scan.translate.source_text_sha256('sucks'))
+        self.assertEqual(row['scan_text_sha256'], risk_scan._digest(source))
+        self.assertEqual(risk_scan.current_view(self.root, 'fa_brand/padded', 'sucks',
+                         prompt_path=self.prompt)['status'], 'stale')
 
     def test_review_reader_exposes_scan_status_and_never_reads_demo_fixture(self):
         fixture = fixtures.WebReviewTests()

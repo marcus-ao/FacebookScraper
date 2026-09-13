@@ -182,6 +182,9 @@ def normalize_fields(fields: dict) -> dict:
             "hashtags_confirmed": fields["hashtags_confirmed"], "links": cleaned_links, "ig_cta": cta.strip()}
 
 
+LINK_PLACEHOLDER = re.compile(r'\{\{link([1-9][0-9]*)\}\}')
+
+
 def render(draft: dict) -> str:
     body = draft.get("body_de") or ""
     if draft.get("platform") == "instagram":
@@ -189,7 +192,17 @@ def render(draft: dict) -> str:
         body = without_urls(body).strip()
         tail = without_urls(draft.get("ig_cta") or "").strip()
     else:
-        tail = "\n".join(link["target_url"] for link in draft.get("links", []) if valid_url(link.get("target_url")))
+        links = draft.get('links', [])
+        used = set()
+        def replace_link(match):
+            index = int(match[1]) - 1
+            if index >= len(links) or not valid_url(links[index].get('target_url')):
+                return match[0]  # Kept visible in drafts; validate blocks publication.
+            used.add(index)
+            return links[index]['target_url']
+        body = LINK_PLACEHOLDER.sub(replace_link, body)
+        tail = "\n".join(link["target_url"] for index, link in enumerate(links)
+                         if index not in used and valid_url(link.get("target_url")))
     return "\n\n".join(part for part in (body, tail, " ".join(draft.get("tags") or [])) if part)
 
 
@@ -199,6 +212,20 @@ def validate(draft: dict) -> dict:
         issues.append({"code": code, "message": message})
     if not str(draft.get("body_de") or "").strip():
         issue("body_missing", "请补充德语正文")
+    body = str(draft.get('body_de') or '')
+    has_placeholder = '{{' in body or '}}' in body
+    cta = str(draft.get('ig_cta') or '')
+    ig_placeholder = draft.get('platform') == 'instagram' and (
+        has_placeholder or '{{' in cta or '}}' in cta)
+    if ig_placeholder:
+        issue('placeholder_not_supported', 'Instagram 不支持链接占位符，请使用 bio 引导话术')
+    elif has_placeholder:
+        remainder = LINK_PLACEHOLDER.sub('', body)
+        links = draft.get('links') or []
+        if ('{{' in remainder or '}}' in remainder or any(
+                int(match[1]) > len(links) or not valid_url(links[int(match[1]) - 1].get('target_url'))
+                for match in LINK_PLACEHOLDER.finditer(body))):
+            issue('unknown_link_placeholder', '链接占位符无效或落地页未填写；请使用对应编号，如 {{link1}}')
     if draft.get("source_stale"):
         issue("source_stale", "源帖已更新，请重新复核并保存")
     if extract_urls(draft.get("body_de") or ""):

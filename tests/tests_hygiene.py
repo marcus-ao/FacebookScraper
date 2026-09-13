@@ -544,5 +544,37 @@ if mirror_tree is not None:
 check(not reverse_mirror, "镜像仅可读取异步任务状态元数据，无云内容反向入口，实得：%s"
       % ("、".join(reverse_mirror) or "无"))
 
+print("\n[9] 同名源文版本字段只使用统一摘要")
+source_hash_errors = []
+def source_version_field(node):
+    return (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+            and node.slice.value == 'source_text_sha256') or (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'get'
+        and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == 'source_text_sha256')
+
+def canonical_source_call(node):
+    # Accessing an already-bound token is a transfer, not a hash calculation.
+    return not isinstance(node, ast.Call) or source_version_field(node) or (
+        isinstance(node.func, ast.Name) and node.func.id == 'source_text_sha256') or (
+        isinstance(node.func, ast.Attribute) and node.func.attr == 'source_text_sha256')
+
+for path in graph_files:
+    for node in ast.walk(trees[module_name(path)]):
+        pairs = []
+        if isinstance(node, ast.Dict):
+            pairs = [(key.value, value) for key, value in zip(node.keys, node.values) if isinstance(key, ast.Constant)]
+        elif isinstance(node, ast.Call):
+            pairs = [(key.arg, key.value) for key in node.keywords]
+        for key, value in pairs:
+            if key == 'source_text_sha256' and not canonical_source_call(value):
+                source_hash_errors.append('%s:%s' % (rel(path), value.lineno))
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            if any(source_version_field(value) for value in operands):
+                for value in operands:
+                    if not canonical_source_call(value):
+                        source_hash_errors.append('%s:%s' % (rel(path), value.lineno))
+check(not source_hash_errors, '含 Web 的来源哈希写入/比较统一，实得：' + ('、'.join(source_hash_errors) or '无'))
+
 print("\n" + ("全部通过" if not fails else "%d 项失败" % len(fails)))
 sys.exit(1 if fails else 0)

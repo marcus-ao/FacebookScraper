@@ -176,9 +176,9 @@ class FeishuTests(unittest.TestCase):
         outbox.enqueue('old-backlog', 'ready', {'text': 'still needed'}, old)
         sent_at = at('2026-10-20T09:00:00+08:00')
         outbox.dispatch(sent_at, lambda *_args: 'late-message')
-        self.assertIn('old-backlog', json.loads(self.path.read_text())['events'])
+        self.assertIn('old-backlog', json.loads(self.path.read_text(encoding='utf-8'))['events'])
         outbox.dispatch(sent_at + timedelta(days=31), lambda *_args: self.fail('duplicate send'))
-        self.assertEqual(json.loads(self.path.read_text())['events'], {})
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['events'], {})
 
     def test_cancelled_unassigned_events_expire_but_off_duty_backlog_survives(self):
         outbox = Outbox(self.path, self.settings)
@@ -188,7 +188,7 @@ class FeishuTests(unittest.TestCase):
         outbox.retain_ready({'waiting'}, night)
         outbox.retain_ready({'waiting'}, night + timedelta(days=29))
         outbox.dispatch(night + timedelta(days=31), lambda *_args: self.fail('off-duty send'))
-        data = json.loads(self.path.read_text())
+        data = json.loads(self.path.read_text(encoding='utf-8'))
         self.assertEqual(set(data['events']), {'waiting'})
         self.assertEqual(data['deliveries'], {})
         self.assertEqual(outbox.archived_event('cancelled')['event']['cancelled_at'], night.isoformat())
@@ -203,7 +203,7 @@ class FeishuTests(unittest.TestCase):
         morning = at('2026-09-12T08:00:00+08:00')
         outbox.dispatch(morning, lambda *_args: 'receipt')
         outbox.enqueue('c', 'ready', {'text': 'c'}, night)
-        source = json.loads(self.path.read_text())
+        source = json.loads(self.path.read_text(encoding='utf-8'))
         identifiers = list(source['deliveries'])
         source['deliveries'][identifiers[1]]['events'] = ['b', 'c']
         source['deliveries']['a-ops2'] = dict(source['deliveries'][identifiers[1]], events=['a'])
@@ -215,13 +215,13 @@ class FeishuTests(unittest.TestCase):
                 data['deliveries'][identifiers[1]]['status'] = status
                 self.path.write_text(json.dumps(data), encoding='utf-8')
                 outbox.dispatch(later, lambda *_args: self.fail('off-duty send'))
-                saved = json.loads(self.path.read_text())
+                saved = json.loads(self.path.read_text(encoding='utf-8'))
                 self.assertEqual(saved['events'], data['events'])
                 self.assertEqual(saved['deliveries'], data['deliveries'])
         # Once the entire transitive component is terminal, archive it together.
         self.path.write_text(json.dumps(source), encoding='utf-8')
         outbox.dispatch(later, lambda *_args: self.fail('off-duty send'))
-        saved = json.loads(self.path.read_text())
+        saved = json.loads(self.path.read_text(encoding='utf-8'))
         self.assertEqual(saved['events'], {})
         self.assertEqual(saved['deliveries'], {})
         self.assertEqual(len(set(saved['archived_events'].values())), 1)
@@ -233,7 +233,7 @@ class FeishuTests(unittest.TestCase):
         now = at('2026-09-12T09:00:00+08:00')
         outbox.enqueue('a', 'ready', {'text': 'Hallo'}, now)
         outbox.dispatch(now, lambda *_args: 'receipt')
-        original = json.loads(self.path.read_text())
+        original = json.loads(self.path.read_text(encoding='utf-8'))
         write = feishu.atomic_write_json
 
         def fails_on_archive(path, data, **kwargs):
@@ -244,8 +244,8 @@ class FeishuTests(unittest.TestCase):
         with patch.object(feishu, 'atomic_write_json', side_effect=fails_on_archive):
             with self.assertRaisesRegex(OSError, 'archive failure'):
                 outbox.dispatch(now + timedelta(days=31), lambda *_args: self.fail('duplicate'))
-        self.assertEqual(json.loads(self.path.read_text())['events'], original['events'])
-        self.assertEqual(json.loads(self.path.read_text())['deliveries'], original['deliveries'])
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['events'], original['events'])
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['deliveries'], original['deliveries'])
 
     def test_retry_after_archive_written_but_main_trim_failed_reuses_same_archive(self):
         from core import feishu
@@ -253,7 +253,7 @@ class FeishuTests(unittest.TestCase):
         now = at('2026-09-12T09:00:00+08:00')
         outbox.enqueue('a', 'ready', {'text': 'Hallo'}, now)
         outbox.dispatch(now, lambda *_args: 'receipt')
-        original = json.loads(self.path.read_text())
+        original = json.loads(self.path.read_text(encoding='utf-8'))
         write = feishu.atomic_write_json
 
         def fail_on_trim(path, data, **kwargs):
@@ -264,12 +264,12 @@ class FeishuTests(unittest.TestCase):
         with patch.object(feishu, 'atomic_write_json', side_effect=fail_on_trim):
             with self.assertRaisesRegex(OSError, 'trim failure'):
                 outbox.dispatch(now + timedelta(days=31), lambda *_args: self.fail('duplicate'))
-        self.assertEqual(json.loads(self.path.read_text())['deliveries'], original['deliveries'])
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['deliveries'], original['deliveries'])
         archived_files = list(self.path.with_name('outbox_archive').glob('*.json'))
         self.assertEqual(len(archived_files), 1)
         content = archived_files[0].read_bytes()
         outbox.dispatch(now + timedelta(days=32), lambda *_args: self.fail('duplicate'))
-        self.assertEqual(json.loads(self.path.read_text())['deliveries'], {})
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['deliveries'], {})
         self.assertEqual(list(self.path.with_name('outbox_archive').glob('*.json')), archived_files)
         self.assertEqual(archived_files[0].read_bytes(), content)
 
@@ -296,10 +296,10 @@ class FeishuTests(unittest.TestCase):
         delivery = outbox.status()['deliveries'][0]
         outbox.resolve(delivery['delivery_id'], action='not_delivered',
                        expected_version=delivery['version'], now=now)
-        original = json.loads(self.path.read_text())['deliveries']
+        original = json.loads(self.path.read_text(encoding='utf-8'))['deliveries']
         self.assertEqual(original[delivery['delivery_id']]['status'], 'cancelled')
         outbox.dispatch(now + timedelta(days=2), lambda *_args: self.fail('cancelled send'))
-        self.assertEqual(json.loads(self.path.read_text())['deliveries'], {})
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['deliveries'], {})
         self.assertEqual(outbox.archived_event('cancelled-attempt')['deliveries'], original)
 
     def test_cancelled_group_does_not_expire_a_still_required_recipient_reminder(self):
@@ -308,14 +308,14 @@ class FeishuTests(unittest.TestCase):
         now = at('2026-09-12T09:00:00+08:00')
         outbox.enqueue('still-required', 'ready', {'text': 'pending recipient'}, now)
         outbox.dispatch(now, lambda *_args: 'receipt')
-        data = json.loads(self.path.read_text())
+        data = json.loads(self.path.read_text(encoding='utf-8'))
         second = list(data['deliveries'].values())[1]
         second.update(status='cancelled', cancelled_at=now.isoformat())
         self.path.write_text(json.dumps(data), encoding='utf-8')
         night = at('2026-10-20T23:00:00+08:00')
         outbox.dispatch(night, lambda *_args: self.fail('off-duty send'))
-        self.assertEqual(json.loads(self.path.read_text())['events'], data['events'])
-        self.assertEqual(json.loads(self.path.read_text())['deliveries'], data['deliveries'])
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['events'], data['events'])
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['deliveries'], data['deliveries'])
 
 
 if __name__ == '__main__':

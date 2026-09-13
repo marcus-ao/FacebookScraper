@@ -90,6 +90,7 @@ export const api = {
     }),
 
   // 编辑时的实时校验。**只算不写**，也永远不会拒绝保存（第 11.4 节）。
-  check: (taskId, textDe, bodyOnly = false) =>
-    request(`/api/tasks/${idPath(taskId)}/check`, json({ text_de: textDe, body_only: bodyOnly }))
+  check: (taskId, textDe, bodyOnly = false, localization = null) =>
+    request(`/api/tasks/${idPath(taskId)}/check`, json({ text_de: textDe, body_only: bodyOnly,
+      ...(localization ? { localization } : {}) }))
 }

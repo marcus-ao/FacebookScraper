@@ -18,6 +18,7 @@ from core.paid_model import atomic_write_json
 from core.network_evidence import NetworkEvidence, NetworkEvidenceSettings, network_evidence_status
 from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
+from core.translated import source_text_sha256
 from pipeline import engine, notifications
 from publish import journal, planner_cache
 
@@ -198,9 +199,17 @@ class Runtime:
             except Exception:
                 notify.notify('系统告警暂未投递', '请检查飞书发件箱；抓取退出状态保持原样。', popup=False)
 
-    def maintenance(self, now: datetime):
+    def maintenance(self, now: datetime, results=()):
         """投递故障留在本地日志，不改变抓取或发布状态。"""
         record_process_tick(now)
+        for result in results:
+            if not result.get('skipped'):
+                continue
+            self.processing.fact('scan_skipped', now, kind=result['kind'], platform=result['platform'],
+                reason=result['skipped'], deadline_at=result.get('deadline_at'), business_date=result.get('business_date'))
+            self._system('scan-skipped:%s:%s' % (result.get('business_date'), result['platform']),
+                '%s 兜底未执行：%s。普通探测按计划继续，请核对早班素材是否完整。'
+                % (result['platform'], result['skipped']), now)
         self.c = cfg()
         self.refresh_hashtags(now)
         try:
@@ -375,7 +384,7 @@ class Runtime:
                 continue
             details = event.get('details') or {}
             if (event.get('kind') == 'ready_to_publish'
-                    and details.get('source_text_sha256') != journal.text_sha256(source['text'])):
+                    and details.get('source_text_sha256') != source_text_sha256(source['text'])):
                 continue
             entry = pending.setdefault(refs[0], {'source': source, 'directory': directory,
                 'state': state, 'recorded_at': event['recorded_at'], 'notes': []})
@@ -413,6 +422,9 @@ class Runtime:
                 text = []
                 if activity:
                     text.append(f"发现 {activity['discovered']} 篇，晨间补抓 {activity['reconcile_discovered']} 篇。")
+                    if activity.get('reconcile_skipped'):
+                        text.append('未执行兜底 %s 次（%s），请核对覆盖。' % (activity['reconcile_skipped'],
+                                    '、'.join(activity.get('reconcile_skipped_platforms', []))))
                     labels = {'video': '视频', 'mixed': '混合媒体', 'text_only': '无静态图片',
                               'media_incomplete': '图片未齐', 'unknown': '范围待确认'}
                     text.extend(f"分类跳过 {labels.get(key, key)}：{count}" for key, count in activity['skipped'].items() if count)
@@ -456,7 +468,7 @@ class Runtime:
                     digest = paid_consent.fingerprint(source, directory)
                     changed = digest != attempt['source_fingerprint']
                 else:
-                    digest = journal.text_sha256(source['text'])
+                    digest = source_text_sha256(source['text'])
                     changed = bool(attempt.get('source_text_sha256') and attempt['source_text_sha256'] != digest)
                 if changed:
                     self.outbox.enqueue(f'source-changed:{attempt["attempt_id"]}:{digest}', 'schedule_failed',

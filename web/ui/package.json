@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "审校台原型前端。构建产物 dist/ 拷到生产机即可，生产机不需要 Node。",
+  "description": "社媒德语本地化审校台。FastAPI 提供构建页面，业务数据来自统一运行配置。",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

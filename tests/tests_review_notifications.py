@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
@@ -97,6 +98,17 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(state['events']['post']['payload']['text'], 'current')
         self.assertIn('current', json.dumps(calls[0][1]))
         self.assertNotIn('later edit', json.dumps(state['deliveries']))
+
+    def test_skipped_reconcile_is_recorded_and_reaches_technical_and_morning_cards(self):
+        now = self.now.replace(hour=0, minute=1)
+        result = {'platform': 'instagram', 'kind': 'reconcile', 'exit_code': None,
+                  'skipped': '已错过早班处理截止线', 'deadline_at': now.isoformat(), 'business_date': str(now.date())}
+        with patch.object(self.runtime, 'refresh_hashtags'), patch.object(self.runtime.delivery_executor, 'submit'):
+            self.runtime.maintenance(now, [result])
+        self.runtime.collect([self.f.account], now)
+        rows = list(self.events().values())
+        self.assertTrue(any(row['kind'] == 'system' and 'instagram' in row['payload']['text'] for row in rows))
+        self.assertTrue(any(row['kind'] == 'morning' and '未执行兜底 1 次' in row['payload']['text'] for row in rows))
 
 
 if __name__ == '__main__':

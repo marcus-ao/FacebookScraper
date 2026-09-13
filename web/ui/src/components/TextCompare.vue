@@ -55,6 +55,16 @@ watch(() => props.activeIndex, async (index) => {
 function syncScroll() {
   if (editor.value && mirror.value) mirror.value.scrollTop = editor.value.scrollTop
 }
+async function insertAtCursor(text) {
+  if (!props.editing || !editor.value) return
+  const start = editor.value.selectionStart ?? props.draft.length
+  const end = editor.value.selectionEnd ?? start
+  emit('update:draft', props.draft.slice(0, start) + text + props.draft.slice(end))
+  await nextTick()
+  editor.value.focus()
+  editor.value.setSelectionRange(start + text.length, start + text.length)
+}
+defineExpose({ insertAtCursor })
 </script>
 
 <template>

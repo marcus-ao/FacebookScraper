@@ -69,6 +69,25 @@ class LocalizationTests(unittest.TestCase):
         draft.update(tags=["#neakasa", "#M1Pro", "#Katzenliebe"], hashtags_confirmed=True)
         self.assertIn("protected_tags_changed", {r["code"] for r in loc.validate(draft)["issues"]})
 
+    def test_facebook_inline_link_replaces_placeholder_and_only_unused_links_append(self):
+        draft = self.draft(link_map={'https://us.example/p#buy': 'https://de.example/p'})
+        draft.update(body_de='Hier {{link1}} entdecken. Noch einmal: {{link1}}', hashtags_confirmed=True)
+        draft['links'].append({'source_url': 'https://us.example/2', 'target_url': 'https://de.example/2', 'confirmed': True})
+        rendered = loc.render(draft)
+        self.assertTrue(rendered.startswith('Hier https://de.example/p entdecken. Noch einmal: https://de.example/p\n\nhttps://de.example/2'))
+        self.assertEqual(loc.validate(draft)['char_count'], len(rendered))
+
+    def test_unresolved_or_malformed_placeholders_and_instagram_are_issues(self):
+        for body in ('{{link2}}', '{{link0}}', '{{Link1}}', '{{link1}', '{{linkx}}'):
+            draft = self.draft(link_map={'https://us.example/p#buy': 'https://de.example/p'})
+            draft['body_de'] = body
+            self.assertIn('unknown_link_placeholder', {r['code'] for r in loc.validate(draft)['issues']})
+        draft = self.draft()
+        draft['body_de'] = '{{link1}}'
+        self.assertIn('unknown_link_placeholder', {r['code'] for r in loc.validate(draft)['issues']})
+        draft['platform'] = 'instagram'
+        self.assertIn('placeholder_not_supported', {r['code'] for r in loc.validate(draft)['issues']})
+
     def test_instagram_removes_urls_adds_cta_and_bio_missing_is_not_blocking(self):
         self.source["platform"] = "instagram"
         draft = self.draft()
@@ -78,6 +97,14 @@ class LocalizationTests(unittest.TestCase):
         self.assertIn("Mehr dazu im Profil 🔗", rendered)
         self.assertEqual(draft["ig_bio_url"], "")
         self.assertTrue(loc.validate(draft)["ready"])
+
+    def test_instagram_cta_cannot_leak_link_placeholders(self):
+        self.source['platform'] = 'instagram'
+        draft = self.draft()
+        draft.update(hashtags_confirmed=True, ig_cta='Mehr dazu: {{link1}}')
+        result = loc.validate(draft)
+        self.assertFalse(result['ready'])
+        self.assertIn('placeholder_not_supported', {item['code'] for item in result['issues']})
 
     def test_counts_use_codepoints_and_limits_only_warn(self):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})

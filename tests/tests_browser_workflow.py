@@ -305,5 +305,27 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.writes, [])
 
 
+    def test_07_facebook_inline_link_insertion_uses_backend_counter_and_survives_reload(self):
+        self.open_task(self.fixtures.fb_id)
+        self.page.get_by_role('button', name='编辑德语').click()
+        body = self.page.get_by_role('textbox', name='德语译文')
+        body.fill('Details:  bitte lesen.')
+        body.evaluate('el => el.setSelectionRange(9, 9)')
+        self.page.get_by_role('button', name='插入正文', exact=True).click()
+        expect(body).to_have_value('Details: {{link1}} bitte lesen.')
+        link = 'https://de.example.invalid/inline'
+        self.page.get_by_label('本篇德语落地页').fill(link)
+        self.page.get_by_label('我已确认落地页适用于德国站').check()
+        draft = self.fixtures.detail(self.fixtures.fb_id)['localization']
+        expected = 'Details: ' + link + ' bitte lesen.\n\n' + ' '.join(draft['tags'])
+        expect(self.page.locator('.caption-counter')).to_contain_text('发布文案 ' + str(len(expected)) + ' 字符')
+        self.save_draft()
+        detail = self.fixtures.detail(self.fixtures.fb_id)
+        self.assertEqual(detail['text']['de_human'], expected)
+        self.assertEqual(detail['text']['de_human'].count(link), 1)
+        self.page.reload()
+        expect(self.page.get_by_text('Details: {{link1}} bitte lesen.', exact=True)).to_be_visible()
+
+
 if __name__ == "__main__":
     unittest.main()

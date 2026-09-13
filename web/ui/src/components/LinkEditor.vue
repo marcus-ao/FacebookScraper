@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 const props = defineProps({ draft: { type: Object, required: true }, editing: Boolean })
-const emit = defineEmits(['update'])
+const emit = defineEmits(['update', 'insert'])
 const isInstagram = computed(() => props.draft.platform === 'instagram')
 const presets = computed(() => props.draft.cta_presets || [])
 const mode = ref('')
@@ -26,6 +26,9 @@ const sourceHref = value => value.startsWith('www.') ? 'https://' + value : valu
     <div v-for="(link, index) in draft.links" :key="index" class="link-row">
       <p class="source"><span>原文</span><a v-if="link.source_url" :href="sourceHref(link.source_url)" target="_blank" rel="noopener noreferrer">{{ link.source_url }}</a><span v-else>人工添加的链接</span></p>
       <template v-if="!isInstagram">
+        <p class="help"><code v-text="'{{link' + (index + 1) + '}}'"></code>
+          <button v-if="editing" type="button" class="btn btn-sm" @mousedown.prevent @click="emit('insert', index)">插入正文</button>
+        </p>
         <p v-if="link.mapped_url" class="mapping">映射表（只读）：{{ link.mapped_url }}</p>
         <label v-if="editing" class="field">本篇德语落地页
           <input type="url" :value="link.target_url" placeholder="https://de.neakasa.com/…" @input="updateLink(index, { target_url: $event.target.value, confirmed: false })" />
@@ -49,7 +52,7 @@ const sourceHref = value => value.startsWith('www.') ? 'https://' + value : valu
       <p v-if="!editing" class="target">{{ draft.ig_cta || '未添加引导话术' }}</p>
       <p class="bio">当前 bio（只读）：<a v-if="canOpen(draft.ig_bio_url)" :href="draft.ig_bio_url" target="_blank" rel="noopener noreferrer">{{ draft.ig_bio_url }}</a><span v-else>未配置</span></p>
     </template>
-    <p v-else class="help">这里保存的是本篇链接选择，不会修改全局映射表。</p>
+    <p v-else class="help">将编号标记插入正文可指定链接位置；未使用的链接会放在文末。这里保存本篇选择，不修改全局映射表。</p>
   </section>
 </template>
 <style scoped>

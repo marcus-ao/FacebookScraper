@@ -305,10 +305,6 @@ def normalize_money_token(tok: str) -> str:
 _norm_money = normalize_money_token
 
 
-# 兼容模块内旧名字；流水线预检使用公开入口，避免与实际替换规则漂移。
-_norm_money = normalize_money_token
-
-
 def extract_money_tokens(text: str) -> tuple[str, ...]:
     """公开给流水线分流使用的金额真相；与写盘硬闸共用同一正则。"""
     return tuple(token.strip() for token in _MONEY_TOKEN_RE.findall(text or ""))

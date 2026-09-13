@@ -77,7 +77,7 @@ const fmt = (value, digits = 3) =>
       </figure>
     </div>
 
-    <!-- 四项自动指标。她关不关心这些数，是这个原型要问出来的问题之一（§13）。 -->
+    <!-- 自动比较指标辅助人工看图，不能替代图片中的文字与版面核对。 -->
     <dl v-if="metrics" class="metrics">
       <div><dt>dHash 距离</dt><dd>{{ metrics.dhash_distance ?? '—' }}</dd></div>
       <div><dt>宽高比形变</dt><dd>{{ fmt(metrics.aspect_drift, 4) }} %</dd></div>

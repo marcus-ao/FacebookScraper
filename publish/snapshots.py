@@ -14,6 +14,7 @@ from core import paid_consent, review, store
 from core.config import cfg
 from core.paid_model import atomic_write_json
 from core.process_identity import current_worker
+from core.translated import source_text_sha256
 from publish import journal
 
 
@@ -48,7 +49,7 @@ def freeze(post, source: dict, *, expected_fingerprint: str):
             os.fsync(handle.fileno())
     atomic_write_json(directory / 'snapshot.json', {
         'schema_version': 1, 'snapshot_id': directory.name, 'fingerprint': fingerprint,
-        'source_fingerprint': source_fingerprint, 'source_text_sha256': journal.text_sha256(source['text']),
+        'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256(source['text']),
         'account': account.name, 'post_id': post.post_id, 'platform': post.platform,
         'status': 'frozen', 'scheduled_at': post.scheduled_at.isoformat(),
         'worker': current_worker(), 'files': {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},

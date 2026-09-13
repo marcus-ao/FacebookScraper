@@ -52,7 +52,8 @@ def _load(state_dir: Path) -> list[dict]:
 def _base_view(source_text: str, prompt_sha256: str) -> dict:
     return {
         "status": "not_scanned", "risks": [],
-        "source_text_sha256": _digest(source_text),
+        "source_text_sha256": translate.source_text_sha256(source_text),
+        "scan_text_sha256": _digest(source_text),
         "prompt_sha256": prompt_sha256, "prompt_version": PROMPT_VERSION,
         "source": None, "scanned_at": None,
         "message": "尚未进行英文语义风险预扫；请人工检查双关、歧义和美国特定表达。",
@@ -70,6 +71,7 @@ def current_view(state_dir: Path, task_id: str, source_text: str, *,
         return view
     current_source = view["source_text_sha256"]
     if (latest.get("source_text_sha256") != current_source
+            or latest.get('scan_text_sha256', latest.get('source_text_sha256')) != view['scan_text_sha256']
             or latest.get("prompt_sha256") != prompt_sha256
             or latest.get("prompt_version") != PROMPT_VERSION):
         view.update({
@@ -149,15 +151,16 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     # Risk coordinates and model input bind to the exact raw UTF-8 text.  The
     # translation digest strips outer whitespace and cannot protect offsets.
-    source_sha256 = _digest(source_text)
+    scan_text_sha256 = _digest(source_text)
     source = {"kind": "paid_model", "provider": "unknown", "model": "unknown"}
     row: dict[str, Any] = {
         "schema_version": 1, "task_id": task_id, "source_ref": source_ref,
-        "source_text_sha256": source_sha256, "prompt_sha256": prompt_sha256,
+        "source_text_sha256": translate.source_text_sha256(source_text),
+        "scan_text_sha256": scan_text_sha256, "prompt_sha256": prompt_sha256,
         "prompt_version": PROMPT_VERSION, "source": source,
         "scanned_at": moment.isoformat(), "actor": None,
     }
-    job_key = "risk-scan:" + _digest("\0".join((task_id, source_sha256, prompt_sha256)))
+    job_key = "risk-scan:" + _digest("\0".join((task_id, scan_text_sha256, prompt_sha256)))
     receipt = None
     try:
         if caller is None:

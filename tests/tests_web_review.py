@@ -361,6 +361,18 @@ class WebReviewTests(unittest.TestCase):
     def save_localization(self, **extra):
         return self.client.put(self.url + "/localization", json=self.localization_body(**extra))
 
+    def test_check_full_draft_counts_rendered_inline_link_without_writing(self):
+        before = sorted(str(p.relative_to(self.account)) for p in self.account.rglob('*'))
+        draft = self.localization_body(body_de='Hier {{link1}} 😀', tags=['#Neakasa'], hashtags_confirmed=True,
+            links=[{'source_url': 'https://us.example/p', 'target_url': 'https://de.example/long-path', 'confirmed': True}])
+        response = self.client.post(self.url + '/check', json={'text_de': draft['body_de'], 'body_only': True, 'localization': draft})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['caption_length'], len('Hier https://de.example/long-path 😀\n\n#Neakasa'))
+        self.assertEqual(response.json()['hashtag_count'], 1)
+        self.assertEqual(before, sorted(str(p.relative_to(self.account)) for p in self.account.rglob('*')))
+        invalid = self.client.post(self.url + '/check', json={'text_de': '', 'localization': []})
+        self.assertEqual(invalid.status_code, 400)
+
     def test_localization_saves_three_blocks_as_bound_human_version(self):
         self.source["text"] += " https://us.example/product #CatLover"
         self.write_source()

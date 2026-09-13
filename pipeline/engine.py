@@ -1042,7 +1042,7 @@ def _ready_item(candidate: Candidate, post) -> HumanItem:
          "platform": source.platform,
          "account_dir": source.account_dir.name,
          "source_created_at": source.created_at.isoformat(),
-         "source_text_sha256": journal.text_sha256(source.text),
+         "source_text_sha256": translated_content.source_text_sha256(source.text),
          "relation": candidate.relation,
          "publish_fingerprint": fingerprint,
          # ⬇️ 以下只为让人**在批准之前**能判断，不参与任何判据。

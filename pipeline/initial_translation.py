@@ -147,7 +147,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None,
             item = engine._ready_item(candidate, post)
         except compose.ComposeError as exc:
             item = engine.HumanItem('initial-review-' + row['job_id'], 'offline_gate', candidate.source_refs,
-                str(exc), {'source_text_sha256': journal.text_sha256(source['text'])})
+                str(exc), {'source_text_sha256': translate.source_text_sha256(source['text'])})
         engine.append_human_item(cfg().state_dir, item, now)
         event.update(status='succeeded', message='本轮处理结束，请在本篇核对素材并继续审校')
     except (Exception, SystemExit) as exc:

@@ -670,7 +670,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
                      if when is not None else None),
         "meta": {
             'platform': source.platform, 'account': source.row.get('account'),
-            'source_text_sha256': journal.text_sha256(source.text),
+            'source_text_sha256': translation.source_text_sha256(source.text),
             'source_fingerprint': full_source_fingerprint, 'fingerprint_error': fingerprint_error,
             'snapshot_id': publication.get('snapshot_id') if publication else None,
             "permalink": source.row.get("permalink"),

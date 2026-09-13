@@ -150,8 +150,9 @@ async def put_localization(task_id: str, request: Request) -> JSONResponse:
     for revision in (human_revision, local_revision):
         if revision is not None and (not isinstance(revision, str) or not revision.strip()):
             raise HTTPException(status_code=400, detail="文案版本无效，请重新打开这篇")
+    source_version = _source_digest(body)
     return JSONResponse(writer.save_localization(task_id, body,
-        source_text_sha256=_source_digest(body), human_revision=human_revision,
+        source_text_sha256=source_version, human_revision=human_revision,
         review_revision=_state_revision(body), localization_revision=local_revision))
 
 
@@ -191,9 +192,21 @@ async def post_check(task_id: str, request: Request) -> JSONResponse:
     text_de = body.get("text_de")
     if not isinstance(text_de, str):
         raise HTTPException(status_code=400, detail="text_de 必须是字符串")
-    return JSONResponse(
-        {"highlights": reader.build_highlights(
-            detail["localization"]["source_body"] if body.get("body_only") else detail["text"]["en"], text_de)})
+    result = {"highlights": reader.build_highlights(
+        detail["localization"]["source_body"] if body.get("body_only") else detail["text"]["en"], text_de)}
+    if 'localization' in body:
+        if not isinstance(body['localization'], dict):
+            raise HTTPException(status_code=400, detail='localization 必须是完整分区草稿对象')
+        draft = dict(detail['localization'], **localization.normalize_fields(body['localization']))
+    elif body.get('body_only'):
+        draft = dict(detail['localization'], body_de=text_de)
+    else:
+        return JSONResponse(dict(result, caption_length=len(text_de),
+                                 hashtag_count=len(translated.extract_hashtags(text_de)), warnings=[], issues=[]))
+    validation = localization.validate(draft)
+    return JSONResponse(dict(result, caption_length=validation['char_count'],
+                             hashtag_count=validation['hashtag_count'], warnings=validation['warnings'],
+                             issues=validation['issues']))
 
 
 async def _json_body(request: Request) -> dict:
@@ -219,7 +232,8 @@ def _state_revision(body: dict) -> str | None:
 
 
 def _review_input(body: dict) -> dict:
-    return {"source_text_sha256": _source_digest(body), "review_revision": _state_revision(body),
+    source_version = _source_digest(body)
+    return {"source_text_sha256": source_version, "review_revision": _state_revision(body),
             "reason": body.get("reason", ""), "wake_at": body.get("wake_at"),
             "handoff_url": body.get("handoff_url", "")}
 

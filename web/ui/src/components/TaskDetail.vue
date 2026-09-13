@@ -35,6 +35,8 @@ const active = ref(-1)
 const editing = ref(false)
 const draft = ref('')
 const localizationDraft = ref(null)
+const textCompare = ref(null)
+const liveValidation = ref(null)
 const liveMarks = ref([])
 const checking = ref(false)
 const saving = ref(false)
@@ -59,6 +61,8 @@ const shownLocalization = computed(() => editing.value ? { ...localizationDraft.
 const captionLength = computed(() => {
   const value = shownLocalization.value
   if (!value) return 0
+  if (!editing.value) return detail.value.localization_validation.char_count
+  if (liveValidation.value?.signature === JSON.stringify(value)) return liveValidation.value.caption_length
   const tail = value.platform === 'instagram' ? value.ig_cta : value.links.map(link => /^https?:\/\//.test(link.target_url) ? link.target_url : '').filter(Boolean).join('\n')
   return charLength([value.body_de.trim(), tail.trim(), value.tags.join(' ')].filter(Boolean).join('\n\n'))
 })
@@ -132,28 +136,33 @@ function discard() {
   draft.value = ''
   localizationDraft.value = null
   liveMarks.value = []
+  liveValidation.value = null
 }
 
 // 实时校验：前端调 API，几十毫秒（§11.4）。
 // ⛔ 它**永远不会拦保存**——这几个检查是给人看的辅助，不是硬闸。
 // 她可能有正当理由改一个金额（比如原文写错了）。
-watch(draft, (value) => {
+watch([draft, localizationDraft], ([value]) => {
   if (!editing.value) return
   clearTimeout(checkTimer)
   const sequence = ++checkSequence
+  const signature = JSON.stringify(shownLocalization.value)
+  const fields = JSON.parse(signature)
+  liveValidation.value = null
   checking.value = true
   checkTimer = setTimeout(async () => {
     try {
-      const result = await api.check(props.taskId, value, true)
+      const result = await api.check(props.taskId, value, true, fields)
       // 风险预扫描扫的是英文原文，改德语不会让它变，所以照旧带着。
       if (sequence === checkSequence && editing.value) {
         liveMarks.value = buildMarks(result.highlights, detail.value.body_risks)
+        liveValidation.value = { ...result, signature }
       }
     } catch { /* 校验挂了不该影响编辑 */ } finally {
       if (sequence === checkSequence) checking.value = false
     }
   }, 250)
-})
+}, { deep: true })
 
 async function save() {
   saving.value = true
@@ -339,7 +348,7 @@ watch(() => props.taskId, load)
       <!-- ---------- 正文对比 ---------- -->
       <p v-if="detail.read_only" role="status">这是冻结账号的历史归档，可查阅来源和处理记录。</p>
       <InitialTranslationPanel v-else :detail="detail" :editing="editing" @changed="applyDetail" />
-      <TextCompare
+      <TextCompare ref="textCompare"
         :en="detail.localization.source_body"
         :de="currentText"
         :marks="marks"
@@ -354,10 +363,14 @@ watch(() => props.taskId, load)
 
       <div class="localization-blocks">
         <HashtagEditor :detail="detail" :draft="shownLocalization" :editing="editing" @update="changeLocalization" />
-        <LinkEditor :draft="shownLocalization" :editing="editing" @update="changeLocalization" />
+        <LinkEditor :draft="shownLocalization" :editing="editing" @update="changeLocalization"
+          @insert="textCompare?.insertAtCursor('{{link' + ($event + 1) + '}}')" />
       </div>
       <p :class="['caption-counter', { near: detail.platform === 'instagram' && captionLength >= 1980 }]">
-        发布文案 {{ captionLength }}{{ detail.platform === 'instagram' ? ' / 2,200' : '' }} 字符（含标签与链接或引导话术）
+        发布文案 {{ editing && !liveValidation ? '约 ' : '' }}{{ captionLength }}{{ detail.platform === 'instagram' ? ' / 2,200' : '' }} 字符（含标签与链接或引导话术）
+      </p>
+      <p v-if="editing && liveValidation?.issues?.length" class="localization-pending">
+        {{ liveValidation.issues.map(item => item.message).join('；') }}
       </p>
       <p v-if="!editing && detail.localization_validation.issues.length" class="localization-pending">
         {{ detail.localization_validation.issues.map(item => item.message).join('；') }}

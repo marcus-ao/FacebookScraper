@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from core.chrome import attach
 from core.config import cfg
+from core.translated import source_text_sha256
 from core import notify
 from publish import business_suite as bs
 from publish import journal, channels, snapshots, records, capabilities
@@ -52,7 +53,7 @@ def new_attempt(post, when: datetime, *, ui_timezone: str,
         source_refs=journal.effective_source_refs(
             post.platform, post.post_id, source_refs),
         target_channels=target_channels,
-        source_text_sha256=journal.text_sha256(post.source_text),
+        source_text_sha256=source_text_sha256(post.source_text),
         original_text_sha256=journal.text_sha256(post.original_text_de),
         final_text_sha256=journal.text_sha256(post.text_de),
         image_sha256=tuple(journal.file_sha256(path) for path in post.image_paths),
