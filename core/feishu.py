@@ -38,6 +38,11 @@ class FeishuSettings:
     base_url: str
     recipients: tuple[str, ...]
     technical_recipients: tuple[str, ...]
+    keep_delivered_days: int = 30
+
+    def __post_init__(self):
+        if type(self.keep_delivered_days) is not int or self.keep_delivered_days < 1:
+            raise ValueError('[feishu].keep_delivered_days 必须是正整数')
 
     @classmethod
     def load(cls):
@@ -47,7 +52,8 @@ class FeishuSettings:
             raise ValueError('[feishu].enabled 必须是布尔值')
         result = cls(enabled, c.get('feishu', 'base_url', ''),
                      tuple(c.get('feishu', 'recipients', [])),
-                     tuple(c.get('feishu', 'technical_recipients', [])))
+                     tuple(c.get('feishu', 'technical_recipients', [])),
+                     c.get('feishu', 'keep_delivered_days', 30))
         if enabled:
             result.validate()
         return result
@@ -176,7 +182,7 @@ class Outbox:
 
     def _load(self):
         if not self.path.exists():
-            return {'schema_version': 1, 'events': {}, 'deliveries': {}}
+            return {'schema_version': 1, 'events': {}, 'deliveries': {}, 'archived_events': {}}
         data = json.loads(self.path.read_text(encoding='utf-8'))
         if (not isinstance(data, dict) or not isinstance(data.get('events'), dict)
                 or not isinstance(data.get('deliveries'), dict)):
@@ -185,6 +191,12 @@ class Outbox:
             if (not isinstance(row, dict) or row.get('status') not in {'pending', 'retry', 'sent', 'uncertain', 'cancelled'}
                     or not isinstance(row.get('events'), list) or not isinstance(row.get('card'), dict)):
                 raise FeishuError('飞书投递条目损坏，请保留现场核对')
+        index = data.setdefault('archived_events', {})
+        if (not isinstance(index, dict) or any(not isinstance(key, str)
+                or not isinstance(value, str) or len(value) != 64
+                or any(char not in '0123456789abcdef' for char in value)
+                for key, value in index.items())):
+            raise FeishuError('飞书归档去重索引损坏，请先核对；未发送消息')
         return data
 
     def enqueue(self, event_id: str, kind: str, payload: dict, now: datetime) -> bool:
@@ -192,6 +204,8 @@ class Outbox:
             raise ValueError('通知需要有效的事件 ID 与类型')
         with self._lock():
             data = self._load()
+            if event_id in data['archived_events']:
+                return False
             if event_id in data['events']:
                 assigned = [item for item in data['deliveries'].values() if event_id in item['events']]
                 # Only a never-attempted notification can follow newer human edits.
@@ -228,6 +242,101 @@ class Outbox:
     @staticmethod
     def _version(row):
         return hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def _archive_path(self, identifier):
+        return self.path.with_name(self.path.stem + '_archive') / (identifier + '.json')
+
+    def _read_archive(self, identifier):
+        data = json.loads(self._archive_path(identifier).read_text(encoding='utf-8'))
+        if self._version(data) != identifier:
+            raise FeishuError('飞书归档内容与指纹不一致，请保留现场核对')
+        return data
+
+    def archived_event(self, event_id):
+        """Read the original event and its immutable connected delivery receipts."""
+        identifier = self._load()['archived_events'].get(event_id)
+        if identifier is None:
+            return None
+        archived = self._read_archive(identifier)
+        return {'event': archived['events'][event_id], 'deliveries': archived['deliveries']}
+
+    def _archive_completed(self, data, now):
+        """Archive whole event/delivery components before trimming their live data."""
+        cutoff = now - timedelta(days=self.settings.keep_delivered_days)
+
+        def old(value):
+            try:
+                stamp = datetime.fromisoformat(value)
+                return stamp.tzinfo is not None and stamp.utcoffset() is not None and stamp < cutoff
+            except (ValueError, TypeError):
+                return False
+
+        def terminal(item):
+            if item['status'] == 'sent':
+                return old(item.get('sent_at'))
+            if item['status'] != 'cancelled':
+                return False
+            timestamps = [item[key] for key in ('cancelled_at', 'retry_authorized_at') if item.get(key)]
+            return bool(timestamps) and all(old(value) for value in timestamps)
+
+        linked = {}
+        for identifier, item in data['deliveries'].items():
+            for event_id in item['events']:
+                linked.setdefault(event_id, set()).add(identifier)
+        visited = set()
+        changed = False
+        for initial in list(data['events']):
+            if initial in visited:
+                continue
+            events, deliveries, pending = set(), set(), [initial]
+            while pending:
+                event_id = pending.pop()
+                if event_id in events:
+                    continue
+                events.add(event_id)
+                for identifier in linked.get(event_id, ()):
+                    if identifier not in deliveries:
+                        deliveries.add(identifier)
+                        pending.extend(data['deliveries'][identifier]['events'])
+            visited.update(events)
+            if not events.issubset(data['events']) or not all(terminal(data['deliveries'][key]) for key in deliveries):
+                continue
+            eligible = True
+            for event_id in events:
+                event = data['events'][event_id]
+                if event.get('cancelled_at'):
+                    eligible = old(event['cancelled_at'])
+                else:
+                    # Unassigned off-duty work and missing recipient receipts remain live.
+                    assigned = [data['deliveries'][key] for key in linked.get(event_id, ())]
+                    recipients = (self.settings.technical_recipients if event['kind'] == 'system'
+                                  else self.settings.recipients)
+                    required = set(recipients) | {item['recipient'] for item in assigned}
+                    received = {item['recipient'] for item in assigned if item['status'] == 'sent'}
+                    eligible = bool(assigned) and old(event.get('created_at')) and required <= received
+                if not eligible:
+                    break
+            if not eligible:
+                continue
+            archived = {'schema_version': 1,
+                        'events': {key: data['events'][key] for key in sorted(events)},
+                        'deliveries': {key: data['deliveries'][key] for key in sorted(deliveries)}}
+            identifier = self._version(archived)
+            path = self._archive_path(identifier)
+            if path.exists():
+                self._read_archive(identifier)
+            else:
+                # Shared outbox lock prevents competing writers. Content addressing
+                # lets a retry reuse the exact archive after a failed live-file trim.
+                atomic_write_json(path, archived)
+            for event_id in events:
+                data['archived_events'][event_id] = identifier
+                del data['events'][event_id]
+            for delivery_id in deliveries:
+                del data['deliveries'][delivery_id]
+            changed = True
+        if changed:
+            atomic_write_json(self.path, data)
 
     def resolve(self, identifier, *, action, expected_version, message_id='', now):
         """Record a human-checked result; this call never sends a message."""
@@ -270,7 +379,7 @@ class Outbox:
             invalid = {key for key, item in data['events'].items()
                        if item['kind'] in {'ready', 'backlog'} and key not in valid_ids}
             for key in invalid:
-                data['events'][key]['cancelled_at'] = _iso(now)
+                data['events'][key].setdefault('cancelled_at', _iso(now))
             for key in valid_ids:
                 if key in data['events']:
                     data['events'][key].pop('cancelled_at', None)
@@ -351,4 +460,5 @@ class Outbox:
                     item.update(status='sent', message_id=message_id, sent_at=stamp)
                     sent += 1
                 atomic_write_json(self.path, data)
+            self._archive_completed(data, now)
         return sent

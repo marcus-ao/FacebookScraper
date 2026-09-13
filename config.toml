@@ -585,6 +585,8 @@ enabled = false
 base_url = ""
 recipients = []
 technical_recipients = []
+# 终态记录保留 30 天后归档；未确认投递和待发送内容继续保留。
+keep_delivered_days = 30
 
 [mirror]
 # 只向已授权的云盘目录创建不可覆盖快照；绝不从云盘回填本地。

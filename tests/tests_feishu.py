@@ -3,8 +3,10 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -148,6 +150,172 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(prepared, ['account/a'])
         self.assertEqual(sent[0], sent[1])
         self.assertEqual(sent[0]['elements'][0]['img_key'], 'uploaded-key')
+
+    def test_expired_sent_cards_are_archived_and_never_enqueued_again(self):
+        outbox = Outbox(self.path, self.settings)
+        now = at('2026-09-12T09:00:00+08:00')
+        outbox.enqueue('a', 'ready', {'text': 'original ' * 500}, now)
+        outbox.dispatch(now, lambda *_args: 'message-a')
+        original = json.loads(self.path.read_text(encoding='utf-8'))
+        original_size = self.path.stat().st_size
+        outbox.dispatch(now + timedelta(days=31), lambda *_args: self.fail('duplicate send'))
+        compact = json.loads(self.path.read_text(encoding='utf-8'))
+        self.assertEqual(compact['events'], {})
+        self.assertEqual(compact['deliveries'], {})
+        self.assertLess(self.path.stat().st_size, original_size // 3)
+        restarted = Outbox(self.path, self.settings)
+        self.assertEqual(restarted.archived_event('a'), {
+            'event': original['events']['a'], 'deliveries': original['deliveries']})
+        self.assertFalse(restarted.enqueue('a', 'ready', {'text': 'replacement'}, now + timedelta(days=32)))
+        restarted.dispatch(now + timedelta(days=32), lambda *_args: self.fail('archived event sent again'))
+        self.assertEqual(restarted.archived_event('a')['deliveries'], original['deliveries'])
+
+    def test_retention_counts_from_delivery_completion_instead_of_event_creation(self):
+        outbox = Outbox(self.path, self.settings)
+        old = at('2026-09-12T23:00:00+08:00')
+        outbox.enqueue('old-backlog', 'ready', {'text': 'still needed'}, old)
+        sent_at = at('2026-10-20T09:00:00+08:00')
+        outbox.dispatch(sent_at, lambda *_args: 'late-message')
+        self.assertIn('old-backlog', json.loads(self.path.read_text())['events'])
+        outbox.dispatch(sent_at + timedelta(days=31), lambda *_args: self.fail('duplicate send'))
+        self.assertEqual(json.loads(self.path.read_text())['events'], {})
+
+    def test_cancelled_unassigned_events_expire_but_off_duty_backlog_survives(self):
+        outbox = Outbox(self.path, self.settings)
+        night = at('2026-09-12T23:00:00+08:00')
+        for identifier in ('cancelled', 'waiting'):
+            outbox.enqueue(identifier, 'ready', {'text': identifier}, night)
+        outbox.retain_ready({'waiting'}, night)
+        outbox.retain_ready({'waiting'}, night + timedelta(days=29))
+        outbox.dispatch(night + timedelta(days=31), lambda *_args: self.fail('off-duty send'))
+        data = json.loads(self.path.read_text())
+        self.assertEqual(set(data['events']), {'waiting'})
+        self.assertEqual(data['deliveries'], {})
+        self.assertEqual(outbox.archived_event('cancelled')['event']['cancelled_at'], night.isoformat())
+        self.assertIsNone(outbox.archived_event('waiting'))
+
+    def test_multi_recipient_shared_groups_keep_every_member_until_all_terminal(self):
+        settings = replace(self.settings, recipients=('ops1', 'ops2'))
+        outbox = Outbox(self.path, settings)
+        night = at('2026-09-11T23:00:00+08:00')
+        for identifier in ('a', 'b'):
+            outbox.enqueue(identifier, 'ready', {'text': identifier}, night)
+        morning = at('2026-09-12T08:00:00+08:00')
+        outbox.dispatch(morning, lambda *_args: 'receipt')
+        outbox.enqueue('c', 'ready', {'text': 'c'}, night)
+        source = json.loads(self.path.read_text())
+        identifiers = list(source['deliveries'])
+        source['deliveries'][identifiers[1]]['events'] = ['b', 'c']
+        source['deliveries']['a-ops2'] = dict(source['deliveries'][identifiers[1]], events=['a'])
+        source['deliveries']['c-ops1'] = dict(source['deliveries'][identifiers[0]], events=['c'])
+        later = night + timedelta(days=32)
+        for status in ('uncertain', 'retry', 'pending'):
+            with self.subTest(status=status):
+                data = json.loads(json.dumps(source))
+                data['deliveries'][identifiers[1]]['status'] = status
+                self.path.write_text(json.dumps(data), encoding='utf-8')
+                outbox.dispatch(later, lambda *_args: self.fail('off-duty send'))
+                saved = json.loads(self.path.read_text())
+                self.assertEqual(saved['events'], data['events'])
+                self.assertEqual(saved['deliveries'], data['deliveries'])
+        # Once the entire transitive component is terminal, archive it together.
+        self.path.write_text(json.dumps(source), encoding='utf-8')
+        outbox.dispatch(later, lambda *_args: self.fail('off-duty send'))
+        saved = json.loads(self.path.read_text())
+        self.assertEqual(saved['events'], {})
+        self.assertEqual(saved['deliveries'], {})
+        self.assertEqual(len(set(saved['archived_events'].values())), 1)
+        self.assertEqual(outbox.archived_event('b')['deliveries'], source['deliveries'])
+
+    def test_archive_write_failure_keeps_live_cards_and_receipts(self):
+        from core import feishu
+        outbox = Outbox(self.path, self.settings)
+        now = at('2026-09-12T09:00:00+08:00')
+        outbox.enqueue('a', 'ready', {'text': 'Hallo'}, now)
+        outbox.dispatch(now, lambda *_args: 'receipt')
+        original = json.loads(self.path.read_text())
+        write = feishu.atomic_write_json
+
+        def fails_on_archive(path, data, **kwargs):
+            if Path(path) != self.path:
+                raise OSError('offline archive failure')
+            write(path, data, **kwargs)
+
+        with patch.object(feishu, 'atomic_write_json', side_effect=fails_on_archive):
+            with self.assertRaisesRegex(OSError, 'archive failure'):
+                outbox.dispatch(now + timedelta(days=31), lambda *_args: self.fail('duplicate'))
+        self.assertEqual(json.loads(self.path.read_text())['events'], original['events'])
+        self.assertEqual(json.loads(self.path.read_text())['deliveries'], original['deliveries'])
+
+    def test_retry_after_archive_written_but_main_trim_failed_reuses_same_archive(self):
+        from core import feishu
+        outbox = Outbox(self.path, self.settings)
+        now = at('2026-09-12T09:00:00+08:00')
+        outbox.enqueue('a', 'ready', {'text': 'Hallo'}, now)
+        outbox.dispatch(now, lambda *_args: 'receipt')
+        original = json.loads(self.path.read_text())
+        write = feishu.atomic_write_json
+
+        def fail_on_trim(path, data, **kwargs):
+            if Path(path) == self.path and data.get('archived_events'):
+                raise OSError('offline trim failure')
+            write(path, data, **kwargs)
+
+        with patch.object(feishu, 'atomic_write_json', side_effect=fail_on_trim):
+            with self.assertRaisesRegex(OSError, 'trim failure'):
+                outbox.dispatch(now + timedelta(days=31), lambda *_args: self.fail('duplicate'))
+        self.assertEqual(json.loads(self.path.read_text())['deliveries'], original['deliveries'])
+        archived_files = list(self.path.with_name('outbox_archive').glob('*.json'))
+        self.assertEqual(len(archived_files), 1)
+        content = archived_files[0].read_bytes()
+        outbox.dispatch(now + timedelta(days=32), lambda *_args: self.fail('duplicate'))
+        self.assertEqual(json.loads(self.path.read_text())['deliveries'], {})
+        self.assertEqual(list(self.path.with_name('outbox_archive').glob('*.json')), archived_files)
+        self.assertEqual(archived_files[0].read_bytes(), content)
+
+    def test_retention_setting_is_a_positive_integer_even_when_disabled(self):
+        from core.config import Config
+        for invalid in (True, 0, -1, '30', 1.5):
+            with self.subTest(invalid=invalid):
+                config = Config()
+                config._d['feishu']['keep_delivered_days'] = invalid
+                with patch('core.feishu.cfg', return_value=config):
+                    with self.assertRaisesRegex(ValueError, 'keep_delivered_days'):
+                        FeishuSettings.load()
+
+    def test_confirmed_cancelled_attempt_archives_original_card_and_uuid(self):
+        outbox = Outbox(self.path, replace(self.settings, keep_delivered_days=1))
+        now = at('2026-09-12T09:00:00+08:00')
+        outbox.enqueue('cancelled-attempt', 'ready', {'text': 'frozen card'}, now)
+
+        def fails(*_args):
+            raise TimeoutError()
+
+        outbox.dispatch(now, fails)
+        outbox.retain_ready(set(), now)
+        delivery = outbox.status()['deliveries'][0]
+        outbox.resolve(delivery['delivery_id'], action='not_delivered',
+                       expected_version=delivery['version'], now=now)
+        original = json.loads(self.path.read_text())['deliveries']
+        self.assertEqual(original[delivery['delivery_id']]['status'], 'cancelled')
+        outbox.dispatch(now + timedelta(days=2), lambda *_args: self.fail('cancelled send'))
+        self.assertEqual(json.loads(self.path.read_text())['deliveries'], {})
+        self.assertEqual(outbox.archived_event('cancelled-attempt')['deliveries'], original)
+
+    def test_cancelled_group_does_not_expire_a_still_required_recipient_reminder(self):
+        settings = replace(self.settings, recipients=('ops1', 'ops2'))
+        outbox = Outbox(self.path, settings)
+        now = at('2026-09-12T09:00:00+08:00')
+        outbox.enqueue('still-required', 'ready', {'text': 'pending recipient'}, now)
+        outbox.dispatch(now, lambda *_args: 'receipt')
+        data = json.loads(self.path.read_text())
+        second = list(data['deliveries'].values())[1]
+        second.update(status='cancelled', cancelled_at=now.isoformat())
+        self.path.write_text(json.dumps(data), encoding='utf-8')
+        night = at('2026-10-20T23:00:00+08:00')
+        outbox.dispatch(night, lambda *_args: self.fail('off-duty send'))
+        self.assertEqual(json.loads(self.path.read_text())['events'], data['events'])
+        self.assertEqual(json.loads(self.path.read_text())['deliveries'], data['deliveries'])
 
 
 if __name__ == '__main__':
