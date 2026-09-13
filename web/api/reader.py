@@ -70,15 +70,10 @@ from core.translated import (_IMPERIAL_RE,             # noqa: E402
 DEFAULT_DAYS = 90
 
 # ---------------------------------------------------------------------------
-# 状态模型（PROTOTYPE_DESIGN.md 第 7 节）
+# 列表展示状态；审校决定和七态转换以 core.review 为准。
 # ---------------------------------------------------------------------------
 
-#: 业务视角的状态，**不是**生产侧的发布五态（那是系统视角，摆给业务同事只会造成困惑）。
-#:
-#: ``not_ready`` 是第 7 节四态之外新加的第五个值（2026-09-08 用户拍板）：
-#: 近 90 天 62 篇图文帖里，绝大多数**还没翻译**，四态里没有一个能表达这件事——
-#: ``pending_review`` 是"待我审"，而没有译文根本无从审起。前端见到这个值就把
-#: 「查看」禁掉。它在切换到生产时天然对应「译文还没跑出来」，不是临时凑数。
+#: not_ready 表示内容尚未就绪。详情仍可读取，受理翻译取决于当前来源和模型能力。
 STATUS_NOT_READY = "not_ready"
 STATUS_PENDING_REVIEW = "pending_review"
 STATUS_EDITED = "edited"
@@ -127,11 +122,11 @@ def _highlight(kind: str, severity: str, label: str,
 
 
 def build_highlights(text_en: str, text_de: str) -> list[dict]:
-    """确定性检查（PROTOTYPE_DESIGN.md 第 8 节的**红色**那一列）。
+    """将共用确定性检查结果映射到两侧正文的字符位置。
 
     ⛔ **判断全部来自 core.translated，本函数一条规则都不新增。**
     三个函数各自回答"有没有问题"，这里只负责把它们的结论落到字符下标上，
-    并按第 6 节的契约拼成 ``highlights`` 数组。
+    并按 web/DESIGN.md 的接口契约拼成 ``highlights`` 数组。
 
     ``severity`` 分两档，都属于红色系：
 
@@ -141,9 +136,8 @@ def build_highlights(text_en: str, text_de: str) -> list[dict]:
       （金额要换成德国站定价、尺码要不要转 EU 码、英制单位换算对不对），
       不是"错了"。
 
-    ⚠️ **@提及没有做。** PROTOTYPE_DESIGN.md 第 8 节把它列在 regex 覆盖范围里，
-    但 ``core/`` 里根本没有对应的检查函数（``hashtags_preserved`` 只管 ``#``）。
-    按"找不到现成函数就不要在 web/ 里另写一份"的纪律，本轮留空，记为缺口。
+    当前共用规则不自动检查 @账号提及；hashtags_preserved 只检查 # 标签，
+    @提及仍需人工核对，不在 Web 层另建一份业务检查规则。
     """
     text_en = text_en or ""
     text_de = text_de or ""

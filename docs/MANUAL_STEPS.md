@@ -201,6 +201,8 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 
 ## 11. 安装当前调度器
 
+本轮已实际只读运行 `python -m tools.schedule scheduler-status`，返回 `FBScraperScheduler: 未注册`，退出码 0。当前 8765 端口的 Web 服务已经启动，常驻监测任务仍未安装；两个进程的状态不能混用。
+
 `tools.schedule install` 是旧每日组合。常驻 scheduler 当前已有下列入口，先做只读预览与安装演练：
 
 ```powershell

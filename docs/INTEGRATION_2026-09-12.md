@@ -29,6 +29,8 @@
 
 本机 Web 服务留供查看，启动时 PID 为 18940；进程可能随后变化，以 worktree `state/integration-20260913/web-process.json` 与实际运行状态为准。`real-web-smoke.json` 保存这次四个 GET，未调用 POST、模型、通知或批准。服务只绑定 127.0.0.1，本次不证明运营网络可达或企业闭环。
 
+本轮另实际只读执行 `python -m tools.schedule scheduler-status`，退出码 0，结果为 `FBScraperScheduler: 未注册`。常驻调度器尚未安装；Web 启动不代表监测已常驻运行。该查询不改变 Windows 任务状态，安装/停用/恢复仍按阶段一的真实验收项执行。
+
 ## 2. 五阶段代码与真实证据
 
 | 阶段/验收单元 | 本轮已完成的代码或证据 | 状态 | 仍需取得的证据 |

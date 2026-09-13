@@ -63,7 +63,7 @@ async def review_validation(request: Request, exc: Exception) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# 只读端（真）
+# 查询与预览
 # ---------------------------------------------------------------------------
 
 @app.get("/api/tasks")
@@ -71,7 +71,7 @@ def get_tasks(status: str | None = None, tag: str | None = None, month: str | No
               platform: str | None = Query(None, pattern='^(facebook|instagram)$'),
               scope: str = Query('review', pattern='^(review|history)$'),
               page: int = Query(1, ge=1), limit: int | None = Query(None, ge=1, le=100)) -> JSONResponse:
-    """任务列表。契约见 PROTOTYPE_DESIGN.md 第 6 节。"""
+    """审校队列与历史分页；参数和响应契约见 web/DESIGN.md。"""
     payload = reader.list_tasks(status=status, tag=tag, month=month, platform=platform,
                                 scope=scope, page=page, limit=limit)
     return JSONResponse(payload)
