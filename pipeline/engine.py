@@ -18,9 +18,10 @@ from publish import journal, channels
 from publish.compose import ComposeError, _read_post_truth, compose_post
 import translate as translation
 from core.paid_model import FileLock
-from core import paid_model, paid_consent, review
+from core import operating_settings, paid_model, paid_consent, review
 from core import translated as translated_content
 from pipeline.settings import pipeline_settings
+from pipeline import risk_scan
 import localize_images
 import localize_images as image_de
 from core import paid_requests
@@ -240,9 +241,10 @@ def publish_rules(raw: Mapping[str, Any] | None = None) -> PublishRules:
     if not isinstance(schedule, Mapping):
         raise PipelineRunError("缺少 [publish.schedule_rule]")
     values = schedule.get("times")
-    if not isinstance(values, list) or values != ["10:00", "17:00"]:
-        raise PipelineRunError(
-            "[publish.schedule_rule].times 必须固定为 ['10:00', '17:00']")
+    try:
+        values = operating_settings.validate_default_times(values)
+    except ValueError as exc:
+        raise PipelineRunError("[publish.schedule_rule].times 无效：%s" % exc) from exc
     slots: list[time] = []
     for value in values:
         try:
@@ -957,6 +959,16 @@ class RealStageRunner:
         return delta.main(args)
 
     def translate(self, source: SourcePost) -> int:
+        source_sha256 = translated_content.source_text_sha256(source.text)
+        operation_id = "pipeline-risk-" + hashlib.sha256(
+            (source.ref + "\0" + source_sha256).encode("utf-8")).hexdigest()[:24]
+        risk_scan.scan_source(
+            cfg().state_dir,
+            task_id="%s/%s" % (source.account_dir.name, source.post_id),
+            source_ref=source.ref, source_text=source.text,
+            controller=paid_requests.RequestController(
+                cfg().state_dir, preflight=budget_preflight,
+                operation_id=operation_id))
         return translation.main([
             "--account", source.account_dir.name,
             "--post-id", source.post_id])

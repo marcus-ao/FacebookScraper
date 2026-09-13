@@ -18,7 +18,7 @@ const suggesting = ref(false)
 const suggestion = ref(null)
 const selected = ref([])
 const suggestionError = ref('')
-const signalLabels = { media_count: '累计帖子数', peer_uses_14d: '同类账号近14天使用', trend_score: '德国趋势信号' }
+const signalLabels = { media_count: 'Instagram 全球累计帖子数', peer_uses_14d: '德国同类账号近14天使用', trend_score: 'Google Trends 德国组内指数' }
 async function suggest() {
   suggesting.value = true
   suggestionError.value = ''
@@ -61,13 +61,14 @@ function adopt() {
     <p v-if="suggestionError" class="suggestion-error" role="alert">{{ suggestionError }}，仍可手动编辑。</p>
     <div v-if="suggestion" class="suggestions">
       <p class="help">{{ suggestion.notice }}</p>
+      <p v-if="suggestion.sampling?.status && suggestion.sampling.status !== 'sampled'" class="help">采样状态：{{ suggestion.sampling.reason || suggestion.sampling.status }}</p>
       <p v-if="suggestion.generated_at" class="help">候选生成：{{ formatWakeAt(suggestion.generated_at) }}（不是热度采样时间）</p>
       <div v-for="(group, i) in suggestion.groups.filter(item => !item.protected)" :key="i" class="candidate-group">
         <strong>{{ group.source_tag }}</strong>
         <div v-for="candidate in group.candidates" :key="candidate.tag" class="candidate">
           <label><input type="checkbox" :checked="selected.includes(candidate.tag)" :disabled="!editing" @change="choose(candidate.tag, $event.target.checked)" /> {{ candidate.tag }}</label>
           <span v-if="!Object.keys(candidate.signals || {}).length" class="help">未采样 · 语义建议</span>
-          <span v-for="(signal, metric) in candidate.signals" :key="metric" class="help">{{ signalLabels[metric] || metric }}：{{ signal.value }} · {{ formatWakeAt(signal.sampled_at) }} · {{ signal.source }}{{ candidate.current_signals?.[metric] ? '' : '（已过期）' }}</span>
+          <span v-for="(signal, metric) in candidate.signals" :key="metric" class="help">{{ signalLabels[metric] || metric }}：{{ signal.value }} · {{ signal.geo === 'DE' ? '德国' : '全球' }} · {{ formatWakeAt(signal.sampled_at) }} · {{ signal.source }}{{ signal.comparison_group ? ` · 组 ${signal.comparison_group}` : '' }}{{ candidate.current_signals?.[metric] ? '' : '（已过期或不可跨批比较）' }}</span>
         </div>
       </div>
       <button class="btn btn-sm" :disabled="!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256" @click="adopt">采用勾选到编辑区</button>

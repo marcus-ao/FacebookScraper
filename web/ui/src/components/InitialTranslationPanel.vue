@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api.js'
+import RiskPanel from './RiskPanel.vue'
 const props = defineProps({ detail: { type: Object, required: true }, editing: Boolean })
 const emit = defineEmits(['changed'])
 const capability = ref(null)
@@ -65,6 +66,7 @@ onMounted(() => { refresh(); timer = setInterval(poll, 1500) })
 onUnmounted(() => { alive = false; clearInterval(timer) })
 </script>
 <template>
+  <RiskPanel :scan="detail.risk_scan" />
   <section v-if="capability?.third_party" class="initial-translation">
     <h3>这篇来自第三方作者</h3>
     <p>请先看原帖，确认本篇可以用于德国站内容运营，再让系统翻译文案和处理图片。生成后仍由你审校和安排发布。</p>

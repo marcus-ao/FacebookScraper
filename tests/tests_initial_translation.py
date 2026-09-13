@@ -73,7 +73,12 @@ class InitialTranslationTests(ConsentFixture):
 
     def test_processing_uses_existing_ledgers_and_returns_to_review(self):
         job = self.submit()
-        translator = SimpleNamespace(translate=lambda text, system: 'Ein sauberes Zuhause. #Neakasa')
+        calls = []
+        translator = SimpleNamespace(translate=lambda text, system: (
+            calls.append('translate') or 'Ein sauberes Zuhause. #Neakasa'))
+        def scan(**kwargs):
+            calls.append('risk_scan')
+            return {'status': 'completed', 'risks': []}
         buffer = io.BytesIO()
         Image.new('RGB', (1088, 1088), 'blue').save(buffer, 'JPEG')
         validated = localize_images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 0)
@@ -81,8 +86,10 @@ class InitialTranslationTests(ConsentFixture):
         editor.edit.return_value = localize_images.EditResult('', 'gpt-image-2', {}, 'response')
         editor.paid_request_id = ''
         with patch.object(localize_images, 'validate_output', return_value=validated):
-            result = initial_translation.execute(job, self.source, translator=translator, editor=editor)
+            result = initial_translation.execute(job, self.source, translator=translator, editor=editor,
+                                                 risk_scanner=scan)
         self.assertEqual(result['status'], 'succeeded', result)
+        self.assertEqual(calls[:2], ['risk_scan', 'translate'])
         self.assertTrue(translated.load_translated(self.account / 'translated.jsonl'))
         self.assertTrue(localize_images.load_image_state(self.account / 'images_de.jsonl').latest)
         self.assertFalse(translated.load_human_translated(self.account / 'translated_human.jsonl'))

@@ -48,6 +48,17 @@ def append_samples(path: Path, rows: list[dict]) -> int:
                 raise ValueError('采样值无效')
         if any(row.get(key) is not None for key in ('peer_uses_14d', 'trend_score')) and row.get('geo') != 'DE':
             raise ValueError('同类账号和趋势信号须明确为德国地区')
+        if row.get('media_count') is not None and row.get('geo', 'global') != 'global':
+            raise ValueError('Instagram 累计帖子数只能标为全球量级')
+        if row.get('trend_score') is not None and any(
+                not isinstance(row.get(key), str) or not row[key].strip()
+                for key in ('comparison_group', 'sample_batch', 'time_range')):
+            raise ValueError('Trends 信号必须绑定同组、同批次和统一时间范围')
+        stale_after = row.get('stale_after')
+        if stale_after is not None:
+            expiry = datetime.fromisoformat(str(stale_after).replace('Z', '+00:00'))
+            if expiry.tzinfo is None or expiry <= moment:
+                raise ValueError('采样过期时刻必须晚于采样时刻')
         accepted.append(dict(row, sampled_at=moment.astimezone(timezone.utc).isoformat()))
     if not accepted:
         return 0
@@ -76,7 +87,9 @@ def load_signals(path: Path) -> dict[str, dict]:
                     current = signals.setdefault(tag, {}).get(metric)
                     if current is None or when > datetime.fromisoformat(current['sampled_at']):
                         signals[tag][metric] = {'value': value, 'source': row['source'],
-                            'sampled_at': when.isoformat(), 'geo': row.get('geo', 'global')}
+                            'sampled_at': when.isoformat(), 'geo': row.get('geo', 'global'),
+                            **{key: row[key] for key in ('source_url', 'metric_scope', 'stale_after',
+                               'comparison_group', 'sample_batch', 'time_range') if row.get(key) is not None}}
         except (ValueError, KeyError, TypeError, AttributeError):
             continue
     return signals
@@ -91,13 +104,23 @@ def recommend(source: str, candidates: dict[str, list[str]], *, keep_verbatim: d
     groups, selected = [], []
     for original_tag in original:
         names = [original_tag] if original_tag in protected else candidates[original_tag]
+        trend_observations = [signals.get(name, {}).get('trend_score') for name in names]
+        trend_keys = {(item.get('comparison_group'), item.get('sample_batch'), item.get('time_range'))
+                      for item in trend_observations if item}
+        comparable_trends = (len(trend_observations) > 1
+                             and all(trend_observations)
+                             and len(trend_keys) == 1
+                             and next(iter(trend_keys))[0] == original_tag)
         items = []
         for name in names:
             signal = signals.get(name, {})
             current = {}
             for key, observation in signal.items():
                 age = moment - datetime.fromisoformat(observation['sampled_at'])
-                if timedelta(0) <= age <= timedelta(days=14):
+                expiry = observation.get('stale_after')
+                fresh = (datetime.fromisoformat(expiry) >= moment if expiry
+                         else timedelta(0) <= age <= timedelta(days=14))
+                if timedelta(0) <= age and fresh and (key != 'trend_score' or comparable_trends):
                     current[key] = observation
             items.append({'tag': name, 'signals': signal, 'current_signals': current})
         # 同类账号近期使用为主，其次趋势，最后才是累计量级；相同信号保持模型顺序。
@@ -106,8 +129,12 @@ def recommend(source: str, candidates: dict[str, list[str]], *, keep_verbatim: d
         groups.append({'source_tag': original_tag, 'protected': original_tag in protected,
                        'candidates': items})
         selected.append(items[0]['tag'])
+    has_peer_signal = any('peer_uses_14d' in item['current_signals']
+                          for group in groups for item in group['candidates'])
     return {'groups': groups, 'selected': selected, 'sampled': any(item['current_signals']
                 for group in groups for item in group['candidates']),
-            'notice': ('缺少同类账号采样，排序依据不完整。' if not peer_accounts else '')
-                      + '未采样或超过14天的信号不参与排序；累计帖子数不代表德国当前热度。',
+            'notice': ('缺少同类账号采样，排序依据不完整。'
+                       if not peer_accounts and not has_peer_signal else '')
+                      + '未采样、失败或过期信号不参与排序；Trends 只在同一候选组同一批次内比较，不可跨批。'
+                      + 'Instagram 累计帖子数是全球量级，不代表德国当前热度。',
             'generated_at': moment.astimezone(timezone.utc).isoformat()}

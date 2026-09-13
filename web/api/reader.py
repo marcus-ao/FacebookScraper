@@ -53,7 +53,7 @@ from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
-from pipeline import engine                            # noqa: E402
+from pipeline import engine, risk_scan                 # noqa: E402
 from publish import compose, journal                   # noqa: E402
 from web.api import query_index                   # noqa: E402
 
@@ -68,12 +68,6 @@ from core.translated import (_IMPERIAL_RE,             # noqa: E402
 
 #: 列表默认口径：近 90 天。与 `pipeline preflight --days` 的默认值一致。
 DEFAULT_DAYS = 90
-
-#: LLM 风险预扫描的静态结果。原型阶段**不实时调 LLM**
-#: （PROTOTYPE_DESIGN.md 第 8 节：预跑一次存静态文件，零成本、零延迟、
-#: 演示当场不会因为 API 抖动而尴尬）。接口契约不变，生产时换成实时调用。
-RISKS_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "risks.json"
-
 
 # ---------------------------------------------------------------------------
 # 状态模型（PROTOTYPE_DESIGN.md 第 7 节）
@@ -195,40 +189,17 @@ def build_highlights(text_en: str, text_de: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# 风险预扫描（静态文件）
+# 风险预扫描（真实状态账本的只读视图）
 # ---------------------------------------------------------------------------
 
-#: LLM 只负责真正模糊的三类（第 8 节）。金额、单位、标签**已经有确定性实现**，
-#: 让 LLM 去做它们只会花钱买误报。
-RISK_KINDS = frozenset({"pun", "ambiguous", "us_only"})
-
-
-def load_risks() -> dict[str, list[dict]]:
-    """读预跑好的风险文件；缺文件或坏格式一律当"没有风险"，不让界面挂掉。"""
-    try:
-        data = json.loads(RISKS_FIXTURE.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    out: dict[str, list[dict]] = {}
-    for task_id, rows in data.items():
-        if not isinstance(task_id, str) or not isinstance(rows, list):
-            continue
-        kept = []
-        for row in rows:
-            if (not isinstance(row, dict)
-                    or row.get("kind") not in RISK_KINDS
-                    or not isinstance(row.get("label"), str)):
-                continue
-            span = row.get("en_span")
-            if (not isinstance(span, list) or len(span) != 2
-                    or not all(isinstance(v, int) for v in span)):
-                continue
-            kept.append({"kind": row["kind"], "en_span": [span[0], span[1]],
-                         "label": row["label"]})
-        out[task_id] = kept
-    return out
+def load_risks(state_dir: Path, sources: Mapping[str, engine.SourcePost]) -> tuple[dict, dict]:
+    """返回当前扫描视图及其中仍有效的风险；失败/过期不会伪装成空风险成功。"""
+    views = {task_id: risk_scan.result_for(source.account_dir, dict(source.row),
+                                           state_dir=state_dir)
+             for task_id, source in sources.items()}
+    risks = {task_id: list(view["risks"]) for task_id, view in views.items()
+             if view["status"] == "completed"}
+    return views, risks
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +339,7 @@ class _Context:
             self.account_dirs, horizon)
         self.sources: dict[str, engine.SourcePost] = {
             task_id_of(item): item for item in sources}
-        self.risks = load_risks()
+        self.risk_scans, self.risks = load_risks(self.state_dir, self.sources)
 
     def reviewable(self, source: engine.SourcePost) -> bool:
         """人工稿即使源文变更也可打开复核；不能因此藏起已经做过的修改。"""
@@ -454,6 +425,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
                          if when is not None else None),
             "hard_alerts": alerts,
             "risk_count": len(ctx.risks.get(task_id, ())),
+            "risk_scan_status": ctx.risk_scans[task_id]["status"],
             "author_flag": author_flag,
             "status": states[source.ref]["status"],
         })
@@ -635,6 +607,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "localization_validation": localization.validate(localized),
         "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),
         "body_risks": body_risks,
+        "risk_scan": ctx.risk_scans[task_id],
         "text": {
             "en": text_en,
             "de_machine": text_de or None,

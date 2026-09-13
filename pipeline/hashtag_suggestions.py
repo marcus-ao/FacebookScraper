@@ -27,7 +27,8 @@ def suggest(account_dir, source, *, source_text_sha256, human_revision, review_r
             engine.budget_preflight()
         settings = translate.Settings()
         caller = translator or translate.Translator(settings,
-            paid_controller=paid_requests.RequestController(c.state_dir, preflight=preflight))
+            paid_controller=paid_requests.RequestController(
+                c.state_dir, preflight=preflight, operation_id=request_id))
         c.state_dir.mkdir(parents=True, exist_ok=True)
         with translate.TranslationRunLock(c.state_dir / 'translate.lock'):
             preflight()

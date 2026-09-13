@@ -11,7 +11,7 @@ import translate
 from core import paid_consent, paid_model, paid_requests, review
 from core.config import cfg
 from core.store import read_post_truth
-from pipeline import engine, refinement
+from pipeline import engine, refinement, risk_scan
 from publish import compose, journal
 
 
@@ -96,7 +96,8 @@ def job_result(job_id: str) -> dict | None:
     return row if row and row.get('kind') == 'initial' else None
 
 
-def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
+def execute(row: dict, indexed: dict, *, translator=None, editor=None,
+            risk_scanner=None) -> dict:
     account_dir = cfg().archive_dir / row['account']
     with paid_model.FileLock(cfg().state_dir / 'refinement.lock', busy_message='内容任务正在领取'):
         current = job_result(row['job_id'])
@@ -114,6 +115,13 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
         source, candidate = _check(account_dir, indexed)
         controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight)
         if engine.translation_needed(candidate.canonical):
+            scan = risk_scanner or risk_scan.scan_source
+            scan_result = scan(
+                state_dir=cfg().state_dir,
+                task_id='%s/%s' % (account_dir.name, source['post_id']),
+                source_ref=source['platform'] + ':' + source['post_id'],
+                source_text=source['text'], controller=controller)
+            event['risk_scan_status'] = scan_result.get('status', 'failed')
             settings = translate.Settings()
             translator = translator or translate.Translator(settings, paid_controller=controller)
             with translate.TranslationRunLock(cfg().state_dir / 'translate.lock'):
