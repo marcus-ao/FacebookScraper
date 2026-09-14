@@ -1724,3 +1724,4 @@ IG 19 篇纯图文里 **6 篇（32%）与 FB 某篇是同一条内容**（4 篇�
 | SPA 回落 | `web/api/app.py::SinglePageFiles`：找不到同名文件时回 `index.html`，但 `/api` 路径、带扩展名的路径和不接受 HTML 的客户端不回落。React 用真实路径，没有它深链接刷新就是 404 |
 | 部署契约 | `tests/tests_spa_static.py`。浏览器回归照不出这一条——`tests/browser_fixture.py` 的 UIFixture 自带 SPA 回落，全绿只证明前端逻辑对 |
 | 版本化离线浏览器 | 实际前端 dist、临时 ASGI 和隔离数据验证保存/历史/设置；显式远端状态夹具仅验 UI，不算实际模型/消息/发布 |
+| 原主工作区只读检查 | 从原 `main` 运行 `scripts/run_web.bat`，核对所供静态字节、业务路由直接打开/刷新、旧链接、只读 API 与 404 边界；结果只证明本机读取，不替代运营网络或外部系统验收 |

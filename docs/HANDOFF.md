@@ -4,13 +4,13 @@
 
 ## 1. 当前工作区事实
 
-原 `main` 工作区是日常运行位置；当前集成改动完成后仍须在该工作区启动服务并做只读检查。
+原 `main` 工作区是日常运行位置。2026-09-14T07:22:54Z 已在该工作区的 `a804c5e` 通过 `scripts/run_web.bat` 启动并完成本机只读检查；后续更新仍按同一入口复验。
 
 **数据绑定。** 原 `main` 工作区没有 `config.local.toml`，它直接按 `config.toml` 的 `[paths]` 读同目录下的 `archive/` 与 `state/`——**这两个目录里是实际业务数据**，打开审校台、点保存都会落到真实账本。副本工作区（如 `.worktrees/business-workflow`）通过忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」。
 
 **归档现状。** 原激活 `2026-09-03T09:00:58.277710Z` 保留。归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，SQLite 实际记录/字段一致，历史第 1/2 页各 20 条且无重复，冻结详情已真实只读访问。核验备份 `runtime.zip` 共 5,246 文件、465,064,677 字节，含运行配置核验，凭据不进证据报告；原 10 份账本/激活与备份 SHA 于 06:58:19Z 再核未变。**这些不是 `.global` 回填基线**，不能重新 activate 或清空发布历史。
 
-**审校台。** 2026-09-14 的当前集成版本只维护 `web/ui/` 下的 React + TypeScript 应用，构建输出为 `web/ui/dist/`；`config.toml` 的 `[paths].web_dist` 显式指向该目录。本地 `config.local.toml` 只接续 archive/state，不选择前端。开发改动合并后，从原 `main` 工作区运行 `scripts/run_web.bat` 并按 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台) 做只读检查；这一步尚未执行。
+**审校台。** 2026-09-14 的当前集成版本只维护 `web/ui/` 下的 React + TypeScript 应用，构建输出为 `web/ui/dist/`；`config.toml` 的 `[paths].web_dist` 显式指向该目录。本地 `config.local.toml` 只接续 archive/state，不选择前端。原 `main` 已按 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台) 启动 PID 21928，`state/ui-consolidation-20260914T063209Z/main-entry.json` 记录静态字节、路由/刷新、旧链接、只读 API 和 404 契约通过，页面错误、阻止请求与外部动作均为零。
 
 **浏览器会话。** 三个 Chrome 均已启动，但「启动」只证明进程和角色存在，不证明会话可抓取：
 
@@ -77,6 +77,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - `.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话/权限和具体发布确认。FB 待制作包 `integration-candidates/facebook-122120460231379375`（在当时开发副本的 `state/` 下），来源 2026-08-16“Cat or CCTV”单图、拟 2026-09-15 10:00 柏林但未占位，缺最终德语图/受控样本许可/整包确认；不覆盖短链或多图。IG 没有新素材，过期活动/美元促销不是可以直接提交的联调包。
 - 审校台前端已收敛为单一 React 应用。深链接刷新由 `web/api/app.py::SinglePageFiles` 保住，契约钉在 `tests/tests_spa_static.py`；历史页首屏缩略图成本是已知待观察项（数字见 §7）。
 - 2026-09-14 当前集成 worktree 的 Python 66/66、React 26 文件 505 项测试、TypeScript + Vite 构建、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约、14 项静态路由测试、34 项 Web 审校测试和七项界面探测均通过。证据位于 `state/ui-consolidation-20260914T063209Z`、`state/offline-validation-20260914T065258Z` 与 `state/offline-browser-20260914T065304Z-21788`；隔离浏览器报告的模型、飞书、Meta 动作为零，不能外推整个真实账本或外部服务。
+- 2026-09-14T07:22:54Z 原 `main` 的 `a804c5e` 完成锁定安装（118 个包）、505 项 React 测试、TypeScript + Vite 构建和实际 8765 服务检查。`main-entry.json` 证明服务字节等于同次构建，七条业务路由直接打开/刷新、两条旧链接、只读业务 API 检查及 404 边界均通过；原数据读到历史 1,067 条、审校 26 条，月历仍是旧的 4 张卡片且界面正确警告。冻结详情首次 5 秒等待超时，45 秒上限复验为直接进入 8.625 秒、刷新 4.094 秒；其它页面为 0.366–3.233 秒，因此功能检查通过，性能观察不关闭。`cutover-data-verification.json` 于 07:24:30Z 证明前后 5,004 个实际数据文件 0 改动、0 缺失、0 新增，并保留用户确认的真实付费调用记录。上述结果只覆盖本机只读入口，不代表运营网络、模型、飞书或 Meta 流程验收。
 
 运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 

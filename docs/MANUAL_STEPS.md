@@ -270,6 +270,8 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。
 
+2026-09-14T07:22:54Z 已在原 `main` 的 `a804c5e` 按本节完成一次实际只读启动：锁定安装 118 个包，505 项 React 测试及 TypeScript + Vite 构建通过，`scripts/run_web.bat` 在 8765 启动 PID 21928。`state/ui-consolidation-20260914T063209Z/main-entry.json` 记录七条业务路由、两条旧链接、只读业务 API 检查和 404 边界通过，且页面错误、阻止请求、外部动作均为零；`cutover-data-verification.json` 记录 5,004 个实际数据文件前后完全一致。月历仍显示旧的 4 张卡片并给出过期警告。冻结详情首次 5 秒等待超时，放宽只读检查上限后直接进入 8.625 秒、刷新 4.094 秒；这项性能观察仍需跟进。下面的清单保留给后续更新复验。
+
 从上到下检查。任何一步失败就停止更新并保留报告，不对 archive/state 做恢复操作。
 
 ### 集成前检查

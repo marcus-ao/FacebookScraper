@@ -198,6 +198,8 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 当前浏览器入口包括：`tests/tests_browser_workflow.py` 的七个迁移后临时真实后端场景加日期控件回归，`tests/browser_regression.py --stage ALL` 的综合行为检查，`tests/network_compare.py` 的 16 个 React 显式请求契约，默认使用 `web/ui/dist` 和实际 FastAPI 的 `tests/cutover_rehearsal.py`，以及 `tests/review_probe.py` 和 React-only 的 `tests/history_thumbnail_cost.py`。2026-09-14 当前集成 worktree 的完整 66 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约、14 项静态路由测试、34 项 Web 审校测试和七项界面探测均通过；报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-consolidation-20260914T063209Z`，不从旧报告继承，也不代表真实外部系统通过。
 
+同日 07:22:54Z，原 `main` 的 `a804c5e` 从 `scripts/run_web.bat` 启动实际 8765 服务。`state/ui-consolidation-20260914T063209Z/main-entry.json` 核对所供 HTML/JavaScript/CSS 与当前 dist 字节一致，并通过七条业务路由直接打开/刷新、旧链接跳转、只读业务 API 检查及 API/资源 404 边界；没有页面错误、阻止请求或外部动作。冻结详情直接进入耗时 8.625 秒、刷新 4.094 秒，其它页面为 0.366–3.233 秒，因此功能契约通过但性能观察保留。`cutover-data-verification.json` 证明检查前后 5,004 个实际数据文件完全一致。
+
 ```powershell
 npm.cmd --prefix web/ui run build
 scripts\run_python.bat tests/tests_browser_workflow.py -v
