@@ -1,4 +1,5 @@
 """运营设置只改白名单字段，保留注释和并发编辑。"""
+import os
 import sys
 import tempfile
 import unittest
@@ -33,6 +34,43 @@ class OperatingSettingsTests(unittest.TestCase):
         self.assertNotEqual(result['version'], before['version'])
         self.assertEqual(config.cfg().get('review', 'snooze_default_days'), 4)
         self.assertEqual(config.cfg().get('pipeline', 'daily_budget_usd'), 5)
+
+    def test_save_is_visible_when_the_rewrite_lands_in_the_same_timestamp_tick(self):
+        """等长改写 + 同一个 mtime 刻度：只有显式作废缓存才读得到新值。
+
+        save() 按原格式回填，``["10:00", "17:00"]`` → ``["11:30", "18:00"]``、
+        ``= 3`` → ``= 4``，字节数都不变，所以 st_size 恒等，(st_mtime_ns, st_size)
+        这个判据就只剩 mtime 一个数。本机实测 5000 次背靠背等长改写里有 68% 命中
+        同一个 st_mtime_ns（有效精度约 1ms），这里把那一刻钉死 —— 不 sleep，
+        也不靠跑很多遍碰运气。
+        """
+        before = operating_settings.read()
+        stamp = self.path.stat()
+        real_replace = os.replace
+
+        def replace_within_the_same_tick(source, target):
+            real_replace(source, target)
+            os.utime(target, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+
+        with patch.object(os, 'replace', replace_within_the_same_tick):
+            operating_settings.save({'default_times': ['11:30', '18:00'],
+                                     'snooze_default_days': 4}, before['version'])
+        after = self.path.stat()
+        self.assertEqual((after.st_mtime_ns, after.st_size), (stamp.st_mtime_ns, stamp.st_size))
+        self.assertEqual(config.cfg().get('review', 'snooze_default_days'), 4)
+        self.assertEqual(config.cfg()['publish']['schedule_rule']['times'], ['11:30', '18:00'])
+
+    def test_cache_is_not_invalidated_when_the_write_fails(self):
+        """落盘失败就不能作废缓存 —— 那会把一份没写成的配置当成新的读进来。"""
+        before = operating_settings.read()
+        cached = config.cfg()
+        with patch.object(os, 'replace', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                operating_settings.save({'snooze_default_days': 4}, before['version'])
+        self.assertEqual(self.path.read_bytes(), self.original.encode())
+        # 同一个对象：没有被重建过。
+        self.assertIs(config.cfg(), cached)
+        self.assertEqual(config.cfg().get('review', 'snooze_default_days'), 3)
 
     def test_concurrent_edit_is_not_overwritten(self):
         version = operating_settings.read()['version']

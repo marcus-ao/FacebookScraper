@@ -12,6 +12,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+# StaticFiles 抛的是 starlette 那一个；fastapi.HTTPException 是它的子类，
+# 捕不到父类，所以这里必须单独引。
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
@@ -284,7 +287,60 @@ def index() -> Response:
     return FileResponse(DIST / "index.html")
 
 
+class SinglePageFiles(StaticFiles):
+    """找不到文件时把 index.html 交回去，让前端路由自己认领这个路径。
+
+    ⚠️ 这条是新前端能不能切换的前提。旧 Vue 的 URL 全都长在 ``/`` 上
+    （``/?task=``、``/?view=``），服务端不需要管前端路由；新前端用的是真实路径
+    （``/review``、``/calendar``、``/review/<account>/<post_id>``），
+    ``StaticFiles`` 找不到同名文件就是 404。实测结果是：侧栏点着能走，
+    一按 F5、一个收藏、一条粘给同事的链接，就只剩一行 ``{"detail":"Not Found"}``。
+    而「刷新详情页仍知道第 n / N 篇」「返回列表恢复原筛选」正是这次重构的目标
+    （DECISION_LOG.md §2.2）。
+
+    浏览器回归没照出这一条：``tests/browser_fixture.py`` 的 UIFixture 在 Playwright
+    那一侧拦路由，找不到文件自己就回落 index.html —— 它自带 SPA 回落，
+    所以 12/12 全绿证明的是前端逻辑对，不是这个部署形状立得住。
+    复现在 ``docs/ui-refactor/tools/cutover_rehearsal.py``。
+
+    ⛔ 三种情况**不回落**，回落了反而会把真问题藏起来：
+       1. ``/api/...``：接口的 404 必须还是 JSON，不能变成一页 HTML；
+       2. 带扩展名的请求（``/assets/xxx.js``）：漏掉一个产物要当场报 404，
+          回落会让浏览器拿到 HTML 再报一个看不懂的 MIME 错；
+       3. 不收 HTML 的请求（``<script src>``、fetch）：同上。
+
+    写方法不用在这里挡：``StaticFiles.__call__`` 自己就只放 GET / HEAD 过来，
+    别的直接 405，所以 ``POST /review`` 永远走不到下面这段 —— 它不会被回落成
+    一页 HTML（那会让调用方以为请求成功了）。路径越界同理：能不能读到文件
+    仍然由 ``StaticFiles`` 自己的查找决定，这里只在它说「没有」之后接手。
+    契约全部钉在 ``tests/tests_spa_static.py``。
+    """
+
+    async def get_response(self, path: str, scope):
+        # StaticFiles 找不到文件时是**抛** HTTPException，不是返回 404 的响应；
+        # 按返回值判会永远判不到（这条实测踩过）。
+        try:
+            response = await super().get_response(path, scope)
+            if response.status_code != 404:
+                return response
+            missing: StarletteHTTPException | None = None
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            response, missing = None, exc
+        # 判 `/api/` 要看请求路径，不能看 StaticFiles 给的 path —— 它在 Windows 上
+        # 已经被 normpath 成 `api\xxx`，`startswith("api/")` 会永远不成立。
+        request_path = scope.get("path", "")
+        if not request_path.startswith("/api/") and not Path(request_path).suffix:
+            accept = dict(scope.get("headers") or []).get(b"accept", b"").decode("latin-1")
+            if "text/html" in accept:
+                return FileResponse(DIST / "index.html")
+        if missing is not None:
+            raise missing
+        return response
+
+
 if DIST.is_dir():
     # 构建产物存在才挂载；不存在时上面那条 / 会给出可操作的提示，
     # 而不是启动时就崩掉。
-    app.mount("/", StaticFiles(directory=str(DIST), html=True), name="ui")
+    app.mount("/", SinglePageFiles(directory=str(DIST), html=True), name="ui")

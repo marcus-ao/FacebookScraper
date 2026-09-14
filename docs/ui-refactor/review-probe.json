@@ -1,0 +1,250 @@
+{
+  "approval_seeded_value": "2026-09-14T10:00",
+  "approval_value_after_refetch": "",
+  "approval_disabled_reason_nodes": 1,
+  "approval_disabled_reason_text": "通过并创建排期。当前不能操作：请先填写柏林发布时间",
+  "approval_reason_tab_presses": 30,
+  "calendar_says_published": 0,
+  "calendar_invalid_list_roles": {
+    "lists": 0,
+    "listitems": 0
+  },
+  "calendar_day_cells": 31,
+  "calendar_berlin_today": "2026-09-14",
+  "calendar_today_in_displayed_month": true,
+  "calendar_today_marked_cells": 1,
+  "calendar_today_cell_day": "2026-09-14",
+  "density": {
+    "review@1366x768": {
+      "rowsAboveFold": 12,
+      "rowHeights": [
+        48
+      ],
+      "documentHeight": 1503,
+      "screensOfScroll": 1.96,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "review@1920x1080": {
+      "rowsAboveFold": 19,
+      "rowHeights": [
+        48
+      ],
+      "documentHeight": 1503,
+      "screensOfScroll": 1.39,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "history@1366x768": {
+      "rowsAboveFold": 12,
+      "rowHeights": [
+        48
+      ],
+      "documentHeight": 2553,
+      "screensOfScroll": 3.32,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "history@1920x1080": {
+      "rowsAboveFold": 19,
+      "rowHeights": [
+        48
+      ],
+      "documentHeight": 2553,
+      "screensOfScroll": 2.36,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "detail@1366x768": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1132,
+      "screensOfScroll": 1.47,
+      "h1": 1,
+      "primaryVisible": 1,
+      "primaryLabels": [
+        "通过并创建排期"
+      ],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px"
+      ]
+    },
+    "detail@1920x1080": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1444,
+      "screensOfScroll": 1.34,
+      "h1": 1,
+      "primaryVisible": 1,
+      "primaryLabels": [
+        "通过并创建排期"
+      ],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px"
+      ]
+    },
+    "calendar@1366x768": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 768,
+      "screensOfScroll": 1,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "calendar@1920x1080": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1080,
+      "screensOfScroll": 1,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px"
+      ]
+    },
+    "settings@1366x768": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 953,
+      "screensOfScroll": 1.24,
+      "h1": 1,
+      "primaryVisible": 1,
+      "primaryLabels": [
+        "保存设置"
+      ],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px"
+      ]
+    },
+    "settings@1920x1080": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1080,
+      "screensOfScroll": 1,
+      "h1": 1,
+      "primaryVisible": 1,
+      "primaryLabels": [
+        "保存设置"
+      ],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px"
+      ]
+    },
+    "runtime@1366x768": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1068,
+      "screensOfScroll": 1.39,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px"
+      ]
+    },
+    "runtime@1920x1080": {
+      "rowsAboveFold": 0,
+      "rowHeights": [],
+      "documentHeight": 1080,
+      "screensOfScroll": 1,
+      "h1": 1,
+      "primaryVisible": 0,
+      "primaryLabels": [],
+      "dangerInline": 0,
+      "horizontalOverflow": false,
+      "headingSizes": [
+        "H1:20px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px",
+        "H2:14px"
+      ]
+    }
+  },
+  "images_requested_on_text_tab": 0,
+  "images_paths_on_text_tab": [],
+  "image_count_in_detail": 1,
+  "images_requested_after_opening_tab": 2,
+  "focus_before_modal": "编辑分类",
+  "modal_opened": 1,
+  "focus_moved_into_modal": true,
+  "shift_tab_stays_in_modal": true,
+  "modal_closed_by_escape": true,
+  "focus_after_close": "编辑分类",
+  "disabled_reason_notes_on_detail": 1,
+  "disabled_reason_labels_on_detail": [
+    "通过并创建排期。当前不能操作：发布条件尚未满足，请查看下方提示"
+  ],
+  "localization_mounted_before_visit": 0,
+  "localization_mounted_after_visit": 1,
+  "localization_still_in_dom_after_switch": 1,
+  "images_still_in_dom_on_text_tab": 0,
+  "mark_count_text": 0,
+  "active_after_n": 0,
+  "explanation_role_status": 0,
+  "non_get_requests": [],
+  "approve_calls": 0,
+  "calendar_refresh_calls": 0,
+  "paid_model_calls": 0,
+  "feishu_calls": 0,
+  "page_errors": []
+}

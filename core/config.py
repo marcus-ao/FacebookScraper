@@ -177,6 +177,26 @@ def cfg() -> Config:
     return _cfg
 
 
+def invalidate_cfg_cache() -> None:
+    """本进程自己写过 config.toml 之后重新读一次，不要交给文件时间戳去猜。
+
+    上面那段 ``(st_mtime_ns, st_size)`` 是给**别人**改配置用的：有人手工编辑
+    config.toml，字节数和修改时间几乎一定会变，探测得到。
+
+    运营在设置页保存走的是另一条路。``operating_settings.save()`` 按原格式回填
+    同一个键，``times = ["10:00", "17:00"]`` → ``["11:30", "18:00"]``、
+    ``snooze_default_days = 3`` → ``= 4``，字节数一模一样，于是 st_size 恒等，
+    能不能发现全看 mtime 这一个数。本机实测：5000 次等长背靠背改写里有 68.42%
+    共用同一个 st_mtime_ns（有效精度约 1ms）。也就是说长驻的 Web 进程可能在
+    「已保存」之后仍然按旧的默认排期时刻办事。
+
+    保存的人自己知道刚写过什么，不必去猜，所以这里直接作废。
+    """
+    global _cfg
+    if _cfg is not None:
+        _cfg = Config(_cfg.path, runtime_path=_cfg.runtime_path)
+
+
 @dataclass(frozen=True)
 class MonitorSchedule:
     """监测与消息静默共用的上海作息；只计算时间，不执行任务。"""

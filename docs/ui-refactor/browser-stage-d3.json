@@ -16,7 +16,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612",
+      "path": "/api/tasks/in_neakasa.global/966105663977",
       "query": "",
       "body": null
     },
@@ -28,13 +28,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/initial-translation/task/in_neakasa.global/997459615612",
+      "path": "/api/initial-translation/task/in_neakasa.global/966105663977",
       "query": "",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/refinements/task/in_neakasa.global/997459615612",
+      "path": "/api/refinements/task/in_neakasa.global/966105663977",
       "query": "",
       "body": null
     },
@@ -46,37 +46,37 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/approval-options",
+      "path": "/api/tasks/in_neakasa.global/966105663977/approval-options",
       "query": "",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/image/0",
+      "path": "/api/tasks/in_neakasa.global/966105663977/image/0",
       "query": "variant=original&v=dfeeb1e9b0b3eb8eac891cdaadf7737dab9146952dfd441a5f3d6d0eb6f51c2c",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/image/0",
+      "path": "/api/tasks/in_neakasa.global/966105663977/image/0",
       "query": "variant=de&v=dfeeb1e9b0b3eb8eac891cdaadf7737dab9146952dfd441a5f3d6d0eb6f51c2c-429b80b951576345e135cfb1bc785af38756def30f92297efca10decc21ca720-manual",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/image/1",
+      "path": "/api/tasks/in_neakasa.global/966105663977/image/1",
       "query": "variant=de&v=dfeeb1e9b0b3eb8eac891cdaadf7737dab9146952dfd441a5f3d6d0eb6f51c2c-429b80b951576345e135cfb1bc785af38756def30f92297efca10decc21ca720-manual",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/image/2",
+      "path": "/api/tasks/in_neakasa.global/966105663977/image/2",
       "query": "variant=de&v=dfeeb1e9b0b3eb8eac891cdaadf7737dab9146952dfd441a5f3d6d0eb6f51c2c-429b80b951576345e135cfb1bc785af38756def30f92297efca10decc21ca720-manual",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/tasks/in_neakasa.global/997459615612/image/1",
+      "path": "/api/tasks/in_neakasa.global/966105663977/image/1",
       "query": "variant=original&v=dfeeb1e9b0b3eb8eac891cdaadf7737dab9146952dfd441a5f3d6d0eb6f51c2c",
       "body": null
     },
@@ -88,7 +88,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/931633789622",
+      "path": "/api/tasks/fa_neakasaofficial/962579296543",
       "query": "",
       "body": null
     },
@@ -100,13 +100,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/initial-translation/task/fa_neakasaofficial/931633789622",
+      "path": "/api/initial-translation/task/fa_neakasaofficial/962579296543",
       "query": "",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/refinements/task/fa_neakasaofficial/931633789622",
+      "path": "/api/refinements/task/fa_neakasaofficial/962579296543",
       "query": "",
       "body": null
     },
@@ -118,20 +118,8 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/931633789622/approval-options",
+      "path": "/api/tasks/fa_neakasaofficial/962579296543/approval-options",
       "query": "",
-      "body": null
-    },
-    {
-      "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/931633789622/image/0",
-      "query": "variant=original&v=45e20145d11cab895e25bcb9d10a1ca0b179aa14edf4ec6641f463f5b421eaa0",
-      "body": null
-    },
-    {
-      "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/931633789622/image/0",
-      "query": "variant=de&v=45e20145d11cab895e25bcb9d10a1ca0b179aa14edf4ec6641f463f5b421eaa0-77802f4311d9d55ec7da7b2fd2d0fc8a42a41cca0a28ca0bc3ff871fe24eec0f-manual",
       "body": null
     }
   ],

@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 from copy import deepcopy
 
-from core.config import cfg
+from core.config import cfg, invalidate_cfg_cache
 from core.paid_model import FileLock
 
 FIELDS = {'default_times': ('publish.schedule_rule', 'times'),
@@ -181,6 +181,9 @@ def save(values, expected_version):
             if path.read_bytes() != before:
                 raise SettingsConflict('保存期间配置被其他程序修改，请重新读取')
             os.replace(temporary, path)
+            # 这次改写和原文等长，(mtime_ns, size) 判据看不见它。原因在
+            # core.config.invalidate_cfg_cache 的注释里。
+            invalidate_cfg_cache()
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

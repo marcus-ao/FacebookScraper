@@ -20,6 +20,10 @@
 | 7 | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) | 那 13 个问题的**提问依据**（已全部决议，口径见 DECISION_LOG） |
 | 8 | [STAGE_A_REPORT.md](STAGE_A_REPORT.md) | Stage A 的执行结果：安装的包与版本、文件清单、测试结果、antd 6 三项核验、新旧 dist 切换方式 |
 | 9 | [STAGE_B_REPORT.md](STAGE_B_REPORT.md) | Stage B1+B2 的执行结果：**最终主色 `#155EEF` 及其判据**、应用外壳、七个共享基元、267 条新增测试、两个分辨率的量值 |
+| 10 | [POST_IMPLEMENTATION_REVIEW.md](POST_IMPLEMENTATION_REVIEW.md) | **实施后独立复核（2026-09-13，基线 `2c89f07`）**：另一位复核者自己量的密度与请求数、对 FINAL 报告 12 条 claim 的逐条验证（其中「浏览器 12/12 PASS」**本机复现不出来**）、5 处已修与 8 类明确不修、`tests_operating_settings` 波动的根因实测 |
+| 11 | [PRE_CUTOVER_REPORT.md](PRE_CUTOVER_REPORT.md) | **切换前稳定化（2026-09-14，基线 `2c89f07`）**：在真实 FastAPI 上挂 React dist 的演练 —— **所有非 `/` 的路径原本 404**，刷新详情页就是一行 `{"detail":"Not Found"}`；这一条的修法、回滚路径验证、9 项 A–I 修复、配置缓存失效的确定性回归测试，以及唯一没解决的历史缩略图成本。§18 是 Release Candidate 冻结，最终结论 **CUTOVER_READY** |
+| 12 | [CUTOVER_CHECKLIST.md](CUTOVER_CHECKLIST.md) | **上线当天从头勾到尾的那一张**：切换前、切换、只读 smoke、低风险写入、受监督的真实 approve、回滚触发条件与回滚步骤 |
+| 13 | [RELEASE_CANDIDATE_MANIFEST.md](RELEASE_CANDIDATE_MANIFEST.md) | 建 release commit 时哪些文件是长期资产、哪些只是这几轮的取证材料 |
 
 ## 不要搞混的两个 DESIGN.md
 

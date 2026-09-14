@@ -1,0 +1,29 @@
+{
+  "engine": "vue",
+  "dist": "web/ui/dist",
+  "http": {
+    "/": 200,
+    "/?view=history": 200,
+    "/?view=calendar": 200,
+    "/?view=settings": 200,
+    "/?view=runtime": 200,
+    "/?task=fa_neakasaofficial/1234567890": 200,
+    "/api/tasks": 200,
+    "/api/runtime": 200,
+    "/api/settings": 200,
+    "/api/calendar": 200,
+    "/assets/index-BFSrMYLJ.js": 200
+  },
+  "legacy": {
+    "/?task=fa_neakasaofficial/1234567890": "/?task=fa_neakasaofficial/1234567890",
+    "/?view=history": "/?view=history",
+    "/?view=calendar": "/?view=calendar"
+  },
+  "external_writes": [],
+  "resolved_dist": "D:\\VSCodeWorkspace\\Facebook\\FacebookScraper\\.worktrees\\business-workflow\\web\\ui\\dist",
+  "asset": "/assets/index-BFSrMYLJ.js",
+  "missing_asset_status": 404,
+  "missing_api_status": 404,
+  "page_errors": [],
+  "all_http_ok": true
+}

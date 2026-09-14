@@ -17,7 +17,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530",
       "query": "",
       "body": null
     },
@@ -29,13 +29,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/initial-translation/task/fa_neakasaofficial/909298601938",
+      "path": "/api/initial-translation/task/fa_neakasaofficial/960164487530",
       "query": "",
       "body": null
     },
     {
       "method": "GET",
-      "path": "/api/refinements/task/fa_neakasaofficial/909298601938",
+      "path": "/api/refinements/task/fa_neakasaofficial/960164487530",
       "query": "",
       "body": null
     },
@@ -47,25 +47,13 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approval-options",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approval-options",
       "query": "",
       "body": null
     },
     {
-      "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/image/0",
-      "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
-      "body": null
-    },
-    {
-      "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/image/0",
-      "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual",
-      "body": null
-    },
-    {
       "method": "POST",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approve",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approve",
       "query": "",
       "body": {
         "scheduled_at": "2026-09-15T10:30",
@@ -77,13 +65,19 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approval-options",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approval-options",
       "query": "",
       "body": null
     },
     {
       "method": "POST",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approve",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approve",
       "query": "",
       "body": {
         "scheduled_at": "2026-09-15T10:30",
@@ -95,13 +89,19 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approval-options",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approval-options",
       "query": "",
       "body": null
     },
     {
       "method": "POST",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938/approve",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530/approve",
       "query": "",
       "body": {
         "scheduled_at": "2026-09-15T11:30",
@@ -113,7 +113,7 @@
     },
     {
       "method": "GET",
-      "path": "/api/tasks/fa_neakasaofficial/909298601938",
+      "path": "/api/tasks/fa_neakasaofficial/960164487530",
       "query": "",
       "body": null
     }
