@@ -3,8 +3,40 @@ from __future__ import annotations
 
 from pipeline.risk_scan import result_for
 from core import localization, translated
-from core.store import assert_physical_direct_path
+from core.store import assert_physical_direct_path, infer_tags, post_directory
 from localize import images as image_de
+
+# 发现卡片上的英文摘要长度；够判断"现在开还是等会儿开"，不喧宾夺主。
+DISCOVERED_EXCERPT = 300
+
+
+def discovered_material(account, source):
+    """抓取刚完成时的卡片素材。此刻没有译文也没有德语图，**不要复用 material()**——
+    它会去读 translated.jsonl 与 media_de/，在发现阶段只会退化成"德语稿尚未就绪"。"""
+    images = [item for item in source.get('media') or []
+              if isinstance(item, dict) and item.get('kind') == 'image']
+    tags = source.get('tags')
+    if not isinstance(tags, list) or not tags:
+        tags = infer_tags(source.get('text') or '')
+    directory = post_directory(account, source)
+    meta = ['%d 张图 · 产品 %s' % (len(images), '、'.join(tags) if tags else '未分类'),
+            '归档 %s' % directory.relative_to(account).as_posix()]
+    owner = (source.get('owner') or '').strip()
+    coauthors = [name for name in source.get('coauthors') or [] if isinstance(name, str) and name.strip()]
+    if owner and owner != (source.get('account') or '').strip():
+        # 合作帖由一方发布、双方主页同时显示；不写清楚会被当成本账号原创。
+        meta.append('合作帖，原作者 %s' % owner)
+    if coauthors:
+        meta.append('合作方 %s' % '、'.join(coauthors))
+    path = None
+    if images:
+        path, _ = image_de._source_from_manifest(account, source, images[0])
+        assert_physical_direct_path(path.parent, path, kind='file', label='发现卡首图')
+    return {'text': (source.get('text') or '').strip()[:DISCOVERED_EXCERPT],
+            'meta': '\n'.join(meta), 'image_count': len(images), 'tags': list(tags),
+            'image_note': '原帖预览，德语稿尚未开始'}, path
+
+
 def material(account, source):
     identifier = source['post_id']
     machine = translated.load_translated(account / 'translated.jsonl').get(identifier)

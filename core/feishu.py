@@ -15,9 +15,13 @@ import httpx
 from core.config import MonitorSchedule, cfg
 from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 
-KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning'}
-TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
+KINDS = {'discovered', 'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning'}
+TITLES = {'discovered': '监测到新帖', 'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
           'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况'}
+# 静默窗只压业务待办；发现提醒和系统告警是链路存活信号，压住它们等于让沉默继续有歧义。
+ALWAYS_DELIVERED = {'system', 'discovered'}
+# 发送前重新取当前素材并上传首图的消息类型。
+PREVIEWED = {'ready', 'discovered'}
 
 
 class FeishuError(RuntimeError):
@@ -140,7 +144,8 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings)
         if payload.get('image_key'):
             elements.append({'tag': 'img', 'img_key': payload['image_key'],
                              'alt': {'tag': 'plain_text', 'content': payload.get('image_note', '帖子首图')}, 'mode': 'fit_horizontal'})
-        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'text', 'image_note', 'risk', 'next_step')
+        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'meta', 'text',
+                                               'image_note', 'risk', 'next_step')
                  if payload.get(key)]
         elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': '\n'.join(parts)[:1600]}})
         if payload.get('task_id'):
@@ -392,7 +397,7 @@ class Outbox:
         with self._lock():
             data = self._load()
             for kind in sorted(KINDS):
-                if kind != 'system' and not self.schedule.is_on_duty(now):
+                if kind not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
                 recipients = (self.settings.technical_recipients if kind == 'system' else self.settings.recipients)
                 for recipient in dict.fromkeys(recipients):
@@ -408,9 +413,9 @@ class Outbox:
                     for group in groups:
                         payloads = [dict(data['events'][key]['payload']) for key in group]
                         for payload in payloads:
-                            if kind == 'ready' and prepare_payload is not None:
+                            if kind in PREVIEWED and prepare_payload is not None:
                                 try:
-                                    prepare_payload(payload)
+                                    prepare_payload(kind, payload)
                                 except Exception as exc:
                                     payload['next_step'] = '预览图暂未加载，请进入审校台查看完整素材。'
                                     payload['preview_error'] = 'authentication' if isinstance(exc, FeishuAuthError) else 'image_upload_failed'
@@ -431,7 +436,7 @@ class Outbox:
             for delivery_id, item in data['deliveries'].items():
                 if item['status'] in {'sent', 'uncertain', 'cancelled'} or item['next_at'] > stamp:
                     continue
-                if item['kind'] != 'system' and not self.schedule.is_on_duty(now):
+                if item['kind'] not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
                 if item['attempts'] and now - datetime.fromisoformat(item.get('retry_authorized_at', item['created_at'])) >= timedelta(minutes=50):
                     # 不无限依赖远端去重时间窗；旧不确定请求交由人核对，避免重复催促。

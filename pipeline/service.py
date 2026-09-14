@@ -261,15 +261,20 @@ class Runtime:
         except Exception as exc:
             notify.notify('审校提醒暂未投递', type(exc).__name__ + '；请检查飞书配置与发件箱。', popup=False)
 
-    def prepare_preview(self, payload):
+    def prepare_preview(self, kind, payload):
         origin = self.thumbnail_sources.get(payload.get('task_id'))
         if origin is None:
             return
         directory, indexed = origin
         source, _ = read_post_truth(directory, indexed)
-        current, path = notifications.material(directory, source)
-        payload.update(current)
-        payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
+        if kind == 'discovered':
+            # 发现阶段没有译文和德语图；走 material() 只会把英文原文换成"德语稿尚未就绪"。
+            current, path = notifications.discovered_material(directory, source)
+            payload.update(current)
+        else:
+            current, path = notifications.material(directory, source)
+            payload.update(current)
+            payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
         if path is None:
             return
         if path.stat().st_size >= 10 * 1024 * 1024:
@@ -344,6 +349,24 @@ class Runtime:
         if result['pending']:
             self._system(f'mirror-pending:{now.date()}', '云盘镜像还有未完成条目，系统会重试；本地留档不受影响。', now)
 
+    def _announce_discoveries(self, sources, now: datetime):
+        """监测发现的帖子逐篇报出来。回填是人主动滚的历史，不在这里推。"""
+        for ref, (directory, source) in sources.items():
+            if source.get('source_route') != 'delta':
+                continue
+            try:
+                material, _ = notifications.discovered_material(directory, source)
+            except (OSError, ValueError) as exc:
+                # 一篇坏归档只丢它自己的卡片，不能连累本轮其余通知；失败要留痕。
+                self._system(f'discovered:{ref}:{now.date()}',
+                             f'{ref} 已抓取，但发现卡素材读不出（{type(exc).__name__}），请检查归档。', now)
+                continue
+            self.outbox.enqueue('discovered:' + ref, 'discovered', {
+                'task_id': directory.name + '/' + source['post_id'],
+                'platform': source['platform'], 'account': source['account'],
+                'created_at': source['created_at'], 'permalink': source.get('permalink'),
+                **material}, now)
+
     def collect(self, directories, now: datetime):
         started_at = self.outbox.started_at(now)
         sources = {}
@@ -359,6 +382,7 @@ class Runtime:
                 sources[ref] = (directory, source)
         self.thumbnail_sources = {directory.name + '/' + source['post_id']: (directory, source)
                                   for directory, source in sources.values()}
+        self._announce_discoveries(sources, now)
         scheduled = journal.scheduled_source_refs(self.c.state_dir)
         pending = {}
         valid_ready = set()
