@@ -55,6 +55,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
   const tab = ['text', 'images', 'localization'].includes(search.get('tab') ?? '') ? search.get('tab')! : 'text'
   const changeTab = (value: string) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
+  // 标签页首次打开才挂载，之后一直留着。两边都要：图片没挂载就不会提前拉全尺寸原图/德语图
+  // （Cache-Control: no-cache，每次进详情都是真实往返），标签页留着则保证已经花钱生成的
+  // 标签建议不会因为切一下正文就消失。换篇时整棵子树随 AppShell 的 Outlet key 重建。
+  const opened = useRef(new Set([tab]))
+  opened.current.add(tab)
   const adoptCandidate = (job: ContentJob) => {
     const adopt = () => {
       let body = job.body_de ?? ''
@@ -105,10 +110,10 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <div hidden={tab !== 'text'}><TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
         active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
         onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} /></div>
-      {tab === 'localization' && <LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
+      {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
-      }} />}
-      <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images} onProgress={setUnseen} /></div>
+      }} /></div>}
+      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images} onProgress={setUnseen} /></div>}
       <div className={styles.counter}>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}

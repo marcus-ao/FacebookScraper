@@ -12,7 +12,7 @@
  *      也不能分享）。
  */
 
-import type { DisplayStatus, QueueBucket } from '@/types/domain'
+import type { DisplayStatus, Platform, QueueBucket } from '@/types/domain'
 
 export const QUEUE_BUCKETS = ['review', 'not_ready', 'snoozed', 'processed'] as const
 
@@ -43,6 +43,45 @@ const isQueueBucket = (value: string | null): value is QueueBucket =>
 /** 未知或缺省一律回落 `review`。 */
 export function parseQueue(value: string | null | undefined): QueueBucket {
   return isQueueBucket(value ?? null) ? (value as QueueBucket) : DEFAULT_QUEUE
+}
+
+// ─── 手改 URL 的边界 ────────────────────────────────────────────────────────
+//
+// 这三个参数都会原样发给后端，所以形状必须和真实契约对齐，**逐个查过**：
+//
+//   platform  web/api/app.py:95 写死 pattern `^(facebook|instagram)$`。
+//             历史页的筛选是服务端做的，`?platform=facebookk` 直接 422 ——
+//             她看到的是整页「暂时无法读取历史归档」。
+//   month     后端没有 pattern，只做等值匹配（core/index_db.py:182），非法值
+//             不报错、永远查不到东西。取值来自 `created_at[:7]`，另外
+//             core/index_db.py:113 会给缺日期的帖子写一个真实取值 `undated`，
+//             它也在筛选下拉里，所以不能只认 YYYY-MM。
+//   tag       后端没有 pattern，是自由业务标签（core/index_db.py:186 另外认一个
+//             `__untagged__` 哨兵）。⛔ 不要在这里编一份白名单 —— 归档里有什么
+//             标签是运营说了算的，前端拦一下就等于把真实数据筛没了。
+
+const PLATFORMS: readonly Platform[] = ['facebook', 'instagram']
+const MONTH = /^\d{4}-(?:0[1-9]|1[0-2])$/
+
+/** 非法一律 null：宁可当成"没筛"，也不要把 422 甩到她脸上。 */
+export function parsePlatform(value: string | null | undefined): Platform | null {
+  return PLATFORMS.find(platform => platform === value) ?? null
+}
+
+export function parseMonth(value: string | null | undefined): string | null {
+  if (!value) return null
+  return MONTH.test(value) || value === 'undated' ? value : null
+}
+
+/** 只去首尾空白。自由标签的取值范围由归档决定，不由这里决定。 */
+export function parseTag(value: string | null | undefined): string | null {
+  return value?.trim() || null
+}
+
+const SANITIZERS: Readonly<Record<string, (value: string) => string | null>> = {
+  platform: parsePlatform,
+  month: parseMonth,
+  tag: parseTag,
 }
 
 /** 某个真实 status 属于哪个分桶。 */
@@ -85,11 +124,15 @@ function read(params: ParamsLike, key: string): string | null {
  * 从当前列表的参数里挑出要带进详情的那几个。
  *
  * 空串与 null 一律丢掉 —— 带上 `platform=` 这种空参数会让后端的 pattern 校验 422。
+ * 非法值同样丢掉，所以手改坏的 URL 走一圈回来就被洗干净了，不会再传下去。
  */
 export function pickContext(params: ParamsLike, source: ListSource): URLSearchParams {
   const out = new URLSearchParams()
   for (const key of CONTEXT_KEYS[source]) {
-    const value = read(params, key)
+    const raw = read(params, key)
+    if (raw === null || raw === '') continue
+    const sanitize = SANITIZERS[key]
+    const value = sanitize ? sanitize(raw) : raw
     if (value === null || value === '') continue
     out.set(key, value)
   }
@@ -122,7 +165,7 @@ export function buildListSearch(params: ParamsLike, source: ListSource): string 
  */
 export interface ReviewListQuery {
   readonly queue: QueueBucket
-  readonly platform: string | null
+  readonly platform: Platform | null
   readonly month: string | null
   readonly tag: string | null
   readonly alerts: boolean
@@ -131,15 +174,15 @@ export interface ReviewListQuery {
 export function parseReviewListQuery(params: ParamsLike): ReviewListQuery {
   return {
     queue: parseQueue(read(params, 'queue')),
-    platform: read(params, 'platform') || null,
-    month: read(params, 'month') || null,
-    tag: read(params, 'tag') || null,
+    platform: parsePlatform(read(params, 'platform')),
+    month: parseMonth(read(params, 'month')),
+    tag: parseTag(read(params, 'tag')),
     alerts: read(params, 'alerts') === '1',
   }
 }
 
 export interface HistoryListQuery {
-  readonly platform: string | null
+  readonly platform: Platform | null
   readonly month: string | null
   readonly tag: string | null
   readonly page: number
@@ -151,9 +194,9 @@ export function parseHistoryListQuery(params: ParamsLike): HistoryListQuery {
   const rawLimit = Number(read(params, 'limit'))
   const allowed: readonly number[] = HISTORY_PAGE_SIZES
   return {
-    platform: read(params, 'platform') || null,
-    month: read(params, 'month') || null,
-    tag: read(params, 'tag') || null,
+    platform: parsePlatform(read(params, 'platform')),
+    month: parseMonth(read(params, 'month')),
+    tag: parseTag(read(params, 'tag')),
     page: Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1,
     limit: allowed.includes(rawLimit) ? rawLimit : DEFAULT_HISTORY_LIMIT,
   }

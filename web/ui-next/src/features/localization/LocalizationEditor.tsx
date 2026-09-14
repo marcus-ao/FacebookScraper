@@ -53,8 +53,13 @@ export function LocalizationEditor({ detail, draft, editing, onChange, onInsert 
             {!candidate.current_signals?.[metric] && '（已过期或不可跨批比较）'}</> : '未采样，不能当作 0'}</div> })}
         </div>)}</div>)}
         <Button disabled={!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256} onClick={() => { const tags = parseSemanticTags(selected.join(' '), draft.protected_tags); setInput(tags.filter(tag => !draft.protected_tags.includes(tag)).join(' ')); update({ tags, hashtags_confirmed: false }) }}>采用勾选到编辑区</Button>
+        {/* 「建议不自动写入」原来是常驻一行。它只在真有建议、真要决定采不采时才有用，
+            所以挪到按钮旁边说一次。 */}
+        <span className={styles.help}> 勾选不会自动生效，按这个按钮才替换编辑区的标签。</span>
       </> }]} />}
-      <p className={styles.help}>建议不自动写入。保存会保留超出上限的标签，供人工调整。</p>
+      {/* 超出上限的提示只在真的快超了才出现 —— 平时它是一句和这一篇无关的系统说明。
+          Facebook 没有这个上限，所以也不对它说。 */}
+      {draft.platform === 'instagram' && draft.tags.length >= 27 && <p className={styles.help}>接近 30 个上限。保存不会替你删标签，超出的部分要自己取舍。</p>}
     </section>
     <section className={styles.section} aria-label="链接与引导"><h2>{draft.platform === 'instagram' ? 'Instagram 主页引导' : 'Facebook 德语落地页'}</h2>
       {!draft.links.length && <p className={styles.help}>原帖没有链接。</p>}
@@ -71,7 +76,9 @@ export function LocalizationEditor({ detail, draft, editing, onChange, onInsert 
         <p className={styles.help}>原文链接从发布文案中移除，使用引导话术前往主页。</p>
         {editing ? <><label className={styles.field}>常用引导话术<Select aria-label="常用引导话术" value={draft.cta_presets.includes(draft.ig_cta) ? draft.ig_cta : draft.ig_cta ? '__custom__' : ''} onChange={value => { if (value !== '__custom__') update({ ig_cta: value }) }} options={[{ value: '', label: '不添加' }, ...draft.cta_presets.map(value => ({ value, label: value })), { value: '__custom__', label: '自定义（下方输入）' }]} /></label><label className={styles.field}>自定义 bio 引导<Input value={draft.ig_cta} onChange={event => update({ ig_cta: event.target.value })} aria-label="自定义 bio 引导" /></label></> : <p>{draft.ig_cta || '未添加引导话术'}</p>}
         <p className={styles.help}>当前 bio（只读）：{canOpen(draft.ig_bio_url) ? <a href={draft.ig_bio_url} target="_blank" rel="noopener noreferrer">{draft.ig_bio_url}</a> : '未配置'}</p>
-      </> : <p className={styles.help}>插入链接可指定正文位置；未插入的链接将放在文末。仅保存本篇选择。</p>}
+      {/* ⛔ 这一句不能删：它决定帖子发出去长什么样。「插入正文」按钮上已经写了位置怎么定，
+          「仅保存本篇选择」是系统实现说明 —— 这两半去掉，剩下的就是她需要知道的那一半。 */}
+      </> : draft.links.length > 0 ? <p className={styles.help}>没有插入正文的链接会放在文末。</p> : null}
     </section>
   </div>
 }

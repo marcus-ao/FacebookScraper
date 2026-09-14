@@ -6,6 +6,7 @@ import type { ContentJob, TaskDetail } from '@/types/domain'
 import { initialCapabilities, initialTranslate, refinementCapabilities, refine, jobRunning, getTemplate } from '@/services/jobs'
 import { useContentJob } from '@/hooks/useContentJob'
 import { PaidActionButton } from '@/components/PaidActionButton'
+import { initialTranslationDisabledReason, refinementDisabledReason } from '@/lib/action-reasons'
 import { isConflict } from '@/services/http'
 import { displayLinks } from '@/features/localization/model'
 import styles from './ContentJobs.module.css'
@@ -28,9 +29,11 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   useEffect(() => { setConsent(false) }, [detail.text.source_text_sha256, detail.review.revision])
   const eligible = ['pending_review', 'edited', 'not_ready'].includes(detail.status) && !detail.text.stale
   const remaining = Math.max(0, (capabilities.data?.max_refine_per_media ?? 0) - (capabilities.data?.image_attempts[String(media)] ?? 0))
-  const common = editing ? '请先保存或放弃当前编辑' : busy ? '正在处理，请等待' : ''
-  const firstReason = common || (jobRunning(first.job) ? '当前初翻仍在处理' : first.job?.status === 'interrupted' ? '请先核对中断的处理' : !initial.data?.available ? '当前无法开始初翻，请刷新处理状态' : !consent ? '请先确认可以处理这篇第三方内容' : '')
-  const nextReason = common || (!eligible ? '请先恢复审校并复核原文变化' : jobRunning(next.job) ? '当前优化仍在生成' : next.job?.status === 'interrupted' ? '请先核对中断的处理' : !instruction.trim() ? '请填写本次希望怎样调整' : !capabilities.data ? '正在读取可用次数与费用' : kind === 'image' && !remaining ? '这张图片的优化次数已用完' : '')
+  // 两条原因链的优先级写在 lib/action-reasons.ts 里，那里有单测；这里只喂事实。
+  const firstReason = initialTranslationDisabledReason({ editing, busy, running: jobRunning(first.job),
+    interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: consent })
+  const nextReason = refinementDisabledReason({ editing, busy, eligible, running: jobRunning(next.job),
+    interrupted: next.job?.status === 'interrupted', instruction, capabilitiesLoaded: !!capabilities.data, kind, remaining })
   const act = async (family: 'initial' | 'refine') => {
     setBusy(true); setError(null)
     try { if (family === 'initial' && initial.data) { first.accept(await initialTranslate(detail, initial.data, consent)); setConsent(false); await initial.refetch() }

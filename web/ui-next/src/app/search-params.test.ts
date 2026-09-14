@@ -10,6 +10,9 @@ import {
   buildDetailSearch,
   buildListSearch,
   legacyRedirect,
+  parseMonth,
+  parsePlatform,
+  parseTag,
   parseHistoryListQuery,
   parseQueue,
   parseReviewListQuery,
@@ -251,5 +254,76 @@ describe('旧 URL 永久兼容（DECISION_LOG D11）', () => {
     const result = legacyRedirect('?task=fa_x/a b')
     expect(result).toBe('/review/fa_x/a%20b')
     expect(result?.split('/').filter(Boolean)).toHaveLength(3)
+  })
+})
+
+// 她会手改 URL，也会把链接复制来复制去。这一组的口径逐个对过真实后端契约：
+// platform 有 pattern（web/api/app.py:95），month 与 tag 没有。
+describe('手改坏的 URL 不要甩一个 422 给她', () => {
+  it('platform 只认后端 pattern 里的那两个', () => {
+    expect(parsePlatform('facebook')).toBe('facebook')
+    expect(parsePlatform('instagram')).toBe('instagram')
+    // 这个值会让 /api/tasks 直接 422，整页变成「暂时无法读取历史归档」。
+    expect(parsePlatform('facebookk')).toBeNull()
+    expect(parsePlatform('FACEBOOK')).toBeNull()
+    expect(parsePlatform('tiktok')).toBeNull()
+    expect(parsePlatform(null)).toBeNull()
+  })
+
+  it('month 认 YYYY-MM，也认归档里真实存在的 undated', () => {
+    expect(parseMonth('2026-09')).toBe('2026-09')
+    expect(parseMonth('2026-01')).toBe('2026-01')
+    expect(parseMonth('2026-12')).toBe('2026-12')
+    // core/index_db.py:113 给缺日期的帖子写的就是这个值，筛选下拉里会出现。
+    expect(parseMonth('undated')).toBe('undated')
+  })
+
+  it('month 不认不存在的月份和别的形状', () => {
+    expect(parseMonth('2026-99')).toBeNull()
+    expect(parseMonth('2026-00')).toBeNull()
+    expect(parseMonth('2026-13')).toBeNull()
+    expect(parseMonth('2026-9')).toBeNull()
+    expect(parseMonth('2026-09-14')).toBeNull()
+    expect(parseMonth('hello')).toBeNull()
+  })
+
+  it('⛔ tag 是自由业务标签，这里不许编白名单', () => {
+    // 归档里有什么标签是运营说了算的。前端拦一下就等于把真实数据筛没了。
+    expect(parseTag('Riko')).toBe('Riko')
+    expect(parseTag('促销')).toBe('促销')
+    expect(parseTag('#Katzen 2026')).toBe('#Katzen 2026')
+    // 后端另外认这一个哨兵（core/index_db.py:186）。
+    expect(parseTag('__untagged__')).toBe('__untagged__')
+    expect(parseTag('  ')).toBeNull()
+    expect(parseTag('')).toBeNull()
+  })
+
+  it('列表查询把非法值当成"没筛"，不原样发出去', () => {
+    const review = parseReviewListQuery({ queue: 'review', platform: 'tiktok', month: '2026-99', tag: ' ' })
+    expect(review.platform).toBeNull()
+    expect(review.month).toBeNull()
+    expect(review.tag).toBeNull()
+    const history = parseHistoryListQuery({ platform: 'facebookk', month: 'hello', page: '2' })
+    expect(history.platform).toBeNull()
+    expect(history.month).toBeNull()
+    expect(history.page).toBe(2)
+  })
+
+  it('详情 URL 里也不再带着坏值往下传', () => {
+    const search = buildDetailSearch({ queue: 'review', platform: 'tiktok', month: '2026-99', tag: 'Riko' }, 'review', { tab: 'images' })
+    expect(search).not.toContain('tiktok')
+    expect(search).not.toContain('2026-99')
+    // 合法的那些一个都不能丢。
+    expect(search).toContain('queue=review')
+    expect(search).toContain('tag=Riko')
+    expect(search).toContain('tab=images')
+  })
+
+  it('合法值原样通过，不会被"顺手规范化"成别的东西', () => {
+    const search = buildListSearch({ platform: 'instagram', month: '2026-09', tag: '__untagged__', page: '3', limit: '20' }, 'history')
+    expect(new URLSearchParams(search).get('platform')).toBe('instagram')
+    expect(new URLSearchParams(search).get('month')).toBe('2026-09')
+    expect(new URLSearchParams(search).get('tag')).toBe('__untagged__')
+    expect(new URLSearchParams(search).get('page')).toBe('3')
   })
 })

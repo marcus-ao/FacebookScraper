@@ -1,6 +1,7 @@
-import { Button, Tooltip } from 'antd'
+import { Button } from 'antd'
 
 import { cx } from '@/lib/css'
+import { DisabledReason } from './DisabledReason'
 import styles from './PaidActionButton.module.css'
 
 /**
@@ -66,18 +67,11 @@ export function PaidActionButton({
 
   return (
     <span className={cx(styles.wrap)}>
-      {disabled ? (
-        // disabled 的元素不发鼠标事件，Tooltip 挂不上去，所以包一层 span。
-        // aria-describedby 由 Tooltip 负责；这里再给一个原生 title 兜底，
-        // 保证"为什么不能点"在任何情况下都拿得到。
-        <Tooltip title={disabledReason}>
-          <span className={cx(styles.disabledWrap)} title={disabledReason}>
-            {button}
-          </span>
-        </Tooltip>
-      ) : (
-        button
-      )}
+      {/* 灰着时由 DisabledReason 包一层：鼠标拿到 Tooltip 与 title，
+          键盘 Tab 停在那一层上读到「动作名。当前不能操作：原因」。 */}
+      <DisabledReason label={text} reason={disabledReason ?? ''}>
+        {button}
+      </DisabledReason>
       {remaining === undefined ? null : (
         <span className={cx(styles.remaining)}>剩余 {remaining} 次</span>
       )}

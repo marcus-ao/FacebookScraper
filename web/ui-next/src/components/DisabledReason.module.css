@@ -1,0 +1,7 @@
+/* disabled 的 button 不派发鼠标事件，Tooltip 与 not-allowed 光标都要挂在外层。 */
+.wrap {
+  display: inline-flex;
+  cursor: not-allowed;
+  /* 焦点停在这一层时，焦点环要跟里面那个按钮同一个圆角。 */
+  border-radius: var(--rc-radius);
+}

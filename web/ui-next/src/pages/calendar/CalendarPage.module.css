@@ -4,6 +4,11 @@
 .weekday { padding: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); background: var(--rc-surface-sunken); }
 .day { min-height: var(--rc-calendar-day-h); padding: var(--rc-space-2); border-top: 1px solid var(--rc-border); border-right: 1px solid var(--rc-border); }
 .day:nth-child(7n) { border-right: 0; }
+/* 「今天」：一圈细描边 + 一个小字，够一眼扫到就行。它绝不能压过卡片上的
+   已发布 / 已排期 / 待核验三种状态色 —— 那三个才是她要看的东西。
+   outline 不参与布局，所以格子的几何一个像素都不变。 */
+.today { outline: 1px solid var(--rc-primary); outline-offset: -1px; }
+.todayMark { color: var(--rc-primary); font-weight: var(--rc-weight-strong); }
 .date { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
 .card { width: 100%; border: 0; background: var(--rc-surface-sunken); border-radius: var(--rc-radius); color: var(--rc-fg); text-align: left; cursor: pointer; padding: var(--rc-space-2); display: flex; flex-wrap: wrap; gap: var(--rc-space-1); margin-top: var(--rc-space-2); font: inherit; font-size: var(--rc-font-meta); }
 .card :global(.ant-tag) { white-space: normal; margin: 0; }

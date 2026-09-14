@@ -26,6 +26,15 @@ export function berlinInput(iso: string | null | undefined): string {
 /** 比较两条柏林墙上时刻的缓存间隔，不负责判断 DST 合法性。 */
 export const wallMinutesApart = (a: string, b: string) => Math.abs(Date.parse(a.slice(0, 16) + ':00Z') - Date.parse(b.slice(0, 16) + ':00Z')) / 60000
 
+/**
+ * 业务口径的「今天」，`YYYY-MM-DD`。
+ *
+ * ⚠️ 不能用 `new Date().getDate()`：这台机器在中国，柏林当地 00:00–07:00 那几个
+ * 小时里浏览器已经是第二天了。月历的日期格和每张卡的 `at_business` 都是柏林
+ * 墙上日期，标错一天就等于把「今天」指到别的格子上。
+ */
+export const berlinToday = (now: Date = new Date()) => berlinInput(now.toISOString()).slice(0, 10)
+
 /** 月历只迭代日期标签；跨月边界和每张卡的柏林日期均来自后端。 */
 export function calendarDays(start: string, end: string): (string | null)[] {
   const first = new Date(start.slice(0, 10) + 'T00:00:00Z'), last = new Date(end.slice(0, 10) + 'T00:00:00Z')

@@ -8,8 +8,10 @@ import {
   STATUS_LABEL,
   formatDate,
   formatSchedule,
+  berlinToday,
   formatTrailTime,
   formatWakeAt,
+  wallMinutesApart,
 } from './format'
 
 // 这份测试跑在 TZ=America/New_York 下（见 vitest.config.ts）：
@@ -165,5 +167,36 @@ describe('文案表', () => {
     expect(Object.keys(RISK_KIND_LABEL)).toHaveLength(3)
     expect(Object.keys(ACTION_LABEL)).toHaveLength(9)
     expect(ACTION_LABEL.text_edited).toBe('修改了德语译文')
+  })
+})
+
+describe('berlinToday：月历的「今天」按柏林算，不按浏览器本地时区', () => {
+  // 这组用例的价值全在"跑在 America/New_York 下"这件事上：下面每一个断言
+  // 换成 new Date().getDate() 都会是另一个日期。
+  it('柏林已经跨到第二天，纽约和上海都还没有', () => {
+    // 2026-09-13T22:30Z：柏林 +02:00 → 09-14 00:30，纽约 -04:00 → 09-13 18:30。
+    expect(berlinToday(new Date('2026-09-13T22:30:00Z'))).toBe('2026-09-14')
+  })
+
+  it('上海已经是第二天了，柏林还没有 —— 这台机器在中国', () => {
+    // 2026-09-13T17:00Z：上海 +08:00 → 09-14 01:00，柏林 +02:00 → 09-13 19:00。
+    expect(berlinToday(new Date('2026-09-13T17:00:00Z'))).toBe('2026-09-13')
+  })
+
+  it('冬令时按 +01:00 算，不是固定偏移', () => {
+    // 2026-01-13T23:30Z：柏林 +01:00 → 01-14 00:30。
+    expect(berlinToday(new Date('2026-01-13T23:30:00Z'))).toBe('2026-01-14')
+    // 同一个墙上钟点，夏令时那天就该停在当天。
+    expect(berlinToday(new Date('2026-07-13T22:30:00Z'))).toBe('2026-07-14')
+  })
+})
+
+describe('wallMinutesApart：跨午夜也是真实分钟差', () => {
+  it('23:30 与次日 00:30 是 60 分钟，不是"不同的两天"', () => {
+    expect(wallMinutesApart('2026-09-14T00:30', '2026-09-13T23:30:00+02:00')).toBe(60)
+  })
+
+  it('两边顺序无关', () => {
+    expect(wallMinutesApart('2026-09-13T23:30', '2026-09-14T00:30:00+02:00')).toBe(60)
   })
 })

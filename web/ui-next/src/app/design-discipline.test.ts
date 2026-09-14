@@ -404,3 +404,34 @@ describe('本版不做的东西，代码里也不许出现', () => {
     expect(offenders).toEqual([])
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 九、切换前定下来的两条，别被顺手"清理"掉
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('切换前的加固不许被无声删掉', () => {
+  const globalCss = readRaw(join(SRC, 'styles/global.css'))
+
+  it('⛔ antd loading 图标的离场规则还在', () => {
+    // 这条规则看起来像一行可以清理掉的 hack，实际上它管的是无障碍：
+    // antd 的 Button 用 rc-motion 做 loading 图标进出场、`removeOnLeave: true`
+    // 但没有 motionDeadline，loading 在一次 180ms 动效之内 true→false 时
+    // （本机 FastAPI 基本都这么快，409 实测 8ms）离场的 transitionend 收不到，
+    // 节点永远停在 `-leave-active` 上。它 width/opacity 都是 0，屏幕上看不见，
+    // 所以这不是视觉故障 —— 是按钮的可及名永远变成「loading 保存分类」，
+    // 读屏会念一个早就结束的 loading，按可及名定位的自动化也再找不到它。
+    // 浏览器侧的证据是 browser_regression 的 Stage I。
+    expect(globalCss).toContain('.ant-btn-loading-icon-motion-leave')
+    expect(globalCss).toMatch(/\.ant-btn-loading-icon-motion-leave\s*\{[^}]*display:\s*none\s*!important/)
+  })
+
+  it('⛔ 月历不许再出现那套无效的 list 语义', () => {
+    // 原来网格是 role="list"，但直接子节点里混着七个星期标题和月初补位格，
+    // 两样都不是 listitem —— 读屏拿到的是一个结构无效的列表。
+    // 删掉之后日期格改用 data-day 定位，浏览器断言与 review_probe 都靠它。
+    const calendar = read(join(SRC, 'pages/calendar/CalendarPage.tsx'))
+    expect(calendar).not.toMatch(/role=["']list["']/)
+    expect(calendar).not.toMatch(/role=["']listitem["']/)
+    expect(calendar).toContain('data-day')
+  })
+})

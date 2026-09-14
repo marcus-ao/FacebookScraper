@@ -126,7 +126,7 @@ def main():
                 assert not ui.errors,ui.errors
                 assert not fx.denied_backend_requests,fx.denied_backend_requests
                 report={'workflows':all_results,'identical_write_contracts':WORKFLOWS,'read_sequence_differences':differences,
-                    'explanation':'React adds shared Header runtime GET, detail calendar GET, eagerly mounted image reads and query cache reuse; UI confirmation and tab layout change read timing. Mutation endpoints and complete bodies are identical. /check retains full localization and is debounced.',
+                    'explanation':'React adds shared Header runtime GET, detail calendar GET and query cache reuse; UI confirmation and tab layout change read timing. Image reads now happen only after the images tab is first opened (post-implementation review fix), so the text-only path issues fewer reads than before. Mutation endpoints and complete bodies are identical. /check retains full localization and is debounced.',
                     'external_calls':0,'server_denials':fx.denied_backend_requests}
                 (ROOT/'docs/ui-refactor/network-comparison.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
                 print(f'{len(WORKFLOWS)} workflows: identical mutation method/path/full body; both UIs driven.',flush=True)

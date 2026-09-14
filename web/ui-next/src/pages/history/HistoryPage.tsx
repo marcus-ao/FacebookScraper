@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Alert, Button, Empty, Pagination, Tooltip } from 'antd'
+import type { TableColumnsType } from 'antd'
 import { LockOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router'
 import { PageTitle } from '@/app/PageTitle'
@@ -24,13 +25,19 @@ export function HistoryPage() {
     }
   }, [search, filters.page, filters.limit, setSearch])
   const href = (row: HistoryListItem) => `/history/${idPath(row.id)}?${buildDetailSearch(search, 'history')}`
-  const columns = createPostColumns<HistoryListItem>({ columns:['thumbnail','summary','status','platform','tags'],summaryHref:href })
-  columns.unshift({ key:'date', title:'日期', width:tokens.layout.platformColumnWidth,
-    render: (_:unknown,row:HistoryListItem) => <time dateTime={row.created_at}>{row.created_at?.slice(0,10) || '—'}</time> })
-  columns.splice(5,0,{key:'account',title:'账号',width:tokens.layout.accountColumnWidth,
-    render: (_:unknown,row:HistoryListItem) => <span className={styles.account} title={row.account}>
-      {row.read_only && <Tooltip title="冻结账号，只供查阅"><LockOutlined aria-label="冻结账号" /></Tooltip>}{row.account}
-    </span> })
+  // 历史比队列多两列：日期在最前，账号在分类之前。这两列的字段只有历史载荷才有，
+  // 按 columns.tsx 的第 2 条约束不进共用列工厂，所以在这里按最终列序拼一次。
+  // ⛔ 不要改回 splice(下标)：改一次上面的列清单就会静默换掉列序。
+  const columns: TableColumnsType<HistoryListItem> = [
+    { key:'date', title:'日期', width:tokens.layout.platformColumnWidth,
+      render: (_:unknown,row:HistoryListItem) => <time dateTime={row.created_at}>{row.created_at?.slice(0,10) || '—'}</time> },
+    ...createPostColumns<HistoryListItem>({ columns:['thumbnail','summary','status','platform'],summaryHref:href }),
+    { key:'account', title:'账号', width:tokens.layout.accountColumnWidth,
+      render: (_:unknown,row:HistoryListItem) => <span className={styles.account} title={row.account}>
+        {row.read_only && <Tooltip title="冻结账号，只供查阅"><LockOutlined aria-label="冻结账号" /></Tooltip>}{row.account}
+      </span> },
+    ...createPostColumns<HistoryListItem>({ columns:['tags'] }),
+  ]
   function change(key: 'platform'|'month'|'tag', value: string|undefined) {
     const next=new URLSearchParams(search)
     if(value) next.set(key,value); else next.delete(key)

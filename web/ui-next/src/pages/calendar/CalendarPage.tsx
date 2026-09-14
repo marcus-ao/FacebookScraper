@@ -7,13 +7,17 @@ import { refreshCalendar } from '@/services/calendar'
 import { isApiError } from '@/services/http'
 import type { CalendarPayload } from '@/types/domain'
 import { BerlinTime } from '@/components/Time'
-import { berlinInput, calendarDays } from '@/lib/format'
+import { DisabledReason } from '@/components/DisabledReason'
+import { berlinInput, berlinToday, calendarDays } from '@/lib/format'
+import { cx } from '@/lib/css'
 import styles from './CalendarPage.module.css'
 
 export function CalendarPage() {
   const query = useCalendar(), client = useQueryClient()
   const [busy, setBusy] = useState(false), [failed, setFailed] = useState(false)
   const data = query.data
+  // 柏林日期，不是浏览器本地日期（lib/format.ts 的 berlinToday）。
+  const today = berlinToday()
   const refresh = async () => {
     setBusy(true); setFailed(false)
     try { client.setQueryData(calendarOptions().queryKey, await refreshCalendar()) }
@@ -24,16 +28,26 @@ export function CalendarPage() {
   }
   const show = data?.cached_at && (data.coverage.matches_current_month || (failed && data.cards.length > 0))
   return <section aria-label="发布月历" aria-busy={busy}>
-    <div className={styles.heading}><PageTitle /><Tooltip title={!data?.refresh_available ? '发布日历读取条件尚未满足，请查看核验信息' : '会打开发布浏览器读取后台，通常需要数十秒'}><span><Button loading={busy} disabled={!data?.refresh_available} onClick={() => void refresh()}>刷新月历</Button></span></Tooltip></div>
+    {/* 可以刷新时提示的是耗时；不能刷新时提示的是原因 —— 后者要键盘也拿得到，
+        所以走 DisabledReason 而不是挂在灰按钮上的 Tooltip。 */}
+    <div className={styles.heading}><PageTitle />{data?.refresh_available
+      ? <Tooltip title="会打开发布浏览器读取后台，通常需要数十秒"><Button loading={busy} onClick={() => void refresh()}>刷新月历</Button></Tooltip>
+      : <DisabledReason label="刷新月历" reason="发布日历读取条件尚未满足，请查看核验信息"><Button loading={busy} disabled>刷新月历</Button></DisabledReason>}</div>
     <p className={styles.help}>以柏林时间查看后台的排期和已发布内容，也包含人工创建的帖子。</p>
     <Space wrap><Typography.Text type="secondary">{data?.month_ui} · 数据截至 <BerlinTime at={data?.cached_at ? berlinInput(data.cached_at) : null} fallback="尚未读取" /></Typography.Text>{data?.stale && <Tag>数据可能已过期</Tag>}{data?.cached_at && <span>{data.cards.length} 条可见记录</span>}</Space>
     {(failed || query.error || data?.error) && <Alert type="warning" title="本次月历未完整更新，仍展示已取得的记录，请稍后重试" />}
     {data?.status === 'partial' && <Alert type="warning" title="部分帖子的渠道尚未识别，当前无法可靠判断可用时刻" />}
     <Spin spinning={busy || query.isPending}>
-      {show && data ? <div className={styles.grid} role="list" aria-label="按柏林日期排列的帖子">
+      {/* ⛔ 这里曾经是 role="list" + role="listitem"。它是错的：list 的直接子节点里
+          还混着七个星期标题和月初的补位格，两样都不是 listitem，读屏拿到的是一个
+          结构无效的列表。想改成合法的 ARIA 就得动布局（CSS Grid 靠的正是这些
+          直接子节点），而「没有错误 ARIA」比「有错误 ARIA」强。日期格改用
+          data-day 定位，浏览器断言照常拿得到，读屏按 section 的 aria-label
+          「发布月历」进来读可见日期文字。 */}
+      {show && data ? <div className={styles.grid}>
         {['周一','周二','周三','周四','周五','周六','周日'].map(day => <div key={day} className={styles.weekday}>{day}</div>)}
-        {calendarDays(data.display_start, data.display_end_exclusive).map((day, index) => <div key={day ?? `pad-${index}`} className={styles.day} role={day ? 'listitem' : undefined} aria-label={day ? `${day} 柏林时间` : undefined}>
-          {day && <><div className={styles.date}>{day.slice(5).replace('-', '/')} {day.slice(0, 7) !== data.month_ui && '· 跨月时差'}</div>
+        {calendarDays(data.display_start, data.display_end_exclusive).map((day, index) => <div key={day ?? `pad-${index}`} className={cx(styles.day, day === today && styles.today)} {...(day ? { 'data-day': day } : {})} {...(day === today ? { 'data-today': '' } : {})}>
+          {day && <><div className={styles.date}>{day.slice(5).replace('-', '/')} {day === today && <span className={styles.todayMark}>今天</span>} {day.slice(0, 7) !== data.month_ui && '· 跨月时差'}</div>
             {data.cards.filter(card => card.at_business.slice(0, 10) === day).map((card, i) => <Popover key={`${card.card_sha256}-${i}`} trigger={['click']} title={`${card.at_business.slice(0,16).replace('T',' ')} 柏林`} content={<div className={styles.caption}>{card.rendered || '正文未提供'}</div>}>
               <button type="button" className={styles.card}><strong>{card.at_business.slice(11,16)} 柏林</strong><span>{card.channels.length ? card.channels.map(channel => channel === 'facebook' ? 'Facebook' : 'Instagram').join(' / ') : '渠道待确认'}</span>
                 <Tag color={card.delivery === 'published' ? 'success' : card.delivery === 'scheduled' ? 'processing' : 'default'}>{card.delivery === 'published' ? '已观测到公开发布' : card.delivery === 'scheduled' ? '已创建定时任务' : '发布状态待核验'}</Tag></button>
