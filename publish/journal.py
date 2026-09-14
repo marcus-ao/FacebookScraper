@@ -151,7 +151,7 @@ class PublishAttempt:
     readback_signal: str = ""
     remote_id: str = ""
     #: 每个渠道各一个远端 ID，形如 ``("facebook=188…", "instagram=437…")``。
-    #: ⚠️ 实测 FB 与 IG 是**两个独立远端对象**（`docs/HANDOFF.md` 第 5 节），
+    #: ⚠️ 实测 FB 与 IG 是**两个独立远端对象**（`docs/HANDOFF.md` 第 6 节），
     #: 单个 `remote_id` 只能记住其中一个，跨渠道对账会缺一半。
     remote_ids: tuple[str, ...] = ()
     verification: str = ""

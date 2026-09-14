@@ -17,13 +17,13 @@
 | 模型任务与批次恢复 | 离线通过 | 恢复要求版本与付费账本核对，不会隐含再次调用模型 |
 | 设置与运行状态 | 离线通过 | 设置保存使用 CAS；状态读取不触发平台、模型或消息调用 |
 
-历史证据必须按版本理解。2026-09-12/13 的 65 个 Python 脚本记录、Vue 50 modules 构建和七个浏览器场景来自旧版本，详见 [集成记录](../docs/INTEGRATION_2026-09-12.md)。React 迁移曾有 496 项组件/逻辑测试记录，它同样早于本次单目录整理。
+历史证据必须按版本理解。2026-09-12/13 的 65 个 Python 脚本记录、Vue 50 modules 构建和七个浏览器场景来自旧版本，范围见 [HANDOFF.md](../docs/HANDOFF.md)。React 迁移曾有 496 项组件/逻辑测试记录，它同样早于本次单目录整理。
 
 2026-09-14 的当前单目录版本已经完成锁定安装、26 个文件共 505 项测试及 TypeScript + Vite 构建；证据位于 `state/ui-consolidation-20260914T063209Z`。日期格式修改先让 9 个相关用例失败，随后 46 个动作与禁用原因用例通过；锁文件中的 162 个依赖条目未升级，只调整根包标识。构建仍有 1.39 MB JavaScript chunk 警告。
 
-当前集成 worktree 的 `state/offline-validation-20260914T065258Z` 记录完整 66 个 Python 脚本全部通过，其中 `state/offline-browser-20260914T065304Z-21788` 记录八个浏览器工作流场景全部通过、页面错误和拒绝请求均为零。`state/ui-regression` 还记录 12 组综合浏览器检查、16 个显式网络契约和实际 FastAPI 静态演练通过；静态演练没有外部写入。`state/ui-consolidation-20260914T063209Z/review-probe.json` 的七项界面探测也通过：正文页签没有提前请求图片，图片页签请求两张，切换后保留已挂载的本地化内容，并且 approve、月历刷新、付费模型与飞书调用均为零，页面错误为空。上述浏览器结果使用临时 archive/state 或明确的界面响应替代，不能升级为真实模型、飞书或 Business Suite 验收。合并到原 `main` 后的日常服务启动和只读检查仍要按下文执行。
+当前集成 worktree 的 `state/offline-validation-20260914T065258Z` 记录完整 66 个 Python 脚本全部通过，其中 `state/offline-browser-20260914T065304Z-21788` 记录八个浏览器工作流场景全部通过、页面错误和拒绝请求均为零。`state/ui-consolidation-20260914T063209Z/browser/` 还记录 12 组综合浏览器检查、16 个显式网络契约和实际 FastAPI 静态演练通过；`tests/tests_spa_static.py` 14 项与 `tests/tests_web_review.py` 34 项也通过。`state/ui-consolidation-20260914T063209Z/review-probe.json` 的七项界面探测同样通过：正文页签没有提前请求图片，图片页签请求两张，切换后保留已挂载的本地化内容，并且 approve、月历刷新、付费模型与飞书调用均为零，页面错误为空。上述浏览器结果使用临时 archive/state 或明确的界面响应替代，不能升级为真实模型、飞书或 Business Suite 验收。合并到原 `main` 后的日常服务启动和只读检查仍要按下文执行。
 
-真实边界没有因前端整理改变：原 1,067 篇是 Facebook 47 篇加冻结 `.tech` 1,020 篇，当前 `.global` 仍为零且未首次回填；本轮没有真实模型调用、付费供应商核账、飞书发送或新的 Facebook/Instagram 发布/排期提交；远端 scheduled 图片数量和顺序仍无法读回，`acceptance.verified` 仍为 false；单渠道验收和运营从飞书到排期的流程仍未完成。
+真实边界没有因前端整理改变：原 1,067 篇是 Facebook 47 篇加冻结 `.tech` 1,020 篇，当前 `.global` 仍为零且未首次回填；尚无成功的真实模型验收，付费供应商核账、飞书发送和新的 Facebook/Instagram 发布/排期提交均未完成；远端 scheduled 图片数量和顺序仍无法读回，`acceptance.verified` 仍为 false；单渠道验收和运营从飞书到排期的流程仍未完成。
 
 ## 目录与路由
 

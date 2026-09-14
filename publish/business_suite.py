@@ -1492,7 +1492,7 @@ async def _collect_planner_matches(
     """匹配日历条目；``open_dialogs`` 时再逐个点开确认渠道与 remote id。
 
     ⚠️ **图片数量不再参与匹配**：实测 Planner 侧零数量语义
-    （`docs/HANDOFF.md` 第 5 节）。张数的保证挪到了
+    （`docs/HANDOFF.md` 第 6 节）。张数的保证挪到了
     `upload_images()` 在 composer 上传后数缩略图那一步。
     """
     for channel in target_channels:

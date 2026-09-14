@@ -160,7 +160,7 @@ React Router 的 `location.state` 只能加速一次导航，不能作为唯一�
 
 ## 12. 验证方式
 
-设计约束由单元测试、浏览器回归和测量脚本共同验证。当前单目录版本已在 `state/ui-consolidation-20260914T063209Z` 记录锁定安装通过、26 个文件共 505 项单元测试通过，以及 TypeScript + Vite 构建通过。构建保留现有 1.39 MB JavaScript chunk 警告；它不使构建失败，但属于后续性能观察。当前集成 worktree 的完整 66 个 Python 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和实际 FastAPI 静态演练也已通过；对应报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-regression`。`state/ui-consolidation-20260914T063209Z/review-probe.json` 另记录七项界面探测通过、页面错误和外部动作均为零。复验入口为：
+设计约束由单元测试、浏览器回归和测量脚本共同验证。当前单目录版本已在 `state/ui-consolidation-20260914T063209Z` 记录锁定安装通过、26 个文件共 505 项单元测试通过，以及 TypeScript + Vite 构建通过。构建保留现有 1.39 MB JavaScript chunk 警告；它不使构建失败，但属于后续性能观察。当前集成 worktree 的完整 66 个 Python 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和实际 FastAPI 静态演练也已通过；对应报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-consolidation-20260914T063209Z/browser`。`state/ui-consolidation-20260914T063209Z/review-probe.json` 另记录七项界面探测通过、页面错误和外部动作均为零。复验入口为：
 
 ```powershell
 npm.cmd --prefix web/ui test
@@ -170,4 +170,4 @@ scripts\run_python.bat tests/review_probe.py
 scripts\run_python.bat tests/history_thumbnail_cost.py
 ```
 
-历史记录曾在 1366×768 与 1920×1080 下量到 48px 行高、12/19 行首屏、详情 1.20–1.48 屏、每页一个 `h1` 和最多三个主要带边框区块。当前 `state/ui-regression/browser-stage-all.json` 再次记录 48px 行高和 1366/1920 下 12/19 行首屏；其它数值仍按各自报告范围解释，不能用旧截图补成当前结论。
+历史记录曾在 1366×768 与 1920×1080 下量到 48px 行高、12/19 行首屏、详情 1.20–1.48 屏、每页一个 `h1` 和最多三个主要带边框区块。当前 `state/ui-consolidation-20260914T063209Z/browser/browser-stage-all.json` 再次记录 48px 行高和 1366/1920 下 12/19 行首屏；其它数值仍按各自报告范围解释，不能用旧截图补成当前结论。

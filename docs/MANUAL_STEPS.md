@@ -1,12 +1,12 @@
 # 人工操作指南
 
-本文件列人工依赖与开发机操作顺序。2026-09-12 本 worktree 已在核验备份后接续原运行数据；2026-09-14 的 `config.local.toml` 只绑定 archive/state，审校写入会落到真实账本，前端目录由已提交的 `config.toml` 选择。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，代码和真实验收分别看 [OPTIMIAZATION.md](OPTIMIAZATION.md)，2026-09-12/13 的证据看 [本轮集成记录](INTEGRATION_2026-09-12.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
+本文件列人工依赖与开发机操作顺序，事实同步至 2026-09-14。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
 当前先保留现场：9224 访问 `.global`、Google Trends 公开页均实际 HTTP 429，分别保存在 `delta_state.json` 和 `trends_export_state.json`，均已停止；需要人工核对探测会话与出口。9223 已登录并录到目标 FB `Neakasa Deutschland`、IG `neakasa.de`，本次完整月份实际读取已经通过，尚无本轮新发布/排期提交。编辑器中曾放入不可发布的技术长文案与 2 张历史原图作控件观察，可能留下草稿；接手时不要直接点击提交。飞书缺凭据、镜像/外部心跳未启用，完整运营流程尚未通过。
 
 ## 1. 接续运行数据前先备份和核验
 
-本次已完成的核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；原激活时间 `2026-09-03T09:00:58.277710Z` 保留。当前绑定由忽略入库的 `config.local.toml` 读取，不能把原目录的配置文件或账本重置成 worktree 空样例。
+2026-09-12 已完成一次核验备份 `runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；原激活时间 `2026-09-03T09:00:58.277710Z` 保留。主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本工作区用忽略入库的 `config.local.toml` 指回同一份数据。**不能把真实目录的配置文件或账本重置成空样例。**
 
 以后再次接续或恢复时，先停止旧调度器与写入进程，备份完整 archive/state，另包含运行 `config.toml`、存在时的 `config.local.toml`、本机 `.env` 的受控副本和解释器位置/版本记录。备份凭据单独控制访问，不放公共云盘或证据报告；不要只复制 manifest/SQLite。
 
@@ -76,7 +76,7 @@ scripts\run_translate.bat --estimate
 
 中断的自动批次还要核对运行状态中的 batch_id、state_revision、operation_id、paid request 与总费用。确认落盘结果和供应商状态后，使用当前版本进行“已核对结果”恢复；CLI 对应 `recover-processing --batch-id <id> --version <state_revision> --outputs-reviewed`。版本冲突则重读，恢复不自动重新发起模型请求。
 
-当前旧 Facebook 机器译文为提示词版本 5，现版为 6；当前读取没有可接受的德语图，原 FB 目录未发现 media_de。冻结 `.tech` 的 3 张历史德语图不作 FB 或新 `.global` 素材。`stale=false` 只说明原文没变；看 `machine_current` 和机器/当前提示词版本，同时单独核对每张图。不要从版本差异推断曾有 FB 德语图，也不为界面检查自动付费重做。
+当前旧 Facebook 机器译文为提示词版本 5，现版为 6；当前读取没有可接受的德语图，原 FB 目录未发现 media_de。冻结 `.tech` 的 3 张历史德语图不作 FB 或新 `.global` 素材。`stale=false` 只说明原文没变；看 `machine_current` 和机器/当前提示词版本，同时单独核对每张图。不要从版本差异推断曾有 FB 德语图，也不为准备演示自动付费重做。
 
 风险需区分未扫、失败、成功零风险，真实扫描绑定源文/提示词，发生在翻译前。标签需分别核对 Trends DE 同英文标签候选组/同时间公开 CSV、IG 全球累计与德语同类账号周更；空名单跳过、失败/过期可手选。当前 429 下不继续 IG 或 Trends 采样。
 
@@ -91,9 +91,9 @@ scripts\run_python.bat -m tools.hashtag_sampling trends-reset --reason "已人�
 
 ## 6. 审校台人工检查
 
-当前开发机 API 已在 [127.0.0.1:8765](http://127.0.0.1:8765) 运行，绑定原数据，2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态 GET 均为 200，冻结详情/运行状态只读。可直接打开本机页面；这不证明运营机器能访问。服务证据在 worktree state/integration-20260913/real-web-smoke.json 与 web-process.json。下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。
+开发机 API 跑在 [127.0.0.1:8765](http://127.0.0.1:8765)，绑定真实数据。2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态四个 GET 均为 200，冻结详情与运行状态只读。可直接打开本机页面；**这不证明运营机器能访问。** 下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。
 
-开发机构建前端：
+开发机构建唯一 React 前端（见第 13 节）：
 
 ```powershell
 npm.cmd --prefix web/ui ci
@@ -111,7 +111,7 @@ scripts\run_python.bat -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
 
 Facebook 在链接区确定德国落地页后，可把对应 `{{linkN}}` 插入正文当前光标处；最终预览/计数会换成 URL，未插入的有效链接仍追加末尾。无效编号、缺目标或损坏占位符先修正，Instagram 使用 bio 话术。编辑中的“约”是临时估算，等待 `/check` 返回当前完整草稿的最终计数，包含标签、实际链接或 CTA；不以占位符短长度判断是否可发。
 
-页面只读取实际风险状态和来源，不提供静态风险数据入口。采样降级时仍可人工决定，不把缺数据写成热度为零或已扫描安全。
+风险夹具只供明确演示模式，不能据此批准真实内容；正式页面读取实际风险状态和来源。采样降级时仍可人工决定，不把缺数据写成热度为零或已扫描安全。
 
 从历史入口检查服务端分页、平台/月/tag/状态筛选、总数及 90 天外详情，冻结 `.tech` 只读；查询不会启动翻译。设置页只改默认柏林时刻与挂起工作日数，保存需版本校验；其它配置/模板只读并保留说明。五阶段运行状态显示真实激活、进程/处理、429、飞书凭据、镜像和月历状态，查看状态不触发外部操作。源发帖至首次就绪和批次处理时效分别显示，前者包含发现等待；没有历史就绪事实时不期待补出统计数字。
 
@@ -176,7 +176,7 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 - Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
-当前这两个联调包尚未齐备。FB 已有来源为 2026-08-16“Cat or CCTV”的单图待制作包，位于 worktree `state/integration-candidates/facebook-122120460231379375/`：德语正文提案、图片德语替换指令、原图与 manifest 已准备，最终德语图仍缺。拟定目标为 Neakasa Deutschland、2026-09-15 10:00 柏林，未占位、未批准；先确认这篇历史内容可作受控样本及图片付费许可，完成图片后再确认整包提交。该包不覆盖 FB 短链、IG bio 或真实多图。过期 8 月活动/美元促销需要业务重新判断；IG 尚无 `.global` 新素材。技术草稿和冻结 `.tech` 不能替代当前来源。
+当前这两个联调包尚未齐备。FB 已有来源为 2026-08-16“Cat or CCTV”的单图待制作包 `integration-candidates/facebook-122120460231379375/`（在当时开发副本的 `state/` 下）：德语正文提案、图片德语替换指令、原图与 manifest 已准备，最终德语图仍缺。拟定目标为 Neakasa Deutschland、2026-09-15 10:00 柏林，未占位、未批准；先确认这篇历史内容可作受控样本及图片付费许可，完成图片后再确认整包提交。该包不覆盖 FB 短链、IG bio 或真实多图。过期 8 月活动/美元促销需要业务重新判断；IG 尚无 `.global` 新素材。技术草稿和冻结 `.tech` 不能替代当前来源。
 
 用户确认后才执行一次提交。提交前后都不要编辑冻结目录。只有 Planner 回读确认目标渠道、时刻和 remote ID 后才能写 `scheduled`。`scheduled` 不代表到时已经公开。
 
@@ -217,21 +217,22 @@ scripts\run_scheduler.bat --preview
 scripts\run_pipeline.bat preflight
 ```
 
-只有真实依赖验收完成才用 `scheduler-install` 安装并允许 `--run`。管理入口 `scheduler-disable` 会停用定义并结束常驻实例；`scheduler-enable` 检查旧任务冲突后恢复并启动。它们会改变实际计划任务，按维护窗口执行，不在没有业务需要时运行。安装后验证查询、停用、恢复、重启单实例、不补跑睡眠全部轮次与三 profile 隔离；进程中断付费任务仍先核账，不自动重放。
+只有真实依赖验收完成才用 `scheduler-install` 安装并允许 `--run`。管理入口 `scheduler-disable` 会停用定义并结束常驻实例；`scheduler-enable` 检查旧任务冲突后恢复并启动。它们会改变实际计划任务，按维护窗口执行，不为演示而运行。安装后验证查询、停用、恢复、重启单实例、不补跑睡眠全部轮次与三 profile 隔离；进程中断付费任务仍先核账，不自动重放。
 
-提交最终验收报告前，在全部修改集成后安装锁定依赖、运行 React 单元测试和构建，再运行隔离测试入口；保存命令、版本与结果：
-
-```powershell
-npm.cmd --prefix web/ui run build
-scripts\run_python.bat -m tools.test_offline
-```
-
-完整前端命令为：
+提交最终验收报告前，在全部修改集成后安装锁定依赖、运行 React 测试和构建，再运行隔离测试入口；保存命令、版本与结果。
 
 ```powershell
 npm.cmd --prefix web/ui ci
 npm.cmd --prefix web/ui test
 npm.cmd --prefix web/ui run build
+scripts\run_python.bat -m tools.test_offline
+```
+
+`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——**它不会让测试结果自动变成真实外部系统结果。** 2026-09-14 当前集成版本是 Python 66/66、React 26 个文件共 505 项测试和 TypeScript + Vite 构建通过；构建保留 1.39 MB JavaScript chunk 警告。
+
+完整前端验证入口为：
+
+```powershell
 scripts\run_python.bat tests/tests_browser_workflow.py -v
 scripts\run_python.bat tests/browser_regression.py --stage ALL
 scripts\run_python.bat tests/network_compare.py
@@ -240,9 +241,16 @@ scripts\run_python.bat tests/review_probe.py
 scripts\run_python.bat tests/history_thumbnail_cost.py
 ```
 
-`tests/tests_browser_workflow.py` 使用 React build、临时真实 ASGI 和隔离 archive/state；迁移后的七个场景加日期控件回归覆盖保存、历史、设置、冲突和链接计数。`network_compare.py` 核对当前 React 的 16 个显式网络契约；`cutover_rehearsal.py` 默认使用 `web/ui/dist` 并实际启动 FastAPI；`history_thumbnail_cost.py` 只量 React 历史页。运行恢复、消息未知、模拟排期和公开状态仍使用明确的浏览器响应替代，只验证界面。不要对绑定原数据运行会写入的测试脚本。
+`tests/tests_browser_workflow.py` 的七个迁移场景加日期回归使用实际 dist、临时真实 ASGI 和隔离 archive/state；保存、历史、设置、链接最终计数走临时后端，远端状态用明确的界面响应替代。`network_compare.py` 核对 16 个 React 请求契约，`cutover_rehearsal.py` 默认使用 `web/ui/dist` 和实际 FastAPI，`review_probe.py` 核对密度、图片按需请求和零外部动作。当前证据统一保存在 `state/ui-consolidation-20260914T063209Z` 的日志、`browser/` 报告及 `review-probe.json`，完整 66 脚本和八场景报告分别在 `state/offline-validation-20260914T065258Z` 与 `state/offline-browser-20260914T065304Z-21788`。
 
-2026-09-14 的当前单元证据位于 `state/ui-consolidation-20260914T063209Z`：锁定安装通过，26 个文件共 505 项测试通过，TypeScript + Vite 构建通过；构建仍有 1.39 MB JavaScript chunk 警告。当前集成 worktree 的完整 66 个 Python 脚本与八个浏览器工作流场景记录在 `state/offline-validation-20260914T065258Z` 和 `state/offline-browser-20260914T065304Z-21788`；12 组综合浏览器检查、16 个网络契约及静态演练记录在 `state/ui-regression`。2026-09-12/13 的 Vue 七场景和旧 65 脚本记录只作历史。合并到原 `main` 后仍须执行第 13 节的日常服务启动和只读检查。
+⛔ **不要对绑定真实数据的目录直接运行会写入的测试脚本。**
+
+部署形状另有静态路由测试；浏览器夹具自带的 SPA 回落不能替代它：
+
+```powershell
+scripts\run_python.bat tests/tests_spa_static.py
+scripts\run_python.bat tests/cutover_rehearsal.py
+```
 
 ## 12. 卡住时保留什么
 
@@ -264,20 +272,15 @@ scripts\run_python.bat tests/history_thumbnail_cost.py
 
 从上到下检查。任何一步失败就停止更新并保留报告，不对 archive/state 做恢复操作。
 
----
-
 ### 集成前检查
 
-- [ ] 工作区已经形成你认可的 release commit
 - [ ] 锁定依赖安装 PASS — `npm.cmd --prefix web/ui ci`
+- [ ] React 单测 PASS — `npm.cmd --prefix web/ui test`
 - [ ] React 构建 PASS — `npm.cmd --prefix web/ui run build`
 - [ ] Python 全量 PASS — `scripts\run_python.bat tools/test_offline.py`
-- [ ] React 单测 PASS — `npm.cmd --prefix web/ui test`
 - [ ] FastAPI 静态演练 PASS — `scripts\run_python.bat tests/cutover_rehearsal.py`
 - [ ] `config.toml` 的 `[paths].web_dist` 是 `web/ui/dist`
 - [ ] `web/ui/dist/index.html` 存在
-
----
 
 ### 合并与启动
 
@@ -285,94 +288,58 @@ scripts\run_python.bat tests/history_thumbnail_cost.py
 - [ ] 在原主工作区运行 `scripts\run_web.bat`
 - [ ] 确认服务监听 `127.0.0.1:8765`
 
-⛔ 只刷新浏览器没用：`DIST` 在 `web/api/app.py` import 时就定死了。
-
----
+只刷新浏览器不会重新读取构建目录：`DIST` 在 `web/api/app.py` import 时确定。
 
 ### 只读检查
 
-**每一条都从地址栏直接敲，不要只点侧栏导航**——侧栏走的是前端路由，
-地址栏走的才是服务端。
+每一条都从地址栏直接输入，覆盖服务端深链接回落：
 
 - [ ] `/review`
 - [ ] `/history`
-- [ ] 一篇活账号详情
-- [ ] **在那一页按 F5**
-- [ ] 一篇冻结账号（`read_only`）详情：确认没有任何写入入口
+- [ ] 一篇活账号详情并在该页刷新
+- [ ] 一篇冻结账号详情：确认 `read_only` 且没有写入入口
 - [ ] `/calendar`
 - [ ] `/settings`
 - [ ] `/runtime`
-- [ ] 旧链接 `/?task=<真实账号>/<真实帖子>` → 跳到 `/review/...`
-- [ ] 旧链接 `/?view=history` → 跳到 `/history?page=1&limit=50`
+- [ ] 旧链接 `/?task=<真实账号>/<真实帖子>` 跳到 `/review/...`
+- [ ] 旧链接 `/?view=history` 跳到 `/history?page=1&limit=50`
 - [ ] 浏览器 console 无报错
-- [ ] Network 里没有异常 404 / 422
-- [ ] 柏林时刻显示合理（不是本地时区换算过的）
-- [ ] 队列四个页签的计数与真实数据对得上
-
----
+- [ ] Network 没有异常 404/422
+- [ ] 柏林时刻和四个队列计数与实际数据一致
 
 ### 低风险写入检查
 
-由你或授权运营手工做。每步之后回列表看一眼状态。
+由你或授权运营手工执行，每步之后回列表核对状态：
 
-- [ ] 编辑德语正文并保存
-- [ ] 返回列表，状态正确
-- [ ] 再打开这一篇，内容仍然正确
+- [ ] 编辑德语正文并保存，返回列表后再打开仍正确
 - [ ] 修改产品分类并保存
-- [ ] snooze 一篇
-- [ ] wake 回来
-
----
+- [ ] 挂起一篇并恢复
 
 ### 可选外部只读检查
 
-前面全部成功之后才考虑。
-
-- [ ] 由你决定是否执行一次 calendar refresh（会打开发布浏览器读后台，数十秒）
-
----
+- [ ] 只有需要刷新 Planner 时才执行一次 calendar refresh；它会打开发布浏览器读取后台，通常需要数十秒
 
 ### 经确认的外部写入检查
 
 先核对当前会话是否已明确授权这篇具体帖子、最终文图、目标账号、唯一渠道和柏林时刻。已有这份具体授权就继续，不重复申请；缺少任一项时停在提交前补齐确认。
 
-- [ ] 选一篇明确允许用来测试的帖子
-- [ ] 选好柏林时间
+- [ ] 选一篇明确允许用来测试的帖子和柏林时刻
 - [ ] 执行真实 approve
-- [ ] 在 Business Suite 里确认这条排期真的存在
+- [ ] 在 Business Suite 确认排期存在
 - [ ] 审校台回读为「已排期」
-- [ ] ⛔ 不能只因为 HTTP 200 就判成功——回执必须是 `ok === true && status === 'scheduled'`
-
----
+- [ ] 回执必须是 `ok === true && status === 'scheduled'`，不能只因为 HTTP 200 判成功
 
 ### 第一个工作日观察
 
-- [ ] 历史归档页缩略图补齐速度（已知风险，见 [web/README.md](../web/README.md)；太慢先改成 20 条/页）
+- [ ] 历史归档页缩略图补齐速度；原归档估算首屏约 12–13 秒，见 [HANDOFF §7](HANDOFF.md#7-审校台缩略图实测)，太慢先改成每页 20 条
 - [ ] `/runtime` 状态
-- [ ] 队列计数与列表局部更新是否对得上
-- [ ] 记录出现过的每一次 409 恢复
-- [ ] 记录运营任何一次"不知道该点哪"的瞬间
+- [ ] 队列计数与列表局部更新是否一致
+- [ ] 记录 409 恢复和运营不清楚下一步的情况
 
----
+### 出现问题时停止更新并留证
 
-### 出现问题时停止更新
-
-出现任意一条就停止当前服务，保存命令、版本、浏览器错误和测试报告，在修复或选择已知良好提交后重新执行本节检查：
-
-- 深链接又出现 404（`/review`、`/calendar`、详情页刷新）
-- 页面白屏 / JS 报错
-- 保存之后读不回来
-- revision / 409 冲突恢复走不通
-- 已排期状态显示错误（尤其把 `scheduled` 显示成已发布）
-- 关键写入口消失（编辑德语、分类、snooze、wake、approve）
-- 真实请求体异常（字段缺失、带了时区偏移、revision 不对）
-- 历史页大面积不可用
-
----
-
-### 问题留证
-
+- [ ] 停止当前服务，保存命令、版本、浏览器错误和测试报告
 - [ ] 记录 `git rev-parse --short HEAD`、实际 build hash 与 `config.toml` 的 `web_dist`
 - [ ] 保存失败页面、console、Network 和对应测试报告
-- [ ] 核对 `/api` 404 仍是 JSON，缺失静态资源仍是 404，深链接刷新仍返回应用
+- [ ] 核对 `/api` 404 仍是 JSON、缺失静态资源仍是 404、深链接刷新仍返回应用
 - [ ] 保留 archive/state 原样；前端整理没有改变数据格式或写入契约

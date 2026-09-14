@@ -281,7 +281,7 @@ def _signal_hits(item: dict, spec: EvidenceSignal) -> bool:
 
 
 #: `planner_scheduled_card` v2 契约要求的属性。
-#: **2026-09-01 按真实 Planner 重写**，见 `docs/HANDOFF.md` 第 5 节。
+#: **2026-09-01 按真实 Planner 重写**，见 `docs/HANDOFF.md` 第 6 节。
 PLANNER_REQUIRED = (
     "date_format", "time_format", "datetime_regex",
     "entry_role", "entry_probe_text",
@@ -590,5 +590,4 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
             return True, ""
     return False, ("证据不在同一页面，或顺序不是账号 → 提交 → 成功 → "
                    "Planner 就绪 → 卡片 → final")
-
 

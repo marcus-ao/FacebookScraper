@@ -10,7 +10,7 @@
 
 当前写入是真实的：人工文案、标签、本地化和审校状态分别写入真相源。风险扫描读取实际状态，不提供另一套演示数据路径。本 worktree 已绑定原 archive/state/本机环境；任何会写入的浏览器测试都必须改用临时 archive/state。
 
-未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。2026-09-12/13 的 Vue 浏览器与 65 脚本记录是旧版本历史，范围见 [集成记录](../docs/INTEGRATION_2026-09-12.md)。当前 React 单目录版本已经完成锁定安装、26 个文件共 505 项单元测试、TypeScript + Vite 构建，以及当前集成 worktree 的完整 66 个 Python 脚本和浏览器/网络/静态演练；结果与隔离边界见 [实施清单](../docs/OPTIMIAZATION.md)。
+未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。2026-09-12/13 的 Vue 浏览器与 65 脚本记录是旧版本历史，范围见 [HANDOFF.md](../docs/HANDOFF.md)。当前 React 单目录版本已经完成锁定安装、26 个文件共 505 项单元测试、TypeScript + Vite 构建，以及当前集成 worktree 的完整 66 个 Python 脚本和浏览器/网络/静态演练；结果与隔离边界见 [REQUIREMENTS §10](../docs/REQUIREMENTS.md#10-五阶段验收状态)。
 
 ## 2. 用户与布局
 
@@ -196,7 +196,7 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 版本化浏览器入口从 `42c8bc9` 开始入库。2026-09-13 的 Vue 构建加临时 ASGI 曾覆盖七个场景，报告位于 worktree `state/offline-browser-20260913T070144Z-3108/report.json`；它是旧版本证据。当前 React 单目录版本在 `state/ui-consolidation-20260914T063209Z` 记录了锁定安装、26 个文件共 505 项测试及 TypeScript + Vite 构建通过；现有 1.39 MB JavaScript chunk 警告不是构建失败，但应保留为性能观察。
 
-当前浏览器入口包括：`tests/tests_browser_workflow.py` 的七个迁移后临时真实后端场景加日期控件回归，`tests/browser_regression.py --stage ALL` 的综合行为检查，`tests/network_compare.py` 的 16 个 React 显式请求契约，默认使用 `web/ui/dist` 和实际 FastAPI 的 `tests/cutover_rehearsal.py`，以及 `tests/review_probe.py` 和 React-only 的 `tests/history_thumbnail_cost.py`。2026-09-14 当前集成 worktree 的完整 66 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和静态演练均通过；报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-regression`，不从旧报告继承，也不代表真实外部系统通过。
+当前浏览器入口包括：`tests/tests_browser_workflow.py` 的七个迁移后临时真实后端场景加日期控件回归，`tests/browser_regression.py --stage ALL` 的综合行为检查，`tests/network_compare.py` 的 16 个 React 显式请求契约，默认使用 `web/ui/dist` 和实际 FastAPI 的 `tests/cutover_rehearsal.py`，以及 `tests/review_probe.py` 和 React-only 的 `tests/history_thumbnail_cost.py`。2026-09-14 当前集成 worktree 的完整 66 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约、14 项静态路由测试、34 项 Web 审校测试和七项界面探测均通过；报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-consolidation-20260914T063209Z`，不从旧报告继承，也不代表真实外部系统通过。
 
 ```powershell
 npm.cmd --prefix web/ui run build

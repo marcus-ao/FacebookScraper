@@ -2,15 +2,15 @@
 
 本项目把美国站 Facebook / Instagram 的公开图文帖归档到本地，生成德语文案和德语图片，交给上海运营在中文审校台修改并选择柏林发布时间，最后通过 Meta Business Suite 创建单渠道排期。
 
-业务规则以 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md) 为准；实施差距看 [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md)；本轮代码/真实证据看 [集成记录](docs/INTEGRATION_2026-09-12.md)；人工操作顺序看 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
+四份文档分工：业务规则看 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md)（术语表是它的附录 A）；每个验收单元现在什么状态看 [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)；红线与证据边界看 [docs/HANDOFF.md](docs/HANDOFF.md)；要人亲自动手的步骤看 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
 
-## 当前基线（2026-09-12）
+## 当前基线（2026-09-14）
 
-规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；核心集成为 `565f17c`。2026-09-12/13 的全量执行有 65 个脚本通过记录：首轮 64/65，修复唯一测试文件的默认编码问题后相关补跑通过；同期 Vue 50 modules 构建及临时 ASGI 的 7 场景浏览器回归通过，页面错误与外部请求均为 0。这是旧版本的全量加相关补跑，不是首次单次全绿，也不能作为当前 React 整理后的验收结果。
+规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；核心集成 `565f17c` 全量执行 65 脚本，首轮 64/65，唯一测试文件默认编码问题修复后相关补跑通过，65 个脚本均有通过记录——这是全量加相关补跑，不是首次单次全绿。
 
-当前前端已收敛为 `web/ui/` 下唯一一套 React + TypeScript 应用，构建输出为 `web/ui/dist/`。迁移期间记录的 496 项 React 测试早于本次目录整理；2026-09-14 的当前证据已更新为锁定安装通过、26 个文件共 505 项测试通过，以及 TypeScript + Vite 构建通过。锁文件中的 162 个依赖条目未升级，只调整根包标识；构建保留现有 1.39 MB JavaScript chunk 警告。当前集成 worktree 的完整 66 个 Python 脚本、8 个临时后端浏览器场景、12 组综合浏览器检查、16 个网络契约和 FastAPI 静态演练均已通过；这些仍是离线或隔离证据，不替代合并到原 `main` 后的启动检查或真实外部系统验收。命令、证据范围和历史缩略图成本见 [web/README.md](web/README.md)。
+当前集成版本只有 `web/ui/` 一套 React + TypeScript 审校台，构建输出为 `web/ui/dist/`；`config.toml` 的 `[paths].web_dist` 显式指向该目录。2026-09-14 的当前证据为 Python 66/66、React 26 个文件共 505 项测试通过、TypeScript + Vite 构建通过。锁文件中的 162 个依赖条目未升级，只调整根包标识；构建保留 1.39 MB JavaScript chunk 警告。八个临时后端浏览器场景、12 组综合浏览器检查、16 个网络契约、14 项静态路由测试、34 项 Web 审校测试和七项界面探测也已通过；证据范围见 [web/README.md](web/README.md)。
 
-这个 worktree 已通过忽略入库的 `config.local.toml` 接续原 archive/state。核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，当前 `.global` 为零，不能把旧归档当作 `.global` 回填证据。
+主工作区直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`，**里面是实际业务数据**。已有核验备份（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，当前 `.global` 为零，不能当作 `.global` 回填证据。
 
 状态词统一为：
 
@@ -22,13 +22,13 @@
 | **真实通过** | 有注明日期和来源的真实证据 |
 | **明确延期** | 业务已决定本轮不做，不应与缺陷混为一谈 |
 
-已存在的离线能力包括响应拦截与回放、本地归档、德语翻译和图片本地化、付费账本、人工审校写入、七态审校流、Planner 缓存、调度器、飞书与云盘适配层、Business Suite 证据闸。它们仍需按 [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md) 的清单完成缺口并逐项真实联调。
+已存在的离线能力包括响应拦截与回放、本地归档、德语翻译和图片本地化、付费账本、人工审校写入、七态审校流、Planner 缓存、调度器、飞书与云盘适配层、Business Suite 证据闸。它们仍需按 [docs/REQUIREMENTS.md 第 10 节](docs/REQUIREMENTS.md#10-五阶段验收状态) 的清单完成缺口并逐项真实联调。
 
 本轮已修复采样 C7 持久停机与数值结构判定，补齐模型/标签/投递独立执行器、批次费用 CAS 恢复、飞书固定消息人工 resolve、多收件人漏发修复、配置与账本周期备份及大证据独立版本。历史交接的统一来源摘要/AST 守卫、兜底过期仍保留普通探测/告警、飞书 30 天终态归档、FB 正文链接占位符和最终计数也已补上。Trends 导出与单渠道全文/身份/时刻回读有离线和复审结论；远端 scheduled 图片读回适配器仍未实现，需要受控排期取证后补齐。代码项和真实依赖按实施清单分开。
 
 真实只读验证已经取得结果：原 1,067 条归档与 SQLite 实际一致；历史每页 20 条读取第 1/2 页无重复，冻结详情只读。实际月历读取在 `2026-09-13T05:01:33Z` 返回 ready，覆盖 35 格（8/30–10/3），识别 4 条公开帖及 2 个推荐时段，包含 3 个独立 IG remote ID。推荐时段经 tooltip 明确排除，旧双渠道排期记录不作为本轮新 G8。
 
-本轮没有真实模型、飞书调用或新发布/排期提交。9223 的 FB `Neakasa Deutschland`、IG `neakasa.de` 已确认；IG `.global` 与 Google Trends 公开页均遇 HTTP 429，已分别持久停机且未重试。`.global` 尚未首次回填；飞书 Secret/两接收组、云盘根目录及可达审校 URL 缺失，外部心跳未启用。FB 旧机器译文为提示词版本 5、当前为 6，当前没有可接受的德语图，原 FB 目录也未发现 media_de。冻结 `.tech` 保留的 3 张历史德语图不能作为 FB 或新 `.global` 素材。已有一份 FB 单图待制作包，仍缺最终德语图和具体确认，尚无两篇齐备的最终联调包。所有真实提交仍须先展示具体文图、账号、单渠道和柏林时刻给用户确认。
+本轮尚无成功的真实模型验收、飞书发送或新发布/排期提交，付费供应商核账也未完成。9223 的 FB `Neakasa Deutschland`、IG `neakasa.de` 已确认；IG `.global` 与 Google Trends 公开页均遇 HTTP 429，已分别持久停机且未重试。`.global` 尚未首次回填；飞书 Secret/两接收组、云盘根目录及可达审校 URL 缺失，外部心跳未启用。FB 旧机器译文为提示词版本 5、当前为 6，当前没有可接受的德语图，原 FB 目录也未发现 media_de。冻结 `.tech` 保留的 3 张历史德语图不能作为 FB 或新 `.global` 素材。已有一份 FB 单图待制作包，仍缺最终德语图和具体确认，尚无两篇齐备的最终联调包。所有真实提交仍须先展示具体文图、账号、单渠道和柏林时刻给用户确认。
 
 为探查编辑器媒体控件，发布浏览器曾放入明确标记不可发布的技术长文案和 2 张历史原图，未点 Schedule、Publish、Finish later 或 Cancel；可能留下未保存或自动保存草稿。编辑器中的两图数量/顺序视觉核验已有真实证据，不能作为业务候选或远端排期图片回读结论。
 
@@ -64,7 +64,7 @@ scripts\run_scheduler.bat --preview
 scripts\run_pipeline.bat preflight --json
 ```
 
-启动审校台。开发分支合并回原 `main` 后，日常服务从原主工作区运行这个入口：
+开发分支合并回原 `main` 后，日常服务从原主工作区启动：
 
 ```powershell
 scripts\run_web.bat
@@ -78,7 +78,7 @@ npm.cmd --prefix web/ui test
 npm.cmd --prefix web/ui run build
 ```
 
-开发界面时先运行 `scripts\run_web.bat`，再运行 `npm.cmd --prefix web/ui run dev`；Vite 使用 5174 并把 `/api` 代理到 8765。部署静态构建不需要 Node。`config.toml` 的 `[paths].web_dist` 显式指向 `web/ui/dist`；`config.local.toml` 只负责本机 archive/state 接续，不选择前端。审校台连接真实数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。
+开发界面时先运行 `scripts\run_web.bat`，再运行 `npm.cmd --prefix web/ui run dev`；Vite 使用 5174 并把 `/api` 代理到 8765。部署静态构建不需要 Node。`config.local.toml` 只接续 archive/state，不选择前端。审校台连接实际业务数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。运行机器迁移本轮明确延期。
 
 ## 运行入口
 

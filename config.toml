@@ -324,7 +324,7 @@ marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
 [publish]
 ig_bio_url = ""  # 德国站稳定聚合页；业务配置后只读展示，空值不猜
 min_channel_gap_min = 90  # 同一目标渠道的排期间隔
-# ---- G 组：Business Suite 定时发布。真实 UI 见 docs/HANDOFF.md 第 5 节 ----
+# ---- G 组：Business Suite 定时发布。真实 UI 见 docs/HANDOFF.md 第 6 节 ----
 # 当前范围：FB 来源只进入 FB DE，IG .global 来源只进入 IG DE，各自审校选期。
 # 旧双渠道记录保留防重；历史归档查询不自动翻译或补发。
 
@@ -374,7 +374,7 @@ timezone = "Europe/Berlin"
 # ✅ 2026-09-01：ui_probe_dump 已填。那份 dump 是首份完整通过 v2 契约的录制
 #    （56 交互 / 71 快照 / 117 截图），G6/G6c 的五件验收证据已由
 #    `tools/probe_signals.py --emit` 从它机械推导并逐条回查，
-#    落在 `publish/signals_backfilled.py`。判读见 docs/HANDOFF.md 第 5 节。
+#    落在 `publish/signals_backfilled.py`。判读见 docs/HANDOFF.md 第 6 节。
 #
 # ✅ **2026-09-01：14 个 UI 上限已由用户在真实 composer 上量完并回填**，
 #    20 个观察项现在全满，所以这一位改成了 true。实测值（原文见 dump 的
@@ -525,7 +525,7 @@ instagram = ["neakasa.tech", "neakasa.global"]
 times = ["10:00", "17:00"]
 
 [pipeline]
-# ---- 流水线编排与自治级别。五阶段现状见 docs/OPTIMIAZATION.md ----
+# ---- 流水线编排与自治级别。五阶段现状见 docs/REQUIREMENTS.md 第 10 节 ----
 # 2026-09-01 起由 pipeline run 全量消费。manual 只对账；assisted 会在每个
 # 付费请求前后按真实 usage 检查预算，并生成待确认项，但不会自行打开发布浏览器。
 
