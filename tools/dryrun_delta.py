@@ -1,28 +1,4 @@
-r"""用已保存的增量转储，离线跑一遍**增量的真实代码路径**。
-
-`tools/replay.py` 重放的是**回填**，而且只走 `extract()` + `partition_by_owner()`。
-本工具补的是另一半：把 `_capture_delta_*.json` 喂给一个假页面，让
-`routes.delta.delta_once()` **原样跑完**——响应收集、登录墙判定、归属过滤、
-合作方哨兵、`min_own_posts` 闸、`ScanResult` 摘要、`should_append` 幂等判断，
-全都是真实实现，只有浏览器是假的。
-
-**这个工具存在的理由**：增量每跑一次就是一次真实露面，而"改完解析器到底对不对"
-不该靠再露面一次来回答。2026-08-30 的教训是反过来的版本——
-当时靠一次实测才发现 IG 只认出 1 篇，然后又猜错了原因。有了这个工具，
-同样的问题在盘上就能复现和验证。
-
-    python -m tools.dryrun_delta instagram
-    python -m tools.dryrun_delta facebook --capture archive/fa_x/_capture_delta_1.json
-    python -m tools.dryrun_delta instagram --break-coauthors   # 自检：闸响不响
-
-⚠️ **全程零网络**：不附着 Chrome、不发请求、不下载媒体、不写归档
-（内部固定 `dry_run=True`）。媒体下载那一段因此**验证不到**——
-那是唯一还需要真实跑一次的东西，见 `docs/MANUAL_STEPS.md` 第 2 节。
-
-`--break-coauthors` 把 `parse.on_timeline_of` 换回"只比 owner"的旧实现
-（CR-19 修复前的形态），用来回答**"哨兵真的会响吗"**。
-它只改内存里的函数引用，不碰任何文件。
-"""
+"""用保存的增量转储离线运行 delta_once；替代浏览器，不下载媒体或写归档。"""
 from __future__ import annotations
 
 import argparse
@@ -42,8 +18,7 @@ from routes.delta import DeltaBlocked, DeltaConfig, delta_once   # noqa: E402
 
 PREFIX = {"facebook": "fa", "instagram": "in"}
 
-# 假响应的 URL 必须命中 core.capture.INTEREST，否则 Collector 会直接忽略它。
-# 两个平台各取一条真实形态的接口路径。
+# 响应 URL 须匹配 Collector 的捕获范围。
 FAKE_URL = {
     "instagram": "https://www.instagram.com/api/v1/feed/user/1/",
     "facebook": "https://www.facebook.com/api/graphql/",
@@ -72,12 +47,7 @@ class FakeMouse:
 
 
 class FakePage:
-    """goto 时把转储里的每一段 JSON 当成一条接口响应喂给监听器。
-
-    ⚠️ **一段 payload 一条响应**，不是把整个数组当成一条：转储里那 17 段
-    本来就来自 17 次响应，合并成一条会让 Collector 的分段统计与真实情况不符，
-    而那个数字正是排查时要看的。
-    """
+    """按一段 payload 一条响应向监听器重放，保留捕获统计口径。"""
 
     def __init__(self, payloads: list, url: str) -> None:
         self._payloads = payloads
@@ -134,10 +104,7 @@ def newest_delta_capture(base: Path) -> Path | None:
 
 
 def offline_cfg() -> DeltaConfig:
-    """真实配置，但把所有等待清零——假页面上没有什么好等的。
-
-    ⚠️ **`min_own_posts` 保持配置里的真值**：它正是要验的东西，改了就等于没验。
-    """
+    """清零离线等待，保留 min_own_posts 等实际业务阈值。"""
     d = DeltaConfig.load()
     d.request_gap_seconds = 0.0
     d.first_screen_seconds = 0.0
@@ -164,7 +131,7 @@ def run(platform: str, capture: Path | None, break_coauthors: bool) -> int:
     print("capture  : %s  (%d KB, %d 段响应)"
           % (cap.name, cap.stat().st_size // 1024, len(payloads)))
     if break_coauthors:
-        print("模式     : --break-coauthors（把合作帖判定退回 CR-19 修复前）")
+        print("模式     : --break-coauthors（把合作帖判定退回 修复前）")
     print()
 
     arc = Archive(c.archive_dir, base.name)

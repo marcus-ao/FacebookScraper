@@ -7,8 +7,6 @@ const html = (node: React.ReactElement) => renderToStaticMarkup(node)
 
 describe('付费动作不是 primary', () => {
   it('是 default 形态', () => {
-    // 她来这个页面是为了审一篇帖子，不是为了花钱生成东西。
-    // 主按钮的位置留给「通过并创建排期」。
     const markup = html(<PaidActionButton label="初翻" amount="US$0.020" />)
     expect(markup).toContain('ant-btn-default')
     expect(markup).not.toContain('ant-btn-primary')
@@ -22,7 +20,6 @@ describe('付费动作不是 primary', () => {
 
 describe('金额写在按钮上', () => {
   it('动作 + 金额同时可见', () => {
-    // 付费动作必须把金额与动作并列展示。
     const markup = html(<PaidActionButton label="图片优化" amount="US$0.045" />)
     expect(markup).toContain('图片优化')
     expect(markup).toContain('US$0.045')
@@ -32,7 +29,6 @@ describe('金额写在按钮上', () => {
     expect(html(<PaidActionButton label="初翻" amount="US$0.020" remaining={12} />)).toContain(
       '剩余 12 次',
     )
-    // 没有数据时不画一个空位置。
     expect(html(<PaidActionButton label="初翻" amount="US$0.020" />)).not.toContain('剩余')
   })
 
@@ -59,9 +55,7 @@ describe('disabled 必须给原因', () => {
   })
 
   it('原因在 DOM 里拿得到，不只活在 Tooltip 的 portal 里', () => {
-    // ⚠️ antd 的 Tooltip 弹出内容走 portal，只在悬停时挂到 body 上 ——
-    // 所以光靠 Tooltip，"为什么不能点"在没有鼠标的时候是不可得的。
-    // 外层 span 上的原生 title 是兜底：读屏、键盘、以及这条断言都拿得到。
+    // 禁用原因也通过 title 提供，不只依赖浮层。
     const markup = html(
       <PaidActionButton label="初翻" amount="US$0.020" disabledReason={reason} />,
     )
@@ -69,15 +63,12 @@ describe('disabled 必须给原因', () => {
   })
 
   it('⛔ 构造不出"灰着但没有理由"的实例', () => {
-    // 这是类型层面的保证：disabledReason 是唯一能让按钮变灰的入口，
-    // 没有独立的 `disabled` prop。下面这行如果能编译过，说明保证破了。
     // @ts-expect-error disabled 不是这个组件的 prop
     const bad = <PaidActionButton label="初翻" amount="US$0.020" disabled />
     expect(bad).toBeDefined()
   })
 
   it('禁用状态始终显示可读原因', () => {
-    // 调用方必须先把阻塞条件收敛成一句话才能让按钮变灰。
     const markup = html(
       <PaidActionButton
         label="文案优化"
@@ -103,7 +94,6 @@ describe('其它', () => {
   })
 
   it('金额用等宽数位', () => {
-    // 三个付费动作的价格要上下对齐着比。
     const markup = html(<PaidActionButton label="初翻" amount="US$0.020" remaining={3} />)
     expect(markup).toContain('_button_')
     expect(markup).toContain('_remaining_')

@@ -12,7 +12,7 @@ export function stageSummary(stage: RuntimeStage): { tone: RuntimeTone; label: s
 export function runtimeSummary(snapshot: RuntimeSnapshot | undefined): { tone: RuntimeTone; label: string } {
   if (!snapshot) return { tone: 'default', label: '未确认' }
   if (snapshot.stages.some(stage => stageSummary(stage).tone === 'warning' || (stage.unconfirmed_attempts ?? 0) > 0)) return { tone: 'warning', label: '需要处理' }
-  // “进程活跃”不能变成整个流水线成功；只有五阶段完整且已知才给出具体进行态。
+  // 进程活跃不代表业务成功；阶段不全或未知时不推定正常。
   if (snapshot.stages.length !== 5 || snapshot.stages.some(stage => stageSummary(stage).tone === 'default')) return { tone: 'default', label: '未确认' }
   return { tone: 'processing', label: '已有运行记录' }
 }

@@ -1,17 +1,4 @@
-r"""五阶段的只读状态、激活边界与 CLI 入口。
-
-    python -m pipeline status           业务阶段、积压与费用事实
-    python -m pipeline preflight --json  与 Web / 发布入口共用的只读能力判据
-    python -m pipeline check-alive       业务成功记录过期时发本机告警
-    python -m pipeline activate          核验单渠道验收后记录新内容边界
-    python -m pipeline run               manual/assisted 对账与受控内容处理
-    python -m pipeline serve             常驻监测；模型、采样、投递在独立执行器
-    python -m pipeline approve           已确认内容的发布入口
-
-status / preflight 不访问网络、不发送付费请求、不写业务状态。
-文件与追加账本保存业务事实；处理请求标记只用于进程协调与恢复，SQLite 只供查询。
-恢复先核对请求与产物，结果不确定时不隐含重放。缺失的观测显示未知，不能显示为零。
-"""
+"""五阶段状态与 CLI；status/preflight 仅读本地事实，命令参数见 --help。"""
 from __future__ import annotations
 
 import argparse
@@ -30,7 +17,7 @@ from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
 from core.notify import notify                      # noqa: E402
 from core.store import Archive, ArchivePathError    # noqa: E402
-import translate as translation                     # noqa: E402
+from localize import text as translation                     # noqa: E402
 from pipeline.settings import (AUTONOMY_LEVELS as AUTONOMY_LEVELS,      # noqa: E402
                                PIPELINE_CONFIG_KEYS as PIPELINE_CONFIG_KEYS,
                                PipelineConfigError,
@@ -47,11 +34,6 @@ from publish.capabilities import checks as capability_checks  # noqa: E402
 from pipeline import engine as pipeline_assisted     # noqa: E402
 from pipeline import engine as assisted              # noqa: E402
 
-
-
-# ---------------------------------------------------------------------------
-# 「最近一次成功运行」—— 死人开关的判据
-# ---------------------------------------------------------------------------
 
 def _parse_iso_z(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
@@ -74,26 +56,7 @@ def _load_json(path: Path) -> Any:
 
 def last_successful_run(state_dir: Path | None = None
                         ) -> tuple[datetime | None, list[str]]:
-    """返回 (最近一次成功**运行**的时刻, 证据来源列表)。
-
-    ⚠️ **判据必须是"跑过"，不能是"产出过"。** `PIPELINE_PLAN` 第 7 节点명了
-    这个项目最怕的失效：**「没跑」和「跑了但没新内容」在输出上长得一模一样**。
-    如果拿 `manifest.jsonl` / `translated.jsonl` 的最新一条当判据，
-    一个每天准时跑、但恰好没有新帖的流水线会被误判成"死了"，
-    而误报会让整条告警通道失效（`core/integrity.py` 已经立过这条规矩）。
-
-    所以只认**运行标记**：
-
-    - `state/delta_state.json` 的各平台 ``last_success`` —— 抓到 0 篇也会更新它，
-      这正是我们要的语义。它证明抓取运行成功，不代表后续本地化或发布成功。
-    - `state/pipeline_state.json` 的 ``last_successful_run`` —— L1a 的
-      ``pipeline run`` 落地之后才会有这个文件。**现在不存在是正常的**，
-      所以这里只把它当补充证据，缺了不报错。
-
-    > **为什么不新建一个 `pipeline_state.json` 来记这件事**（任务书原文的做法）：
-    > `delta_state.json` 已经记了，再记一份就是第二个真相源（第 2 节明令不要）。
-    > 等 L1a 真的有了跨阶段的运行概念，它自然会写自己那一份，这里已经预留了读它的位置。
-    """
+    """返回最近成功运行及其证据；无新帖的成功扫描仍算运行，不代表下游加工成功。"""
     state_dir = state_dir or cfg().state_dir
     stamps: list[tuple[datetime, str]] = []
 
@@ -118,23 +81,10 @@ def last_successful_run(state_dir: Path | None = None
     return newest, [name for stamp, name in stamps if stamp == newest]
 
 
-# ---------------------------------------------------------------------------
-# 各阶段积压
-# ---------------------------------------------------------------------------
+# 阶段积压
 
 def publishable_ids(rows: Iterable[Mapping[str, Any]]) -> set[str]:
-    """「可发」= 有正文 **且** 至少 1 张**已下载**的图。
-
-    ⚠️ **这是发布口径，不是翻译口径**，两者差 597 篇（纯视频 / 无图 / 无正文）。
-    实测 1067 篇归档里只有 470 篇可发。**这是这个项目最容易搞错的一处数字**，
-    改这个函数之前先确认你要的是哪一个。
-
-    ⚠️ 它比 ``publish/compose.py::compose_post`` 的完整硬闸**宽**：
-    compose 还要求 ``media_complete=True``、媒体项全部是图片、译文当前、
-    金额与标签逐字符未变……这里**不重复那套判据**（第 2 节：不重写别人的逻辑）。
-    所以「可发」的含义是"原则上进得了发布流水线"，
-    **不是"现在就能发出去"**。status 的脚注里写着这句话，不要把它去掉。
-    """
+    """返回有正文和已下载图片的基础候选；完整发布校验由 compose 执行。"""
     out: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
@@ -169,16 +119,8 @@ def pending_translation_ids(rows: list[dict], arc_base: Path,
 def pending_image_ids(rows: list[dict], arc_base: Path, publishable: set[str],
                       pending_translation: set[str],
                       report: Callable[[str], None]) -> tuple[set[str], int]:
-    """待调图 = 可发 ∩（缺当前译文 **或** 还有图没生成）。
-
-    返回 (待调图的 post_id 集合, 待处理**图片**张数)。
-    图片张数是花钱的那个数，帖子数是积压的那个数，两个都要。
-
-    判据整个交给 :func:`localize_images.build_jobs` —— 它已经把
-    「人工优先」「当前记录」「素材问题」全考虑进去了，重写一遍必然漂移。
-    没有当前译文的帖子 K 组根本不排队，所以那部分要在这里补上。
-    """
-    import localize_images as image_de          # 延迟导入：它会拉起 Pillow
+    """返回待调图帖子及图片数；复用 build_jobs，并计入缺当前译文的候选。"""
+    from localize import images as image_de          # 延迟导入：它会拉起 Pillow
 
     settings = image_de.Settings()
     jobs, _state, _stats = image_de.build_jobs(
@@ -221,9 +163,7 @@ def published_ids(state_dir: Path | None = None) -> set[str]:
     return {ref.rsplit(":", 1)[-1] for ref in refs}
 
 
-# ---------------------------------------------------------------------------
-# 本月花费（读两个阶段已经逐条写下的真实 usage）
-# ---------------------------------------------------------------------------
+# 费用
 
 def _month_key(when: datetime) -> str:
     return when.strftime("%Y-%m")
@@ -237,13 +177,7 @@ def _previous_month(month: str) -> str:
 def month_spend(dirs: list[Path], month: str,
                 warn: Callable[[str], None], *,
                 state_dir: Path | None = None) -> tuple[float, float, list[str]]:
-    """返回 (翻译花费, 图片花费, 无法计算的原因列表)，单位 US$。
-
-    ⚠️ **优先读独立 paid ledger，旧产物才按逐条真实 usage 兼容汇总；**
-    不按字符数或张数外推，且按 paid_request_id 去重。
-    CR-40 的教训：F 组按字符估给出 US$1.08–5.41，真实是 US$23.73，
-    低估一个数量级 —— 漏掉了 thinking 那个主导项。
-    """
+    """返回文本/图片美元费用及未知原因；优先付费账本，按 request ID 去重。"""
     problems: list[str] = []
     text_cost = image_cost = 0.0
     paid_ids: frozenset[str] = frozenset()
@@ -266,9 +200,8 @@ def month_spend(dirs: list[Path], month: str,
         problems.append("[translate] 配置不可用，翻译花费未计入（%s）" % exc)
         ts = None
     try:
-        # 延迟导入：它会拉起 Pillow。`python -m pipeline status` 是零网络的只读命令，
-        # 常用来"看一眼积压"，不该为此付 Pillow 的启动开销。
-        import localize_images as image_de
+        # 延迟导入：只读状态按需加载图片计价依赖。
+        from localize import images as image_de
         isettings = image_de.Settings()
     except SystemExit as exc:
         problems.append("[image] 配置不可用，图片花费未计入（%s）" % exc)
@@ -348,9 +281,7 @@ def _jsonl_rows(path: Path):
             yield row
 
 
-# ---------------------------------------------------------------------------
-# status
-# ---------------------------------------------------------------------------
+# 状态输出
 
 def account_counts(arc_base: Path, report: Callable[[str], None], *,
                    activated_at: datetime | None = None) -> dict:
@@ -399,11 +330,7 @@ def account_counts(arc_base: Path, report: Callable[[str], None], *,
 
 
 def display_width(text: str) -> int:
-    """终端列宽：CJK / 全角算 2 列。
-
-    ``%-24s`` 按**字符**补齐，而账号名旁边的表头是中文，
-    于是列会歪。这个项目的输出是给人在 cmd 窗口里看的，歪掉的表读起来很费劲。
-    """
+    """计算终端列宽，CJK 和全角字符计两列。"""
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1
                for ch in text)
 
@@ -527,8 +454,7 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     print("本月（%s）花费：US$%.4f / %.2f　（翻译 US$%.4f + 图片 US$%.4f）"
           % (month, text_cost + image_cost, settings["monthly_budget_usd"],
              text_cost, image_cost))
-    # 月初刚翻篇时本月必然是 0，而上个月可能刚花过钱。只打本月会让人误以为
-    # "这东西从来没花过钱"，顺带也看不出费用计算到底通没通。
+    # 同时显示上月费用，避免月初零值掩盖已有支出。
     prev = _previous_month(month)
     prev_text, prev_image, _ = month_spend(
         dirs, prev, lambda _m: None, state_dir=state_dir)
@@ -552,9 +478,7 @@ def run_status(dirs: list[Path], now: datetime | None = None,
     return 0
 
 
-# ---------------------------------------------------------------------------
-# preflight（上线预检）
-# ---------------------------------------------------------------------------
+# 预检
 
 def _probe_observation_gaps() -> tuple[str, ...]:
     """`ui_constraints_verified` 到底还差哪几个观察项。判据借 compose 的，不另写。"""
@@ -576,7 +500,7 @@ def _probe_observation_gaps() -> tuple[str, ...]:
 
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
-    """G6/G6c 三道发布校验。直接调 business_suite 的判据（导入不会启动浏览器）。"""
+    """复用 business_suite 发布校验；导入不启动浏览器。"""
     return [(item['name'], item['available'], item['reason'] or '证据已回查') for item in capability_checks()]
 
 
@@ -651,19 +575,7 @@ def _print_network_preflight(state_dir: Path, now: datetime) -> None:
 
 
 def run_preflight(days: int = 90, now: datetime | None = None) -> int:
-    """上线预检：把手维护的状态表变成**算出来的**。
-
-    **零网络、零费用、零写盘。** 回答两个问题：
-
-    1. 现在离"能激活"还差哪几件，每件差什么；
-    2. **激活之后如何处理新内容** —— 用实际同一套判据，
-       拿最近 ``days`` 天的真实归档当"假如那时就激活了"跑一遍。
-
-    第 2 问是这条命令存在的理由。三道闸全开、G8 也过了，流水线照样可能
-    "跑起来但什么都不产出" —— 因为 `[publish.price_map]` 是空的、
-    `[publish.trusted_owners]` 少一个自家兄弟账号。那两张表和 14 个 UI 上限
-    一样是承重的，但它们不在 GO_LIVE 的关键路径上，于是没人盯。
-    """
+    """只读预检激活条件，并按实际付费判据检查近期归档。**零网络、零费用、零写盘**。"""
 
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     state_dir = ROOT / cfg().get('paths', 'state', 'state')
@@ -683,7 +595,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         print("    还差 %d 个只能人亲眼量的观察项：" % len(gaps))
         for key in gaps:
             print("      - %s" % key)
-        print("    填法：docs/MANUAL_STEPS.md 第 3.4 节（一条 --set-note 命令填完）")
+        print("    填法：docs/MANUAL_STEPS.md 第 8 节（probe_publish 的 --set-note）")
 
     blockers = assisted.activation_blockers(state_dir)
     scheduled_refs = len(assisted.journal.scheduled_source_refs(state_dir))
@@ -775,9 +687,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     return 0 if (ready and not blockers) else 1
 
 
-# ---------------------------------------------------------------------------
-# check-alive（死人开关）
-# ---------------------------------------------------------------------------
+# 业务缺席检查
 
 ALIVE = 0
 ALIVE_CHECK_FAILED = 1
@@ -787,13 +697,7 @@ DEAD = 2
 def run_check_alive(now: datetime | None = None, state_dir: Path | None = None,
                     notify_fn: Callable[..., None] = notify,
                     popup: bool = True) -> int:
-    """死人开关。退出码：0 = 活着，1 = 查不了，2 = 判定为死并已告警。
-
-    ⚠️ **这个检查必须由一个独立的计划任务触发**（`FBScraperAlive`），
-    不能只挂在 `pipeline run` 或增量任务里 —— **它自己不跑的时候，
-    正是最需要它响的时候**。挂在增量任务里，增量任务一被禁用就一起哑了。
-    独立任务意味着要两个东西同时失效才会静默，而不是一个。
-    """
+    """检查业务运行缺席：0 正常，1 无法检查，2 已告警；由独立任务触发。"""
     now = now or datetime.now(timezone.utc)
     state_dir = state_dir or cfg().state_dir
     try:
@@ -806,13 +710,7 @@ def run_check_alive(now: datetime | None = None, state_dir: Path | None = None,
     when, sources = last_successful_run(state_dir)
 
     if when is None:
-        # 「从未跑过」和「跑过但停了」是两件事，消息要分开写：
-        # 前者的动作是"去装计划任务"，后者是"去看它为什么停了"。
-        #
-        # ⚠️ 刚装完计划任务、第一次增量还没跑成之前，这条**一定**会响一次。
-        # 那不是误报，是这条告警通道的自检 —— 消息里必须说清楚，
-        # 否则用户第一次见到它就会把通知关掉，而那正是最坏的结果
-        # （core/integrity.py 立过的规矩：误报的代价是让整条通道失效）。
+        # 区分从未成功与成功后停摆，给出对应处理方法。
         message = ("流水线**从未**成功运行过：没有任何运行标记。\n"
                    "· 刚装完计划任务？那这条是正常的，"
                    "而且正好证明告警通道是通的——等第一次增量跑成就不再响。\n"
@@ -929,9 +827,7 @@ def main(argv=None) -> int:
             return 2
 
     if args.command == "activate":
-        # `--g8-verified` 曾经只是一句自觉。激活早了不是顺序不好看，是**真花钱**：
-        # assisted 会先付费翻译、再付费调图，最后逐篇卡在离线硬闸上。
-        # 这两条本来就是可机检的，所以在这里检。
+        # 激活前核验能力与边界，避免先付费再卡在发布条件。
         blockers = assisted.activation_blockers(cfg().state_dir)
         if blockers and assisted.activation_time(cfg().state_dir) is None:
             print("[!] G8 验收证据不成立，拒绝激活：")

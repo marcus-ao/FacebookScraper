@@ -1,9 +1,4 @@
-r"""启动发布账号专用 Chrome（G0）。
-
-发布实例固定读取 ``[publish]`` 的 profile/port；抓取侧仍由
-``tools/start_chrome.py`` 读取 ``[chrome]``。两者必须同时可运行，且绝不能
-互换 profile，因为抓取小号被封是本项目唯一不可恢复的失败模式。
-"""
+"""按 publish 配置启动独立发布 Chrome，不与抓取会话混用。"""
 from __future__ import annotations
 
 import sys
@@ -18,14 +13,7 @@ from core.console import force_utf8                                     # noqa: 
 
 
 def _report_profile_mismatch(port: int, profile) -> int:
-    """端口上是 Chrome、但归属核对没过时，说清到底是哪一种。
-
-    ⚠️ **"确实是别的 profile" 与 "核对不了" 是两件事**（CR-63）。
-    原来两种情况印同一段话，于是 2026-09-01 用户调 G1 时，
-    一个**完全正确**的环境被报成"你开错了浏览器"，还被建议去关掉它——
-    真实原因是归属核对的子进程超时（5 秒不够，实测要 7–9 秒）。
-    **让人去关一个本来就对的 Chrome，比不报错更坏。**
-    """
+    """区分 profile 错配与无法核验，给出对应提示。"""
     verdict = _cdp_profile_matches(port, profile)
     if verdict is False:
         print("[!] 发布端口 %d 上是 Chrome，但它用的**不是**发布 profile。" % port)
@@ -90,10 +78,7 @@ def main() -> int:
         return 0
 
     print()
-    # ⚠️ `launch()` 有两种失败：端口一直没起来、以及端口起来了但归属核对没过。
-    # 原来这里只印前一种（还写死"等了 15 秒"），于是归属核对失败时
-    # 用户看到的是一份**全是错的**排查清单 —— 2026-09-01 真踩了（CR-63）。
-    # 所以这里重新分诊一次，再决定说什么。
+    # 区分端口未就绪与 profile 核验失败。
     if cdp_ready(port):
         return _report_profile_mismatch(port, profile)
 

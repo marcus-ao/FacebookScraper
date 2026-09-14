@@ -13,7 +13,6 @@ import {
 } from './columns'
 import type { PostRowBase } from './columns'
 
-/** 队列行：列表载荷里真实有的字段，一个不多。 */
 interface ReviewRow extends PostRowBase {
   readonly hard_alerts: readonly { code: string; label: string }[]
   readonly risk_count: number
@@ -21,7 +20,6 @@ interface ReviewRow extends PostRowBase {
   readonly schedule: { at: string | null } | null
 }
 
-/** 历史行：历史载荷里真实有的字段。 */
 interface HistoryRow extends PostRowBase {
   readonly created_at?: string
   readonly account: string
@@ -71,7 +69,6 @@ const historyColumns = () =>
 
 type CellRenderer<T> = (value: unknown, row: T, index: number) => React.ReactNode
 
-/** 把一张表里每一列的 render 挑出来。 */
 function renderers<T>(columns: TableColumnsType<T>): CellRenderer<T>[] {
   const out: CellRenderer<T>[] = []
   for (const column of columns) {
@@ -83,7 +80,6 @@ function renderers<T>(columns: TableColumnsType<T>): CellRenderer<T>[] {
   return out
 }
 
-/** 把某一列的 cell 渲染成 HTML。 */
 function cell<T>(columns: TableColumnsType<T>, key: string, row: T): string {
   const column = columns.find((item) => item.key === key)
   if (!column || !('render' in column)) throw new Error(`没有 ${key} 这一列`)
@@ -112,7 +108,6 @@ describe('⛔ 没有批量，所以没有勾选', () => {
   })
 
   it('工厂不产出 rowSelection —— 它只返回列', () => {
-    // 不显示没有对应功能的控件。
     const result: unknown = reviewColumns()
     expect(Array.isArray(result)).toBe(true)
   })
@@ -120,8 +115,6 @@ describe('⛔ 没有批量，所以没有勾选', () => {
 
 describe('队列与历史共用同一套列', () => {
   it('队列有问题列，历史没有', () => {
-    // 历史载荷里没有 hard_alerts / risk_count / author_flag。
-    // 没有判据就不画这一列，而不是画一个永远空着的。
     expect(reviewColumns().map((column) => column.key)).toContain('problem')
     expect(historyColumns().map((column) => column.key)).not.toContain('problem')
   })
@@ -210,7 +203,6 @@ describe('⛔ 不依赖详情字段', () => {
   })
 
   it('⛔ 没有「译文来源」四态列', () => {
-    // 列表 API 无法区分"机器 / 人工 / 旧提示词"（DECISION_LOG）。
     const titles = [...reviewColumns(), ...historyColumns()]
       .map((column) => String(column.title ?? ''))
       .join(' ')
@@ -220,11 +212,9 @@ describe('⛔ 不依赖详情字段', () => {
   })
 
   it('"还没有德语译文"只从 text_de_excerpt 是否为空串判，不从 status 猜', () => {
-    // 空串 → 没译文，无论 status 是什么。
     expect(cell(reviewColumns(), 'summary', { ...reviewRow, text_de_excerpt: '' })).toContain(
       '还没有德语译文',
     )
-    // 有内容 → 有译文，即使 status 是 not_ready。
     const markup = cell<ReviewRow>(reviewColumns(), 'summary', {
       ...reviewRow,
       status: 'not_ready',
@@ -268,8 +258,6 @@ describe('单元格细节', () => {
   })
 
   it('没有缩略图时画空位，不渲染 <img src="">', () => {
-    // <img src=""> 会变成浏览器的碎图标，看起来像故障；
-    // 而"这一篇没有图"是一个正常状态。
     const markup = cell(reviewColumns(), 'thumbnail', { ...reviewRow, thumbnail_url: '' })
     expect(markup).not.toContain('<img')
     expect(markup).toContain('aria-hidden="true"')
@@ -299,7 +287,6 @@ describe('行的视觉', () => {
   })
 
   it('not_ready 与进行中的行不降饱和', () => {
-    // 区分「已经处理完」和「还没准备好」正是这个类名存在的理由。
     expect(postRowClassName({ ...reviewRow, status: 'not_ready' })).toBe('')
     expect(postRowClassName({ ...reviewRow, status: 'pending_review' })).toBe('')
     expect(postRowClassName({ ...reviewRow, status: 'approved' })).toBe('')

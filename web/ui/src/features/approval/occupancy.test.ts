@@ -7,8 +7,6 @@ const card = (at: string, channels: CalendarCard['channels'] = ['facebook']): Ca
   at, at_business: at, channels, card_sha256: at, delivery: 'scheduled', rendered: '',
 })
 
-// 后端的 90 分钟同渠道闸门是真正的判定（web/DESIGN.md）。这里测的是排期前
-// 那句本地提示 —— 它说"附近没有占用"而后端马上 409，就是白跑一趟。
 
 describe('同渠道占用按真实时间差算，不按"同一个日历日"', () => {
   const gap = 90
@@ -27,7 +25,6 @@ describe('同渠道占用按真实时间差算，不按"同一个日历日"', ()
   it('同一天但隔得够远就不提醒', () => {
     const result = nearbyOccupancy([card('2026-09-14T08:00:00+02:00')], 'facebook', '2026-09-14T10:30', gap)
     expect(result.tooClose).toBe(false)
-    // 仍然列出来给她看，只是不报警。
     expect(result.cards).toHaveLength(1)
   })
 
@@ -63,7 +60,6 @@ describe('同渠道占用按真实时间差算，不按"同一个日历日"', ()
   })
 
   it('⛔ 这不是闸门：它只回答"近不近"，不回答"能不能排"', () => {
-    // gap 为 0（后端还没给间隔）时不许自己编一个出来。
     expect(nearbyOccupancy([card('2026-09-14T10:29:00+02:00')], 'facebook', '2026-09-14T10:30', 0).tooClose)
       .toBe(false)
   })

@@ -1,6 +1,3 @@
-// 展示口径。**只管怎么显示，不含任何判断**——判断全在后端。
-//
-// ⛔ STATUS_LABEL.not_ready 显示为「未就绪」；其余状态文案是既定运营用语。
 
 import type {
   AuthorKind,
@@ -24,13 +21,7 @@ export function berlinInput(iso: string | null | undefined): string {
 /** 比较两条柏林墙上时刻的缓存间隔，不负责判断 DST 合法性。 */
 export const wallMinutesApart = (a: string, b: string) => Math.abs(Date.parse(a.slice(0, 16) + ':00Z') - Date.parse(b.slice(0, 16) + ':00Z')) / 60000
 
-/**
- * 业务口径的「今天」，`YYYY-MM-DD`。
- *
- * ⚠️ 不能用 `new Date().getDate()`：这台机器在中国，柏林当地 00:00–07:00 那几个
- * 小时里浏览器已经是第二天了。月历的日期格和每张卡的 `at_business` 都是柏林
- * 墙上日期，标错一天就等于把「今天」指到别的格子上。
- */
+/** 按业务时区计算今天，避免跨日边界受宿主时区影响。 */
 export const berlinToday = (now: Date = new Date()) => berlinInput(now.toISOString()).slice(0, 10)
 
 /** 月历只迭代日期标签；跨月边界和每张卡的柏林日期均来自后端。 */
@@ -42,21 +33,15 @@ export function calendarDays(start: string, end: string): (string | null)[] {
   return days
 }
 
-// 排期时刻带的是柏林偏移（+02:00 / +01:00）。**不能交给浏览器的本地时区去渲染**：
-// 这台机器在中国，直接 toLocaleString 会把 10:00 柏林显示成 16:00，
-// 而那正是这个项目最不能出错的一类数（夏令时切换日尤其）。
-// 所以按字符串里带的偏移自己算，显示成柏林当地时刻。
+// 显示字符串携带的柏林墙上时刻，不转换为浏览器本地时区。
 export function formatSchedule(iso: string | null | undefined): string | null {
   if (!iso) return null
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
   if (!match) return null
   const [, y, mo, d, h, mi] = match
-  // 正则匹配成功时这五组一定存在；noUncheckedIndexedAccess 下显式判一次。
   if (y === undefined || mo === undefined || d === undefined || h === undefined || mi === undefined) {
     return null
   }
-  // getUTCDay() 恒在 0..6，但 noUncheckedIndexedAccess 下类型仍是可选；
-  // 不给兜底的话模板字符串会把 undefined 原样印出来，那是静默错误。
   const weekday = WEEKDAYS[new Date(Date.UTC(+y, +mo - 1, +d)).getUTCDay()] ?? ''
   return `${+mo}/${+d} ${weekday} ${h}:${mi} 柏林`
 }
@@ -90,10 +75,6 @@ export const PLATFORM_LABEL: Record<Platform, string> = {
   instagram: 'Instagram',
 }
 
-// 业务视角七态 + not_ready（web/DESIGN.md 第 4 节 / core/review.py:16）。
-//
-// ⚠️ not_ready 显示为「未就绪」。队列有四个页签，「待我审」才是她的待办；
-// 把 not_ready 叫「待处理」会让两个概念撞车。
 export const STATUS_LABEL: Record<DisplayStatus, string> = {
   not_ready: '未就绪',
   pending_review: '待我审',
@@ -111,15 +92,13 @@ export const AUTHOR_KIND_LABEL: Record<AuthorKind, string> = {
   third_party: '第三方作者',
 }
 
-// 风险三类（web/DESIGN.md 第 8 节）。金额/单位/标签由 regex 负责，不进这里。
 export const RISK_KIND_LABEL: Record<RiskKind, string> = {
   pun: '俚语双关',
   ambiguous: '歧义句',
   us_only: '美国限定',
 }
 
-// 操作记录的动作文案。列表和详情共享同一份标签。
-// text_edited 只存在于详情的 trail —— reader.py:610 把账本里的 edited 改写成它。
+// 详情 trail 将账本的 edited 映射为 text_edited。
 export const ACTION_LABEL: Record<TrailAction, string> = {
   approved: '通过',
   skipped: '标记为不发',

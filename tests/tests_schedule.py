@@ -1,15 +1,4 @@
-"""计划任务与入口脚本自测。对应实施计划 E1 / E3 的【验收】里能离线做的部分。
-
-这套测试盯两件事，都是"错了要几天后才发现"的那类：
-
-  1. **两个任务的参数不能搞反。** 每日触发器显式带 `--platform all`、
-     但**不带** `--if-stale`
-     （stale_after_hours = 26 > 24，带上就变成跑一天跳一天），
-     补跑触发器**必须带**（否则每次解锁都抓一遍）。
-  2. **`.bat` 必须纯 ASCII + CRLF。** 计划里写着"`.gitattributes` 只保证换行，
-     ASCII 得靠人守"——靠人守的东西迟早会破，所以在这里守。
-     实测后果不是乱码而是**行被从中间劈开、后半段当命令执行**。
-"""
+"""验证计划任务参数和批处理 ASCII/CRLF；不注册真实任务。"""
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -127,9 +116,7 @@ bat = ROOT / "scripts" / "run_delta.bat"
 check(bat.exists(), "scripts\\run_delta.bat 存在（E1）")
 check((ROOT / "scripts" / "run_pipeline.bat").exists(),
       "scripts\\run_pipeline.bat 存在（L0b/L0c）")
-# 三个稳定任务名都经 run_pipeline.bat；前两个动作分别是 run / run --if-stale。
-# ⚠️ 这不是随手分的：死人开关要抓的失效正是「增量任务不跑了」，
-#    与增量共用入口就会跟着一起哑掉。见 tools/schedule.py::alive_xml。
+# 缺席告警保持独立触发，避免随增量任务一起停摆。
 expected_bat = {DAILY_TASK: "run_pipeline.bat", CATCHUP_TASK: "run_pipeline.bat",
                 ALIVE_TASK: "run_pipeline.bat"}
 for name, tree in trees.items():

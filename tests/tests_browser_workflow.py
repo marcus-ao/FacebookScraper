@@ -1,15 +1,4 @@
-"""Repeatable offline regression against the built React app and local FastAPI.
-
-Run from the repository (uses installed Python Playwright and Config.chrome_exe):
-    npm.cmd --prefix web/ui run build
-    <venv-python> tests/tests_browser_workflow.py -v
-
-Human saves, source conflicts, archive paging and settings CAS exercise real
-backend code with temporary files. Runtime and remote publication responses are
-explicit browser routes: those assertions cover UI behavior ONLY. All external
-requests and unapproved backend mutations fail the test. There are no paid calls,
-live account sessions, Feishu messages or real publish/scheduling submissions.
-"""
+"""Built React + temporary FastAPI regression; saves use real local writes, external results use browser overrides."""
 from __future__ import annotations
 
 import json
@@ -387,8 +376,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         approve.click(force=True)
         expect(self.page.get_by_role("dialog")).to_have_count(0)
 
-        # Seconds are accepted by datetime-local but rejected by this UI's
-        # explicit minute-only wall-time contract.
+        # datetime-local permits seconds; this UI requires minute precision.
         field.fill("2026-09-15T10:30:15")
         expect(field).to_have_value("2026-09-15T10:30:15")
         expect(self.page.get_by_text("请填写完整有效的柏林日期和时间", exact=True)).to_be_visible()

@@ -1,35 +1,12 @@
-r"""Business Suite 定位常量（G1 回填）。
+"""Business Suite 定位注册表；按真实录证保存 role/name、来源与失效条件，不跨界面复用。
 
-⛔ **全局红线 5：不得凭猜测编写 Business Suite 的选择器。**
-所以本文件里的每一条都必须能在真实 probe dump 里被逐字找到，
-并且带着「出自哪一份 dump 的第几条交互」的来源注释。
-:data:`REGISTRY` 里的 ``name`` 字段是**原样抄录**的可访问名，
-`tests/tests_publish.py` 会在 dump 还在本机时逐条回查
-——**编不出来的定位会当场被测试打回。**
+⛔ **红线 5：不得凭猜测编写 Business Suite 的选择器。** 每一条都必须能在真实
+probe dump 里逐字找到，并带上出自哪份 dump、第几条交互的来源注释。
+**不要因为"看截图就知道那个按钮叫什么"而把缺的项填上** —— 截图不是 dump，
+看着填进来的定位会给下一个人一个危险的假绿灯。
 
-三件必须先知道的事：
-
-1. **不记 class、不记 CSS path。** Business Suite 是 React SPA，
-   class 是构建期混淆的，`div > div:nth-child(3) > span` 这类定位
-   下次发版就全废。这里一律用 ARIA ``role`` + 可访问名。
-2. **两份 dump 是两个不同的界面，不许混用**（见 :data:`SURFACE_*`）。
-   `business.facebook.com/latest/composer/` 才是本组要自动化的那条路；
-   `www.facebook.com/professional_dashboard/` 那份只作旁证保留，
-   它是 FB 单平台的旧版创作者后台，**没有 IG 那一路**。
-3. **录到的东西比要用的东西少。** 缺的那几项在 :data:`GAPS` 里逐条点名，
-   连"缺它会挡住哪一步、怎么补录"一起写清楚。
-   ⛔ **不要因为"看截图就知道那个按钮叫什么"而把它们填上**——
-   截图不是 dump，看着填进来的定位会给下一个人一个危险的假绿灯。
-
-来源 dump（都在 `state/`，**不进版本库**，所以这里只记文件名）::
-
-    publish_probe_20260831_222850_347719.json   24 条 · composer（本组用这份）
-    publish_probe_20260831_195237_008047.json   63 条 · professional_dashboard（旁证）
-
-⚠️ 那份 24 条的 dump `finished_at=null` 且序号不连续（录制中途被 CR-66 的
-死锁打断）。**它过不了 `compose._validated_probe_dump` 的严格校验，这是对的**：
-那两条校验证明的是"记录没丢过"。**但用来人工读、回填定位完全够用**，
-本文件就是这么来的。严格发布仍然要等用户重录一份干净的。
+只用 ARIA role + 可访问名，不记 class、不记 CSS path：Business Suite 是 React
+SPA，class 是构建期混淆的，下次发版就全废。缺的项在 GAPS 里逐条点名。
 """
 from __future__ import annotations
 
@@ -41,9 +18,7 @@ from publish.locator_types import (COMPOSER_DUMP, COMPOSER_URL,
                                    normalize_account_value)
 
 
-# =============================================================================
-# 一、composer 界面：本组真正要自动化的那条路
-# =============================================================================
+# Composer
 
 _COMPOSER_LOCATORS = (
     Locator(
@@ -102,9 +77,7 @@ _COMPOSER_LOCATORS = (
         attributes={
             "tag": "div",
             "is_contenteditable": "true",
-            # ⚠️ **这不是 <textarea>**。第 5/18 条显示命中的是内层 div，
-            # 语义祖先第 3 层才是这个 combobox —— 富文本编辑器的典型形状，
-            # 多段文本要逐行输入，不能一次 fill（PUBLISH_PLAN 3.2 第 3 点）。
+            # 富文本 combobox 非 textarea；写入后须核验换行与完整正文。
             "nested_editable_depth": "3",
         },
     ),
@@ -176,8 +149,7 @@ _COMPOSER_LOCATORS = (
                     "所以填完必须回读比对，见 business_suite.set_schedule",
         attributes={
             "tag": "input",
-            # ⚠️ **这两条是实测事实，不是推测**：placeholder 是 mm/dd/yyyy，
-            # 说明这台 UI 用的是**美式日期**，不是德式 dd.mm.yyyy。
+            # UI 日期为 mm/dd/yyyy。
             "placeholder": "mm/dd/yyyy",
         },
     ),
@@ -193,8 +165,7 @@ _COMPOSER_LOCATORS = (
         breaks_when="容器不再是 role=application，或它的可见文本不再是"
                     "`12 : 30 AM` 这种形状（回读比对会当场失败）",
         attributes={
-            # 录到的渲染值。**这是 12 小时制 + AM/PM 的直接证据**，
-            # 也是回读比对的格式依据（h : mm AM/PM）。
+            # 时间显示使用 12 小时制及 AM/PM。
             "rendered_text": "12 : 30 AM",
         },
     ),
@@ -226,14 +197,7 @@ _COMPOSER_LOCATORS = (
     ),
 )
 
-# =============================================================================
-# 二、professional_dashboard 界面：**旁证，不参与自动化**
-# =============================================================================
-#
-# 为什么留着这一段：63 条那份 dump 是**唯一**录到过
-# 「Meta 的 Photo/video 按钮背后确实是一个真的 <input type=file multiple>」
-# 的证据（第 33/34 条）。G3 因此可以放心走 set_input_files() 而不是模拟拖拽。
-# ⛔ **但它是另一个界面的证据，不许把这里的定位直接用到 composer 上。**
+# Professional dashboard 旁证，不用于 composer 定位。
 
 _DASHBOARD_LOCATORS = (
     Locator(
@@ -278,119 +242,75 @@ REGISTRY: dict[str, Locator] = {
 
 COMPOSER: dict[str, Locator] = {item.key: item for item in _COMPOSER_LOCATORS}
 
-# 新版完整提交 dump 交付后，只能把其中已经通过 evidence.verify_signal 回查的
-# 条目填到这里。空表意味着 G6/G6c 必须继续失败闭合。
+# 只装载可回查的信号；空表保持提交阻塞。
 SIGNALS: dict[str, EvidenceSignal] = {}
 
 
-# =============================================================================
-# 三、G1 **没**录到的（这一段和上面两段同等重要）
-# =============================================================================
+# 缺失控件
 
 _GAPS = (
     Gap(
         key="composer_file_input",
         step="G3 上传",
-        why_missing="点了 Add photo/video 之后弹出的是**操作系统的文件对话框**，"
-                    "那一步不产生任何页面事件，recorder 天然录不到；"
-                    "而那一轮用户没有真的选文件，所以连 change 事件都没有。",
-        blocks="G3：不知道 composer 里那个 <input type=file> 长什么样",
-        how_to_close="不必补录。business_suite.upload_images 改成**运行时发现**："
-                     "点开入口后在页面里找 accept 含 image/ 的 file input，"
-                     "找不到就失败闭合。旧版后台那条（dashboard_file_input）"
-                     "已证明这种控件确实存在，所以这不是在赌。",
+        why_missing="录证未包含编辑器文件输入控件。",
+        blocks="缺少文件输入控件的静态定位。",
+        how_to_close="打开上传入口后查找接受图片的 file input，缺失即失败。",
     ),
     Gap(
         key="composer_hours_spinbutton",
         step="G5 排期",
-        why_missing="用户只点了 minutes 与 meridiem 两个 spinbutton，"
-                    "小时那个没被点到，因此没有它的 aria-label。",
-        blocks="G5：直接按名字定位小时字段",
-        how_to_close="不必补录。Time input 容器里的 spinbutton 一共三个，"
-                     "两个已知，**剩下那个按排除法就是小时**；"
-                     "个数不是 3 就失败闭合，设完还要回读 `h : mm AM/PM` 比对。",
+        why_missing="小时字段未录到独立名称。",
+        blocks="不能按名称定位小时字段。",
+        how_to_close="仅在恰有三个 spinbutton 时排除已知分钟与 AM/PM，设值后完整回读。",
     ),
     Gap(
         key="composer_upload_thumbnails",
         step="G3 上传",
-        why_missing="缩略图是上传**之后**渲染出来的，那一轮根本没传成文件，"
-                    "自然也没有缩略图可点、可录。",
-        blocks="G3 的【验收】「1 张与 5 张缩略图数量正确」——"
-               "程序现在能确认文件已交给上传控件，"
-               "**不能**确认 UI 真的收下了几张。",
-        how_to_close="补录时真的传 5 张图，点一下其中一张缩略图，"
-                     "让缩略图容器的 role 与可访问名进 dump。",
+        why_missing="录证未包含上传后的缩略图。",
+        blocks="无法证明编辑器已接收的图片数量和顺序。",
+        how_to_close="按操作指南录取多图容器及顺序；远端排期图片另行核验。",
     ),
     Gap(
         key="composer_placement_toggles",
         step="G1 第 4 点",
-        why_missing="那一轮完全没有走到渠道选择（FB Page 与 IG 帐号各一路），"
-                    "dump 里没有任何 checkbox/switch 属于渠道。",
-        # ✅ 2026-09-01 用户实测后**降级**：原先写的是
-        # 「『FB + IG 同时发』这条用户点名的范围做不了」——那是高估了。
-        blocks="**已降级，不再挡住『FB + IG 同时发』。**"
-               "用户 2026-09-01 确认：进 composer 时**两个渠道默认就是全勾选的**，"
-               "所以本来就不需要点。"
-               "提交前仍不读取或操作勾选控件；提交后由 G6c 在日历卡片上"
-               "回读 FB + IG。明确少任一渠道就转人工，不能记 scheduled。",
-        how_to_close="只有两种情况才需要补录："
-                     "① 要**改**选择（比如只发 FB 不发 IG）；"
-                     "② 想让程序自己回读校验渠道。"
-                     "两者都要重录一次探查，走到渠道那一屏把控件点一遍。",
+        why_missing="该份录证不含渠道勾选控件。",
+        blocks="不能据默认勾选推定单渠道正确。",
+        how_to_close="使用 tools/probe_channels.py 录取控件，并在提交前核验唯一渠道。",
     ),
     Gap(
         key="composer_submit_button",
         step="G6 提交",
-        why_missing="那一轮在设定时刻时被 CR-66 的死锁打断，没走到提交。",
-        blocks="G6 的验收证据门：状态机与单击提交已经实现，但 SIGNALS 为空时"
-               "会在接触浏览器前失败闭合；绝不凭猜测解锁品牌主页提交。",
-        how_to_close="重录一次探查并走到提交（可以排一个几天后的时刻，"
-                     "验证完再去取消）。",
+        why_missing="录证未覆盖提交控件。",
+        blocks="提交信号缺失时保持阻塞。",
+        how_to_close="按操作指南准备并确认具体内容，再录取受控提交。",
     ),
     Gap(
         key="composer_success_signal",
         step="G6 提交",
-        why_missing="同上，没走到提交，也就没有成功后的 toast/跳转/列表项。",
-        blocks="G6：没有明确成功信号就只能"
-               "「点完就当成功」，那等于没有验收（PUBLISH_PLAN 3.2 第 7 点）。",
-        how_to_close="补录，并在 --fill-notes 的 success_signal 里写清楚"
-                     "看到的是什么。",
+        why_missing="录证未包含提交后的成功信号。",
+        blocks="仅点击按钮不能证明创建成功。",
+        how_to_close="补录成功后的语义，并在 --fill-notes 中填写 success_signal。",
     ),
     Gap(
         key="planner_scheduled_card",
         step="G6c 排期回读",
-        why_missing="旧 probe 在提交前中断，也没有停留在提交后的 Planner/内容日历，"
-                    "所以没有排期卡片的被动语义证据。",
-        blocks="G6c：无法用目标时刻、最终正文与 FB/IG 渠道回读远端排期；"
-               "出现成功 toast 也只能记 submitted_unverified，不能记 scheduled。",
-        how_to_close="用 v2 probe 手工完成一次未来排期提交；成功后进入内容日历，"
-                     "先录到 Planner 数据就绪语义，再让同一张卡片以相互独立的"
-                     "子语义显示目标时刻、最终正文、FB、IG 与 5 张图/图片数；"
-                     "保持最终页面不动，再回终端停止录制。",
+        why_missing="录证未覆盖已排期任务详情。",
+        blocks="缺少完整回读时只记 submitted_unverified。",
+        how_to_close="优先只读录取已有任务的时刻、全文、渠道、图片及来源；需新增样本时先确认具体内容。",
     ),
     Gap(
         key="composer_account_context",
         step="G2 账号核对",
-        why_missing="composer 界面上没录到主页切换器，也没录到任何"
-                    "「当前发的是哪个 Page / 哪个 IG 帐号」的控件。",
-        blocks="G2 的实际账号安全闸：显式 `--submit` 必须在点击前证明当前上下文"
-               "同时对应配置中的 FB Page 与 IG 帐号；缺证据时在浏览器前失败闭合。",
-        how_to_close="补录时在 composer 里点一下主页/帐号那一块，"
-                     "让它的 role 与可访问名进 dump。",
+        why_missing="编辑器中未取得目标账号证据。",
+        blocks="不能证明提交上下文属于配置账号。",
+        how_to_close="录取账号控件的 role 与名称，并按任务渠道核验目标。",
     ),
     Gap(
         key="ui_timezone",
         step="G5 排期",
-        why_missing="dump 的观察项整段是空的（那一轮被打断，收尾问答没跑完）。"
-                    "⚠️ **但答案本身已经有了**：用户 2026-09-01 实测确认，"
-                    "Business Suite 上那个时刻**跟发帖者设备的本机时间走**，"
-                    "已据此填好 [publish].ui_timezone。",
-        blocks="严格 UI 约束（显式 `--submit` 会强制开启）：必须核对 dump 里"
-               "的时区与实测排期/IG 上限，配置占位值不能放行真实提交。",
-        how_to_close=r"准备自动提交前跑 `.venv\Scripts\python.exe "
-                     r"tools\probe_publish.py --fill-notes "
-                     r"state\publish_probe_<时间戳>.json`，"
-                     "把同一个 IANA 名和其余实测 UI 限制填进观察项（不用重录）。",
+        why_missing="录证未填写设备时区及日期控件约束。",
+        blocks="配置值不能替代人工核验的 UI 证据。",
+        how_to_close="运行 scripts/run_python.bat -m tools._scaffolding.probe_publish --fill-notes <dump>，填写 IANA 时区及实际控件限制。",
     ),
 )
 
@@ -400,29 +320,11 @@ GAPS: dict[str, Gap] = {item.key: item for item in _GAPS}
 def describe_gap(key: str) -> str:
     """把一条缺口渲染成可以直接丢进异常消息的文本。"""
     gap = GAPS[key]
-    return ("G1 尚未录到「%s」（%s）。\n"
-            "  为什么没有：%s\n"
-            "  它挡住了：%s\n"
-            "  怎么补上：%s\n"
-            "  ⛔ 不得凭截图或经验猜一个定位顶上（全局红线 5）。"
+    return ("缺少控件证据：%s（%s）。\n原因：%s\n影响：%s\n处理：%s"
             % (gap.key, gap.step, gap.why_missing, gap.blocks, gap.how_to_close))
 
 
-# =============================================================================
-# 四、验收证据的装载点
-# =============================================================================
-#
-# `tools/probe_signals.py --emit` 从一份 v2 dump **机械推导**出 G6/G6c 需要的
-# 五条证据、逐条丢回 `evidence.py` 回查、并验证同页因果顺序之后，
-# 才会写出 `publish/signals_backfilled.py`。这里把它并进三张表。
-#
-# ⚠️ **装载不等于放行。** `business_suite.require_*_evidence()` 在真正提交前
-# 还会**再回查一遍**（用的就是 evidence.py 那套代码），并且要求
-# `[publish].ui_probe_dump` 指向同一份 dump —— 那个配置项是人工审核的签字栏，
-# 程序不替人填。所以即使有人手工造一个 signals_backfilled.py 塞进来，
-# 只要它回查不过或来源对不上，`--submit` 依然会在碰浏览器之前失败闭合。
-#
-# 文件不存在 = 还没录到干净的 dump = 三张表保持现状 = 发布校验保持关闭。
+# 装载生成信号；提交前仍须回查并与配置中的人工复核 dump 一致。
 try:
     from publish import signals_backfilled as _backfilled
 except ImportError:                               # 正常状态：还没有验收证据

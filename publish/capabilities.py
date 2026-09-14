@@ -67,8 +67,7 @@ def acceptance(state_dir):
                     or media.get('image_count') != len(row.get('image_sha256') or ())
                     or [image.get('source_sha256') for image in images]
                     != row.get('image_sha256')):
-                # Prepared thumbnails cannot certify the later scheduled assets.
-                # Scheduling still deduplicates, but new G8 acceptance stays pending.
+                # Editor thumbnails cannot certify media in a later scheduled post.
                 continue
             try:
                 metadata, source, _, _ = snapshots.load(row['snapshot_id'])

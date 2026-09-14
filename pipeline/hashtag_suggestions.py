@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import translate
+from localize import text as translation
 from core import hashtag_rank, hashtag_sampling, paid_model, paid_requests
 from core.config import cfg
 from pipeline import engine, refinement
@@ -26,12 +26,12 @@ def suggest(account_dir, source, *, source_text_sha256, human_revision, review_r
         def preflight():
             refinement._eligible(account_dir, source, source_hash=source_text_sha256)
             engine.budget_preflight()
-        settings = translate.Settings()
-        caller = translator or translate.Translator(settings,
+        settings = translation.Settings()
+        caller = translator or translation.Translator(settings,
             paid_controller=paid_requests.RequestController(
                 c.state_dir, preflight=preflight, operation_id=request_id))
         c.state_dir.mkdir(parents=True, exist_ok=True)
-        with translate.TranslationRunLock(c.state_dir / 'translate.lock'):
+        with translation.TranslationRunLock(c.state_dir / 'translation.lock'):
             preflight()
             caller.set_paid_context('hashtags:' + request_id, truth['platform'] + ':' + truth['post_id'])
             try:

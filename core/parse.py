@@ -1,15 +1,4 @@
-"""把各路来源的 JSON 收敛成统一的 Post。
-
-三种输入形态，结构互不相同：
-  1. iphone_struct    —— 回填时拦截到的 /api/v1/ 响应，字段最全
-  2. GraphQL node     —— 登出 web_profile_info 的 timeline media，字段较少
-  3. FB story node    —— Facebook GraphQL，结构最乱
-
-形态 2 的重要限制：timeline media 里**不含轮播子项**，只有封面图
-(display_url)。所以登出增量能发现新帖、拿到正文和封面，但拿不到
-轮播帖的全部图片 —— 这类帖会被标记 media_complete=False，
-由完整性检查汇总，留给人工或下一次登录态回填补齐。
-"""
+"""将 IG iphone_struct、GraphQL media 与 FB story 归一为 Post；缺轮播子项时标记媒体不全。"""
 from __future__ import annotations
 
 import time
@@ -27,10 +16,7 @@ def iso(ts: int | float | None) -> str:
 
 
 def walk(node: Any, pred: Callable[[dict], bool]) -> Iterator[dict]:
-    """在任意深度的 JSON 里找出满足 pred 的所有 dict。
-
-    FB/IG 的响应嵌套深且随版本漂移，全树搜索比写死字段路径抗变化。
-    """
+    """遍历嵌套 JSON 中满足 pred 的字典。"""
     if isinstance(node, dict):
         if pred(node):
             yield node
@@ -41,46 +27,16 @@ def walk(node: Any, pred: Callable[[dict], bool]) -> Iterator[dict]:
             yield from walk(v, pred)
 
 
-# --------------------------------------------------------------------------
-# 形态 1：iphone_struct（回填拦截）
-# --------------------------------------------------------------------------
+# IG iphone_struct
 
 def is_iphone_struct(d: dict) -> bool:
-    """判定必须看**值**，不是看键在不在。
-
-    2026-08-30 实测：轮播帖的 `carousel_media` 子项里 `code` 这个**键确实存在，
-    但值是 None**，`pk` 和 `taken_at` 也都在。旧判定写的是 `"code" in d`，
-    于是 478 个子项全部命中，每个都被造成一篇独立的、没有正文的"帖子"——
-    一篇 3 图轮播被记成 1 篇父帖 + 3 篇空帖。
-
-    `product_type != "carousel_item"` 是第二道闸：值判空是根因修复，
-    这一条是针对已知形态的显式拦截。两条都要——万一哪天子项开始带 code 了，
-    第二条还能挡住。
-    """
+    """要求有效 code 并排除 carousel_item，避免将轮播子图识别成帖子。"""
     return (bool(d.get("pk")) and bool(d.get("code")) and bool(d.get("taken_at"))
             and d.get("product_type") != "carousel_item")
 
 
 def ig_coauthors(node: dict) -> list[str]:
-    """Instagram 合作帖（collab）的其他作者，归一化成小写 username。
-
-    **这个字段决定一篇帖子在不在本账号的主页上。** collab 帖会同时出现在
-    双方主页，但 `user.username` 只记原始发布者——只看它的话，
-    本账号主页上的一大批内容会被判成"别人的帖子"。
-    2026-08-30 实测：neakasa.tech 因此丢了 **263 篇自己主页上的帖子**
-    （其中 229 篇的原作者是宠物 UGC 账号、30 篇是 neakasa.global）。
-
-    ⚠️ **只取 `coauthor_producers`，不取 `invited_coauthor_producers`。**
-    后者是"邀请了但对方还没接受"，那种帖子不会出现在被邀请方的主页上。
-    两个**键**在真实响应里都存在（1022 个节点全有），很容易顺手一起收。
-    ⚠️ 补一个诚实的限定：实测这 1022 个节点里 `invited_coauthor_producers`
-    的**值全是空数组**，所以"不收它"这条选择至今没有真实反例可验证。
-    它是保守方向上的选择（宁可漏一篇，不可混进一篇别人的），保持不变。
-
-    条目形态兼容 `{"username": ...}` 与裸字符串两种：真实响应给的是前者，
-    但**认不出条目 = 整篇帖子被判成他人帖丢掉**，而这正是 CR-19 那 263 篇
-    的丢法。这一类判定上多兼容一种形态的成本是两行，代价不对称。
-    """
+    """提取已接受的 coauthor_producers；邀请未接受者不算合作作者。"""
     out: list[str] = []
     for c in node.get("coauthor_producers") or []:
         if isinstance(c, dict):
@@ -97,8 +53,7 @@ def ig_coauthors(node: dict) -> list[str]:
 def from_iphone_struct(item: dict, account: str, route: str) -> Post:
     code = item.get("code", "")
     caption = (item.get("caption") or {}).get("text", "") or ""
-    # 实测 1022 个有效节点里 1022 个都用 user.username，owner.username 一个没有；
-    # 但两个都收着，成本为零，端点换形态时不至于整批丢归属。
+    # 兼容 user/owner 两种归属字段。
     ig_user = item.get("user") or item.get("owner") or {}
     owner = (ig_user.get("username") or "").strip().lower() or None if isinstance(ig_user, dict) else None
     owner_name = ig_user.get("full_name") if isinstance(ig_user, dict) else None
@@ -140,8 +95,7 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
             media.append(Media(url=img["url"], kind="image",
                                width=img.get("width"), height=img.get("height")))
         else:
-            # 一项结构漂移不应让 extract() 丢掉整篇父帖；保留已解析媒体并
-            # 明确标残缺，下一次登录态回填才会继续尝试补齐。
+            # 局部结构异常保留父帖并标残缺，供后续补齐。
             media_complete = False
 
     return Post(
@@ -154,13 +108,10 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
     )
 
 
-# --------------------------------------------------------------------------
-# 形态 2：GraphQL timeline node（登出 web_profile_info）
-# --------------------------------------------------------------------------
+# IG GraphQL timeline
 
 def is_graphql_node(d: dict) -> bool:
-    # 同 is_iphone_struct：判值不判键。这里没有真实数据证实过子项会误命中，
-    # 但 iphone_struct 那边已经付过一次代价了，同一类判定不该留两种写法。
+    # 检查值有效性，避免空字段的子项误命中。
     return bool(d.get("shortcode")) and bool(d.get("taken_at_timestamp"))
 
 
@@ -210,9 +161,7 @@ def from_graphql_node(node: dict, account: str, route: str) -> Post:
     )
 
 
-# --------------------------------------------------------------------------
-# 形态 3：Facebook story node
-# --------------------------------------------------------------------------
+# Facebook story
 
 def is_fb_story(d: dict) -> bool:
     return bool(d.get("post_id")) and ("message" in d or "attachments" in d)
@@ -222,14 +171,7 @@ FB_WATCH = "https://www.facebook.com/watch/?v="
 
 
 def _fb_slug(url: str | None) -> str | None:
-    """从 actors[0].url 里取出账号名段，归一化成可与 config 比对的形式。
-
-    实测两种形态：
-        https://www.facebook.com/neakasaofficial       -> "neakasaofficial"
-        https://www.facebook.com/profile.php?id=1000…  -> "id:1000…"
-    后者是没有自定义用户名的主页，取不到 slug，用数字 ID 兜底并加前缀，
-    免得哪天真有个账号就叫 "profile.php" 时撞上。
-    """
+    """从 FB URL 提取小写 slug；无自定义名称的主页返回 id:<数字>。"""
     if not url:
         return None
     tail = url.rstrip("/").rsplit("/", 1)[-1]
@@ -244,14 +186,7 @@ def _fb_slug(url: str | None) -> str | None:
 
 
 def _fb_actor(node: dict) -> tuple[str | None, str | None]:
-    """归属。FB 把它放在 actors[0]，形如
-    `{"__typename": "User", "id": "615…", "name": "Neakasa Official",
-      "url": "https://www.facebook.com/neakasaofficial"}`。
-
-    ⚠️ **`name` 是展示名，与 URL 里的账号名不相等**（"Neakasa Official"
-    vs "neakasaofficial"），所以判等必须用 url 里的 slug，不能用 name。
-    这一点和 Instagram 不同——IG 的 username 与 config 里的值直接相等。
-    """
+    """从 actors[0] 取归属；比较 URL 账号名，不比较显示名。"""
     actors = node.get("actors")
     if not (isinstance(actors, list) and actors and isinstance(actors[0], dict)):
         return None, None
@@ -263,21 +198,7 @@ def _fb_actor(node: dict) -> tuple[str | None, str | None]:
 
 
 def _fb_videos(node: dict) -> list[Media]:
-    """视频附件。**只记元数据不下载**（计划固化的边界）。
-
-    2026-08-30 之前这个函数不存在，`from_fb_story` 只抽图片，于是 47 篇里
-    20 篇视频帖得到 `media=[]` → `media_complete=False`，被当成"图片抓取失败"，
-    永久挂在 `Archive.needs_media()` 的待补清单上、每次回填都重试一遍。
-
-    取的是 `attachments[i].media` 而不是对整棵 attachments 子树做 walk：
-    实测有 1 篇图文帖的 attachments 深处也埋着 Video 节点（推荐位之类），
-    walk 会把它当成这篇帖子的视频。`attachments[i].media` 才是"这篇帖子附的东西"。
-
-    ⚠️ 我们捕获到的这版响应里，`media` 只给了 `{__typename, id}`，
-    没有 `progressive_url`（它挂在更深的、没有 __typename 的渲染器节点上，
-    路径不稳定）。所以 URL 是**用 video id 拼出来的 watch 链接**，
-    不是响应里给的。因为视频从不下载，拼错的成本仅限于这条链接点不开。
-    """
+    """仅记录顶层附件视频元数据；watch 链接由 ID 构造，不作为下载地址。"""
     out: list[Media] = []
     seen: set[str] = set()
 
@@ -326,27 +247,14 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
         text=text, created_at=iso(ts) if isinstance(ts, (int, float)) else (ts or ""),
         permalink=node.get("url") or node.get("permalink_url"),
         media=media, source_route=route,
-        # 解析层一律给 True：它表达的是"响应给了什么我们就收了什么"。
-        # 旧写法 `bool(media)` 把**纯文字帖**和**视频帖**都判成不完整，
-        # 而它们本来就没有图片可下。真正的 False 由下载环节在失败时写入
-        # （见 CR-04），职责不该混在这里。
+        # 纯文字或视频不等于媒体残缺；下载失败由下载层标记。
         media_complete=True,
         owner=owner, owner_name=owner_name,
     )
 
 
-# --------------------------------------------------------------------------
-# 统一入口
-# --------------------------------------------------------------------------
-
 def _merge_post(current: Post, candidate: Post) -> Post:
-    """合并同一帖的两份响应，优先媒体更全者并补回非媒体字段。
-
-    同一篇帖子可能同时出现在 GraphQL 与 ``iphone_struct`` 响应里。只比较媒体
-    数量会在数量相同时保留先到的空正文；而只整条替换又可能让媒体更全的版本
-    丢掉另一份响应里的正文。这里先按媒体完整度选主记录，再从另一份补齐正文、
-    时间与链接。
-    """
+    """合并同帖响应：优先完整媒体，并补齐正文、时间、链接及作者信息。"""
     def rank(post: Post) -> tuple[int, bool, bool, bool, bool]:
         return (len(post.media), post.media_complete, bool(post.text),
                 bool(post.created_at), bool(post.permalink))
@@ -354,17 +262,13 @@ def _merge_post(current: Post, candidate: Post) -> Post:
     winner, other = ((candidate, current)
                      if rank(candidate) > rank(current)
                      else (current, candidate))
-    # coauthors 取**并集**，不是"空了才补"。两份响应给出不同子集时
-    # （合作方超过一个的帖子实测有 21 篇，最多 4 个），"空了才补"会让
-    # 先到的那份把目标账号挡在外面 —— 结果又是一篇自家帖子被判成他人帖。
-    # 并集在语义上也更对：coauthor 关系是这篇帖子的属性，不是某次响应的属性。
+    # 合并合作作者集合，避免分片响应遗漏目标账号。
     merged = list(winner.coauthors or [])
     for name in (other.coauthors or []):
         if name not in merged:
             merged.append(name)
     winner.coauthors = merged
-    # owner 也要补：同一帖的多份响应里，往往只有一份带 actors/user，
-    # 漏补的话这篇会因为"归属未知"被 partition_by_owner 丢掉 —— 丢的是真帖子。
+    # 补齐另一份响应中的归属，避免误判为未知作者。
     for attr in ("text", "created_at", "permalink", "owner", "owner_name"):
         if not getattr(winner, attr) and getattr(other, attr):
             setattr(winner, attr, getattr(other, attr))
@@ -398,48 +302,13 @@ def extract(payloads: list[dict], platform: str, account: str,
 
 
 def on_timeline_of(post: Post, target: str) -> bool:
-    """这篇帖子出现在 `target` 的主页上吗？
-
-    两种情况都算，**这是 2026-08-30 修掉的一个 P0 缺陷**：
-
-    1. `owner == target` —— 本账号自己发的；
-    2. `target in coauthors` —— **合作帖**。它由别人发布，但同时出现在
-       本账号主页上，是这个账号内容的一部分。
-
-    只判第一种的话，实测 neakasa.tech 会丢掉 **263 篇自己主页上的帖子**，
-    而且丢的正是最近这一年的主要内容形式——账号看起来"一个多月没发帖"，
-    实际上一直在更。增量看到的那一屏更极端：**36 篇里 35 篇是合作帖，
-    本账号自己发的只有 1 篇**。
-
-    ⚠️ `target` 在这里**自己归一化**，不假设调用方已经 lower 过。
-    `partition_by_owner` 是这么传的，但这个函数是公开的判定入口，
-    而"传了个带大写的账号名"的失败形态恰好就是静默丢掉全部帖子 ——
-    这个项目已经为同一种静默丢弃付过一次代价了。
-    """
+    """目标为 owner 或已接受的 coauthor 即属于该时间线；账号名忽略大小写。"""
     who = (target or "").strip().lower()
     return post.owner == who or who in (post.coauthors or [])
 
 
 def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], list[dict]]:
-    """按归属把解析结果切成「本账号的」和「要丢弃的」两份。
-
-    **为什么是独立函数而不是塞进 extract()**：丢弃是一个业务判断，
-    不是解析判断。把它显式摆在调用点上，调用方就不可能"忘了处理被丢的那批"——
-    返回值里就摆着，签名逼你接住。
-
-    **为什么必须丢**：`extract()` 走 `walk()` 全树搜索，抗字段路径漂移，
-    但代价是任何"看起来像帖子"的节点都会被捞进来。人工滚动时页面会加载推荐内容
-    和被 @ 的 UGC。2026-08-30 实测，一次 Instagram 回填混进 266 条来自另外
-    195 个账号的帖子。这些帖子若流到下游，`translate.py` 会翻译他人文案、
-    发布环节会把第三方 UGC 当自家内容发到 DE Page —— 这是法务风险，不只是数据脏。
-
-    **归属未知的一律丢弃**（`owner is None`）。宁可漏一篇自家的，
-    不可混进一篇别人的：漏的那篇下次回填还能补回来，
-    发出去的那篇收不回来。丢弃原因会区分记录，便于事后判断是不是丢多了。
-
-    返回 `(kept, rejected)`。`rejected` 的每一项是可直接写进 `_rejected.jsonl`
-    的 dict，**必须落盘**——静默丢数据正是本项目最忌讳的事。
-    """
+    """返回 (kept, rejected)，保留目标及合作帖；调用方须落盘拒绝原因。"""
     target = (account or "").strip().lower()
     kept: list[Post] = []
     rejected: list[dict] = []

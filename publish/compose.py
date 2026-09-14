@@ -1,8 +1,4 @@
-"""发布前离线硬闸（G0b）。
-
-本模块只读归档，且在碰浏览器之前完成译文、金额、媒体与排期契约校验。
-Business Suite 没有事务性；越早失败，就越不可能留下半成品草稿。
-"""
+"""发布前离线校验译文、金额、媒体与排期契约。"""
 from __future__ import annotations
 
 import hashlib
@@ -64,12 +60,7 @@ class ComposeError(ValueError):
 
 @dataclass(frozen=True)
 class InstagramConstraints:
-    """G1 实测后注入的 IG UI 限制；本类本身不携带任何猜测数字。
-
-    ``probe_dump`` 必须点名产生这些值的真实 dump。字段允许为 ``None``，表示
-    那一项尚未测出；发布入口可以用 ``require_verified_ui_constraints=True``
-    在任何浏览器操作前失败闭合。
-    """
+    """由 probe 注入的 UI 限制；None 表示未知，严格发布时拒绝缺失项。"""
 
     probe_dump: str
     min_aspect_ratio: float | None = None
@@ -132,8 +123,7 @@ class ScheduleWindow:
     probe_dump: str
     min_ahead: timedelta
     max_ahead: timedelta
-    # UI 时区。**跨月判定只能在这个时区里做**，所以它属于"窗口"本身，
-    # 不能在校验时临时去读全局 config —— 注入窗口的调用方必须把它一起说清。
+    # 窗口携带 UI 时区，用于月界判断。
     ui_timezone: str
 
     def __post_init__(self) -> None:
@@ -266,18 +256,7 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
             raise ComposeError(
                 "注入的 UI 约束必须全部来自 config 已审核的同一份 G1 probe：%s"
                 % expected)
-    # v2 的结构契约（schema/mode、started_at/finished_at、interactions 与
-    # snapshots 的序号连续、page_id / evidence_order / recorded_at 齐全、
-    # final 快照带有效遮罩截图）由 evidence.validate_v2_dump 统一判定。
-    #
-    # ⚠️ 2026-09-03 之前这里另写了一份，与那边逐条重叠（started/finished 是
-    # 带时区 ISO、序号从 1 严格连续、必须有 reason=final 快照、final 截图
-    # 存在且非空且在本轮截图目录内）。两份改一份不会红，是典型的漂移温床。
-    # 委托过去还顺带吃到那边的解析缓存——一次 --submit 原本要重复解析
-    # 这份 1.97 MB 的 dump 约 38 次。
-    #
-    # 同时去掉了 v1 (1, "record-only") 的受理：全仓没有任何实际者或测试用它，
-    # 而 signals_backfilled 只认 v2，v1 dump 过了这道闸也会死在证据闸上。
+    # v2 dump 结构与截图校验统一委托 evidence，避免重复解析和规则分叉。
     data, detail = evidence.validate_v2_dump(expected.name, state_dir)
     if data is None:
         raise ComposeError("G1 probe 不满足 v2 契约：%s" % detail)
@@ -368,12 +347,7 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
 
 def verified_constraints_from_config(
         platform: Platform) -> tuple[InstagramConstraints, ScheduleWindow]:
-    """从唯一一份人工审核过的 G1 dump 构造严格发布约束。
-
-    发布 CLI 不再要求调用方手工复制这些数字。复制既容易漏传，也可能让
-    ``--submit`` 在没有真正执行严格闸时继续；这里直接解析 config 指向的
-    dump，后续仍由 :func:`_match_probe_measurements` 逐项复核。
-    """
+    """从配置指定且经人工复核的 dump 构建并校验发布约束。"""
     if platform not in {"facebook", "instagram"}:
         raise ComposeError("未知发布平台：%r" % platform)
     data = _validated_probe_dump(())
@@ -392,10 +366,7 @@ def verified_constraints_from_config(
             observations, "schedule_max_ahead_seconds", integer=True)),
         ui_timezone,
     )
-    # ``platform`` 是来源平台，不是发布目标。当前 composer 默认同时勾选 FB+IG，
-    # 代码也故意不操作渠道控件；所以即使 canonical 来源是 Facebook，真实提交仍
-    # 必须满足 Instagram 的限制。跨平台精确合并还会优先选 FB，若按来源平台跳过
-    # 这里，恰好会让最常见的合并路径绕过 IG 硬闸。
+    # 未明确单渠道约束时仍须核验 IG 限制，来源平台不能代替目标渠道。
     limits = InstagramConstraints(
         probe_dump=configured,
         min_aspect_ratio=_parse_probe_number(
@@ -596,17 +567,7 @@ def _validate_image(path: Path, post_id: str) -> tuple[int, int]:
 
 
 def _program_owned_media_de(account_dir: Path) -> dict[str, set[str | None]]:
-    """读 ``images_de.jsonl``，得到「哪些 ``media_de/`` 文件是程序产出」。
-
-    返回 ``{归档相对路径: {output_sha256, ...}}``；集合里出现 ``None`` 表示
-    有一条旧 schema 的记录没有写 ``output_sha256``，此时只能按路径认所有权。
-
-    ⚠️ **故意不 import ``localize_images``**：那是 K 组独占文件（所有权表），
-    而这里只需要读它的**产物**。这条边界与 ``PIPELINE_PLAN`` 第 2 节
-    「只读产物、不重写别人的逻辑」是同一条。判定规则必须与
-    ``localize_images.py::_candidate_is_program_owned`` 保持一致 ——
-    两边对同一个目录只能有一套语义（CR-48）。
-    """
+    """读取程序图片所有权；含 output_sha256 时核对字节，旧记录仅按路径兼容。"""
     path = account_dir / "images_de.jsonl"
     owned: dict[str, set[str | None]] = {}
     if not path.is_file():
@@ -667,17 +628,7 @@ def _is_program_output(account_dir: Path, candidate: Path,
 def _pick_localized(account_dir: Path, candidates: list[Path], *,
                     post_id: str, position: int,
                     owned: dict[str, set[str | None]]) -> tuple[Path, bool]:
-    """同序号有多个德语图时按「人工优先」选一个，返回 (选中的图, 是否人工)。
-
-    ⚠️ **这一条以前是硬错误，现在不是了**（CR-48）。K 组**刻意支持**
-    「程序图 ``01.jpg`` 与设计同事的修订版 ``01.png`` 并存、人工优先」，
-    而 compose 原先见到多个候选就 ``ComposeError`` —— 于是
-    **K 组专门为设计同事设计的那个场景，会让这篇帖子发不出去**。
-    两组对同一个目录必须只有一套语义，用户 2026-08-31 拍板改 G 侧。
-
-    仍然失败闭合的只有一种：**多个都不是程序产出**。那是真的分不清该发哪张，
-    机器不该替人猜（IMAGE_PLAN 第 3.1 节「不确定时的默认动作：不动」同源）。
-    """
+    """同序号图片优先人工版；多个人工候选时拒绝猜选。"""
     manual = [item for item in sorted(candidates)
               if not _is_program_output(account_dir, item, owned)]
     if len(manual) > 1:
@@ -802,8 +753,6 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
                 owned=owned_media_de)
             source_kind = "media_de"
             if manual:
-                # PIPELINE_PLAN 第 6 节第 5 条：这一篇被设计同事动过手，
-                # 本身就说明它特殊，操作者按下"排期"前应当看见。
                 warnings.append(
                     "第 %d 张用的是**人工放置**的德语图 %s（不是程序产出），"
                     "已按人工优先选用" % (position, chosen.name))
@@ -856,17 +805,7 @@ def _validate_instagram(post_id: str, text: str,
 
 def _validate_schedule_month(post_id: str, scheduled_at: datetime,
                              now: datetime, ui_timezone: str) -> None:
-    """composer 的日期选择器**不允许跨月**（2026-09-01 用户在真实 UI 上实测）。
-
-    ⚠️ **这条闸没法用 ``ScheduleWindow`` 的固定时长表达**，所以它单独存在：
-    上限不是"多少天以内"，而是一个**日历边界**。9 月 1 日能排 29 天，
-    9 月 28 日只剩 2 天 —— 同一个 ``max_ahead`` 在月初太松、在月末太紧。
-    dump 里那个 31 天只是绝对天花板，真正的判据是这里。
-
-    ⚠️ **必须在 UI 时区里判**，不是柏林、也不是 UTC。日期选择器画的是
-    发帖设备本机（``[publish].ui_timezone``）的日历；德国 10-01 00:00 在
-    美西还是 09-30，两边**分属不同的月**。
-    """
+    """在 UI 时区核验自然月边界；不能用固定提前天数代替。"""
     zone = resolve_ui_timezone(ui_timezone)
     target = scheduled_at.astimezone(zone)
     today = now.astimezone(zone)
@@ -901,12 +840,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
                  now: datetime | None = None,
                  require_verified_ui_constraints: bool = False,
                  warning_sink: WarningSink | None = print) -> DePost:
-    """组装一篇待发帖；失败发生在任何浏览器操作之前。
-
-    G1 完成前，UI 数值约束没有真实来源。此时函数会显式告警但允许做离线组装；
-    真正的发布入口必须传 ``require_verified_ui_constraints=True``，缺任一份
-    probe 来源即失败闭合。
-    """
+    """离线组装待发内容；真实发布必须要求 verified UI constraints。"""
     _aware(scheduled_at, "scheduled_at")
     root = Path(archive_root) if archive_root is not None else cfg().archive_dir
     arc, manifest_row = _find_source(
@@ -956,7 +890,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
                if value == "original"]
     if require_all_media_de and missing:
         commands = [
-            'python localize_images.py --account "%s" --post-id "%s" --media-index %d'
+            'python -m localize.images --account "%s" --post-id "%s" --media-index %d'
             % (arc.base.name, post_id, index) for index in missing]
         raise _fail(
             post_id,
@@ -978,9 +912,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
         _validate_instagram(post_id, text_de, dimensions, instagram_constraints)
 
     if schedule_window is None:
-        # 同上：这条**仍然成立且没有松动** —— 那两个数是 Graph API 的值，
-        # 不是 Business Suite UI 的值，代码任何地方都不许拿它们当 UI 事实。
-        # 只是把"禁止"的对象说准：禁止的是**采信这两个数**，不是禁止发布。
+        # Graph API 上限不能当作 Business Suite UI 实测约束。
         message = ("定时窗口尚无 G1 实测值；config.toml 的 10 分钟/75 天只是 API 占位，"
                    "代码不会拿它们当 Business Suite UI 事实 —— "
                    "排的时刻是否落在 UI 允许的窗口内，目前只能你自己看")

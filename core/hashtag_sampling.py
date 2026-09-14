@@ -217,11 +217,7 @@ def import_trends_csv(value: str, *, candidate_group: str, tags: Iterable[str],
 
 
 def verified_instagram_count(payloads: Iterable[Mapping], tag: str) -> int | None:
-    """Read only a count whose enclosing object names the exact hashtag.
-
-    This deliberately does not inspect page text or guess selectors.  Unknown
-    response shapes return ``None`` so a UI can degrade to semantic ordering.
-    """
+    """Read counts only from objects naming the exact hashtag; unknown shapes return None."""
     normalized = tag.removeprefix("#").casefold()
 
     def hashtag_nodes(value):

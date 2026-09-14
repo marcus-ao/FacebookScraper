@@ -35,15 +35,11 @@ describe('八个状态的文案', () => {
   })
 
   it('not_ready 显示为「未就绪」', () => {
-    // DECISION_LOG：新队列有四个页签，「待我审」才是她的待办，
-    // 把 not_ready 也叫「待处理」会让两个概念撞车。
     expect(STATUS_LABEL.not_ready).toBe('未就绪')
     expect(html('not_ready')).not.toContain('待处理')
   })
 
   it('scheduled 是「已排期」，⛔ 绝不写成「已发布」', () => {
-    // 它只表示排期被回读确认，不表示内容已经公开（web/DESIGN.md）。
-    // 这是业务口径，不是措辞偏好。
     expect(html('scheduled')).toContain('已排期')
     for (const status of ALL) {
       expect(html(status)).not.toContain('已发布')
@@ -58,7 +54,6 @@ describe('八个状态的文案', () => {
 
 describe('skipped 不用红色', () => {
   it('它是中性档，不是错误档', () => {
-    // 「这篇不发」是她有意做的正常业务决定，不是系统出了问题。
     expect(STATUS_TONE.skipped).toBe('neutral')
     expect(html('skipped')).toContain('data-tone="neutral"')
   })
@@ -71,7 +66,6 @@ describe('skipped 不用红色', () => {
   })
 
   it('中性档的 CSS 里一个错误色变量都没有', () => {
-    // 断言样式表，防止 .neutral 混入错误色变量。
     const css = readFileSync(
       fileURLToPath(new URL('./StatusTag.module.css', import.meta.url)),
       'utf8',
@@ -80,15 +74,12 @@ describe('skipped 不用红色', () => {
     expect(neutralBlock).not.toBe('')
     expect(neutralBlock).not.toContain('--rc-error')
     expect(neutralBlock).not.toContain('--rc-risk')
-    // 整份样式表里也不该出现错误色 —— 八个状态没有一个配得上红色。
     expect(css).not.toContain('--rc-error')
   })
 })
 
 describe('状态不只靠颜色', () => {
   it('每一个都带文字', () => {
-    // 色觉障碍和 12px 小面积的红黄区分度要求状态带文字：
-    // .row.done 与 .row.waiting 用同一个灰底，两者视觉上完全不可区分。
     for (const status of ALL) {
       const text = html(status).replace(/<[^>]+>/g, '').trim()
       expect(text, status).toBe(STATUS_LABEL[status])
@@ -132,7 +123,6 @@ describe('终态', () => {
   })
 
   it('not_ready 不是终态', () => {
-    // 区分「已经处理完」和「还没准备好」正是这个判定存在的理由。
     expect(isTerminalStatus('not_ready')).toBe(false)
   })
 })
@@ -144,8 +134,6 @@ describe('低视觉重量', () => {
       'utf8',
     )
     expect(css).toContain('var(--rc-font-meta)')
-    // antd 6 的无边框写法是 variant="filled"，落成 ant-tag-filled。
-    // （`bordered={false}` 在 antd 6 已废弃，会打 deprecation 警告。）
     expect(html('not_ready')).toContain('ant-tag-filled')
     expect(html('not_ready')).not.toContain('ant-tag-outlined')
   })

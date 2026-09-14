@@ -12,7 +12,7 @@ export const taskKey = (id: string) => ['task', id] as const
 export const reviewListOptions = () => queryOptions({
   queryKey: REVIEW_KEY, queryFn: listReviewTasks,
   refetchOnMount: false, refetchOnReconnect: false,
-  // 与旧 App 内存列表相同：一次会话中保留，详情读多久都不因 GC 重拉整表。
+  // 会话内保留列表缓存，避免阅读详情期间被回收。
   gcTime: Infinity,
 })
 

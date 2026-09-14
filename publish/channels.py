@@ -6,11 +6,7 @@ from publish import channel_evidence as controls
 
 
 def require_independent_channel_evidence(target_channels: tuple[str, ...]) -> None:
-    """在附着浏览器之前拒绝没有实测依据的单渠道操作。
-
-    单渠道控件、账号、唯一排期表单和资产 ID 来自本机的独立录证。
-    历史默认双选记录只保留防重作用，不能代替这里的单渠道证据。
-    """
+    """附着前核验独立渠道、账号、表单及资产证据；历史双选记录不能替代。"""
     if len(target_channels) != 1 or target_channels[0] not in {"facebook", "instagram"}:
         raise ProbeRequired("每篇来源只允许发布到对应的一个渠道；请重新生成独立审校项。")
     controls.require(target_channels[0])

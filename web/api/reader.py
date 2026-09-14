@@ -1,36 +1,4 @@
-r"""审校台的**只读数据层**：从归档算出任务列表与详情。
-
-列表以归档索引定位源帖，再读取 post.json 真相；文案同时读取机器与人工账本，
-人工稿优先展示，源文变化保留稿件并提示复核。
-
-源帖、译文和发布事实只读；列表会按需重建可删除的 SQLite 展示索引。
-不调用任何付费 API，不启动浏览器。
-
-一条贯穿全文的纪律（REQUIREMENTS.md 第 5.2 节）：
-
-    **Web 层不许复制任何流水线逻辑，只能调用业务代码。**
-
-所以下面每一个判断都指得到一个既有函数：
-
-===================  =========================================================
-"这篇在范围内吗"     ``pipeline.engine.load_sources``（内部用 ``out_of_scope_reason``）
-"这篇有硬闸告警吗"   ``pipeline.engine.prepaid_issue``
-"排到什么时刻"       ``pipeline.engine.next_slots``
-"已经排过期了吗"     ``publish.journal.scheduled_record_for_refs``
-"译文还算不算数"     ``core.translated.translation_is_current``
-"金额被动过吗"       ``core.translated.money_preserved``
-"标签被动过吗"       ``core.translated.hashtags_preserved``
-"数字要人确认吗"     ``core.translated.review_numeric_flags``
-"德语图有没有"       ``localize_images.review_image_pairs``
-"图选哪张/回退没有"  ``publish.compose.compose_post``（``image_sources`` / ``warnings``）
-===================  =========================================================
-
-本模块自己**只做两件事**：把这些返回值拼成 web/DESIGN.md 第 6 节
-那份 JSON 契约；以及**把标记定位到字符下标**（那三个 regex 只判"有没有"，
-不给位置，而界面要在正文里画出来）。定位复用的是 ``core.translated`` 里
-**同一个正则对象**——不是照抄一份——所以那边改了这边自动跟着改，
-不存在两份实现漂移的可能。
-"""
+"""从归档与账本组装列表和详情；复用业务判据，人工稿优先，不调用模型或浏览器。"""
 from __future__ import annotations
 
 import json
@@ -47,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:                          # 支持 `python -m web.api.reader`
     sys.path.insert(0, str(ROOT))
 
-import localize_images                                 # noqa: E402
+from localize import images as image_de  # noqa: E402
 from core import store, review, localization                         # noqa: E402
 from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
@@ -57,10 +25,7 @@ from pipeline import engine, risk_scan                 # noqa: E402
 from publish import compose, journal                   # noqa: E402
 from web.api import query_index                   # noqa: E402
 
-# 那三条判据的正则**对象本身**，不是复制品。
-# core.translated 的 review_numeric_flags 只回答"有没有"，界面还需要"在哪"——
-# 直接借它的正则来定位，是唯一一种零漂移的做法：那边改了正则，这边画出来的
-# 位置自动跟着改。照抄一份到 web/ 才是这个项目吃过亏的形状。
+# 复用业务层正则定位高亮，避免规则分叉。
 from core.translated import (_IMPERIAL_RE,             # noqa: E402
                              _MONEY_RE,
                              _MONEY_TOKEN_RE,
@@ -69,9 +34,6 @@ from core.translated import (_IMPERIAL_RE,             # noqa: E402
 #: 列表默认口径：近 90 天。与 `pipeline preflight --days` 的默认值一致。
 DEFAULT_DAYS = 90
 
-# ---------------------------------------------------------------------------
-# 列表展示状态；审校决定和七态转换以 core.review 为准。
-# ---------------------------------------------------------------------------
 
 #: not_ready 表示内容尚未就绪。详情仍可读取，受理翻译取决于当前来源和模型能力。
 STATUS_NOT_READY = "not_ready"
@@ -80,29 +42,18 @@ STATUS_EDITED = "edited"
 STATUS_SCHEDULED = "scheduled"
 
 
-# ---------------------------------------------------------------------------
-# 字符定位：把"有没有"变成"在哪"
-# ---------------------------------------------------------------------------
+# 字符定位
 
 def _paired_spans(pattern, text_en: str, text_de: str
                   ) -> list[tuple[list[int] | None, list[int] | None]]:
-    """同一个正则在两侧各自的命中位置，按出现顺序配对。
-
-    数量对不上时用 ``None`` 补齐——**那本身就是信号**：原文三处金额、译文只剩
-    两处，第三条的 ``de_span`` 是 null，界面上就是"这处在译文里找不到"。
-    """
+    """按顺序配对两侧匹配范围，缺失位置补 None。"""
     left = [list(m.span()) for m in pattern.finditer(text_en or "")]
     right = [list(m.span()) for m in pattern.finditer(text_de or "")]
     return list(zip_longest(left, right))
 
 
 def _hashtag_spans(text: str) -> list[list[int]]:
-    """按 ``extract_hashtags`` 的结果在原串里顺序定位。
-
-    不自己写扫描：标签的边界规则（Unicode 组合记号、连续 ``#``、句尾标点）
-    在 ``core.translated`` 里有一份，那份是真相。这里只负责把它认出来的那些
-    串按出现顺序找回下标——游标只前进，所以重复标签不会都指向第一处。
-    """
+    """复用标签提取规则，按顺序定位原串偏移，正确处理重复标签。"""
     spans: list[list[int]] = []
     cursor = 0
     for tag in translation.extract_hashtags(text):
@@ -122,23 +73,7 @@ def _highlight(kind: str, severity: str, label: str,
 
 
 def build_highlights(text_en: str, text_de: str) -> list[dict]:
-    """将共用确定性检查结果映射到两侧正文的字符位置。
-
-    ⛔ **判断全部来自 core.translated，本函数一条规则都不新增。**
-    三个函数各自回答"有没有问题"，这里只负责把它们的结论落到字符下标上，
-    并按 web/DESIGN.md 的接口契约拼成 ``highlights`` 数组。
-
-    ``severity`` 分两档，都属于红色系：
-
-    * ``error`` —— ``money_preserved`` / ``hashtags_preserved`` 判违规。
-      语义是**这里错了**：不该动的内容被动了。
-    * ``warn``  —— ``review_numeric_flags`` 的三类。语义是**这里要人确认**
-      （金额要换成德国站定价、尺码要不要转 EU 码、英制单位换算对不对），
-      不是"错了"。
-
-    当前共用规则不自动检查 @账号提及；hashtags_preserved 只检查 # 标签，
-    @提及仍需人工核对，不在 Web 层另建一份业务检查规则。
-    """
+    """将共享检查映射为字符高亮：error 表示违规，warn 提示人工确认；不另建业务规则。"""
     text_en = text_en or ""
     text_de = text_de or ""
     out: list[dict] = []
@@ -158,15 +93,9 @@ def build_highlights(text_en: str, text_de: str) -> list[dict]:
                                             _hashtag_spans(text_de)):
             out.append(_highlight("hashtag", "error", label, en_span, de_span))
 
-    # ---- 需人工确认的数字 ----
-    # review_numeric_flags 按 金额 → 尺码 → 英制 的固定顺序**只在命中时**追加，
-    # 所以用同一批正则判一次命中，就能知道返回的第 i 句对应哪一类。
-    # 这不是"再判一遍"——用的是同一个正则对象，命中与否按构造完全一致。
+    # 提示按金额、尺码、英制单位顺序对应共享正则。
     flags = translation.review_numeric_flags(text_en, text_de)
-    # 判命中用 review_numeric_flags 自己那三个正则；**画范围**另说：
-    # _MONEY_RE 只匹配「符号 + 一位数字」（它只需要回答"有没有金额"），
-    # 拿它画出来就是把 $219.99 标成 $2。所以金额那一类改用完整 token 正则
-    # _MONEY_TOKEN_RE 取范围——命中与否仍由 _MONEY_RE 决定，两者不会分叉。
+    # 金额高亮用完整 token 范围，避免只标出符号与首位数字。
     categories = [("money_review", _MONEY_RE, _MONEY_TOKEN_RE),
                   ("size", _SIZE_RE, _SIZE_RE),
                   ("imperial", _IMPERIAL_RE, _IMPERIAL_RE)]
@@ -182,9 +111,7 @@ def build_highlights(text_en: str, text_de: str) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# 风险预扫描（真实状态账本的只读视图）
-# ---------------------------------------------------------------------------
+# 风险账本
 
 def load_risks(state_dir: Path, sources: Mapping[str, engine.SourcePost]) -> tuple[dict, dict]:
     """返回当前扫描视图及其中仍有效的风险；失败/过期不会伪装成空风险成功。"""
@@ -196,9 +123,7 @@ def load_risks(state_dir: Path, sources: Mapping[str, engine.SourcePost]) -> tup
     return views, risks
 
 
-# ---------------------------------------------------------------------------
-# 归档取数
-# ---------------------------------------------------------------------------
+# 归档读取
 
 def task_id_of(source: engine.SourcePost) -> str:
     """契约里的任务 id：``<账号目录>/<post_id>``（第 6 节的例子就是这个形状）。"""
@@ -211,13 +136,7 @@ def _iso(value: datetime | None) -> str | None:
 
 def _hard_alerts(source: engine.SourcePost,
                  rules: engine.PublishRules) -> tuple[list[dict], dict | None]:
-    """调 ``prepaid_issue`` 拿硬闸结论，返回 (告警数组, 原始 issue.details)。
-
-    ⚠️ **单来源候选，不做跨平台归并。** REQUIREMENTS.md 第 3.3 节的目标路由
-    模型是"爬 FB 只发 FB、爬 IG 只发 IG，两条独立车道互不合并"；现状代码那套
-    两两配对是被明确标为**方向错**的返工项。列表按 62 篇源帖展示，正是目标模型
-    的形状，所以这里构造的是 ``reconcile`` 给未配对来源用的同一种候选。
-    """
+    """对单来源候选调用 prepaid_issue，返回告警及原始详情。"""
     candidate = engine.Candidate(source, (source,), "independent")
     issue = engine.prepaid_issue(candidate, rules)
     if issue is None:
@@ -227,12 +146,7 @@ def _hard_alerts(source: engine.SourcePost,
 
 
 def _alert_label(issue: engine.HumanItem) -> str:
-    """一行能看懂的告警文案。
-
-    ⛔ **不做 kind → 文案的全量映射表**：那张表会在 ``prepaid_issue`` 新增一种
-    kind 时静默漏掉一类告警。这里只对已知几种做短句，**其余一律回落到实际自己
-    写的那句 summary**——可能长一点，但绝不会消失。
-    """
+    """缩短已知告警，未知 kind 回落业务 summary，避免静默遗漏。"""
     details = issue.details or {}
     if issue.kind == "unmapped_price":
         amounts = [str(v) for v in (details.get("amounts") or [])]
@@ -251,16 +165,7 @@ def _alert_label(issue: engine.HumanItem) -> str:
 
 def _author_kind(source: engine.SourcePost, details: dict | None,
                  alerts: list[dict]) -> tuple[str, str | None]:
-    """返回 (author_kind, author_flag)。
-
-    三分法沿用 compose 的定义：``DePost.is_collaboration`` 就是 owner != account。
-    "第三方"这一档不自己判——它等价于 ``prepaid_issue`` 报出的
-    ``unknown_collaborator``（作者不在 ``[publish.trusted_owners]`` 里）。
-
-    ``author_flag`` **常态是 null**（第 10 节：近期 IG 帖 35/36 是合作帖，
-    那是常态，每行都标就是噪声）。只有第三方作者才给值，因为那才是需要她
-    停下来的信号。
-    """
+    """返回作者类型及标记；第三方依据 prepaid_issue，其它作者不额外提示。"""
     owner = str(source.row.get("owner") or "").strip()
     account = str(source.row.get("account") or "").strip()
     if any(item["code"] == "unknown_collaborator" for item in alerts):
@@ -327,9 +232,7 @@ class _Context:
         self.now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         self.rules = engine.publish_rules()
         self.state_dir = cfg().state_dir
-        # 只看 `[targets]` 当前在跑的账号。冻结的 `in_neakasa.tech` 今天是靠
-        # 90 天窗口碰巧挡在外面的（它最后一篇 2026-06），窗口一放宽就会漏进审校队列
-        # —— 而它按业务决定已经「只读、不进流水线」。判据与 pipeline 那边同一条。
+        # 当前队列只读 active_accounts，冻结历史不靠日期窗口排除。
         self.account_dirs = engine.active_account_dirs(
             store.account_dirs(cfg().archive_dir))
         horizon = self.now - timedelta(days=days)
@@ -360,16 +263,7 @@ class _Context:
 
     def allocate_slots(self, pending: list[engine.SourcePost]
                        ) -> dict[str, datetime]:
-        """给还没排期、且**有译文**的任务分配德国 10:00/17:00 空槽。
-
-        ⚠️ ``next_slots`` **可能返回少于请求数**，这不是异常：composer 的日期
-        选择器不允许跨月（2026-09-01 实测），可排的槽在每个月末真的会用完。
-        分不到的任务 ``schedule`` 是 null，界面上排在最后。
-
-        没有译文的任务**不参与分配**——流水线侧 ``pipeline run`` 本来也只给
-        ``ready_to_publish`` 的候选分配槽位，凭空给它们编一个时刻就是把假数据
-        混进了"读全真"的那一半。
-        """
+        """仅给未排期且有译文的任务分配候选；时刻不足时保留 schedule=None。"""
         occupied = [when for when in
                     (self.scheduled_at(item) for item in self.sources.values())
                     if when is not None]
@@ -377,19 +271,11 @@ class _Context:
         return {item.ref: slot for item, slot in zip(pending, slots)}
 
 
-# ---------------------------------------------------------------------------
-# GET /api/tasks
-# ---------------------------------------------------------------------------
-
 def list_tasks(*, days: int = DEFAULT_DAYS,
                now: datetime | None = None, status: str | None = None,
                tag: str | None = None, month: str | None = None, platform: str | None = None,
                scope: str = 'review', page: int = 1, limit: int | None = None) -> dict:
-    """任务列表。契约见 web/DESIGN.md 第 6 节。
-
-    排序：按 ``schedule.at`` 升序（最急的在最上面）；没有排期的排在最后，
-    内部按原帖时间倒序（最新的先看）。
-    """
+    """读取任务列表，按候选时刻及来源时间排序。"""
     if scope == 'history':
         return history_tasks(now=now, status=status, tag=tag, month=month, platform=platform, page=page, limit=limit or 50)
     ctx = _Context(days=days, now=now)
@@ -492,22 +378,13 @@ def _review_state(ctx: _Context, source: engine.SourcePost, reviewable: bool,
     return state
 
 
-# ---------------------------------------------------------------------------
-# GET /api/tasks/<id>
-# ---------------------------------------------------------------------------
-
 def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
-    """逐张图：原图 / 德语图 / 四项指标。
-
-    德语图在不在，由 ``localize_images.review_image_pairs`` 判——它同时管着
-    "人工放的图优先于程序产出"和"旧程序产物不许错配新原文/新译文"两条规则，
-    照抄任何一条都会在某次改版后和 K 组分叉。
-    """
+    """复用 review_image_pairs，读取人工优先的逐图对照与指标。"""
     task_id = task_id_of(source)
     pairs = []
     if entry:
         try:
-            pairs = localize_images.review_image_pairs(
+            pairs = image_de.review_image_pairs(
                 source.account_dir, source.row, entry)
         except (OSError, ValueError, ArchivePathError):
             pairs = []
@@ -533,11 +410,7 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
 
 
 def _metrics(record: Mapping[str, Any] | None) -> dict | None:
-    """images_de.jsonl 的四项指标，字段名按第 6 节的契约改写。
-
-    ⚠️ 只改名，不改值：``aspect_drift_percent`` → ``aspect_drift``、
-    ``scale_factor`` → ``scale_ratio``、``elapsed_seconds`` → ``elapsed_s``。
-    """
+    """将图片指标字段映射到接口名称，不改变数值。"""
     if not isinstance(record, Mapping):
         return None
     return {
@@ -551,15 +424,7 @@ def _metrics(record: Mapping[str, Any] | None) -> dict | None:
 def _compose_warnings(source: engine.SourcePost,
                       rules: engine.PublishRules,
                       when: datetime | None) -> list[str]:
-    """借 ``compose_post`` 的组装结果拿"缺德语图，已回退原图"这类告警。
-
-    只在有译文时能成；失败（金额未映射、素材不齐等）本身已经由
-    ``prepaid_issue`` 报成硬闸告警，这里静默跳过不会丢信息。
-
-    ⚠️ 只保留**跟这篇内容有关**的告警。compose 在非严格模式下还会带两条
-    "G1 实测值尚无"的环境提示（IG 画幅约束、定时窗口），那是部署状态不是内容
-    问题，摆到审校台上只会让人学会忽略告警。
-    """
+    """提取 compose 的内容告警；环境状态另行展示，失败由 prepaid_issue 报告。"""
     if when is None:
         when = datetime.now(timezone.utc) + timedelta(days=1)
     try:
@@ -598,8 +463,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
     alerts, details = _hard_alerts(source, ctx.rules)
     author_kind, _flag = _author_kind(source, details, alerts)
 
-    # 原文变更判据：译文绑的指纹与当前正文对不上。**不是** translation_is_current
-    # ——那个还包含提示词版本，而提示词升级不是"原文已变更"。
+    # 来源变化只比较正文指纹；提示词升级另由 machine_current 表示。
     bound_entry = human or entry
     bound = str(bound_entry.get("source_text_sha256") or "") if bound_entry else ""
     stale = bool(bound_entry) and bound != translation.source_text_sha256(text_en)
@@ -672,11 +536,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
             "owner": source.row.get("owner"),
             "coauthors": list(coauthors) if isinstance(coauthors, list) else [],
             "author_kind": author_kind,
-            # ⚠️ **这是第 6 节契约之外唯一新增的字段**，理由：
-            # 「缺德语图，已回退原图」这类降级告警来自 compose 的组装结果，
-            # 而第 6 节的 meta 没有任何位置放得下它。降级本身是允许的
-            # （能降级的就降级），但**必须让人看见**——没有这个字段，
-            # 详情页上"这篇其实有 4 张图是英文的"就彻底消失了。
+            # 详情明确展示缺德语图等内容降级。
             "compose_warnings": _compose_warnings(source, ctx.rules, when),
         },
         "trail": trail,
@@ -703,19 +563,10 @@ def source_post(task_id: str) -> engine.SourcePost | None:
     return engine.SourcePost(platform, directory, row, created, journal.source_ref(platform, pid))
 
 
-# ---------------------------------------------------------------------------
-# GET /api/tasks/<id>/image/<n>
-# ---------------------------------------------------------------------------
-
 def image_bytes(task_id: str, index: int, variant: str = "de", *,
                 days: int = DEFAULT_DAYS,
                 now: datetime | None = None) -> tuple[bytes, str] | None:
-    """直接读归档字节，返回 (数据, media type)。
-
-    ``variant=de`` 且这张没有德语图时**回退原图**，与 ``compose._choose_images``
-    的行为一致（缺德语图不是"没有图"，是"用了原图"）。降级不会被藏起来：
-    详情页的 ``images[].de_present`` 与元信息里的组装告警都会说出来。
-    """
+    """返回归档图片字节及媒体类型；缺德语图时回退原图，详情明确标记。"""
     source = source_post(task_id)
     if source is None or index < 0:
         return None
@@ -730,7 +581,7 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
             dict(source.row), _translation_of(source), _human_translation_of(source))
         if entry:
             try:
-                for pair in localize_images.review_image_pairs(
+                for pair in image_de.review_image_pairs(
                         source.account_dir, source.row, entry):
                     if pair.media_index == index and pair.localized_rel:
                         path = source.account_dir / Path(pair.localized_rel)
@@ -744,8 +595,7 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
         path = source.account_dir / Path(raw.replace("\\", "/"))
 
     try:
-        # 归档是我们自己的数据，但读之前仍然确认它是真实普通文件——
-        # symlink/junction 指出去就成了任意文件读取。判据用 store 那份。
+        # 复用物理路径检查，拒绝链接指向归档外文件。
         store.assert_physical_direct_path(
             path.parent, path, kind="file", label="审校台图片")
         data = path.read_bytes()
@@ -754,9 +604,7 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
     return data, (mimetypes.guess_type(path.name)[0] or "application/octet-stream")
 
 
-# ---------------------------------------------------------------------------
-# CLI —— 阶段 0 的验收口：先证明数据读得出来，再谈界面
-# ---------------------------------------------------------------------------
+# CLI
 
 def _print_list(days: int) -> int:
     payload = list_tasks(days=days)

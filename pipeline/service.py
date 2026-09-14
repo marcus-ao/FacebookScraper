@@ -139,11 +139,7 @@ class Runtime:
         return self.processing.activity_summary(now)
 
     def start_processing(self, now: datetime):
-        """Claim a known-pending batch and run it off the scheduler thread.
-
-        A marker left in ``running`` after process restart is changed to
-        ``interrupted`` during construction and is never claimed here.
-        """
+        """Run a pending batch off-thread; interrupted batches require explicit recovery."""
         if not self.process:
             return None
         if self.processing_future is not None and not self.processing_future.done():
@@ -243,8 +239,7 @@ class Runtime:
                 notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
 
     def _deliver(self, now):
-        # Browser readback, image upload and archive mirrors have bounded network
-        # waits, but a batch can contain many files. Keep them off the monitor loop.
+        # Keep batch network work off the monitoring loop.
         self.refresh_calendar(now)
         if self.mirror_settings.enabled:
             try:

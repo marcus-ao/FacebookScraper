@@ -1,8 +1,4 @@
-"""单常驻监测调度器。默认仅预览；--run 才可能访问目标社媒。
-
-随机时刻先落盘再执行，因此重启不会重抽、也不会连续补跑睡眠期间每个轮次。
-抓取仍受 delta.lock 和失败预算约束。回调可由应用组装后续处理，本模块不调用模型。
-"""
+"""持久化抖动时刻的单实例调度器；默认预览，--run 才访问社媒，不补跑全部错过轮次。"""
 from __future__ import annotations
 
 import argparse
@@ -90,8 +86,7 @@ class Scheduler:
         atomic_write_json(self.path, self.state)
 
     def _quiet(self, platform: str) -> bool:
-        # --state 只重定位调度计划；实际抓取状态仍由统一 [paths].state 定位。
-        # 这里直接派生只读路径，避免 preview 调用 state_dir 属性创建目录。
+        # --state 仅重定位计划；只读 preview 不创建业务状态目录。
         path = ROOT / self.config.get("paths", "state", "state") / "delta_state.json"
         entry = delta.load_state(path).get(platform, {})
         expected = self.config["targets"][platform]
@@ -189,8 +184,7 @@ class Scheduler:
     def _ensure_jobs(self, now):
         sample_month = (self.schedule.local(now).replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
         if self.state.get("posting_distribution", {}).get("month") != sample_month:
-            # Missing active archives count as incomplete coverage; otherwise one
-            # populated account could accidentally authorize an adaptive window.
+            # Missing active archives mean incomplete coverage and prohibit adaptive windows.
             directories = [self.config.archive_dir / name for name in self.config.active_accounts()]
             self.state["posting_distribution"] = posting_distribution(directories, self.schedule, now)
         expected = {}
@@ -270,8 +264,7 @@ class Scheduler:
             kind, platform = job["kind"], job["platform"]
             started = self.clock()
             if kind == "delta" and platform in reconciled_platforms:
-                # Only an attempted deep scan replaces this ordinary probe. A job
-                # can expire while the other platform is running earlier in tick.
+                # Only an attempted deep scan replaces the ordinary probe; expired jobs do not.
                 job["next_at"] = self._next_delta(started, platform).isoformat()
                 job["coalesced_with"] = "reconcile"
                 self._save()
@@ -300,8 +293,7 @@ class Scheduler:
                 job["last_error"] = result["skipped"]
             else:
                 if kind == "reconcile":
-                    # An attempted failure still consumes this probe: do not spend
-                    # another failure-budget attempt through the co-due delta.
+                    # A failed deep scan consumes this probe too, avoiding a second failure-budget attempt.
                     reconciled_platforms.add(platform)
                 try:
                     rc = self.callback(kind, platform)

@@ -1,47 +1,4 @@
-r"""统一归档层。
-
-三条获取路线（官方导出 / 官方 API / 浏览器拦截）产出格式各不相同，
-在这里收敛为同一个 schema，下游的翻译与图像管线只认这个 schema。
-
-归档布局（旧平铺目录继续可读，新帖创建月份目录）::
-
-    archive/<平台前缀>_<账号>/
-      index.html                        全账号总览（派生，可重建）
-      manifest.jsonl                    **派生索引**，可从 posts/ 重建
-      _rejected.jsonl                   被丢弃的节点及原因
-      _orphan_media/                    重建后无主的媒体文件
-      _orphan_posts/                    被升级/replay 隔离的旧帖子目录（可恢复）
-      posts/
-        2026-08/2026-08-25_1423_<slug>_<post_id>/
-          post.json                     **真相源**
-          text.txt                      正文纯文本（派生，给人和设计同事看）
-          text_de.txt                   德语译文副本（派生）
-          01.jpg  02.jpg                原图，按帖内顺序
-          source_history.jsonl          源帖更新前的完整版本与媒体路径
-          media_de/                     设计同事回填的德文版图
-        undated/undated_<slug>_<post_id>/ 时间解析不出来的进这里，不猜
-      _capture_*.json                   回填时的原始响应转储
-
-**为什么是每帖一个文件夹**：帖子一多，扁平的 `media/<post_id>_<n>.jpg`
-就分不清哪些图和哪段文字是一篇、哪天发的。但决定性的理由不是"好看"，
-而是**下游有人要动这些文件**——计划固化了「图内英文文字本期走人工处理」，
-设计同事会把替换好德文的图交回来。存在人工编辑环节的数据，
-就该按人能操作的粒度组织。
-
-**三条必须守住的规则**：
-
-1. **`post.json` 是真相，`manifest.jsonl` 是派生索引。** 冲突时以文件夹为准，
-   跑 `Archive.reindex()` 重建索引——**永远不反过来**。方向必须单一，
-   否则会退化成"两个都不可信"。
-2. **译文的真相源仍是账号级的 `translated.jsonl`**（守住既有决策：重跑抓取
-   不得冲掉花钱买来的译文）。文件夹里的 `text_de.txt` 是派生副本。
-3. **被丢弃的节点必须留痕**（`_rejected.jsonl`），不得静默丢弃。
-
-历史说明：旧布局有个 `raw/<post_id>.json`，docstring 声称是"原始响应，
-保留以便 schema 变更后重放"，**但代码实际写进去的是 `post.to_row()`**——
-和 manifest 逐字段相同，不是原始响应。真正的原始响应一直在 `_capture_*.json` 里。
-`post.json` 落地后它成了纯重复，已移除。
-"""
+"""按帖保存来源与媒体；post.json 为事实源，manifest 和文本副本从源文件派生。"""
 from __future__ import annotations
 
 import hashlib
@@ -78,26 +35,13 @@ class Post:
     permalink: str | None = None
     media: list[Media] = field(default_factory=list)
     source_route: str = ""    # "backfill" | "delta" | "graph_api"
-    # ⚠️ owner 是**节点自己声明的归属**，account 是**我们要抓的目标**。
-    # 两者必须分开：人工滚动时页面会加载推荐内容和被 @ 的 UGC，
-    # 它们和目标账号的帖子混在同一批响应里。2026-08-30 实测，
-    # Instagram 一次回填混进了 266 条来自另外 195 个账号的帖子，
-    # 全被标成目标账号 —— 下游会翻译并发布他人内容。
-    # 归一化形式：IG = user.username；FB = actors[0].url 里的账号名段。
-    # 都转小写，便于与 config.toml 的 [targets] 直接比对。
+    # owner 是响应中的实际作者，account 是抓取目标；归属使用小写账号名。
     owner: str | None = None
-    # 展示名，只给人看（_rejected.jsonl 里 "The Garden State Cat Club"
-    # 比一串 slug 有用得多）。不参与任何判等。
+    # 仅供展示，不参与归属判等。
     owner_name: str | None = None
-    # 合作帖的其他作者（Instagram 的 collab）。**这个字段决定一篇帖子在不在
-    # 本账号主页上**：collab 帖会同时出现在双方主页，但 `user.username`
-    # 只记原始发布者。2026-08-30 实测，只看 owner 的话 neakasa.tech 有
-    # **263 篇自己主页上的帖子被当成他人帖丢掉**，其中 2026-08 那个月
-    # 21 篇里绝大多数都是这种——账号看起来"一个多月没发帖"，其实一直在更。
-    # 归一化为小写 username，便于与 [targets] 直接比对。
+    # 已接受的合作作者，同样决定帖子是否属于目标时间线。
     coauthors: list[str] = field(default_factory=list)
-    # 源响应只给轮播封面拿不到子项时（IG 的 web_profile_info 就是这样），标 False，
-    # 由完整性检查汇总，留给人工或下一次登录态回填补齐。
+    # 源响应未提供全部媒体时标 False，供后续补齐。
     media_complete: bool = True
     folder_name: str | None = None  # 创建时固定；修改正文/标签不重命名
     tags: list[str] | None = None   # None 尚未预填；[] 是人工明确清空
@@ -123,13 +67,7 @@ _IMAGE_EXTENSIONS = {
 
 
 def _safe_post_id_component(post_id: str) -> str:
-    """把外部 ``post_id`` 变成单个、跨平台安全的目录名组件。
-
-    Facebook/Instagram 的正常 ID 只含 ASCII 字母、数字、点、横线或下划线，
-    这类值原样保留，兼容已有归档。其余值（路径分隔符、控制字符、Windows
-    保留名、过长 ID 等）使用原值的 SHA-256 摘要；同一个异常 ID 永远得到
-    同一个目录名。这里只改变磁盘路径，``post.json`` / manifest 仍保存原 ID。
-    """
+    """将异常 post_id 转为稳定 SHA-256 目录名；业务记录仍保留原 ID。"""
     raw = str(post_id)
     reserved_stem = raw.split(".", 1)[0].upper()
     if (_SAFE_POST_ID.fullmatch(raw)
@@ -137,8 +75,7 @@ def _safe_post_id_component(post_id: str) -> str:
             and reserved_stem not in _WINDOWS_RESERVED):
         return raw
     digest = hashlib.sha256(raw.encode("utf-8", errors="surrogatepass")).hexdigest()[:24]
-    # "~" 不在正常 ID 白名单内，因此生成名不可能与一个原样保留的正常 ID
-    # 撞名；若远端真的给出同形字符串，它本身会再次走哈希分支。
+    # 生成名以正常 ID 白名单之外的 ~ 开头，避免命名碰撞。
     return f"~id_{digest}"
 
 
@@ -161,17 +98,7 @@ def _post_quality_parts(post: "Post | dict") -> tuple[bool, int, int]:
 
 
 def _post_quality_rank(post: "Post | dict") -> tuple[int, int, int]:
-    """与增量升级规则共用的质量等级。
-
-    完整记录永远胜过残缺记录；两条都残缺时，已实际落盘的媒体更多者胜出，
-    其次才看已知媒体项数。落盘数优先很重要：一次重试可能只
-    补回两张失败图片中的一张，虽然仍是 ``media_complete=False``，这部分
-    进展也必须写回真相源，不能在下一次重试时重新下载。
-
-    两条都完整时仍视为同等级，因为 :meth:`Archive._is_upgrade` 本来就不允许
-    完整记录之间互相覆盖。把规则集中在一处，避免 append 与 reindex 各自
-    发明胜负。
-    """
+    """完整记录优先；残缺记录按已落盘媒体数、已知媒体数排序，保证补齐进度单调。"""
     complete, media_count, local_count = _post_quality_parts(post)
     if complete:
         return (1, 0, 0)
@@ -215,13 +142,7 @@ def _is_link_or_reparse(path: Path) -> bool:
 
 def assert_physical_direct_path(parent: Path, path: Path, *,
                                 kind: str, label: str) -> Path:
-    """确认 ``path`` 是 ``parent`` 下真实的直属目录或普通文件。
-
-    不存在的目标可以通过（供安全创建）；存在时拒绝 symlink、junction、其它
-    reparse point，以及文件 hardlink。resolve 后必须精确等于物理父目录加当前
-    文件名，不能只比较 ``resolved.parent``，否则链接到同一父目录的兄弟项仍会
-    被误放行。
-    """
+    """核验真实直属路径；拒绝 symlink、junction、reparse point 和文件硬链接，允许待创建路径。"""
     parent = Path(parent)
     path = Path(path)
     if kind not in {"directory", "file"}:
@@ -267,11 +188,7 @@ def _archive_row_error(row: object) -> str | None:
 
 
 def _atomic_write_text(path: Path, text: str, *, label: str) -> None:
-    """同目录临时文件 flush+fsync 后原子替换，异常时保留旧文件。
-
-    实现在 core/paid_model；路径安全断言通过 guard 传进去，包括**替换前
-    再验一次目标**（防目标在写临时文件期间被换成链接）。
-    """
+    """同目录原子写入；替换前再次核验目标，避免被换成链接。"""
     def guard(candidate: Path, role: str) -> None:
         assert_physical_direct_path(
             candidate.parent, candidate, kind="file",
@@ -281,32 +198,17 @@ def _atomic_write_text(path: Path, text: str, *, label: str) -> None:
 
 
 def post_dirname(post_id: str, created_at: str | None) -> str:
-    """每帖文件夹的名字：`<YYYY-MM-DD>_<HHMM>_<post_id>`。
-
-    **日期在前**，所以在资源管理器里按名称排序就是按发布时间排序——
-    这正是"分不清哪篇是哪天发的"那个问题的解法。
-    **post_id 在后**，所以判断"这篇抓过没有"不用打开任何文件。
-
-    时间解析不出来的进 `undated_<post_id>`。**不猜时间**——
-    猜一个日期塞进文件夹名，比没有日期更糟：它看起来是真的。
-    真实数据里确实有这种帖子（FB 有一条 `created_at` 为空）。
-    """
+    """生成日期在前的帖子目录名；无有效时间时使用 undated。"""
     ts = created_at or ""
     safe_id = _safe_post_id_component(post_id)
-    # 只认 core.parse.iso() 产出的 "%Y-%m-%dT%H:%M:%SZ"。宽松匹配会把
-    # from_fb_story 原样透传的怪字符串也放进来，那才是真正难查的问题。
+    # 只接受归一化时间格式；未知时间保留 undated。
     if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", ts):
         return f"{ts[:10]}_{ts[11:13]}{ts[14:16]}_{safe_id}"
     return f"undated_{safe_id}"
 
 
 def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
-    """archive/ 下所有含 manifest.jsonl 的账号目录。
-
-    从 `translate.py` 搬来的：翻译、调图、发布、流水线四路都要遍历账号目录，
-    却只有翻译那边有这个函数，于是另外三路都得 import 翻译执行器。
-    **archive/ 的目录布局是本模块的事。**
-    """
+    """枚举包含 manifest.jsonl 的账号目录。"""
     if not archive_root.exists():
         return []
     dirs = sorted(p for p in archive_root.iterdir()
@@ -317,18 +219,7 @@ def account_dirs(archive_root: Path, only: str | None = None) -> list[Path]:
 
 
 def source_text_digest(text: str) -> str:
-    """源帖正文的版本指纹：strip 后 UTF-8 的 sha256。
-
-    ⛔ **这是唯一一处定义。** `core.translated.source_text_sha256` 转调它，
-    审校账本、本地化账本、标签保存与 Web 的 409 判据全都落在这一个口径上。
-    住在 store 而不是 translated，只是因为 translated 已经 import store，
-    反过来就是环（`tests_hygiene.py` 第 6 条会红）。
-
-    一度两边各写一遍 `sha256(text.strip())`。它们当时算出来一样，所以没人会
-    发现哪天只改了一边 —— 而同一段逻辑在两个文件里各写一遍正是
-    `tests_hygiene.py` 病因 3 记着的那个病（`_is_fatal_api_error` 语义分叉，
-    一次 429 让翻译整批崩、调图只算单条失败，两天没人发现）。
-    """
+    """统一来源文字指纹：strip 后 UTF-8 的 SHA-256。"""
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
@@ -537,12 +428,7 @@ class Archive:
         return None
 
     def _write_post_files(self, post: "Post") -> None:
-        """写 `post.json`（真相源）与 `text.txt`（给人看的派生副本）。
-
-        text.txt 与 post.json 里的 text 重复，是有意的：设计同事和审校人
-        双击就能看，不必去读 JSON。post.json 永远是真相，
-        text.txt 由 reindex 从它重新生成。
-        """
+        """写入 post.json 事实源及可重建的 text.txt 副本。"""
         d = self.post_dir(post)
         d.mkdir(parents=True, exist_ok=True)
         assert_post_directory(self.base, d)
@@ -550,19 +436,14 @@ class Archive:
             d, d / "post.json", kind="file", label="post.json")
         text_file = assert_physical_direct_path(
             d, d / "text.txt", kind="file", label="text.txt")
-        # 两个叶子必须先全部通过，再写任何一个，避免 text.txt 有链接时
-        # post.json 已经被部分更新。
+        # 先核验两个目标再写入，避免部分更新。
         _atomic_write_text(
             post_json, json.dumps(post.to_row(), ensure_ascii=False, indent=2),
             label="post.json")
         text_file.write_text(post.text or "", encoding="utf-8")
 
     def _load_rows(self) -> dict[str, dict]:
-        """读取 manifest，同一 post_id 后写胜出。
-
-        manifest 是追加写的，一个 post_id 可能出现多次（增量先写了
-        只有封面的轮播帖，回填后又写了完整版）。读取时取最后一条。
-        """
+        """读取追加式 manifest；同一 post_id 取最后一条。"""
         rows: dict[str, dict] = {}
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
@@ -598,14 +479,7 @@ class Archive:
         return [r for r in self._rows.values() if not r.get("media_complete", True)]
 
     def record_rejected(self, rows: list[dict]) -> int:
-        """把被丢弃的节点追加进 `_rejected.jsonl`，返回实际新增条数。
-
-        **静默丢数据是本项目最忌讳的事。** `partition_by_owner` 每次都会丢掉
-        一批不属于目标账号的帖子（2026-08-30 实测 Instagram 一次回填丢 266 条），
-        如果只是 `continue` 过去，就没人能回答"到底丢了什么、丢多了没有"。
-
-        按 post_id 去重，重跑不会把同一条记录写很多遍。
-        """
+        """按 post_id 去重追加拒绝记录，返回新增数。"""
         if not rows:
             return 0
         path = self.base / "_rejected.jsonl"
@@ -636,13 +510,7 @@ class Archive:
         return added
 
     def media_path(self, post: "Post", idx: int, content_type: str | None) -> Path:
-        """媒体落在该帖自己的文件夹里，命名 `01.jpg` / `02.jpg`（1 起，补零）。
-
-        ⚠️ 签名收的是 **Post 而不是 post_id**：文件夹名要用到发布时间，
-        光有 id 拼不出来。调用方只有下载环节，改动面很小。
-
-        下载发生在 append 之前，所以这里要保证文件夹已存在。
-        """
+        """创建帖子目录并返回按顺序补零的媒体路径。"""
         ext = ".jpg"
         if content_type:
             mime = content_type.split(";")[0].strip().lower()
@@ -670,13 +538,7 @@ class Archive:
             d, media, kind="file", label=f"媒体文件 {media.name}")
 
     def reusable_media_path(self, post: "Post", url: str) -> Path | None:
-        """返回同帖、同 URL 已安全落盘的媒体路径；没有则返回 ``None``。
-
-        残缺帖重试会重新解析出一个全新的 :class:`Post`，其中没有旧记录的
-        ``local_path``。若不在下载边界把已成功的部分接回来，每次重试都会
-        重复请求这些 CDN URL。只复用当前帖子预期 truth dir 下的真实普通文件；
-        时间被纠正导致目录变化时不跨目录借用，避免升级隔离旧目录后留下悬空引用。
-        """
+        """仅复用同帖、同 URL、当前事实目录中的真实媒体；目录变化时不跨目录借用。"""
         old = self._current_row(post)
         if not isinstance(old, dict):
             return None
@@ -712,12 +574,7 @@ class Archive:
         return candidate
 
     def _isolate_other_truth_dirs(self, post: Post, keep: Path) -> list[Path]:
-        """把同 ID 的其它 truth dir 移入 ``_orphan_posts/``，从不删除。
-
-        created_at 被补出或纠正时，同一 post_id 的目标目录名会改变。若旧目录
-        仍留在 ``posts/``，它就和新目录同时成为真相源，后续 reindex 可能选回
-        旧的残缺记录。调用方必须先成功写完 ``keep/post.json`` 再调用这里。
-        """
+        """新 post.json 写成后，将同 ID 的旧目录移入可恢复的 _orphan_posts。"""
         orphan_root = self.base / "_orphan_posts"
         assert_physical_direct_path(
             self.base, orphan_root, kind="directory", label="_orphan_posts 恢复区")
@@ -760,16 +617,7 @@ class Archive:
         return isolated
 
     def reindex(self) -> int:
-        """从 `posts/*/post.json` 重建 `manifest.jsonl`，返回条数。
-
-        **这是"文件夹与索引冲突时以文件夹为准"那条规则的执行者。**
-        人删了一个文件夹、或者哪次运行崩在中途，索引就会和现实脱节；
-        重建的方向永远是 posts/ → manifest，绝不反过来。
-
-        同一 post_id 若意外存在多个 truth dir，按与 append 升级相同的质量等级
-        只选一个写入索引并显式告警；目录本身不在 reindex 中删除或移动。
-        顺带把 `text.txt` 也重新生成一遍（它是派生的）。
-        """
+        """从 post.json 重建 manifest 与文本副本；重复目录按质量选取并告警，不移动或删除源目录。"""
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
         selected: dict[str, tuple[tuple[int, int], dict, Path]] = {}
@@ -828,8 +676,6 @@ class Archive:
 
         rows = [entry[1] for entry in selected.values()]
 
-        # 按时间正序落盘：manifest 本来不保证顺序，但重建时顺手排一下，
-        # 人 `tail` 它的时候看到的就是最新的几条。
         rows.sort(key=lambda r: (r.get("created_at") or "", r.get("post_id") or ""))
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
@@ -839,13 +685,7 @@ class Archive:
         return len(rows)
 
     def append(self, post: Post) -> bool:
-        """写入 manifest，返回是否实际写了。
-
-        重复的 post_id 默认忽略，让脚本可以反复重跑而不产生副作用。
-        唯一的例外是升级：已存记录媒体不全（源响应只给了封面，或图片没下全），
-        而新记录更全 —— 这时追加一条新的，读取时后写胜出。
-        没有这个例外，media_complete 标记就没有意义，补全永远写不进去。
-        """
+        """追加新帖或更完整的记录，返回是否写入；重复内容忽略。"""
         with archive_write_lock(self.base):
             self._rows = self._load_rows()
             previous = self._current_row(post)
@@ -874,9 +714,7 @@ class Archive:
         row = post.to_row()
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
-        # 顺序要紧：**先写文件夹，再写索引**。反过来的话，中途崩溃会留下
-        # 一条指向不存在文件夹的索引记录 —— 而规则是"以文件夹为准"，
-        # 那条记录会在下次 reindex 时凭空消失，且没人知道发生过什么。
+        # 先写事实文件再写派生索引，确保中断后可重建。
         if previous is not None and self._source_changed(previous, post):
             history = self.post_dir(post) / "source_history.jsonl"
             paid_model.append_jsonl(history, {"recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -884,8 +722,7 @@ class Archive:
                                     guard=lambda path: assert_physical_direct_path(
                                         path.parent, path, kind="file", label="source_history.jsonl"))
         self._write_post_files(post)
-        # created_at 被补出/纠正会改变目录名。新 truth dir 已完整写成后，
-        # 可恢复地隔离同 ID 的旧目录，保证 posts/ 内仍只有一个真相源。
+        # 新目录完整写成后隔离旧目录，保持同 ID 唯一事实源。
         if previous is not None:
             self._isolate_other_truth_dirs(post, self.post_dir(post))
         assert_physical_direct_path(
@@ -896,11 +733,7 @@ class Archive:
         return True
 
     def should_append(self, post: Post) -> bool:
-        """返回这条帖子是否会被 :meth:`append` 接受。
-
-        下载媒体前需要先做这个判断，避免幂等重跑时重复请求 CDN；同时不能只用
-        ``has(post_id)``，否则先前留下的残缺帖永远无法被后续更全的抓取补上。
-        """
+        """下载前检查新帖或补齐记录是否可接受，避免重复下载且允许残缺重试。"""
         old = self._current_row(post)
         return old is None or self._is_upgrade(old, post) or self._source_changed(old, post)
 
@@ -922,7 +755,6 @@ class Archive:
         if new_complete:
             return True
         _, old_media, old_local = _post_quality_parts(old)
-        # 残缺 -> 残缺只能单调改进。否则“新响应多发现一张、但本次全部下载
-        # 失败”会以 media_count 更大为由覆盖旧 local_path，反而丢掉恢复成果。
+        # 残缺重试必须增加已落盘成果，不能用更多失败 URL 覆盖已有文件。
         return (new_media >= old_media and new_local >= old_local
                 and (new_media > old_media or new_local > old_local))

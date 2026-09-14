@@ -11,8 +11,7 @@ def matching(inventory, when, final_text, target_channels):
     expected = bs._card_text(final_text)
     if not expected:
         raise bs.PublishStepError('待核验文案为空')
-    # Dates come from the complete grid; full captions and IDs come from details.
-    # A compact time-only link can no longer lose its date on the way to matching.
+    # Bind grid dates to detail captions and IDs before matching time-only links.
     return [card for card in inventory.cards
             if card.delivery == 'scheduled' and card.at.timestamp() == when.timestamp()
             and card.channels == target_channels and bs._card_text(card.rendered) == expected]

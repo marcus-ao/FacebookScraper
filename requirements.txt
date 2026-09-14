@@ -1,41 +1,21 @@
-# 回填（CDP 附着）与登出增量
 playwright>=1.49
 httpx>=0.27
-# httpx: fb_graph.py（API 只读验证）与 core/http.py（登出增量）
 
-# F 组德语翻译。按 DeepSeek 官方文档，以 OpenAI SDK 直连其原生兼容端点。
-# 3.6 是本项目已做线级契约验证的最低版本；固定大版本避免未来破坏性升级。
-# K 组的图片 edits 走同一个 SDK（第三方网关是 OpenAI 兼容形态）。
+# 翻译与图片都走 OpenAI SDK（图片侧的第三方网关是 OpenAI 兼容形态）
+# 固定大版本：3.6 是做过线级契约验证的最低版本
 openai>=3.6,<4
 
-# K 组（图片德语化）与 G 组（发布前的离线硬闸）都要读图。
-# ⚠️ 这违反了「不引入新依赖」的全局约定，理由记在这里：
-# 产出图必须验证"能解码 / 尺寸对 / 不是占位图 / 与原图结构相近"，
-# 没有图像库做不了；发布侧也要在碰浏览器之前确认每张图能打开且非 0 字节。
-# **只加 Pillow，不加 numpy** —— 结构相似度用纯 Python 的 dHash 汉明距离即可。
-#
-# 它被**提前**装进主干（而不是留给 K0），是为了让 feat/image-de 与
-# feat/business-suite-publish 两个分支不必同时改这一个文件。
+# Pillow：产出图必须验证能解码、尺寸对、不是占位图、与原图结构相近，
+# 发布侧也要在碰浏览器之前确认每张图能打开且非 0 字节 —— 没有图像库做不了
+# 只加 Pillow，不加 numpy：结构相似度用纯 Python 的 dHash 汉明距离即可
 Pillow>=11,<13
 
-# G 组：排期时区。**这是 Windows 上的硬需求，不是便利品**（CR-60）。
-# ⚠️ 同样违反「不引入新依赖」的约定，理由记在这里：
-#
-# 本机实测（2026-08-31）：`zoneinfo.TZPATH` 是**空的**，
-# `ZoneInfo("Europe/Berlin")` 抛 `ZoneInfoNotFoundError` ——
-# Windows 不自带 IANA 时区数据库，而 `zoneinfo` 只读系统数据库。
-#
-# 而 `PUBLISH_PLAN.md` 第 3.3 节把显式时区转换写成了**硬要求**：
-# 「代码里显式做时区转换，不依赖本地时区隐式生效」，
-# 并且要求**在夏令时切换日各测一次**（Europe/Berlin 每年切两次）。
-# 那两件事都不可能靠固定 UTC 偏移做对 —— 一旦写死 +01:00/+02:00，
-# 就会在切换日把帖子发到错误的时刻，而且**没人会立刻发现**。
-#
-# tzdata 是**纯数据包**（无原生代码、无传递依赖），这是所有可选方案里
-# 侵入性最小的一个。
+# tzdata：Windows 上是硬需求。本机实测 zoneinfo.TZPATH 为空、
+# ZoneInfo("Europe/Berlin") 直接抛 ZoneInfoNotFoundError —— Windows 不自带
+# IANA 数据库。而排期要求显式时区转换并在夏令时切换日各测一次
+# 写死 +01:00/+02:00 会在切换日把帖子发到错的时刻，且没人会立刻发现
+# 它是纯数据包，无原生代码、无传递依赖
 tzdata>=2024.1
 
-# 审校台 HTTP API 与静态页面服务。
-# React 依赖由 web/ui/package-lock.json 管理；构建到 web/ui/dist 后由 FastAPI 提供。
 fastapi>=0.115
 uvicorn>=0.30

@@ -6,7 +6,9 @@
 
 ## 1. 接续运行数据前先备份和核验
 
-2026-09-12 已完成一次核验备份 `runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；原激活时间 `2026-09-03T09:00:58.277710Z` 保留。主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本工作区用忽略入库的 `config.local.toml` 指回同一份数据。**不能把真实目录的配置文件或账本重置成空样例。**
+主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本工作区用忽略入库的 `config.local.toml` 指回同一份数据。
+
+⛔ 2026-09-14 已按业务决定把 archive/state 整库清空且**没有备份**，现在两个目录都是空的。这条决定是一次性的：**以后再接续或恢复，仍然必须先备份再动**，下面这套核验步骤照做。
 
 以后再次接续或恢复时，先停止旧调度器与写入进程，备份完整 archive/state，另包含运行 `config.toml`、存在时的 `config.local.toml`、本机 `.env` 的受控副本和解释器位置/版本记录。备份凭据单独控制访问，不放公共云盘或证据报告；不要只复制 manifest/SQLite。
 
@@ -137,7 +139,7 @@ outbox 的终态在线保留期默认 30 天，过期完整关联组件归档后
 
 ## 8. 录制单渠道 Business Suite 证据
 
-2026-09-01 dump 没有单渠道交互。2026-09-12 已有 `channel_controls.json`、被动 `publish_probe_20260912_205317_056051.json` 的 22 条事件，观察到 FB `Neakasa Deutschland`、IG `neakasa.de`。`planner_controls.json` 和最新 `planner_month_20260913T044722903276.png` 与后续实际读取共同证明本次月份已完整读取；不证明本轮真实提交成功。继续录缺失部分时分别记录控件观察、编辑器操作和具体内容确认后的提交。
+**2026-09-14 运行数据整库清空之后，这里一份证据都没有了。** 原来的 `publish_probe_*.json`、`channel_controls.json`、`planner_controls.json` 和月历截图随 `state/` 一起删除，`config.toml` 的 `[publish].ui_probe_dump` 与 `ui_constraints_verified` 也已退回未签字状态。所以 preflight 的 G6/G6c 现在全关——要走到真实发布，下面这套录证得从零做一遍。
 
 ```powershell
 scripts\run_python.bat -m tools._scaffolding.probe_publish
@@ -152,9 +154,17 @@ scripts\run_python.bat -m tools._scaffolding.probe_publish
 - 发布/排期详情的只读渠道证据和公开状态，不明确则 unknown；
 - final 快照和遮罩截图。
 
+**那 14 个只能人亲眼量的 UI 上限**（图片数、画幅比、正文与标签上限、定时上下限）录制器证明不了，`preflight` 的第 2 项会逐条列出还差哪些。用 `--set-note KEY=VALUE` 一次填完，未知或畸形的键会当场报错、不会静默丢弃：
+
+```powershell
+scripts\run_python.bat -m tools._scaffolding.probe_publish --set-note <KEY>=<实测值>
+```
+
+录完之后把 `config.toml` 的 `[publish].ui_probe_dump` 填成新 dump 的文件名，`ui_constraints_verified` 改回 `true`。⛔ 换 dump 就要重新量：这一位签的是"那份 dump 里的观察项有人亲眼看过"，不是"这个项目量过一次"。
+
 本轮已经观察到已发布详情的渠道图标、`Published on` 与合作作者信息，以及两个未来 time-only 条目实际为推荐时段并已排除。实际 inventory 在 2026-09-13T05:01:33Z 返回 ready：8 月 30 日至 10 月 3 日的 35 格、4 条公开帖、3 个独立 IG remote ID；这只覆盖本次已观察月份。只有完成第 9 节具体内容确认后，才把一次 Schedule、成功 dialog、该渠道卡片/全文/时刻/remote ID 的回读录入提交验收；`Publish`/`Publish now` 不用于验证。
 
-原 state 中 `composer_media_probe_20260913T054737Z_final.json/.png` 是另一次编辑器媒体观察：技术文案明确写有“Technischer Entwurf…Nicht zur Veröffentlichung vorgesehen.”，并上传 2 张历史原图。`composer_media_verification_20260913.json` 已在 06:01:17Z 验证这两图的数量、顺序和视觉一致性。未点 Schedule、Publish、Finish later 或 Cancel，可能留下未保存/自动保存草稿。它不是业务候选；后续接手先识别现场，不能直接提交。缩略图检查只证明编辑器中媒体准备状态，不能替代远端排期卡片中的最终图片证据。
+清库前做过一次编辑器媒体观察：放入明确不可发布的技术文案与 2 张历史原图，核验了缩略图的数量、顺序与视觉一致性，未点 Schedule / Publish / Finish later / Cancel。**发布浏览器里可能还留着那份草稿**，接手时先识别现场，不要直接提交。缩略图检查只证明编辑器侧准备状态，不替代远端排期卡片里的最终图片证据。
 
 先运行信号报告，不要直接手改 selector 注册表：
 
@@ -176,7 +186,7 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 - Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
-当前这两个联调包尚未齐备。FB 已有来源为 2026-08-16“Cat or CCTV”的单图待制作包 `integration-candidates/facebook-122120460231379375/`（在当时开发副本的 `state/` 下）：德语正文提案、图片德语替换指令、原图与 manifest 已准备，最终德语图仍缺。拟定目标为 Neakasa Deutschland、2026-09-15 10:00 柏林，未占位、未批准；先确认这篇历史内容可作受控样本及图片付费许可，完成图片后再确认整包提交。该包不覆盖 FB 短链、IG bio 或真实多图。过期 8 月活动/美元促销需要业务重新判断；IG 尚无 `.global` 新素材。技术草稿和冻结 `.tech` 不能替代当前来源。
+两个联调包都不存在：清库把归档和此前准备的 FB 待制作包一起删了。要重新走到这一步，得先回填出有正文和图片的新帖，再逐篇准备。
 
 用户确认后才执行一次提交。提交前后都不要编辑冻结目录。只有 Planner 回读确认目标渠道、时刻和 remote ID 后才能写 `scheduled`。`scheduled` 不代表到时已经公开。
 
@@ -241,7 +251,7 @@ scripts\run_python.bat tests/review_probe.py
 scripts\run_python.bat tests/history_thumbnail_cost.py
 ```
 
-`tests/tests_browser_workflow.py` 的七个迁移场景加日期回归使用实际 dist、临时真实 ASGI 和隔离 archive/state；保存、历史、设置、链接最终计数走临时后端，远端状态用明确的界面响应替代。`network_compare.py` 核对 16 个 React 请求契约，`cutover_rehearsal.py` 默认使用 `web/ui/dist` 和实际 FastAPI，`review_probe.py` 核对密度、图片按需请求和零外部动作。当前证据统一保存在 `state/ui-consolidation-20260914T063209Z` 的日志、`browser/` 报告及 `review-probe.json`，完整 66 脚本和八场景报告分别在 `state/offline-validation-20260914T065258Z` 与 `state/offline-browser-20260914T065304Z-21788`。
+`tests/tests_browser_workflow.py` 的七个迁移场景加日期回归使用实际 dist、临时真实 ASGI 和隔离 archive/state；保存、历史、设置、链接最终计数走临时后端，远端状态用明确的界面响应替代。`network_compare.py` 核对 16 个 React 请求契约，`cutover_rehearsal.py` 默认使用 `web/ui/dist` 和实际 FastAPI，`review_probe.py` 核对密度、图片按需请求和零外部动作。产物统一落在已 gitignore 的 `state/` 下，跑一次回归不会弄脏工作区。
 
 ⛔ **不要对绑定真实数据的目录直接运行会写入的测试脚本。**
 
@@ -270,7 +280,14 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。
 
-2026-09-14T07:22:54Z 已在原 `main` 的 `a804c5e` 按本节完成一次实际只读启动：锁定安装 118 个包，505 项 React 测试及 TypeScript + Vite 构建通过，`scripts/run_web.bat` 在 8765 启动 PID 21928。`state/ui-consolidation-20260914T063209Z/main-entry.json` 记录七条业务路由、两条旧链接、只读业务 API 检查和 404 边界通过，且页面错误、阻止请求、外部动作均为零；`cutover-data-verification.json` 记录 5,004 个实际数据文件前后完全一致。月历仍显示旧的 4 张卡片并给出过期警告。冻结详情首次 5 秒等待超时，放宽只读检查上限后直接进入 8.625 秒、刷新 4.094 秒；这项性能观察仍需跟进。下面的清单保留给后续更新复验。
+⚠️ 清库后 `web/ui/node_modules` 与 `web/ui/dist` 都已删除，**打开页面之前必须先装依赖并构建**：
+
+```powershell
+npm --prefix web/ui ci
+npm --prefix web/ui run build
+```
+
+下面的清单用于每次更新前端后的复验。
 
 从上到下检查。任何一步失败就停止更新并保留报告，不对 archive/state 做恢复操作。
 

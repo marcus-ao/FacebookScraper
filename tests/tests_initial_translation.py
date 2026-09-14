@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tests_paid_consent import ConsentFixture
-import localize_images
+from localize import images as image_de
 from core import paid_consent, review, translated
 from pipeline import engine, initial_translation, refinement
 from web.api.app import app
@@ -81,17 +81,17 @@ class InitialTranslationTests(ConsentFixture):
             return {'status': 'completed', 'risks': []}
         buffer = io.BytesIO()
         Image.new('RGB', (1088, 1088), 'blue').save(buffer, 'JPEG')
-        validated = localize_images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 0)
+        validated = image_de.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 0)
         editor = Mock()
-        editor.edit.return_value = localize_images.EditResult('', 'gpt-image-2', {}, 'response')
+        editor.edit.return_value = image_de.EditResult('', 'gpt-image-2', {}, 'response')
         editor.paid_request_id = ''
-        with patch.object(localize_images, 'validate_output', return_value=validated):
+        with patch.object(image_de, 'validate_output', return_value=validated):
             result = initial_translation.execute(job, self.source, translator=translator, editor=editor,
                                                  risk_scanner=scan)
         self.assertEqual(result['status'], 'succeeded', result)
         self.assertEqual(calls[:2], ['risk_scan', 'translate'])
         self.assertTrue(translated.load_translated(self.account / 'translated.jsonl'))
-        self.assertTrue(localize_images.load_image_state(self.account / 'images_de.jsonl').latest)
+        self.assertTrue(image_de.load_image_state(self.account / 'images_de.jsonl').latest)
         self.assertFalse(translated.load_human_translated(self.account / 'translated_human.jsonl'))
         self.assertEqual(review.state_for(self.account, self.source)['status'], 'pending_review')
         self.assertTrue(engine.latest_human_items(engine.cfg().state_dir))

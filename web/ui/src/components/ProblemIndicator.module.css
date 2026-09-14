@@ -1,7 +1,3 @@
-/*
- * 问题指示。列表里**红色只出现在这里**，位置固定。
- * 图标对底色的对比度门槛是非文本的 3:1（断言在 app/theme.test.ts）。
- */
 
 .icon {
   display: inline-flex;
@@ -14,7 +10,7 @@
   cursor: help;
 }
 
-/* 占位：没有问题时仍然占住这一列的宽度，否则整列会左右跳。 */
+/* 无问题时仍占位，避免列宽跳动。 */
 .none {
   display: inline-block;
   width: var(--rc-icon-size);
@@ -29,7 +25,6 @@
   color: var(--rc-risk);
 }
 
-/* 第三方作者是"需要先授权"，不是错误，所以是中性色。 */
 .thirdParty {
   color: var(--rc-fg-muted);
 }

@@ -16,7 +16,6 @@ describe('parseHex', () => {
   })
 
   it('非法输入直接抛，不静默返回黑色', () => {
-    // 静默回落成黑色会让对比度断言"看起来通过了"，那比报错糟得多。
     expect(() => parseHex('#12345')).toThrow()
     expect(() => parseHex('rgb(1,2,3)')).toThrow()
   })
@@ -29,7 +28,6 @@ describe('relativeLuminance', () => {
   })
 
   it('低通道走线性分支（≤ 0.04045）', () => {
-    // 9/255 = 0.0353 < 0.04045，走 /12.92 那一支。
     expect(relativeLuminance('#090909')).toBeCloseTo(0.0027317, 6)
   })
 })
@@ -51,7 +49,6 @@ describe('contrastRatio', () => {
   })
 
   it('确认 #1677ff 对白 ≈ 4.10:1，低于正文门槛', () => {
-    // 这条是这个模块存在的理由。它看起来完全正常，但达不到 4.5:1。
     expect(contrastRatio('#1677ff', '#ffffff')).toBeCloseTo(4.1, 1)
     expect(contrastRatio('#1677ff', '#ffffff')).toBeLessThan(4.5)
   })
@@ -72,7 +69,6 @@ describe('hueOf', () => {
 describe('hueDistance', () => {
   it('取最短夹角，不会超过 180', () => {
     expect(hueDistance('#ff0000', '#00ffff')).toBeCloseTo(180, 6)
-    // 350° 与 10° 之间是 20°，不是 340°。
     expect(hueDistance('#ff0026', '#ff2a00')).toBeLessThan(30)
   })
 })

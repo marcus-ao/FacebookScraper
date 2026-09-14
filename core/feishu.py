@@ -1,8 +1,4 @@
-"""企业飞书私聊卡片与耐久发件箱。凭据只读环境变量，默认禁用投递。
-
-HTTP 契约核对：open.feishu.cn/document/server-docs/im-v1/message/create
-以及 larksuite/oapi-sdk-python 的 create_message_request_body.py。
-"""
+"""飞书私聊卡片与耐久发件箱；凭据从环境变量读取。"""
 from __future__ import annotations
 
 import hashlib
@@ -208,8 +204,7 @@ class Outbox:
                 return False
             if event_id in data['events']:
                 assigned = [item for item in data['deliveries'].values() if event_id in item['events']]
-                # Only a never-attempted notification can follow newer human edits.
-                # Once any recipient was attempted, its event set, card and UUID remain immutable.
+                # 首次尝试后冻结事件集、卡片和 UUID；仅未尝试消息可跟随人工修改。
                 if (kind == data['events'][event_id]['kind'] and not any(item['attempts'] for item in assigned)
                         and data['events'][event_id]['payload'] != payload):
                     data['events'][event_id]['payload'] = payload
@@ -326,8 +321,7 @@ class Outbox:
             if path.exists():
                 self._read_archive(identifier)
             else:
-                # Shared outbox lock prevents competing writers. Content addressing
-                # lets a retry reuse the exact archive after a failed live-file trim.
+                # 内容寻址让裁剪失败后的重试复用同一归档。
                 atomic_write_json(path, archived)
             for event_id in events:
                 data['archived_events'][event_id] = identifier
@@ -354,8 +348,7 @@ class Outbox:
             if action == 'delivered':
                 row.update(status='sent', message_id=message_id.strip(), sent_at=stamp)
             else:
-                # Cancellation after review means the reminder is obsolete. Keep
-                # its original card/UUID and close it instead of reviving old work.
+                # 取消的提醒已过期，保留原卡片和 UUID，不重新入队。
                 obsolete = any(data['events'][key].get('cancelled_at') for key in row['events'])
                 row.update(status='cancelled' if obsolete else 'retry', next_at=stamp,
                            retry_authorized_at=stamp)
@@ -426,8 +419,7 @@ class Outbox:
                         delivery_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
                         version = 1
                         while delivery_id in data['deliveries']:
-                            # A cancelled attempt remains immutable history. This is
-                            # a new reminder after a confirmed result, not a retry.
+                            # 已取消的尝试保持不变；核对结果后另建提醒。
                             delivery_id = hashlib.sha256((seed + ':v' + str(version)).encode()).hexdigest()[:32]
                             version += 1
                         data['deliveries'][delivery_id] = {

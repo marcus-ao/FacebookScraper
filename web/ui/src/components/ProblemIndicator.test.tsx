@@ -31,9 +31,7 @@ describe('优先级：硬闸 > 风险 > 第三方 > 无', () => {
   })
 
   it('author_flag 常态是 null —— 真实数据 26/26 篇都是', () => {
-    // reader.py `_author_kind`：合作帖是常态，每行都标就是噪声。
     expect(problemOf({ hard_alerts: [], risk_count: 0, author_flag: null })).toBe('none')
-    // 空串也当没有，不因为后端给了空字符串就画一个图标。
     expect(problemOf({ hard_alerts: [], risk_count: 0, author_flag: '' })).toBe('none')
   })
 
@@ -105,8 +103,6 @@ describe('Tooltip 里那句话', () => {
 
 describe('这一列的数据来源只有列表载荷里的三个字段', () => {
   it('传一个只有这三个键的对象就够了', () => {
-    // 类型上 ProblemSource 就是这三个键；这条是运行期再确认一次，
-    // 免得实现里偷偷读了第四个字段（比如详情才有的 text 或 risk_scan）。
     const proxy = new Proxy(
       { hard_alerts: [], risk_count: 1, author_flag: null } as ProblemSource,
       {

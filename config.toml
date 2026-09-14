@@ -1,170 +1,70 @@
-# 全部可调参数集中在这里，代码里不写死。
-
 [chrome]
-# 留空则自动探测（见 core/config.py 的 CHROME_CANDIDATES）
-exe = ""
-# 专用 profile：小号会话存在这里，与日常 Chrome 完全隔离
-profile_dir = "~/.fbscraper-chrome"
+exe = ""  # 留空自动探测 Chrome。
+profile_dir = "~/.fbscraper-chrome"  # 回填会话；与监测、发布隔离。
 debug_port = 9222
 
 [detect]
-# 常规探测与兜底对账专用；人工登录一次，与回填和发布隔离。
-profile_dir = "~/.fbscraper-detect"
+profile_dir = "~/.fbscraper-detect"  # 监测会话，需人工登录。
 port = 9224
 
 [targets]
-# 回填与增量的目标账号（US 站，2026-08-29 由用户提供）
-facebook = "neakasaofficial"       # facebook.com/<这里>
-instagram = "neakasa.global"         # instagram.com/<这里>
+facebook = "neakasaofficial"
+instagram = "neakasa.global"
 
 [backfill]
-# 人工滚动阶段的最长等待（秒）。到点自动收尾，防止忘了回车。
 max_session_seconds = 1800
 
 [delta]
-# 上海时区的运营作息；消息静默时段也引用这个窗口。
-on_duty_window = ["08:00", "19:00"]
+on_duty_window = ["08:00", "19:00"]  # 上海时间，同时用于通知静默窗口。
 on_duty_interval_min = 60
 off_duty_interval_min = 180
 jitter_ratio = 0.25
-# 常规只取首屏；深扫每天独立一次，在 ±30 分钟、±1 屏内随机。
-max_scrolls = 0
-reconcile_at = "07:00"
+max_scrolls = 0  # 常规扫描深度；0 表示只取首屏。
+reconcile_at = "07:00"  # 上海时间；晨间深扫。
 reconcile_jitter_min = 30
 reconcile_scrolls = 3
-# 每平台扫描上限90秒。processing_budget_min 是整批处理预算的下限，
-# 调度器还计入两个平台扫描及已知待处理批次，必要时前移晨间兜底；不提高频率。
-reconcile_max_session_seconds = 90
-processing_budget_min = 25
+reconcile_max_session_seconds = 90  # 单个平台扫描上限。
+processing_budget_min = 25  # 整批处理预算下限，另计两个平台扫描。
 request_gap_seconds = 8
 first_screen_seconds = 6
 max_session_seconds = 300
-failure_budget = 3
+failure_budget = 3  # 连续失败次数，达到后停止。
 quiet_days_before_slowdown = { facebook = 10, instagram = 10 }
 autostart_chrome = true
-# 只清理超过保留期的增量响应；回填转储永久保留。
-keep_captures_days = 7
+keep_captures_days = 7  # 仅清理增量转储，回填转储保留。
 min_own_posts = 3
 
 [hashtags]
-# 候选量级和德国同类账号只使用探测小号浏览器；名单为空时周采样直接跳过。
 enabled = true
-peer_accounts = []
+peer_accounts = []  # 德国同类账号；空名单跳过采样。
 refresh_days = 7
 max_candidate_tags = 20
 max_peer_accounts = 10
 
 [integrity]
-# 连续 N 天零新增即告警。按平台分开（用户 2026-08-30 拍板要分开）。
-#
-# ⚠️ **值在同一天改过一次。** 第一版是 FB 7 / IG 21，那是按"IG 已经一个多月
-# 没发新帖"算的——而那个认知是错的：合作帖被误判丢弃了（见 CODE_REVIEW 的
-# CR-19）。修完之后重新统计，当时的 FB 与 IG .tech 历史账号接近日更：
-#
-#              篇数   最新一帖     近一年间隔中位   p95     近一年 >7 天的间隔
-#   Facebook     46   2026-08-25   1.00 天         3.00    0 次
-#   Instagram  1019   2026-08-27   0.99 天         4.03    2 次
-# 这是 2026-08-30 的历史样本；.global 切换后的覆盖率与窗口必须另行统计，不能借用。
-#
-# 于是 IG 从 21 天收到 10 天：21 天意味着真坏了要三周才报出来，
-# 而 10 天每年大约只误报一次（近一年 >10 天的正常间隔只出现过 1 次）。
-# **误报的代价不是打扰，是让整条告警通道失效**——用户关掉通知之后，
-# 真正的故障就再也没人知道了。所以也不能一路收到 4 天。
-alert_after_quiet_days = { facebook = 7, instagram = 10 }
-
-# 相邻两帖间隔超过这个天数，标记为疑似缺口。同样支持按平台写成内联表。
-# 只检查最近 60 天、且同一个缺口只报一次（见 core/integrity.py），
-# 所以这里可以设得比"零新增"阈值紧一些。
-# 近一年的 p95：FB 3.0 天、IG 4.0 天。
-gap_flag_days = { facebook = 5, instagram = 6 }
+alert_after_quiet_days = { facebook = 7, instagram = 10 }  # 连续零新增告警；两平台分别统计。
+gap_flag_days = { facebook = 5, instagram = 6 }  # 相邻源帖超过此间隔时提示疑似缺口。
 
 [translate]
-# ---- 连接（DeepSeek 官方 OpenAI 兼容接口）----
-# "deepseek" 会对官方 URL / 模型名做严格校验，防止错配后静默回退。
 provider = "deepseek"
 base_url = "https://api.deepseek.com"
-
-# API Key 从**环境变量**读，绝不写进本文件（本文件进版本库，密钥不能进）。
-# 下面填的是环境变量的**名字**，不是密钥本身。
-api_key_env = "DEEPSEEK_API_KEY"
-
-# 2026-08-30 官方最新高质量文本模型。若更看重速度/费用，可显式改成
-# deepseek-v4-flash；不要再用已于 2026-07-24 停用的 deepseek-chat/reasoner。
+api_key_env = "DEEPSEEK_API_KEY"  # 环境变量名，非密钥。
 model = "deepseek-v4-flash"
-
-# ---- 请求参数 ----
 timeout_seconds = 120
-max_retries = 2                    # SDK 自带指数退避，重试 429/5xx/连接错误
-request_gap_seconds = 1.0          # 相邻两次调用的最小间隔，避免短时间请求过密
-
-# 连续失败多少条就停止本批。**不是总失败数，是连续失败数。**
-# 单条失败（429、超时、单条被审核拒）只跳过这一条继续（CR-53），
-# 但连续失败说明问题不在素材而在链路——1051 篇待译，断网时空转
-# 一千次既没意义又会把限流坐实。形状与 [image].failure_budget、
-# [delta].failure_budget 一致。
-failure_budget = 3
-
-# thinking 始终显式开启；默认用模型官方的 high 档位。
-reasoning_effort = "high"          # low | high | max
-# 不配置、也不发送 max_tokens / max_completion_tokens 等输出限制；
-# temperature / top_p 在 thinking 模式下会被 DeepSeek 忽略，同样不发送。
-#
-# ⚠️ **这一项是全量翻译账单的主导因素，不是微调项。**
-# 2026-08-31 实测（同一篇 1261 字符的帖子，其余条件完全相同）：
-#
-#            reasoning tok   可见译文 tok   单篇费用上界
-#   low            373            419        US$0.0101
-#   high         9 899            420        US$0.0412
-#
-# **可见译文一样长，思考量差 26 倍。** 按已译帖子的真实 usage 外推，
-# 全量 1051 篇在 high 下约 **US$24**，在 low 下约 US$6–7。
-# 但 high 的德语排版细节确实更好（„…“ 引号成对、句中不误大写），
-# low 那一版实测出现过 "Schluss mit Schlechtem Gewissen"（Schlechtem 误大写）。
-# **这是业务取舍，代码不替你定。** 改完跑 `--estimate` 会用真实 usage 重新外推。
-cost_rates_usd_per_million = { input = 1.32, cache_read = 0.044, output = 3.96 }
-# ⚠️ 上面这张费率表是 **V4 Pro 的峰时最高价**（核对日期 2026-08-30），
-# 而当前 model 是 flash。**故意不换成 flash 的价**：这个数只用来算
-# "最坏情况的上界"，用更贵的费率去估更便宜的模型，方向是安全的。
-# 真实账单以 DeepSeek 控制台为准。换 model 时不需要动这张表。
-
-# ---- 翻译行为 ----
-# 目标语言不做成配置项：提示词模板 prompts/translate_de.md 是德语专用的
-# （德式排版、du/Sie、性别表达全是德语特有问题）。想加语言得新写一份模板，
-# 留一个改了不生效的 target_lang 只会误导人。
-# 风格来源：从该账号已抓到的 US 文案里取 N 篇作为提示词示例
-style_examples = 6
-# 额外的语气指令，营销同事可直接改这一行
+max_retries = 2
+request_gap_seconds = 1.0
+failure_budget = 3  # 连续失败次数，达到后停止本批。
+reasoning_effort = "high"  # low | high | max；显式开启 thinking。
+cost_rates_usd_per_million = { input = 1.32, cache_read = 0.044, output = 3.96 }  # 保守估算上界，实际费用以供应商账单为准。
+style_examples = 6  # 从源账号取用的文案示例数。
 tone = "品牌口吻保持简洁直接，避免夸张营销词；控制长度。"
+address_form = "du"  # du | Sie
+gender_style = "neutral"  # neutral | colon | generic
+anglicism_policy = "moderate"  # moderate | minimal | keep
 
-# ---- 品牌语域决策 ----
-# ⚠️ 这三项决定每一篇译文的基调；改动后同时把 translate.py 的 PROMPT_VERSION +1，
-# 普通运行就会把旧版译文自动列回待译队列。
-# 它们是**模型无法自行知道的品牌决策**，必须在这里定死，
-# 否则模型会篇篇自己挑，整个 feed 读起来是散的。
-
-# 称呼形式。英文的 "you" 不含这个信息，德语必须二选一：
-#   "du"  = 非正式第二人称。消费品牌在 IG/FB 上的德语主流选择
-#   "Sie" = 正式敬称。B2B、金融、医疗、高端奢侈品常用
-address_form = "du"
-
-# 性别表达（德国市场的真实分歧点）：
-#   "neutral" = 改写成中性说法，尽量避开人称名词（最安全，不站队）
-#   "colon"   = 冒号式 Kund:innen（年轻/进步品牌常用，部分受众反感）
-#   "generic" = 传统阳性泛指 Kunden（最保守，部分受众视为过时）
-gender_style = "neutral"
-
-# 英语借词政策。德语营销对英语词的容忍度比多数语言高，但过量会显得廉价：
-#   "moderate" = 已通用的保留（Sale / Shop / Style / Look / Outfit / Hoodie），其余译出
-#   "minimal"  = 尽量用德语词
-#   "keep"     = 原文的英语词尽量保留
-anglicism_policy = "moderate"
-
-# 术语表：强制统一的译法。左边写英文（大小写不敏感），右边写德文。
-# 没有它，第 1 篇写 Kapuzenpullover、第 12 篇写 Hoodie —— 品牌内容不能这样。
-# 以下译法来自真实 1055 条语料的高频词，并按 Neakasa 德国官网现有用语收敛。
-# ⚠️ TOML 语法要求：本小节必须放在 [translate] 的**最后**，
-#    它下面的键都属于 glossary，不再属于 [translate]。
+# ⚠️ TOML 规则：本子表必须是 [translate] 的最后一段，它下面的键都会归给 glossary。[translate] 的新标量键加在这一行**之前**。
 [translate.glossary]
+# 英文术语到德文的统一译法；变更翻译规则时更新 PROMPT_VERSION。
 "free shipping"             = "kostenloser Versand"
 "grooming kit"              = "Haustierpflege-Set"
 "litter box"                = "Katzentoilette"
@@ -180,285 +80,56 @@ anglicism_policy = "moderate"
 "wet food"                  = "Nassfutter"
 
 [image]
-max_refine_per_media = 3  # 单张人工发起的优化次数上限；只读安全参数
-# ---- K 组：图内英文德语化（GPT-Image-2）。理由见 docs/HANDOFF.md 第 6 节 ----
-# ⚠️ 2026-08-31 用户拍板新增。这一项**推翻了**实施计划第 0 节原本
-#    「图内英文文字的德语替换（一期走人工处理）」那条排除，不是新增功能。
-
-# 第三方网关（用户指定）。实测 `GET /v1/models` 返回 200 且为 OpenAI 形态，
-# 列表里有 gpt-image-2 与 gpt-image-2-free，所以客户端复用 openai SDK。
+max_refine_per_media = 3  # 每张图片可受理的人工优化次数上限。
 provider = "inferera"
 base_url = "https://api.inferera.com/v1"
-
-# 同 [translate]：这里填的是**环境变量的名字**，不是密钥本身。
-# 密钥走 .env（已 gitignore）。本文件进版本库，密钥永远不能进。
-api_key_env = "IMAGE_API_KEY"
+api_key_env = "IMAGE_API_KEY"  # 环境变量名，非密钥。
 model = "gpt-image-2"
 
-# ⛔ 三条会让请求直接失败的约定（实测得来，不要照 SDK 签名猜）：
-#
-# 1. **代码不得发送 input_fidelity。** gpt-image-2 强制高保真处理参考图，
-#    已取消这个参数，传了返回 400。
-#    ⚠️ 本机 openai 3.6.0 的 images.edit() 签名里**有**它，docstring 还写着
-#    "supported for gpt-image-1.5 and later models" —— 那句话对 gpt-image-2 是错的。
-#    看到签名就想加回去是很自然的反应，**加回去的那一刻整组请求全部 400**。
-#
-# 2. **quality 必须显式给 low/medium/high，不要 auto。** auto 会让计费不可预测。
-#    ⚠️ **用户 2026-08-31 拍板选 high**，我原本建议 medium（便宜 4 倍）。
-#    这是业务取舍，代码不替用户改 —— 与 [translate].reasoning_effort 那条同源。
-#    单张 1024² 输出：high ≈ $0.211、medium ≈ $0.053，输入另加 ≈ $0.008。
-#    按当前范围（不补发历史、只跟增量）实际支出很小，见下：
-#      · 最新 3 篇验收 ≈ 10 张 ≈ US$2.2
-#      · 上线后每天 ≈ 5 张 ≈ US$1.1/天 ≈ US$33/月
-#      · 全量 818 张 ≈ US$179（**用户已定不补发，不要跑这个**）
-#
-# 3. **不得把原图宽高直接当 size。** 边长必须是 16 的倍数、宽高比 ≤3:1、
-#    总像素 655,360–8,294,400、边 ≤3840。而归档实测（818 个图片文件）：
-#    1080×1080（318 张）与 1080×1350（100 张）都不是 16 的倍数，
-#    720×720（12 张）总像素低于下限。**一半以上的图会 400。**
-#    一律走 legal_size()（K2），它有自己的单元测试。
-quality = "high"
+quality = "high"  # low | medium | high；不使用 auto。
 output_format = "jpeg"
+timeout_seconds = 720
+max_retries = 2
+request_gap_seconds = 2.0
+incremental_since = "2026-08-31T00:00:00Z"  # 默认处理边界；补历史须显式确认费用。
+cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }  # 估算费率，实际费用以网关账单为准。
+dhash_max_distance = -1  # -1 只记录不拦截；启用阈值前须用业务样本标定，不许拍脑袋。
+aspect_drift_warn_percent = 2.0  # 宽高比偏差百分比；仅告警。按 818 张真实归档标定过。
+scale_warn_factor = 1.25  # 线性放大倍数；仅告警。
+failure_budget = 3  # 连续失败次数，达到后停止本批。
 
-# ⚠️ **用户 2026-08-31 决定不做预扫描**（原计划 K3：先用便宜视觉模型读一遍
-# "这张图里有哪些英文"），改为直接靠 gpt-image-2 自带的视觉能力。
-# **这个决定有两个后果，写在这里免得以后当成 bug 去查：**
-#   1. **没有"这张图有没有文字"的闸**，所有配图一律送进 edits。
-#      无文字的产品图也会被付费处理一次（当前范围下总额很小，可接受）。
-#   2. **"德语文字正确"这条验收完全落到人工**：机器不再知道原图上有哪些英文，
-#      也就无法自动回答"有没有漏改"。K8 的审校清单因此是唯一的验收关口。
-# 要恢复预扫描的话，K3 的设计在 git 历史里：git show b491edc -- docs （整理前的全部文档）
-
-timeout_seconds = 720              # 供应商提示可能超过 5 分钟，预留 12 分钟
-max_retries = 2                    # SDK 自带指数退避
-request_gap_seconds = 2.0          # 相邻两次调用的最小间隔
-
-# 默认只处理自动图片德语化立项之后的新帖，避免首次运行把 818 张历史图全送去付费。
-# K9 验收用 `--latest-posts 3` 显式选最新三篇；未来若业务重新决定补历史，
-# 还必须同时传 `--all-history --confirm-all-history-cost`，不能靠误双击触发。
-incremental_since = "2026-08-31T00:00:00Z"
-
-# 费率（核对日期 2026-08-31，OpenAI 上游价；**中转网关通常有加价**，
-# 真实账单以 inferera 控制台为准）。这张表只用来算量级和"要不要跑"。
-cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }
-
-# 结构相似度闸（K5）：原图与产出图的 dHash 汉明距离超过它就判"模型整张重画了"。
-# 用户那条验收标准「产品外观未被改动」在机器侧就落在这一项上。
-#
-# ⚠️ **-1 = 关闭，只记录不拦截。现在必须是 -1。**
-# 项目已经立过规矩：阈值在真实数据上标定，不许拍脑袋（[integrity] 那几个值
-# 因为拍脑袋改过两次）。做法：第一批 20 张跑完后把 20 对 (原图,产出图) 的
-# 距离分布打出来，人眼判定哪些是"只改了字"、哪些是"重画了"，再定这个数。
-dhash_max_distance = -1
-
-# 形变告警：legal_size() 换算后与原图宽高比的偏差超过这个百分比就进人工清单。
-# 不是失败——1080×1350→1088×1360 是零形变，1440×1080→1440×1088 有 0.7%，
-# 都可接受；这道线是为了让真正离谱的那种被看见。
-#
-# ✅ **已在真实归档上标定过，不要凭感觉改**（CR-54，2026-08-31）：
-#    对全部 818 张归档图片跑 legal_size() 实测形变分布 ——
-#    中位 0.0000% / p95 0.653% / 最大 2.794%，**全档只有 3 张超过 2.0**。
-#    也就是说这道线每 270 张才响一次：既不吵，也不是死旋钮。
-aspect_drift_warn_percent = 2.0
-
-# 放大倍数告警（线性倍数，按面积开方）。超过它只提示、不拦截。
-#
-# ⚠️ **为什么形变告警不够**：等比放大的宽高比形变是 0，所以上面那道线
-#    抓不到"小图被放大"。而 legal_size() 为了过 655,360 像素下限**会放大小图**。
-#    实测（818 张）：772 张不缩放，13 张放大超过 1.3 倍，最极端的
-#    278×430 → 656×1008 放大了 **2.35 倍**，而它的形变只有 0.66%，
-#    在上面那道线下静默通过 —— 发出去的德语图就是一张 2.35 倍放大件。
-#    1.25 这个值命中 13/818（约 1.6%），量小到可以逐张人眼看。
-scale_warn_factor = 1.25
-
-# 连续失败多少张就停止本批（形状照抄 [delta].failure_budget）。
-# ⚠️ 单张失败**不再**掀掉整批（CR-53：旧实现把整个 openai.APIError 当致命，
-#    一次 429/超时、或某一张图被内容审核拒掉都会断掉剩余全部图片）。
-#    但连续失败说明问题不在单张素材上，继续跑只是重复烧钱。
-#    3 与 [delta].failure_budget 取同一个数，没有第二套心智模型。
-failure_budget = 3
-
-# ⚠️ TOML 语法要求：下面的子表必须放在 [image] 的**最后**，
-#    它下面的键都属于 keep_verbatim，不再属于 [image]。
-#    （[translate.glossary] 已经为这条规则写过一次警告。）
-
+# ⚠️ 同上：本子表必须是 [image] 的最后一段，[image] 的新标量键加在这一行之前。
 [image.keep_verbatim]
-# 图里出现这些字符串时**逐字符原样保留**，不得翻译、改写或重排版式。
-# 分类理由见 docs/HANDOFF.md 第 6 节；条目来自对 1057 条真实正文的词频统计，
-# **不是凭空想的**。括号里是语料出现次数。
-
-# ⚠️ 最危险的一类，放在最前面：优惠码是**任意字符串却长得像单词**，
-#    模型最容易顺手"翻译"掉。码错了 = 用户结账失败 = 直接的商业事故。
+# 图内逐字符保留；删除条目前须确认业务影响。
 promo_codes = ["P1MMCG", "NEAKACG", "SOCIAL05", "Q11", "PH5RIKO"]
-
-# 品牌名与商标。Neabot 是旧品牌名，语料里仍然出现。
 brands = ["Neakasa", "NEAKASA", "Neabot"]
-
-# 产品型号，含 Neakasa 与型号连写的形态（语料里两种写法都有）。
-# ⚠️ **这张表只能加，不能在"顺手整理"时减。** CR-51 就是这么丢的：
-#    2026-08-31 加 P1 Pro / Riko / RIKO 那一次，同一行把原有的 "S1 Pro" 删掉了，
-#    而它在语料里出现 10 篇。型号是标识符，漏一项没有任何机器能补
-#    （K3 预扫描已取消，机器不知道图上原本有哪些英文）。
-# 括号里是 1057 条真实正文的出现次数，改这一行前先重新统计，别凭印象。
 models = ["M1", "P1", "P1 Pro", "P1Pro", "P2", "S1", "S1 Pro", "S1Pro",
           "F1", "N3", "Magic1", "Riko", "RIKO",
           "NeakasaM1", "NeakasaP1Pro", "NeakasaF1", "NeakasaS1Pro", "NeakasaMagic1"]
-# 语料实测：P1 Pro(39) Riko(78) S1 Pro(10) S1Pro(10) RIKO(8) P1Pro(3)
-
-# 展会 / 活动名。
 events = ["CES", "IFA", "CES2025", "CES2026", "IFA2025", "IFA2026"]
-
-# 认证、合规与法律标记。
 marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
 
-# 下面几类没法穷举成词表，靠提示词按**规则**处理（见 prompts/image_de.md）：
-#   · 货币金额 —— 逐字符原样。与 prompts/translate_de.md 第 3 节同源同理由：
-#     德国站定价是商务决策，模型无从知道。图里出现 € 一律是错的。
-#   · 数值 + 单位 —— **图内一律不换算**（正文允许 inch→cm，图片不允许）。
-#     理由是可验证性不同：正文换算错了 review.md 两栏一对就看出来，
-#     图片是像素，错了只能靠人眼逐张看，而**没有人会逐张看 818 张图**。
-#   · **合作方水印 / 署名** —— 263 篇合作帖里 229 篇原作者是第三方创作者。
-#     改掉别人的水印比翻错严重得多，那是署名权。
-#   · @提及 / #标签 / URL / 二维码 / 条码 / 人名地名。
-
 [publish]
-ig_bio_url = ""  # 德国站稳定聚合页；业务配置后只读展示，空值不猜
-min_channel_gap_min = 90  # 同一目标渠道的排期间隔
-# ---- G 组：Business Suite 定时发布。真实 UI 见 docs/HANDOFF.md 第 6 节 ----
-# 当前范围：FB 来源只进入 FB DE，IG .global 来源只进入 IG DE，各自审校选期。
-# 旧双渠道记录保留防重；历史归档查询不自动翻译或补发。
-
-# DE 站的发布目标（用户 2026-08-31 提供）。
-#
-# ⚠️ **下面两个值的形态不一样，别混用。** 这个项目已经因为
-# "显示名 ≠ URL 账号名段"踩过一次坑（CR-12：FB 的 actors[0].name 是显示名
-# "Neakasa Official"，而 URL 里是 neakasaofficial，两者不相等）。
-#
-# FB 给的是**主页显示名**——Business Suite 的主页切换器里显示的就是它，
-# G2「确认选中的是不是对的 Page」要用的也是它。它**不能拼进 URL**
-# （中间有空格，facebook.com/Neakasa Deutschland 不是合法地址）。
-facebook_page_name = "Neakasa Deutschland"
-
-# FB 主页 URL 里的账号名段。**当前留空不阻塞发布**：G2 用显示名在
-# Business Suite 里认 Page，整条发布链路不需要拼 URL。
-# G1 探查时顺手从地址栏抄下来填上即可（只填账号名那一段，不带 https:// 和斜杠）。
-facebook_page_slug = ""
-
-# IG 这边用户给的就是 handle 形态，可直接拼 URL：instagram.com/<这里>
+ig_bio_url = ""  # 德国站聚合页，只读展示；不自动修改 bio。
+min_channel_gap_min = 90  # 同渠道排期间隔；冲突拒绝，不自动顺延。
+facebook_page_name = "Neakasa Deutschland"  # 主页显示名，用于 Business Suite 账号核验。
+facebook_page_slug = ""  # 主页 URL 账号名段；可留空，不用于账号核验。
 instagram_account = "neakasa.de"
-
-# ⚠️ **发布必须用独立的 Chrome profile，这是红线不是优化项。**
-# 抓取小号被封是本项目唯一不可恢复的失败模式（回填与增量会同时断掉）。
-# 把持有 DE 发布权的账号和抓取小号放进同一个浏览器指纹里，等于把两件事绑成一件。
-# 三个独立角色分别为 [chrome] 回填、[detect] 监测和 [publish] 发布，端口/profile 不可混用。
-profile_dir = "~/.fbscraper-publish"
+profile_dir = "~/.fbscraper-publish"  # 发布会话；与回填、监测隔离。
 debug_port = 9223
-
-# 德国受众的业务排期时区。Business Suite UI 按下方 ``ui_timezone``（本机）
-# 显示，代码必须显式转换并**回读 UI 上显示的时间比对**（G5）。
-# ⚠️ 每年两次夏令时切换日是最容易出错的，G5 的验收专门要测那两天。
-timezone = "Europe/Berlin"
-
-# ⚠️ 定时窗口没有配置项，这是刻意的。2026-09-01 用户在真实 composer 上量到：
-#   下限 = 当前时刻（没有最小提前量）；上限 = **本月最后一天**（日期选择器不允许跨月）。
-# 上限是一个**日历边界**而不是固定时长，用一个数表达不了：9/1 排期最远 29 天，
-# 9/28 排期只剩 2 天。真正的判据是 `publish/compose.py::_validate_schedule`
-# 里那道"必须落在同一自然月"的闸。曾经这里有两个 schedule_*_ahead 键，
-# 代码从未读过它们（2026-09-02 删除）——留一个改了不生效的旋钮比没有更糟。
-
-# 只有完成 G1、人工复核真实 dump 与四类 IG/UI 限制后才能改 true 并填路径。
-# 严格组装会解析这份 dump、核对 9223/profile/交互/截图/观察与注入数值；
-# 显式 `--submit` 会强制走这道严格组装，因此上面两个 API 占位值不会被拿来给
-# Business Suite 真实发布放行。
-#
-# ✅ 2026-09-01：ui_probe_dump 已填。那份 dump 是首份完整通过 v2 契约的录制
-#    （56 交互 / 71 快照 / 117 截图），G6/G6c 的五件验收证据已由
-#    `tools/probe_signals.py --emit` 从它机械推导并逐条回查，
-#    落在 `publish/signals_backfilled.py`。判读见 docs/HANDOFF.md 第 6 节。
-#
-# ✅ **2026-09-01：14 个 UI 上限已由用户在真实 composer 上量完并回填**，
-#    20 个观察项现在全满，所以这一位改成了 true。实测值（原文见 dump 的
-#    observations，判读见 docs/HANDOFF.md 第 5.4 节）：
-#      图片数 ≤ 10 · 画幅 4:5 ~ 1.91:1 · 正文 ≤ 2200 · 标签 ≤ 30
-#      定时下限 = 当前时刻 · 定时上限 = **本月最后一天（不能跨月）**
-#
-# ⚠️ **正文计数方式取的是 utf8_bytes，这是一个刻意保守的选择，不是实测值。**
-#    UI 报错只说 "characters"，而 emoji 到底算 1 / 2 / 4 无法从界面确定。
-#    utf8_bytes 对任何字符串都 ≥ 另外两种算法，所以它只可能**多拦**、
-#    不可能漏放。用户判断真实正文远达不到 2200，代价为零。
-#    真要精确化，去 composer 粘一串 emoji 看计数器跳几，再改这一项。
-#
-# ⛔ 换了 dump 就要把这一位改回 false 重新量：这一位签的是
-#    "上面那份 dump 里的观察项有人亲眼看过"，不是"这个项目量过一次"。
-ui_constraints_verified = true
-ui_probe_dump = "publish_probe_20260901_054226_378622.json"
-
-# ✅ **用户 2026-09-01 实测确认：Business Suite 上那个时刻跟发帖者设备的
-#    本机时间走**（不是 Page 的时区设置，也不是受众所在时区）。
-#
-# 所以这一项 = **这台机器的时区**。当前机器是 Pacific（Windows 显示
-# "(UTC-08:00) Pacific Time (US & Canada)"），IANA 名即下面这个。
-#
-# 上面的 `timezone` 是「我们想让德国受众在几点看到」，这一项是「UI 认哪个时区」，
-# **两者本来就不一样**，代码显式换算，不靠本机时区隐式生效。
-#
-# ⚠️ **换机器、或者改了 Windows 时区，就必须改这里。**
-# `publish/business_suite.py` 会在每次排期前核对这一项与本机在**目标时刻**的
-# 偏移是否一致，对不上直接失败闭合 —— 因为这类错只表现为「帖子早/晚一小时
-# 发出去」，没有人会立刻发现。
-#
-# ⚠️ **不要自己心算时差。** 柏林与本机的夏令时切换日**不是同一天**
-# （2026：柏林 03-29 / 10-25，本机 03-08 / 11-01），
-# 于是一年里有两段约一周的窗口时差从 9 小时变成 8 小时
-# （2026-10-25~11-01、2027-03-14~03-28）。手算必然在那两段里错。
-ui_timezone = "America/Los_Angeles"
-
-# UI 操作的通用超时（秒）。⚠️ **这个数没有在真机上标定过。**
-# CR-63 的教训：profile 归属核对写了 5 秒而本机实际要 7–9 秒，于是每次都超时，
-# 一个完全正确的环境被报成"你开错了浏览器"。所以这里宁可偏大——
-# 偏大只是慢，偏小是把对的环境判成错的。真机跑过之后按实测调。
+timezone = "Europe/Berlin"  # 运营选择的业务时区。
+ui_constraints_verified = false  # 绑定下方 dump；更换证据后须重新核验。
+ui_probe_dump = ""  # 人工复核的控件证据路径；操作见 docs/MANUAL_STEPS.md。
+ui_timezone = "America/Los_Angeles"  # Business Suite 所在设备时区，换设备或时区时须核对。
 ui_timeout_seconds = 30
+require_confirmation = true  # 提交前确认最终内容。
+require_all_media_de = true  # 缺德语图时拒绝发布。
 
-# ⚠️ **自动发布到品牌主页是不可回滚的对外行为。**
-# 抓错了可以重抓、译错了可以重译，**发出去了只能删帖，而删帖在粉丝侧是可见的**。
-# true = 程序把待发清单（原作者 / 译文 / 图 / 排期时刻）打出来，人点头才提交。
-# 想全自动改成 false 即可。建议至少前几周保留 —— 理由和 C7 那七条一样：
-# 这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
-require_confirmation = true
-
-# 缺少德语图时在离线组装阶段拒绝发布；显式 false 才允许带警告回退原图。
-require_all_media_de = true
-
-# ⚠️ **[publish] 的新标量键请加在这一行之前。**
-# L 组会往本段末尾加三个子表（price_map / trusted_owners / schedule_rule），
-# TOML 规则要求子表必须在段的最后 —— 子表头之后的键会全部归属子表，
-# 不再属于 [publish]。[translate.glossary] 已经为这条规则写过一次警告。
-
+# ⚠️ 以下三个子表必须留在 [publish] 末尾。[publish] 的新标量键加在这一行之前，写到子表头之后会静默归给子表。
 [publish.link_map]
-# 英文落地页到德国站落地页的业务映射；Web 只读，单篇可确认覆盖。
 
 [publish.price_map]
-# 金额必须先由业务明确映射，assisted 才会花钱处理该帖。
-#
-# ✅ **2026-09-01 用户决定：带美元符号的金额暂时不换算、不改符号，原样发布。**
-#    所以下面 46 行全部是**恒等映射**（左右一模一样）——
-#    `apply_money_mapping` 照常替换，只是替换成它自己，正文一个字节都不变。
-#
-# ⚠️ **恒等映射不等于"这道闸没用了"，它换掉的是闸的含义**：
-#      改之前：这道闸挡住"没人决定过德国站卖多少钱"的帖；
-#      改之后：这道闸挡住**归档里没出现过的新金额串**。
-#    也就是说，**新价格第一次出现时仍然会停下来问人**，
-#    而已经过目的这 46 种直接放行。这条性质要保住 —— 它是把人工从
-#    "每篇一次"降到"每个新价格一次"的那个装置。
-#
-# ⛔ **不要为了省事写成通配或者把闸关掉。** 真到了要换德国站定价那天，
-#    改法就是把右边换成 "219,99 €" 这种，左边不动。
-#
-# 想知道现在还缺哪些金额串：`python pipeline.py preflight --days 180`
-# 会直接按 TOML 格式把缺的行打出来。
-#
-# 下面 46 种覆盖了全部**可发帖**（有正文 + 至少 1 张已下载的图）里出现的金额，
-# 共 136 处。按出现频次降序。
+# 业务确认的金额映射；未列出的新金额仍需确认。
 "$100" = "$100"
 "$5" = "$5"
 "$20" = "$20"
@@ -507,116 +178,56 @@ require_all_media_de = true
 "5$" = "5$"
 
 [publish.trusted_owners]
-# 目标账号自己的原创允许自动进入付费阶段；合作作者默认一律待人工确认。
-#
-# ✅ 2026-09-01：用户确认 **@neakasa.global 的二次使用授权已覆盖**，加入白名单。
-#    实测这一条覆盖最近 90 天全部 12 篇被 unknown_collaborator 拦下的帖。
-#
-# ⛔ **不要顺手把第三方创作者（宠物 UGC 账号）也加进来。**
-#    归档里有 229 篇原作者是第三方创作者，那类每篇都该有人看一眼 ——
-#    这道闸就是为它们留的。加进来等于把闸拆了。
-#    判断依据：`neakasa.*` 是自家品牌账号；其余一律逐个确认授权后再加。
+# 允许进入付费处理的来源；第三方作者须确认授权。
 facebook = ["neakasaofficial"]
 instagram = ["neakasa.tech", "neakasa.global"]
 
 [publish.schedule_rule]
-# 柏林当地时间的常用候选，运营可在设置页修改；并非只能选这些时刻。
-# 实际选期受实测月份窗口及同渠道90分钟间隔约束，提交前再次读取远端占用。
-times = ["10:00", "17:00"]
+times = ["10:00", "17:00"]  # 柏林默认候选；可选其它合法时刻。
 
 [pipeline]
-# ---- 流水线编排与自治级别。五阶段现状见 docs/REQUIREMENTS.md 第 10 节 ----
-# 2026-09-01 起由 pipeline run 全量消费。manual 只对账；assisted 会在每个
-# 付费请求前后按真实 usage 检查预算，并生成待确认项，但不会自行打开发布浏览器。
-
-# 自治级别。**不要在"全手动"和"全自动"之间二选一** ——
-# 这个项目的风险是不对称的：抓取被封不可恢复、发布不可回滚，
-# 而翻译和调图错了只是重跑。所以按阶段分别放开。
-#
-#   manual      只做本地对账，不触发增量/翻译/调图/发布
-#   assisted    在既有激活边界、付费许可与预算内处理新帖；逐篇人工审校和选期
-#   supervised / autonomous  保留名称以识别旧配置，本轮不开放无人审核发布
-#
-# 固定路径：先通过 G8 并 activate，再切 assisted；计划任务仍由用户显式安装。
-# supervised / autonomous 本轮故意失败闭合。
-# ⚠️ 不建议直接跳到 autonomous。理由和 [delta] 那七条缓解措施一样：
-#    这类风险的反馈是延迟的，而且第一次通常就是最贵的那次。
-autonomy = "assisted"
-
-# ---- 业务长时间未成功的本机告警 ----
-# core/integrity.py 检查的是「**账号**有没有在发新帖」，
-# check-alive 根据业务成功记录判断；常驻进程状态另行展示。
-# 电脑断电时本机任务也不能告警，需要 [heartbeat] 外部服务检测缺席。
-#
-# 超过这个天数没有一次成功的 pipeline run 就告警。
-# 3 天：留出周末合盖不开机的余量，又不至于让故障潜伏一周。
-dead_man_days = 3
-
-# ---- 成本闸 ----
-# 自动化意味着没人盯着，所以预算必须是硬的：超了停下来问，不是继续跑。
-# 按近 90 天实测节奏（5.2 篇/周、11.9 图/周）估：
-#   翻译 ≈ US$1/月 ＋ 图片 high 档 ≈ US$33/月 ＝ 约 US$34/月。
-# 设 60 是给新品发布、活动周这类波动留余量。
-#
-# ⚠️ **账单必须按真实 usage 外推，不许按字符数或张数猜。**
-# CR-40 的教训：F 组按字符估给出 US$1.08–5.41，真实是 US$23.73，
-# 低估一个数量级 —— 漏掉了主导项。两个阶段的真实 usage 都逐条写在
-# paid_requests.jsonl 里；旧业务 usage 只用于兼容历史统计，不能隐藏新失败请求费用。
-monthly_budget_usd = 60
+autonomy = "assisted"  # manual 仅对账；assisted 按许可和预算处理，逐篇人工审校。
+dead_man_days = 3  # 业务连续未成功的告警阈值，不代表进程存活。
+monthly_budget_usd = 60  # 按付费请求账本计费，超预算停止。
 daily_budget_usd = 5
 
 [paths]
 archive = "archive"
 state = "state"
-# 审校台静态构建目录，相对于项目根目录。
-web_dist = "web/ui/dist"
+web_dist = "web/ui/dist"  # 相对于项目根目录。
 
 [review]
-# 「挂起」默认到期几个上海工作日后回到待审列表（按周一至周五数，不猜调休）。
-# 3 是定下来的：比「明天」长，够她真的去把事情问清楚；比「一周」短，
-# 不至于忘了这回事 —— 带到期提醒的挂起不是死信箱，它会自己回来。
-# 这是 REQUIREMENTS 第 5.3 节二分里的「运营」类参数，可以改；
-# API 与界面中的默认值只是兜底，
-# 真正生效的是这里。
-snooze_default_days = 3
+snooze_default_days = 3  # 上海工作日，按周一至周五计。
 
 [feishu]
-# 管理员批准自建应用、配置两个接收组及可访问的审校台地址后再启用。
-# 密钥仅从 FEISHU_APP_ID / FEISHU_APP_SECRET 环境变量读取。
 enabled = false
-base_url = ""
-recipients = []
-technical_recipients = []
-# 终态记录保留 30 天后归档；未确认投递和待发送内容继续保留。
-keep_delivered_days = 30
+base_url = ""  # 运营可访问的审校台地址。
+recipients = []  # 业务接收组。
+technical_recipients = []  # 技术告警接收组。
+keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 
 [mirror]
-# 只向已授权的云盘目录创建不可覆盖快照；绝不从云盘回填本地。
-# 使用 FEISHU_APP_ID / FEISHU_APP_SECRET；获得目录写入权限后再启用。
+# 本地到云盘的单向版本镜像。
 enabled = false
 root_folder_token = ""
 mirror_state = true
 state_interval_minutes = 60
 
 [heartbeat]
-# 外部服务负责发现缺席并告警；地址中的匿名凭据只放环境变量。
 enabled = false
-url_env = "HEARTBEAT_URL"
+url_env = "HEARTBEAT_URL"  # 心跳地址的环境变量名；缺席告警由外部服务负责。
 interval_minutes = 5
 timeout_seconds = 3
-# 模型、采样和投递已移出监测主循环。此阈值衡量外部心跳缺席，
-# 不用它冒充内容处理成功，也不把单篇预算当作整批耗时。
-stale_after_minutes = 45
+stale_after_minutes = 45  # 外部心跳缺席阈值，不代表内容处理成功。
 
 [calendar]
-# 核验发布浏览器的完整月历读取后再启用；刷新争用同一把发布锁，繁忙时跳过。
+# 刷新前核验发布会话，读取与发布共用锁。
 enabled = false
 refresh_minutes = 60
 
 [network_evidence]
-# IPINFO_TOKEN 仅从环境变量读取。Lite 提供 IP/ASN，类型未知；Core 需相应服务权限。
 enabled = false
-tier = "lite"
+tier = "lite"  # lite 提供 IP/ASN；类型未知。
 interval_minutes = 60
 history_size = 20
 timeout_seconds = 3

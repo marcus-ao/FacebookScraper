@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 from core import paid_requests as P
 from core.console import force_utf8
 from pipeline import engine as A
-import translate as T
+from localize import text as T
 
 force_utf8()
 fails = []
@@ -63,8 +63,7 @@ with tempfile.TemporaryDirectory() as folder:
     check(not snapshot.unknown and abs(snapshot.daily_usd - .25) < 1e-9,
           "独立账本按响应 usage 计费，不依赖业务产物是否可读")
 
-    # 产出硬闸失败仍保留费用。同一 job 允许有界重试（模型偶发抖动和"提示词
-    # 真的有问题"长得一样），但用满预算就停——反复重跑只是重复扣费碰运气。
+    # 产出拒绝仍计费，同一任务仅允许有界重试。
     def reject_once(key="job-rejected"):
         _, receipt = controller.run(
             stage="translation", job_key=key,

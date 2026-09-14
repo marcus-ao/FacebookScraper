@@ -9,15 +9,7 @@ const KINDS: readonly ConflictKind[] = ['draft', 'tags', 'settings', 'schedule']
 const html = (kind: ConflictKind) =>
   renderToStaticMarkup(<ConflictRecovery kind={kind} onRecover={vi.fn()} />)
 
-/**
- * 这一组的全部意义：**运营看到的 409 不许长得像 409。**
- *
- * 后端的 409 表示"版本/锁/许可/能力冲突"（web/DESIGN.md）。
- * 对她来说这句话零信息量，而她需要知道的只有两件事：
- * 她的修改还在，以及按哪个按钮能继续。
- */
 
-/** 一个都不许出现在界面上的词。 */
 const ENGINEERING_TERMS = [
   '409',
   'HTTP',
@@ -77,10 +69,8 @@ describe('说清两件事：修改还在，以及下一步按什么', () => {
   })
 
   it('恢复文案沿用她已经认识的说法', () => {
-    // 恢复动作使用与冲突类型对应的明确文案。
     expect(CONFLICT_COPY.tags.action).toBe('载入最新分类')
     expect(CONFLICT_COPY.schedule.action).toBe('刷新状态，保留填写内容')
-    // DESIGN.md 指定的那一句。
     expect(CONFLICT_COPY.draft.action).toBe('载入最新内容并保留我的修改')
   })
 })
@@ -109,7 +99,6 @@ describe('形态', () => {
   })
 
   it('组件只负责展示，恢复动作由业务 feature 给', () => {
-    // 它不知道"载入最新"具体做什么 —— 不同冲突的恢复完全不同。
     const onRecover = vi.fn()
     renderToStaticMarkup(<ConflictRecovery kind="draft" onRecover={onRecover} />)
     expect(onRecover).not.toHaveBeenCalled()

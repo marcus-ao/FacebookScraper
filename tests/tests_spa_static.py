@@ -1,27 +1,4 @@
-"""前端静态产物的部署契约：深链接刷新必须还在，而且不能吞掉真正的 404。
-
-这一份守的是一个**部署级**缺陷，不是某个组件。
-
-React 使用真实路径（``/review``、``/calendar``、``/review/<账号>/<帖子>``）。
-裸的 ``StaticFiles`` 找不到同名文件就是 404，于是侧栏点着能走，
-**一按 F5、一个收藏、一条粘给同事的链接，
-页面就只剩一行** ``{"detail":"Not Found"}``。而「刷新详情页仍知道第 n / N 篇」
-「返回列表恢复原筛选」正是路由部署契约必须守住的行为。
-
-⛔ 这一条浏览器回归照不出来：``tests/browser_fixture.py`` 配套的 UIFixture 在
-   Playwright 那一侧拦路由，找不到文件自己就回落 index.html —— **它自带 SPA 回落**。
-   所以浏览器场景全绿证明的是前端逻辑对，不是这个部署形状立得住。
-   这就是为什么这份契约必须留在普通 Python 测试里：以后有人换掉 StaticFiles、
-   改 mount 顺序、升级 Starlette、或者「简化」SinglePageFiles，
-   只要把深链接刷新再弄坏，跑一次测试就当场红。
-
-用的是临时 dist + 临时 config，**不读 web/ui/dist 的当前内容** ——
-否则这份测试会随着谁有没有构建过前端而飘。
-
-临时目录落在仓库之内（``state/``，已 gitignore）：``web/api/app.py`` 的 ``_dist_dir()``
-只接受 ROOT 之内的目录，那条限制本身就是安全规则（这个路径会被直接伺服），
-不能为了测试绕开它。
-"""
+"""通过临时 FastAPI 配置与 dist 验证深链接及 404，不依赖浏览器夹具的路由回落。"""
 import json
 import re
 import shutil
@@ -38,13 +15,7 @@ from core import config
 HTML = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
 INDEX_MARKER = "<!doctype html><title>SPA fixture</title><div id=root></div>"
 
-#: 前端路由拥有的路径。刷新这些里的任何一个都必须拿到 index.html。
-#:
-#: ⚠️ ``in_neakasa.tech`` 那两条不是凑数的：回落的判据之一是「路径带扩展名就当成
-#: 静态资源」，而真实账号名里就带点（归档里那个冻结账号就叫这个）。判扩展名时
-#: 只看最后一段，所以 ``/review/in_neakasa.tech/9000000030`` 仍然会回落 ——
-#: 这条要钉死，不然哪天有人把判据改成「整条路径里有点就算资源」，
-#: 冻结账号的详情页会单独失效，而且只在那一个账号上失效。
+# 账号名可含点，扩展名判断只看路径末段。
 SPA_ROUTES = ["/", "/review", "/history", "/calendar", "/settings", "/runtime",
               "/review/fa_account/123", "/history/fa_account/123",
               "/review/in_neakasa.tech/9000000030", "/history/in_neakasa.tech/9000000030"]
@@ -80,8 +51,7 @@ def setUpModule():
 
     _patch = patch.object(config, "_cfg", config.Config(cfg_path, runtime_path=runtime))
     _patch.start()
-    # ⚠️ 必须在打上 config 之后再 import：DIST 与 mount 都是 import 时就定死的
-    # （换 web_dist 后也需要「改配置 + 重启进程」）。
+    # 先替换配置再导入，静态目录在导入时确定。
     from fastapi.testclient import TestClient
     from web.api.app import DIST, app
 
@@ -129,8 +99,7 @@ class StaticAssetTests(unittest.TestCase):
         self.assertIn("built", response.text)
 
     def test_missing_asset_stays_404_even_when_the_client_accepts_html(self):
-        # 回落会让浏览器拿到一页 HTML，然后报一个看不懂的 MIME 错 ——
-        # 真正的问题（产物没构建/没拷过去）反而被藏住。
+        # 缺资源须返回 404，不能用 HTML 回落掩盖。
         response = _client.get("/assets/does-not-exist.js", headers=HTML)
         self.assertEqual(response.status_code, 404)
         self.assertNotIn(INDEX_MARKER, response.text)
@@ -187,7 +156,6 @@ class MethodAndPathSafetyTests(unittest.TestCase):
     """Case 5 与安全边界。断言的是实测到的行为，不是猜的。"""
 
     def test_head_on_a_front_end_route_matches_the_get(self):
-        # 实测：Starlette 对 HEAD 走同一条回落，回 200 + text/html，body 为空。
         response = _client.head("/review", headers=HTML)
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
@@ -200,8 +168,7 @@ class MethodAndPathSafetyTests(unittest.TestCase):
         self.assertEqual(response.content, b"")
 
     def test_wrong_method_is_405_not_the_app_shell(self):
-        # ⛔ 写方法打到前端路径上是调用方写错了，必须直说 —— 回一页 HTML
-        # 会让对面以为请求成功了。
+        # 前端路径不接受写方法。
         for method in ["POST", "PUT", "DELETE", "PATCH"]:
             with self.subTest(method=method):
                 response = _client.request(method, "/review", headers=HTML)
@@ -209,8 +176,7 @@ class MethodAndPathSafetyTests(unittest.TestCase):
                 self.assertNotIn(INDEX_MARKER, response.text)
 
     def test_path_traversal_is_still_refused_by_staticfiles(self):
-        # 回落没有绕开 StaticFiles 自己的路径检查：越界的请求拿不到仓库里的文件，
-        # 也拿不到 index.html 之外的任何东西。
+        # SPA 回落仍须满足静态路径边界。
         for path in ["/../config.toml", "/%2e%2e/config.toml",
                      "/assets/../../config.toml", "/....//config.toml"]:
             with self.subTest(path=path):

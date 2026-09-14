@@ -12,17 +12,7 @@ import { taskKey } from '@/hooks/useTasks'
 import type { TaskDetail } from '@/types/domain'
 import detailFixture from '@/types/__fixtures__/task-detail-active.json'
 
-/**
- * 详情三个标签页的**挂载时机**。
- *
- * 这是本轮复核修掉的一处：原实现把图片工作区常驻在 `hidden` 容器里，于是每打开
- * 一篇详情、哪怕运营只看正文，也会先把当前这张的原图和德语图各拉一次
- * （图片响应是 `Cache-Control: no-cache`，每次都是真实往返）；而话题标签页反过来
- * 用条件渲染，切一下正文就把已经付费生成的标签建议整块卸载掉。
- *
- * 这里只验第一次渲染时谁在 DOM 里 —— 这一条 SSR 就能答。"打开过之后要一直留着"
- * 需要真实交互，由 tests/review_probe.py 在 Playwright 里守。
- */
+/** SSR 检查首次挂载；打开后保留内容由浏览器测试覆盖。 */
 const detail = detailFixture as unknown as TaskDetail
 const [account, postId] = detail.id.split('/') as [string, string]
 

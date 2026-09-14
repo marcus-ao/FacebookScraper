@@ -1,20 +1,4 @@
-r"""Business Suite 定位的**词汇表**：三个数据类 + 界面常量 + 名值归一化。
-
-这里只有"一条定位长什么样"，没有"有哪些定位"。两者分开是为了打断一条环：
-
-    selectors.py  ──尾部 try-import──▶  signals_backfilled.py
-         ▲                                       │
-         └───────── from publish.selectors ──────┘
-
-`signals_backfilled.py` 是 `tools/_scaffolding/probe_signals.py --emit` 机械
-生成的**数据**文件，它只需要 :class:`Locator` / :class:`EvidenceSignal` 两个
-形状，却因此要 import 那个正在加载它的注册表。能跑，是因为 selectors.py 把
-三个类定义在文件上半部分 —— **文件内的定义顺序成了承重结构**，谁把类挪到
-文件末尾谁就炸。
-
-所以词汇表下沉到这里：生成的数据文件依赖形状，注册表也依赖形状，
-但**数据文件不再依赖注册表**。
-"""
+"""定位与证据的数据类型；独立于注册表，供生成文件复用。"""
 import re
 from dataclasses import dataclass, field
 
@@ -51,27 +35,19 @@ COMPOSER_URL = "https://business.facebook.com/latest/composer/"
 
 @dataclass(frozen=True)
 class Locator:
-    """一条**有据可查**的定位。
-
-    字段的意义就是 PUBLISH_PLAN 第 3.4 节那条【验收】的三问：
-    对应哪一步（``step``）、从哪份 dump 得来（``source_dump`` / ``sequences``）、
-    什么信号说明它失效了（``breaks_when``）。
-    """
+    """携带步骤、来源 dump、交互序号及失效条件的定位。"""
 
     key: str
     step: str
     surface: str
     role: str
     name: str
-    #: dump 里 ``accessible_name_source`` 的原值：aria-label / visible-text /
-    #: aria-labelledby。**visible-text 来源的名字最脆**——它跟着界面语言走，
-    #: 发布账号一旦切到德语界面就会全部失配（见 breaks_when）。
+    # 可访问名来源；visible-text 会随界面语言变化。
     name_source: str
     source_dump: str
     sequences: tuple[int, ...]
     breaks_when: str
-    #: 相对 dump 做过的推广，没有就留空。**有值就等于"这一条不是纯抄录"**，
-    #: 必须在这里说清推广了什么、凭什么。
+    # 相对录证的推广及依据；原样抄录时留空。
     inferred: str = ""
     #: 该元素在 dump 里还带着的其它稳定属性，回查与排障用。
     attributes: dict[str, str] = field(default_factory=dict)
@@ -79,22 +55,14 @@ class Locator:
     evidence_kind: str = "interaction"
 
     def match(self) -> tuple[str, bool]:
-        """返回 ``get_by_role(name=…, exact=…)`` 要用的 (字符串, 是否精确)。
-
-        可访问名里带零宽空格时**自动退成子串匹配**：Playwright 的名字比较
-        只归一化常规空白，``​`` 会被原样留下，精确匹配必然失配。
-        """
+        """返回 (name, exact)；零宽空格名称退为子串匹配。"""
         cleaned = self.name.replace(ZERO_WIDTH_SPACE, "").strip()
         return (cleaned, False) if cleaned != self.name else (self.name, True)
 
 
 @dataclass(frozen=True)
 class EvidenceSignal:
-    """提交后成功/日历回读信号；同样必须能逐条回查到 v2 dump。
-
-    ``kind=semantic`` 使用 role + name；``kind=url`` 使用已经去掉查询参数的
-    URL 前缀。当前表故意为空：用户还没有提供新版完整提交 dump。
-    """
+    """可回查的信号：semantic 使用 role/name，url 使用去查询参数的 URL 前缀。"""
 
     key: str
     step: str
@@ -119,11 +87,7 @@ class EvidenceSignal:
 
 @dataclass(frozen=True)
 class Gap:
-    """G1 **没有**录到的东西。
-
-    这个类存在的唯一理由：让"还没测出来"变成代码里**看得见、拦得住**的东西。
-    这个项目已经为同型失效吃过亏——"没跑"和"跑了但没事做"输出上一模一样。
-    """
+    """尚缺录证的控件及其阻塞范围。"""
 
     key: str
     step: str

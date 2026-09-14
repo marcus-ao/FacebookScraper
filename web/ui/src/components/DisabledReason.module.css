@@ -2,6 +2,5 @@
 .wrap {
   display: inline-flex;
   cursor: not-allowed;
-  /* 焦点停在这一层时，焦点环要跟里面那个按钮同一个圆角。 */
   border-radius: var(--rc-radius);
 }

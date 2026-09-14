@@ -1,8 +1,4 @@
-"""仅供界面展示的可重建 SQLite 索引；业务决定始终读取源文件。
-
-唯一写入口 rebuild_index 从帖子文件夹及各追加账本派生完整数据库，成功后原子替换。
-抓取、翻译、图片、流水线与发布不得依赖此模块，hygiene 对导入边界做机器检查。
-"""
+"""从源文件原子重建展示用 SQLite 索引；业务写入不依赖索引。"""
 from __future__ import annotations
 
 import json
@@ -19,21 +15,7 @@ from core.store import (ArchivePathError, _archive_row_error, _post_quality_rank
 
 
 def display_account_dirs(archive_root: Path, *, include_frozen: bool = False) -> list[Path]:
-    """展示索引覆盖的账号：只有 `[targets]` 里当前在跑的那两个。
-
-    ⛔ **这是唯一一处定义。** `web/api/query_index.py` 算源文件指纹时也用它 ——
-    两边各枚举一遍的话，CLI `reindex-db` 建出的 DB 会和 Web 期望的不是同一份，
-    指纹永远对不上，于是每个列表请求都触发一次全量重建。
-
-    为什么不是全部账号：冻结的 `in_neakasa.tech` 有 1,020 篇，它只读、不进流水线，
-    **审校台列表永远显示不到它**。实测一次冷路径 `GET /api/tasks` 7.24 秒、
-    列表却是空的，成本就在这 1,020 篇上：`_display_rows` 每篇调一次
-    `review.state_for`（各重读一遍整个审校账本，1,067 次共 1.75 秒），
-    指纹那趟再 stat 一遍每篇 `post.json`。
-
-    判据与 `pipeline.engine.active_account_dirs` 是同一条（`Config.active_accounts`），
-    但这里不能 import pipeline —— `tests_hygiene.py` 第 6 条的分层不允许 core 往上够。
-    """
+    """枚举当前目标账号，供索引重建与 Web 指纹计算共用；冻结历史另行查询。"""
     archive_root = Path(archive_root)
     if not archive_root.exists():
         return []

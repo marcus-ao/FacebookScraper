@@ -58,7 +58,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
     <Modal title="登记已送达" open={!!delivery} okText="登记已送达" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: !messageId.trim() }} onCancel={() => { if (!busy) setDelivery(null) }} onOk={() => { if (delivery) void action(() => resolveNotification(delivery, 'delivered', messageId)).then(() => setDelivery(null)).catch(() => {}) }}>
       <label>请填写已核对到的飞书消息 ID<Input autoFocus aria-label="飞书消息 ID" value={messageId} maxLength={200} onChange={event => setMessageId(event.target.value)} /></label>
     </Modal>
-    <Drawer title="未确认发布的维护说明" open={maintenance} onClose={() => setMaintenance(false)} size="large"><p>请由维护人员核对发布尝试记录，找出未确认的帖子，再打开该篇审核页的“核对并补齐本地回执”。当前接口未提供帖子列表，请勿根据数量推断具体帖子。</p><p>核对本地发布记录和对应的远端排期回读结果后再处理，避免重复提交。</p><pre className={styles.diagnostic}>publish/journal.py · pipeline/runtime_status.py · DEF-1</pre></Drawer>
+    <Drawer title="未确认发布的维护说明" open={maintenance} onClose={() => setMaintenance(false)} size="large"><p>请由维护人员核对发布尝试记录，找出未确认的帖子，再打开该篇审核页的“核对并补齐本地回执”。当前接口未提供帖子列表，请勿根据数量推断具体帖子。</p><p>核对本地发布记录和对应的远端排期回读结果后再处理，避免重复提交。</p><pre className={styles.diagnostic}>publish/journal.py · pipeline/runtime_status.py</pre></Drawer>
   </>
 }
 

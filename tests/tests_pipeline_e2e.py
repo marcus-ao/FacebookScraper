@@ -1,27 +1,4 @@
-"""I1 全链路离线串跑：抓取之后的每一段**真的接上了吗**。
-
-零网络、零费用、零浏览器、零真实归档写入。
-
-### 为什么单独开一套，而不是往 tests_pipeline_assisted.py 里加
-
-那一套测的是**每一段各自的判据**（配对、预算、幂等、停手）。它有一个共同的
-盲区：`_run_unlocked` 里的 `compose_post(archive_root=cfg().archive_dir)` 读的是
-**真实 config 的归档目录**，而夹具建在临时目录里，于是那些用例**从来没有真的
-走通过 compose**，全都在 `offline_gate` 上停下。换句话说：
-
-> **「翻译 + 调图做完 → 离线硬闸通过 → 生成 ready_to_publish」这一段，
-> 在这次之前一条断言都没有。** 而它恰恰是整条链上最关键的一次交接。
-
-这正是 CODE_REVIEW 18.9 那条教训的形状：**mock 掉的边界就是没被测到的边界。**
-所以这一套把 `cfg` 也换掉，让整条链在临时归档上**真的跑一遍**。
-
-### 这里的 runner 是"假的调用、真的后果"
-
-`Runner` 桩只记调用、什么都不产出，于是 `translation_is_current` 永远是假、
-`compose_post` 永远失败。这里的 `StageRunner` 不同：它**真的把译文写进
-`translated.jsonl`、真的把德语图写进 `media_de/`** —— 只是不花钱。
-只有这样，下游那一段才是被测到的，而不是被绕过的。
-"""
+"""在临时归档串联加工与组装；模型用替代实现，译文和图片实际落盘。"""
 from __future__ import annotations
 
 import contextlib
@@ -40,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from activation_fixtures import activate as fixture_activate
 
 from pipeline import engine as A          # noqa: E402
-import translate as translation        # noqa: E402
+from localize import text as translation        # noqa: E402
 from core.config import cfg            # noqa: E402
 from core.store import post_dirname    # noqa: E402
 from core.console import force_utf8    # noqa: E402
@@ -72,15 +49,8 @@ class ArchiveOverride:
 def make_post(account_dir: Path, post_id: str, created: str, text: str,
               account: str, *, owner=None, coauthors=None, images=1,
               size=(1080, 1080), tint=(20, 60, 120), pattern=0) -> dict:
-    """按真实归档形态造一篇：manifest 行 + post.json + 图片。
-
-    ⚠️ 图片必须直接放在帖子目录下（`posts/<dir>/01.jpg`），不是 `media/` 子目录 ——
-    `compose._choose_images` 会断言 `original.parent == post_dir`。
-    """
-    # ⚠️ **必须用实际的 post_dirname**，不要自己拼时间戳。
-    # 第一版照抄了 tests_pipeline_assisted 的拼法（`20260901_1300_<id>`），
-    # 而真实的是 `2026-09-01_1300_<id>` —— 那一套从来没走到 compose，
-    # 所以那个偏差在那边永远不会暴露。这里一走到 compose 就是"帖子目录不存在"。
+    """构造 manifest、post.json 和直属图片，保持真实归档布局。"""
+    # 复用实际目录命名函数。
     folder = "posts/" + post_dirname(post_id, created)
     row = {
         "post_id": post_id,
@@ -98,10 +68,7 @@ def make_post(account_dir: Path, post_id: str, created: str, text: str,
     post_dir = account_dir / folder
     post_dir.mkdir(parents=True, exist_ok=True)
     for index in range(1, images + 1):
-        # ⚠️ **纯色图在 dHash 下全部相等**（dHash 比的是相邻像素梯度，纯色一律是 0），
-        # 于是两个平台的图被判成 media_corresponding，两篇进 similar_cross_platform。
-        # 那是**正确的行为**，只是这里要测的是两篇独立帖，所以夹具必须有真实结构。
-        # 第一版夹具用纯色，连换两次颜色都没用 —— 记在这里免得下次再试一遍。
+        # 纯色图的 dHash 都为零；独立图片样本须有不同梯度。
         shade = tuple(min(255, value + index * 17) for value in tint)
         canvas = Image.new("RGB", size, shade)
         draw = ImageDraw.Draw(canvas)
@@ -118,11 +85,7 @@ def make_post(account_dir: Path, post_id: str, created: str, text: str,
 
 
 def german(text: str) -> str:
-    """造一份"合法"的德语译文：金额与话题标签**逐字符保留**。
-
-    这两条是 compose 的硬闸（`money_preserved` / `hashtags_preserved`），
-    随手改一个就会在 ready 之前被拦下 —— 那正是它们存在的意义。
-    """
+    """生成逐字符保留金额和标签的测试译文。"""
     tail = "".join(" " + token for token in translation.extract_hashtags(text))
     money = "".join(" " + token for token in translation.extract_money_tokens(text))
     return "Deutscher Text." + money + tail
@@ -144,9 +107,7 @@ class StageRunner:
         entry = {
             "post_id": source.post_id,
             "translated_at": "2026-09-03T00:00:00Z",
-            # ⚠️ `load_translated` 会**静默丢掉**缺 model / prompt_version 的行
-            # （坏行不许污染付费产物）。少写一个字段的表现是"没有译文"，
-            # 不是"译文格式错" —— 造夹具时最容易在这里卡住。
+            # 测试译文必须包含 model/prompt_version 才会被读取。
             "model": "deepseek-chat",
             "prompt_version": translation.PROMPT_VERSION,
             "source_text_sha256": translation.source_text_sha256(source.text),
@@ -161,8 +122,7 @@ class StageRunner:
 
     def image(self, source, media_index: int) -> int:
         self.calls.append(("image", source.ref, media_index))
-        # 真的产出德语图。调图是这条链上**最贵**的一段（≈US$33/月 vs 翻译 US$1/月），
-        # 所以"跑第二次不会重新花钱"必须被真的测到，而不是靠桩返回 0 蒙混过去。
+        # 实际写出图片，验证重跑复用产物。
         post_dir = A._post_dir(source)
         media_de = post_dir / "media_de"
         media_de.mkdir(exist_ok=True)
@@ -320,11 +280,9 @@ with tempfile.TemporaryDirectory() as folder:
 config_module._cfg = original_global_config
 print("\n[4] 跨进程 argv 契约：这几段是靠命令行拼起来的，拼错了只在真跑时才炸")
 
-# ⚠️ 这四条是**整条链上仅有的四个字符串接缝**。它们在别处全被 mock 掉了：
-# 单元测试用桩 runner，桩不校验参数名。真实调用要等到 assisted 第一次跑、
-# 或者 approve 第一次开浏览器之后才发生 —— 那是最差的发现时机。
+# 核验跨模块参数接线，避免桩忽略未知参数。
 from routes import delta as delta_module           # noqa: E402
-import localize_images                             # noqa: E402
+from localize import images as image_de  # noqa: E402
 from tools import publish_post as publish_module   # noqa: E402
 
 parsed = delta_module._parse_args(["--platform", "all", "--if-stale"])
@@ -348,15 +306,13 @@ def accepts(fn, argv) -> bool:
 
 check(accepts(translation.main,
               ["--account", "__no_such_account__", "--post-id", "__none__"]),
-      "RealStageRunner.translate 拼的 --account/--post-id 能被 translate.py 接受")
-check(accepts(localize_images.main,
+      "RealStageRunner.translate 拼的 --account/--post-id 能被 localize/text.py 接受")
+check(accepts(image_de.main,
               ["--account", "__no_such_account__", "--post-id", "__none__",
                "--media-index", "0"]),
       "RealStageRunner.image 拼的 --account/--post-id/--media-index "
-      "能被 localize_images.py 接受")
+      "能被 image_de.py 接受")
 
-# approve 的 submit_one 拼的就是下面这串。多一个不认识的参数 = 整批在
-# 浏览器已经开着的时候炸掉。
 submit_argv = [
     "--post-id", "__none__",
     "--at", datetime(2026, 9, 20, 10, tzinfo=timezone(timedelta(hours=2))).isoformat(),

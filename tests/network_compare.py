@@ -1,10 +1,4 @@
-"""Drive 16 React workflows and verify their complete HTTP mutation contracts.
-
-Every expected method, path, and body is declared here from fixture values and
-the established API schema. The test does not import React request helpers.
-All browser traffic stays on the isolated loopback host and every backend write
-is fulfilled by an in-memory route override.
-"""
+"""Verify React HTTP writes against explicit API contracts; loopback host and in-memory responses only."""
 from __future__ import annotations
 
 import copy

@@ -71,11 +71,7 @@ def read():
 
 
 def _comments(text):
-    """Associate TOML comments with exposed keys, without returning hidden values.
-
-    Quoted hashes (URLs, hashtags, price keys) are data. The original TOML parser
-    remains authoritative; this pass only supplies operator help text.
-    """
+    """从 TOML 注释提取字段帮助；引号内的 # 属于数据。"""
     notes, pending, section = {}, [], ''
     for line in text.splitlines():
         stripped = line.strip()
@@ -127,11 +123,7 @@ def _fields(values, prefix, notes):
 
 
 def _replace(text, section, key, value):
-    """Change the existing scalar/inline-array value, retaining comments and line endings.
-
-    TOML parsing before and after the patch verifies that no unrelated field changes.
-    A manually expanded multiline setting stays untouched and gets an explicit conflict.
-    """
+    """仅替换单行设置值并保留格式；多行值明确拒绝。"""
     pattern = re.compile(r'(?m)^\[' + re.escape(section) + r'\][^\r\n]*(?:\r?\n|$)')
     header = pattern.search(text)
     rendered = json.dumps(value, ensure_ascii=False)
@@ -181,8 +173,7 @@ def save(values, expected_version):
             if path.read_bytes() != before:
                 raise SettingsConflict('保存期间配置被其他程序修改，请重新读取')
             os.replace(temporary, path)
-            # 这次改写和原文等长，(mtime_ns, size) 判据看不见它。原因在
-            # core.config.invalidate_cfg_cache 的注释里。
+            # 主动失效缓存，避免等长快速改写仍命中旧配置。
             invalidate_cfg_cache()
         finally:
             if os.path.exists(temporary):

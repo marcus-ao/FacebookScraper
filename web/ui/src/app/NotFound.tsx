@@ -3,14 +3,6 @@ import { Link } from 'react-router'
 
 import { PageTitle } from './PageTitle'
 
-/**
- * 404。
- *
- * 两条要求（本会话 §10）：一句**业务能看懂**的说明，一个出口。
- *
- * 不写「路由未匹配」「Not Found」这类工程语言 —— 她不是来调试路由的，
- * 她是点了一个飞书卡片里的旧链接。说清楚这件事，然后把她送回队列。
- */
 export function NotFound() {
   return (
     <>

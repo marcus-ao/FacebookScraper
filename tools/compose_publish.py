@@ -1,25 +1,4 @@
-r"""离线组装待发德语帖并打印待确认清单（G0b 的用户入口）。
-
-**这个工具不碰浏览器，不发任何请求，不写任何文件。** 它只把
-`publish/compose.py` 的全部离线硬闸跑一遍，把结果按人能读的形式打出来：
-译文、用了哪几张图（德语图还是回退的原图）、合作帖原作者、以及所有告警。
-
-为什么需要它（CR-58）：`compose_post()` 此前唯一的调用方是
-`tests/tests_publish.py`，于是 `PUBLISH_PLAN.md` 第 5 节那条【验收】
-——「对最新 3 篇真实帖组装成功；人为改过期/删图各自被正确拒绝」——
-**没有任何命令可以让用户自己复跑**。项目工作协议要求需要用户操作的功能
-同步进 `MANUAL_STEPS.md`，而没有命令就没有可交接的验收。
-
-它同时就是 `[publish].require_confirmation = true` 那道人工闸要看的那张清单。
-
-用法::
-
-    scripts\run_publish.bat --post-id 122123185335379375 --at 2026-09-05T10:00
-    scripts\run_publish.bat --latest 3
-
-`--at` 不给时按 `[publish].timezone` 取「明天 10:00」，只是为了让排期校验有个
-具体值；本工具**不会**因此排任何东西。
-"""
+"""离线组装待发内容并打印文案、图片和告警；不访问浏览器或写文件。"""
 from __future__ import annotations
 
 import argparse
@@ -35,7 +14,7 @@ from core.config import cfg                                # noqa: E402
 from core.console import force_utf8                        # noqa: E402
 from core.store import Archive                             # noqa: E402
 from publish.compose import ComposeError, compose_post     # noqa: E402
-from translate import account_dirs                         # noqa: E402
+from localize.text import account_dirs                         # noqa: E402
 
 
 def _schedule_timezone() -> ZoneInfo:
@@ -45,8 +24,7 @@ def _schedule_timezone() -> ZoneInfo:
     try:
         return ZoneInfo(name)
     except ZoneInfoNotFoundError as exc:
-        # ⚠️ Windows 不自带 IANA 时区数据库，`zoneinfo` 只读系统数据库（CR-60）。
-        # 本机实测 TZPATH 为空，所以缺 tzdata 时这里必然失败。
+        # Windows 需要 tzdata 提供 IANA 时区。
         raise SystemExit(
             f"找不到时区 {name!r}。\n\n"
             "  Windows 不自带 IANA 时区数据库，需要纯数据包 tzdata：\n"
@@ -60,11 +38,7 @@ def _schedule_timezone() -> ZoneInfo:
 
 
 def _parse_when(raw: str | None) -> datetime:
-    """解析 --at；不给时给一个明天 10:00 的占位值。
-
-    ⚠️ 占位值只是为了让排期校验有个具体输入，**它不代表任何真实排期决定**。
-    真正的排期窗口上下限要等 G1 实测（见 PUBLISH_PLAN 第 3.3 节）。
-    """
+    """解析 --at；省略时用明天 10:00 作离线校验输入，不代表排期决定。"""
     zone = _schedule_timezone()
     if raw is None:
         base = datetime.now(zone) + timedelta(days=1)
@@ -145,8 +119,6 @@ def main(argv=None) -> int:
     bad: list[tuple[str, str]] = []
     for post_id in post_ids:
         try:
-            # 显式传 archive_root：入口要说清自己在读哪份归档，
-            # 而不是让它隐式落到某个模块级默认值上。
             post = compose_post(
                 post_id, when, archive_root=archive_root,
                 account=args.account,

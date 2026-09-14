@@ -98,12 +98,7 @@ def write_v2(root: Path, *, interactions: list[dict], snapshots: list[dict]) -> 
 TARGET_FB = "Neakasa Deutschland"
 TARGET_IG = "neakasa.de"
 
-# ⚠️ **2026-09-01 起，这一整段夹具照抄真实 Business Suite。**
-# 上一版是照着"想象中的富卡片"写的，被
-# `state/publish_probe_20260901_054226_378622.json` 逐条推翻：
-# 真实 Planner 上没有"一张卡片带时刻/正文/两个渠道/图片数"这种东西，
-# 有的是一条同时带正文与时刻的 link，加上**每个渠道各一个**详情弹窗。
-# 详见 `docs/HANDOFF.md` 第 6 节。
+# Planner 夹具由正文时刻 link 和独立渠道详情组成。
 DATETIME_REGEX = (r"(?P<date>[A-Z][a-z]{2,8} \d{1,2}, \d{4})"
                   r"\D{0,10}?(?P<time>\d{1,2}:\d{2} [AaPp][Mm])")
 PLANNER_ATTRIBUTES = {
@@ -155,7 +150,7 @@ def planner_semantics(caption="Probe caption", *, instagram=True,
     return rows
 
 
-#: composer 上**只能**证明 FB —— 实测那里没有 IG 帐号名。
+# 此夹具的编辑器只提供 FB 账号证据。
 ACCOUNT_ATTRIBUTES = {
     "facebook_account_token": TARGET_FB,
     "facebook_account_regex": r"@?(?P<account>.+)",
@@ -163,11 +158,7 @@ ACCOUNT_ATTRIBUTES = {
 
 
 def account_semantics(*, facebook=TARGET_FB, instagram=TARGET_IG) -> list[dict]:
-    """composer 的 Facebook 预览：`article` 抬头那条 `heading h2`。
-
-    ``instagram`` 参数保留只为兼容调用方 —— 真实 composer 上没有 IG 帐号名，
-    传什么都不会出现在这里。
-    """
+    """构造 FB 预览身份；instagram 参数仅兼容调用，不出现在该结构中。"""
     preview = "%s Just now · Hello Like Comment Share" % facebook
     return [
         {"tag": "div", "role": "article", "accessible_name": preview,
@@ -177,15 +168,6 @@ def account_semantics(*, facebook=TARGET_FB, instagram=TARGET_IG) -> list[dict]:
          "visible_text": facebook},
     ]
 
-
-# ==========================================================================
-# [1] 已删除（2026-09-03）：probe v2 白名单是 tools/probe_publish.py 的内部
-# 契约，且与 tests_publish.py 已删的 [6]-[9] 重叠。探针已移入
-# tools/_scaffolding/，不参与发布链路。
-#
-# 发布侧对 v2 dump 的要求由 publish/evidence.py::validate_v2_dump 表达，
-# 它的测试在 tests_publish.py [4]，保留。
-# ==========================================================================
 
 print("\n[2] submit() 只点击一次，成功/超时/跳转都返回结构化结论")
 
@@ -278,9 +260,7 @@ check(stale_blocked and page.button.clicks == 0,
 
 print("\n[3] G6c 只有目标时刻、完整正文、两个渠道的独立弹窗齐了才 scheduled")
 
-# ⚠️ 这一节的假页面**照抄真实 Planner**（2026-09-01 dump 推翻了上一版）：
-# 日历上只有一条同时带正文与时刻的 link；渠道与 remote id 要**点开**
-# 各自的详情弹窗才读得到，FB 与 IG 是两个独立对象。
+# 渠道与 remote ID 只在独立详情弹窗中可读。
 
 
 class Node:
@@ -567,9 +547,7 @@ readback = asyncio.run(bs.verify_scheduled(
 check(not readback.found and readback.missing_channels == ("instagram",),
       "弹窗里是 neakasa.deals 这种近碰撞账号时 IG 不算命中 —— "
       "整串文本里按**独立词**判，不是子串")
-# ⚠️ 「目标名 + 后缀」（Neakasa Deutschland Test）在弹窗整串里挡不住，
-# 空格是合法词边界。挡它的是**提交前**那道 composer 账号闸：
-# 那里比的是独立元素的**完整值**，多一个词就不等。
+# 显示名后缀由提交前完整值比较拦截，token 边界检查不能代替。
 account_signal = EvidenceSignal(
     key="composer_account_context", step="G2", kind="semantic",
     surface=SURFACE_COMPOSER, source_dump="fixture.json", sequences=(1,),
@@ -622,7 +600,7 @@ readback = asyncio.run(bs.verify_scheduled(
 check(not readback.found,
       "正文对不上时不记 scheduled")
 
-# 正文里塞满旧版整卡子串判据；渠道仍然只能由**点开的弹窗**证明。
+# 正文中的渠道词不能替代详情弹窗证据。
 poison = FLAT + " Facebook Instagram Neakasa Deutschland neakasa.de 5 photos"
 readback = asyncio.run(bs.verify_scheduled(
     PlannerPage([("%s %s" % (poison, ENTRY_MOMENT), "")]), when, poison,
@@ -856,13 +834,9 @@ check(_pending_blocks_force({"status": journal.STATUS_SUBMIT_AMBIGUOUS})
       "--force 也不能绕过模糊/未回读/自动 pre-submit 失败状态")
 
 
-
 print("\n[5] dump 校验结果缓存：命中要快，内容变了要失效")
 
-# 一次 --submit 会沿 compose / workflow / business_suite 三条路径反复要同一份
-# dump（实测 38 次、72 MB）。缓存按 (路径, mtime_ns, 大小) 命中。
-# 这一段盯的是**失效**而不是命中：缓存住一份已经被换掉的 dump，等于让证据闸
-# 对着旧事实放行。
+# 替换 dump 后必须失效缓存，不能沿用旧证据放行。
 import time as _time
 from publish import evidence as _ev
 

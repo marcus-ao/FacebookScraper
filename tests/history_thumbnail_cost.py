@@ -1,15 +1,4 @@
-"""历史列表首屏的缩略图成本：量取 React 首屏的真实请求数与耗时。
-
-这个只读诊断脚本回答两个问题：
-
-  1. 历史列表首屏要为每一行发一次缩略图 GET，React 默认每页 50 条；
-  2. 那个接口单次到底多慢，钱花在哪。
-
-只读：跑在隔离夹具的临时归档上，不碰真实 archive / state / config。
-
-用法：
-    scripts\\run_python.bat tests/history_thumbnail_cost.py
-"""
+"""在隔离归档上测量历史首屏缩略图请求数与耗时。"""
 from __future__ import annotations
 
 import cProfile
@@ -31,8 +20,7 @@ def main() -> int:
     with BrowserFixture() as fx:
         from web.api import reader
 
-        # UIFixture 会再往归档里加一批帖子，必须先建好再统计 ——
-        # 否则量到的行数和浏览器真正看到的不是同一批。
+        # 先建立完整 UI 夹具，再统计浏览器实际可见的帖子。
         ui = UIFixture(fx)
 
         # 单次成本：进程内直接调，避开 HTTP 与浏览器的噪音。

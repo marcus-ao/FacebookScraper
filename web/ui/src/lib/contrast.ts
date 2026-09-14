@@ -1,15 +1,4 @@
-/**
- * WCAG 2.1 相对亮度与对比度。**纯函数，没有依赖。**
- *
- * 存在的理由只有一个：主色不能靠肉眼定。
- *
- * DESIGN.md 给主色定了三条判据，其中"填充按钮上白字的对比度 ≥ 4.5:1"
- * 是个可以算的数 —— 旧候选 #1677ff 看起来完全正常，算出来只有 4.10:1。
- * 所以这份实现进仓库、进单测，而不是在文档里写一句"已确认可读"。
- *
- * 算法出处：WCAG 2.1 定义的 relative luminance 与 contrast ratio
- * （https://www.w3.org/TR/WCAG21/#dfn-relative-luminance）。
- */
+/** WCAG 相对亮度与对比度：https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
 
 /** `#rgb` / `#rrggbb`（大小写均可）→ [0..255, 0..255, 0..255]。 */
 export function parseHex(hex: string): readonly [number, number, number] {
@@ -52,12 +41,7 @@ export function contrastRatio(a: string, b: string): number {
   return (light + 0.05) / (dark + 0.05)
 }
 
-/**
- * HSL 的色相角，0..360。
- *
- * 用来证明"主色与红、黄在同一屏上不混淆"这条判据（DESIGN.md）
- * 有一个可复算的依据，而不是"我看着不像"。
- */
+/** HSL 色相角，0..360。 */
 export function hueOf(hex: string): number {
   const [r255, g255, b255] = parseHex(hex)
   const r = r255 / 255
@@ -66,7 +50,7 @@ export function hueOf(hex: string): number {
   const max = Math.max(r, g, b)
   const min = Math.min(r, g, b)
   const delta = max - min
-  if (delta === 0) return 0 // 灰，没有色相
+  if (delta === 0) return 0
   let hue: number
   if (max === r) hue = ((g - b) / delta) % 6
   else if (max === g) hue = (b - r) / delta + 2

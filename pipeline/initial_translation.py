@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import localize_images
-import translate
+from localize import images as image_de
+from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review
 from core.config import cfg
 from core.store import read_post_truth
@@ -123,20 +123,20 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None,
                 source_ref=source['platform'] + ':' + source['post_id'],
                 source_text=source['text'], controller=controller)
             event['risk_scan_status'] = scan_result.get('status', 'failed')
-            settings = translate.Settings()
-            translator = translator or translate.Translator(settings, paid_controller=controller)
-            with translate.TranslationRunLock(cfg().state_dir / 'translate.lock'):
+            settings = translation.Settings()
+            translator = translator or translation.Translator(settings, paid_controller=controller)
+            with translation.TranslationRunLock(cfg().state_dir / 'translation.lock'):
                 preflight()
-                _, failed = translate.run_translate(settings, translator, account_dir, 1, False, False,
+                _, failed = translation.run_translate(settings, translator, account_dir, 1, False, False,
                     scope=frozenset([source['post_id']]), source_rows=[source])
             if failed:
                 raise ValueError('文案生成未通过产出检查')
-        settings = localize_images.Settings()
+        settings = image_de.Settings()
         for index in engine.pending_image_indices(candidate.canonical):
             preflight()
-            editor = editor or localize_images.ImageEditor(settings, paid_controller=controller)
-            with localize_images.ImageRunLock(cfg().state_dir / 'images.lock'):
-                stats = localize_images.run_localize(settings, editor, account_dir, [source], 1, False, False, index)
+            editor = editor or image_de.ImageEditor(settings, paid_controller=controller)
+            with image_de.ImageRunLock(cfg().state_dir / 'images.lock'):
+                stats = image_de.run_localize(settings, editor, account_dir, [source], 1, False, False, index)
             if stats.failed:
                 raise ValueError('图片生成未通过产出检查')
         preflight()
@@ -147,7 +147,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None,
             item = engine._ready_item(candidate, post)
         except compose.ComposeError as exc:
             item = engine.HumanItem('initial-review-' + row['job_id'], 'offline_gate', candidate.source_refs,
-                str(exc), {'source_text_sha256': translate.source_text_sha256(source['text'])})
+                str(exc), {'source_text_sha256': translation.source_text_sha256(source['text'])})
         engine.append_human_item(cfg().state_dir, item, now)
         event.update(status='succeeded', message='本轮处理结束，请在本篇核对素材并继续审校')
     except (Exception, SystemExit) as exc:

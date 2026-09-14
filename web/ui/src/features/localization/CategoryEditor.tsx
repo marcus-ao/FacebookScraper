@@ -6,11 +6,7 @@ import { ConflictRecovery } from '@/components/ConflictRecovery'
 
 export function CategoryEditor({ detail, disabled, apply, refresh }: { detail: TaskDetail; disabled: boolean; apply: (detail: TaskDetail) => void; refresh: () => Promise<TaskDetail> }) {
   const [open, setOpen] = useState(false), [input, setInput] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null)
-  // 重新读取最新分类走自己的状态，不复用保存的 busy。另外三个冲突恢复入口
-  // （正文草稿 useLocalization、排期 useApproval、设置 SettingsPage）本来就是分开的，
-  // 只有这里把两件事挤在一个 busy 上：恢复只是重新读一遍，不该让「保存分类」转圈 ——
-  // 转圈的应该是恢复按钮自己。少一次 confirmLoading 的开关，也少一次
-  // global.css 末尾记的那个 antd loading 图标离场问题的触发机会。
+  // 重读分类与保存分别记录忙碌状态，让恢复按钮显示实际进度。
   const [recovering, setRecovering] = useState(false)
   const { message } = App.useApp()
   const save = async () => {

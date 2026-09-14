@@ -1,9 +1,4 @@
-"""Verify the ordered composer thumbnails observed on the DE account.
-
-The Media section contains one listitem, one img and one Remove photo button per
-upload (live draft probe 2026-09-13). Nothing in this module clicks edit/remove.
-This proves the prepared editor contents, not a later scheduled/public post.
-"""
+"""只读核验编辑器缩略图数量及顺序；不代表后续排期或公开帖的媒体。"""
 import hashlib
 import io
 from urllib.parse import urlsplit
@@ -66,8 +61,7 @@ async def verify_upload(page, paths, *, timeout=30):
         await page.get_by_text('Uploading media', exact=True).wait_for(state='hidden', timeout=timeout * 1000)
         rendered = []
         for index in range(len(paths)):
-            # The live Media section nests three listitems around each photo.
-            # Anchor each upload to its unique remove control and nearest item.
+            # Anchor each image to its unique remove control's nearest listitem, avoiding nested duplicates.
             card = remove.nth(index).locator('xpath=ancestor::*[@role="listitem"][1]')
             img = card.locator('img')
             await expect(img).to_have_count(1, timeout=timeout * 1000)

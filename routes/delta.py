@@ -1,9 +1,4 @@
-r"""登录态监测：常规只取首屏，reconcile 复用同一路径做每日随机深扫。
-
-两种扫描均附着 detect 专用 Chrome；回填与发布各用自己的 profile。
-所有登录由人完成。随机触发、有限深度、异常即停、失败预算与安静账号降频
-仍是无人值守的必要边界。看到新内容后按原归档契约追加，后续处理由应用组装。
-"""
+"""登录态监测：首屏轮询与每日有限深扫共用 detect 会话及失败预算。"""
 from __future__ import annotations
 
 import argparse
@@ -88,19 +83,7 @@ class DeltaConfig:
 
 
 class DeltaBlocked(RuntimeError):
-    """当次抓取被中止的所有原因（登录墙、被拦、解析异常）共用这一个类型。
-
-    它们的处理办法大体相同——**立即停止、记一次失败、告警、不重试**——
-    区别只在给人看的那句话，所以不给每种原因单独造一个异常类型。
-
-    唯一需要程序区分的是 ``hard``：
-
-    * ``hard=True``（登录墙 / 401 / 403 / 429）—— **本次全部平台一起停**。
-      两个平台共用同一个会话、同一份浏览器指纹，IG 刚被限流就转头去敲 FB，
-      是把"可能被注意到"变成"确定被注意到"。
-    * ``hard=False``（解析不出来、页面没加载、超时）—— 只停这个平台。
-      这类问题出在我们这边，不是对面在拦，另一个平台照跑。
-    """
+    """中止扫描并记录失败；hard=True 同停两平台，False 仅停当前平台。"""
 
     def __init__(self, reason: str, hard: bool = False):
         super().__init__(reason)
@@ -112,17 +95,10 @@ class DeltaRunAlreadyActive(RuntimeError):
 
 
 def DeltaRunLock(path: Path) -> FileLock:      # noqa: N802（保留原名，调用点不变）
-    """跨两个 Task Scheduler 任务的进程锁。
-
-    ``MultipleInstancesPolicy=IgnoreNew`` 只约束同一个计划任务；每日任务与
-    登录/解锁补跑是两个不同任务，醒机时仍可能同时进入这里。锁覆盖 stale
-    判定、随机延迟、浏览器和状态写入，保证整个增量主干并发恒为 1。
-    """
+    """跨计划任务的独占锁，覆盖状态读取、抖动、浏览器操作和状态写入。"""
     return FileLock(path, error_type=DeltaRunAlreadyActive,
                     busy_message="另一个增量实例正在运行；本次不再附着浏览器或写状态。")
 
-
-# ---- C5：运行状态 -------------------------------------------------------
 
 def state_path() -> Path:
     return cfg().state_dir / "delta_state.json"
@@ -158,9 +134,7 @@ def load_state(path: Path) -> dict:
         return {}
     if not isinstance(data, dict):
         return {}
-    # 最外层是对象还不够：手工修状态、旧版本半写入或文件损坏，都可能留下
-    # {"facebook": null} / {"instagram": "..."}。main() 随后会对平台值
-    # 调 .get()，若不在读取边界修复，计划任务会在真正抓取前直接崩掉。
+    # 平台状态也须为对象，防止后续 .get() 在抓取前失败。
     for platform in PLATFORMS:
         if platform in data and not isinstance(data[platform], dict):
             data[platform] = blank_entry()
@@ -168,12 +142,7 @@ def load_state(path: Path) -> dict:
 
 
 def save_state(path: Path, state: dict) -> None:
-    """原子保存运行状态，失败时保留上一份完整 JSON。
-
-    计划任务可能在任何时刻被系统结束；直接覆盖目标文件会先截断旧内容，
-    随后的中止便同时丢掉失败预算与 ``last_success``。临时文件必须和目标
-    位于同一目录，完整落盘后再用 ``Path.replace`` 原子提交。
-    """
+    """原子保存状态，失败时保留上一份完整 JSON。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = -1
     tmp_path: Path | None = None
@@ -208,13 +177,7 @@ def iso(dt: datetime) -> str:
 
 
 def quiet_days(entry: dict, now: datetime) -> int:
-    """距上一次真的抓到新帖过了几天。
-
-    ⚠️ **不是"连续几次跑出 0 新增"**。按次数算的话，`runs_per_day` 一改
-    这个数的含义就变了（跑两次 = 一天算两天），而它下游要喂给
-    "连续 N 天零新增就告警/降频"——那两处说的都是**天**。
-    从没抓到过新帖时，从第一次成功之日起算。
-    """
+    """距最近发现新帖的天数；尚无新帖时从首次成功起算，不按扫描次数计算。"""
     anchor = parse_ts(entry.get("last_new_at")) or parse_ts(entry.get("first_success"))
     if anchor is None:
         return 0
@@ -237,12 +200,7 @@ def record_success(entry: dict, now: datetime, new_count: int) -> dict:
 
 
 def record_failure(entry: dict, now: datetime, error: str) -> dict:
-    """失败也要写。
-
-    否则"连续三天失败"和"连续三天没新帖"在状态文件里长得**一模一样**，
-    而这两件事一个要人去重新登录、一个什么都不用做。
-    ⚠️ `last_success` **不刷新** —— 刷新了 `--if-stale` 就会以为跑过了。
-    """
+    """记录失败且不刷新 last_success，保持 stale 判据有效。"""
     entry["last_run"] = iso(now)
     entry["last_error"] = error
     entry["consecutive_failures"] = int(entry.get("consecutive_failures") or 0) + 1
@@ -250,11 +208,7 @@ def record_failure(entry: dict, now: datetime, error: str) -> dict:
 
 
 def budget_exhausted(entry: dict, budget: int) -> bool:
-    """连续失败达阈值 → 停止自动运行，要人来看一眼（C7「失败预算」）。
-
-    会话失效之后每天硬撞一个已经失效的会话，是这条路径上最坏的行为：
-    它把"可能被注意到"变成"每天主动提醒对方注意"。
-    """
+    """连续失败达到预算后停止自动运行。"""
     if budget <= 0:
         return False
     return int(entry.get("consecutive_failures") or 0) >= budget
@@ -279,19 +233,8 @@ def stale_enough(entry: dict, now: datetime, hours: float) -> tuple[bool, str]:
     return True, "距上次成功 %.1f 小时" % elapsed
 
 
-# ---- C2/C3：页面扫描 ----------------------------------------------------
-
 def login_wall_reason(final_url: str, blocked: tuple[int, str] | None = None) -> str | None:
-    """这次访问是不是被登录墙 / 限流拦了？是就返回人话理由。
-
-    两个独立证据，都要看：
-      1. **落地 URL** —— 会话失效时页面会被重定向到登录页或 checkpoint；
-      2. **接口状态码** —— 页面壳可能照常渲染，但接口全在 401/403/429，
-         这时 URL 完全正常，只看 URL 会把"被拦"读成"这个号没发帖"。
-
-    单拆成纯函数是为了能离线测：这几种情况的最终表现都是"抓到 0 篇"，
-    只断言结果分不清走的哪条分支，而它们给用户的提示完全不同。
-    """
+    """从落地 URL 和接口状态码识别登录墙或限流；页面外壳正常不代表可访问。"""
     url = (final_url or "").lower()
     for marker in LOGIN_URL_MARKERS:
         if marker in url:
@@ -305,12 +248,7 @@ def login_wall_reason(final_url: str, blocked: tuple[int, str] | None = None) ->
 
 
 async def _pause(window: tuple[float, float]) -> None:
-    """在区间内随机睡一会儿。**必须 await，不能 time.sleep。**
-
-    ⚠️ `time.sleep` 会把事件循环整个冻住，而**响应体正是在那个循环上异步读的**
-    ——睡 8 秒等于这 8 秒里到达的响应一段都读不到，
-    最后表现为"抓到 0 篇"，且看不出原因。
-    """
+    """异步随机等待，保持响应体读取的事件循环运行。"""
     await asyncio.sleep(random.uniform(*window))
 
 
@@ -324,20 +262,7 @@ async def _eval(page, expr: str, default):
 
 
 async def human_scroll(page, dcfg: DeltaConfig) -> tuple[int, float]:
-    """按 C7 的深度上限往下滚几屏，每屏之间随机停顿。
-
-    返回 `(滚了几屏, 页面实际移动了多少像素)`。
-
-    ⚠️ **必须先把鼠标移到视口中间。** `mouse.wheel` 是在**当前鼠标位置**派发
-    滚轮事件，而默认位置是 (0, 0) —— 视口左上角通常是导航栏/侧边栏，
-    滚轮打在那里对主区域没有任何作用。2026-08-30 首次实测时就是这样：
-    程序以为自己滚了两屏，页面一动没动，而**日志里看不出任何异常**。
-
-    返回实际位移正是为了让这种失败可见：滚了却没动，就该说出来。
-
-    ❌ **不滚到底。** 增量只需要看到最新几条；每天滚到底既无收益，
-    又是这条路径上最明显的机器行为特征。
-    """
+    """有限滚动并返回 (屏数, 实际位移)；滚轮先定位到主视口。"""
     screens = max(0, dcfg.max_scrolls)
     if not screens:
         return 0, 0.0
@@ -364,14 +289,11 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
         await asyncio.sleep(dcfg.first_screen_seconds)
         screens, moved = await human_scroll(page, dcfg)
         if screens and moved <= 0:
-            # 滚了却没动。这不是小事：增量看不到新内容时，
-            # "页面没滚动"和"确实没新帖"在输出里必须长得不一样。
             print("[!] 滚了 %d 屏但页面没有移动（scrollY 未变）——"
                   "滚轮事件可能没落在可滚动区域" % screens)
         final_url = page.url
         page.remove_listener("response", handler)
-        # 停止接收新事件后再等已到达的响应体读完，否则最后几段 JSON
-        # 会在页面关闭时被取消，形成无提示的数据缺口（CR-05）
+        # 停止监听后 drain，避免页面关闭时取消未读响应。
         await col.drain()
         return col, final_url
     finally:
@@ -384,14 +306,7 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
 
 @dataclass
 class ScanResult:
-    """一次增量的结果与**诊断信息**。
-
-    诊断字段不是可有可无的日志装饰。2026-08-30 首次实测时，Instagram 那边
-    只打了一句"新增 0 篇"——而真相是它**根本没看到本账号的时间线**
-    （39 个候选里 1 篇是自己的，还比归档里最新的更旧）。
-    "真的没新帖"和"没看到时间线"当时在输出里完全一样。
-    下面每个字段都是为了让这两件事长得不一样。
-    """
+    """增量结果与诊断，用于区分没有新帖和未看到目标时间线。"""
     new: int = 0
     upgraded: int = 0
     own: int = 0
@@ -400,11 +315,7 @@ class ScanResult:
     oldest_seen: str = ""
     newest_known: str = ""
     payloads: int = 0
-    # own 拆成"本账号自己发的"和"合作帖"两半。**这不是装饰**：
-    # 实测增量看到的 36 篇里 35 篇是合作帖、自己发的只有 1 篇，
-    # 所以 own 这个数字几乎完全由合作帖判定撑着。合作判定一旦漂移，
-    # own 会从 36 掉到 1 —— 拆开写，这件事在日志里一眼可见；
-    # 不拆的话，它和"今天真的只发了一篇"长得一模一样（CR-18 那类二义）。
+    # 分开记录原创与合作数量，使归属解析异常可见。
     authored: int = 0
     collab: int = 0
     # 被丢弃、但作者是已知合作方的那些（core.integrity.check_dropped_partners）
@@ -445,11 +356,7 @@ def scope_skip_counts(posts) -> dict[str, int]:
 
 async def delta_once(ctx, platform: str, account: str, arc: Archive,
                      dcfg: DeltaConfig, *, dry_run: bool = False) -> ScanResult:
-    """跑一个平台的一次增量。被拦时抛 :class:`DeltaBlocked`。
-
-    ⚠️ 判断"这条要不要写"用 `arc.should_append()` 而**不是 `has()`**：
-    否则先前留下的残缺帖永远补不全（CR-03），而且下载会白跑一遍 CDN。
-    """
+    """扫描单个平台；使用 should_append 保留残缺补齐机会，被拦时抛 DeltaBlocked。"""
     url = profile_url(platform, account)
     try:
         col, final_url = await asyncio.wait_for(
@@ -466,9 +373,7 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         raise DeltaBlocked("一个接口响应都没捞到（命中 %d 次）—— "
                            "页面可能没加载出来，或接口路径变了" % col.hits)
 
-    # 解析之前无条件转储。回填那边这条兜底救过一次 40 分钟的人工滚动；
-    # 增量重跑虽然便宜，但"解析器悄悄失效"与"这几天确实没发帖"在日志里
-    # 长得一模一样，没有原始响应就无从分辨。保留时间由 keep_captures_days 控制。
+    # 解析前保存原始响应，结构漂移时可离线复查。
     if not dry_run:
         dump = arc.base / ("_capture_delta_%d.json" % int(time.time()))
         atomic_write_json(dump, col.payloads)
@@ -479,9 +384,6 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         raise DeltaBlocked("捕获到 %d 段响应但一篇都没解析出来 —— "
                            "解析器可能已经与真实结构不符" % len(col.payloads))
 
-    # 首屏同样会混进推荐内容与被 @ 的 UGC（回填时实测 IG 混进 266 条、
-    # FB 混进 1 条；增量实测 IG 一次混进 38 条）。
-    # "增量只看几条"不是省掉这一步的理由。
     posts, rejected = partition_by_owner(posts, account)
     if rejected and not dry_run:
         arc.record_rejected(rejected)
@@ -490,11 +392,7 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     dates = sorted(p.created_at for p in posts if p.created_at)
     target = (account or "").strip().lower()
     n_authored = sum(1 for p in posts if p.owner == target)
-    # 被丢弃的那批里，作者是已知合作方的 —— 强烈提示"合作判定又漏了"。
-    # 归档里的 210 个合作方 vs 历史上丢弃过的 6 个账号，交集为空，
-    # 所以这条命中一次就值得看（core/integrity.py 的第四项检查有完整理由）。
-    # 合作方名单同时取自归档和**本次留下的这批**：归档为空的新账号
-    # （第一次跑增量、还没回填过）光看归档会得到空名单，这一项就白搭了。
+    # 合作名单同时读取归档与本批结果，覆盖首次扫描。
     suspect = integrity.check_dropped_partners(
         rejected,
         integrity.known_partners(known + [p.to_row() for p in posts], account))
@@ -505,19 +403,11 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         newest_known=max((r.get("created_at") or "" for r in known), default=""),
         payloads=len(col.payloads), skipped=scope_skip_counts(posts))
 
-    # 「看到的自家帖子太少」是"没看到时间线"最可靠的信号。
-    # ⚠️ 用篇数而不是"最新一篇的日期倒退"来判：后者在账号删掉最新一帖时会
-    # 每天误报、把失败预算耗光，而删帖是会真实发生的。
-    # 空归档不能把门槛一起降成 0：首次接入新账号时，推荐位/UGC 全被丢弃
-    # 仍会得到“成功、0 篇自家内容”，随后刷新 last_success 并掩盖错误目标。
-    # 归档很小时继续按已有规模降门槛，但只要配置没有显式设 0，至少要看到 1 篇。
+    # 按目标帖数判断覆盖；空归档仍保留最低门槛，最新帖日期倒退不作失败依据。
     floor = (0 if dcfg.min_own_posts == 0 else
              min(max(1, dcfg.min_own_posts), max(1, len(known))))
     if len(posts) < floor:
-        # 命中"丢弃的里面有合作方"时，把它写进中止理由里。**这一句是给下一个
-        # 会话省几个小时的**：同样是"只看到 1 篇"，"归属判定漏了合作帖"
-        # 和"真的被登录墙拦了"处理办法完全不同，而 2026-08-30 那次
-        # 恰恰是先猜了后者、写了一整条新代码路径，才发现是前者。
+        # 中止原因补充疑似合作误丢，便于区分归属错误与访问受阻。
         hint = ("；其中 %d 篇来自**已知合作方**（%s）—— 优先怀疑合作帖判定失效，"
                 "而不是被拦" % (len(suspect),
                                 "、".join(sorted({(s.get("owner") or "?")
@@ -554,28 +444,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     return res
 
 
-# ---- D3：把完整性检查接进增量 -------------------------------------------
-
 def run_integrity(arc: Archive, entry: dict, platform: str,
                   now: datetime | None = None,
                   suspect: list[dict] | None = None) -> list[dict]:
-    """跑完整性检查并把命中项告警出去。返回命中项，便于测试与打印。
-
-    **为什么这一步在方案 B 之下比原来更重要**：登出增量最坏只是抓不到；
-    登录态增量最坏是**会话失效后每天硬撞，直到账号被处理**。
-    爬取路径没有 ground truth——"滚到这里就没了"和"被限流截断了"在响应上
-    长得一样——这一层是唯一能让"悄悄坏掉"变成"看得见地坏掉"的东西。
-
-    告警走 `core.notify.notify()`，它**无条件先写 `state/alerts.log`**，
-    所以这里不需要再自己写一遍日志（D2 已确立的职责划分）。
-
-    ``suspect`` 是本次扫描里"被丢弃、但作者是已知合作方"的那些
-    （见 `core.integrity.check_dropped_partners`）。它和其它三项不同，
-    是**本次扫描的**结论而不是归档的结论，所以由调用方传进来。
-    **这一条不做去重节流**：其它检查会天天成立（账号真停更时"零新增"
-    每天都真），而这一条在全部真实数据上从未成立过——它响一次就意味着
-    归属判定可能又开始漏判自家内容了，漏报的代价远大于重复提醒。
-    """
+    """返回并通知完整性问题；suspect 来自本次扫描，不做重复告警节流。"""
     gap_days, alert_after = integrity.params(platform)
     findings = integrity.run_checks(
         arc.rows(), arc.needs_media(), entry, platform,
@@ -600,8 +472,6 @@ def run_integrity(arc: Archive, entry: dict, platform: str,
     return findings
 
 
-# ---- C6：主入口 ---------------------------------------------------------
-
 async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                    path: Path, dry_run: bool) -> int:
     """附着一次 Chrome，把到期的平台依次跑完。返回退出码。"""
@@ -609,10 +479,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
         c = cfg()
         pw, browser, ctx = await attach(port=c.detect_debug_port, profile=c.detect_profile_dir)
     except (Exception, SystemExit) as e:
-        # attach 在进入平台循环前失败；若让异常直接穿透，两个平台都会表现成
-        # “从未运行”，失败预算和 --if-stale 也就全部失真。core.chrome.attach
-        # 的端口竞态/无 context 契约会抛 SystemExit，必须显式列出；不要捕获
-        # KeyboardInterrupt 等其它 BaseException。
+        # 附着失败也更新两平台状态；捕获 SystemExit，保留 KeyboardInterrupt。
         msg = "附着专用 Chrome 失败（%s）：%s" % (
             type(e).__name__, str(e) or "无错误详情")
         print("[!] %s" % msg)
@@ -627,10 +494,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
     try:
         for i, platform in enumerate(platforms):
             entry = state.setdefault(platform, blank_entry())
-            # 配置读取和 Archive 构造也是这个平台的一次运行步骤，必须和
-            # delta_once 落在同一个异常闭环里。否则目录权限、路径校验或坏配置
-            # 会在真正抓取前直接穿透：既不累计失败预算，也没有状态/通知，且会
-            # 无端阻止另一个平台继续（这些都是我们本地的问题，不是对面在拦）。
+            # 配置和归档初始化也属于平台运行，失败须进入同一状态闭环。
             account = "账号配置未读取"
             try:
                 c = cfg()
@@ -642,8 +506,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                     delta_once(ctx, platform, account, arc, dcfg, dry_run=dry_run),
                     timeout=dcfg.max_session_seconds)
             except DeltaBlocked as e:
-                # C7「异常即停」：当次立即停止并告警，不重试、不换 UA、不绕。
-                # 继续试探是把"可能被注意到"变成"确定被注意到"。
+                # 访问受阻立即停止，不重试或更换身份。
                 print("[!] 本次中止：%s" % e)
                 rc = 1
                 if dry_run:
@@ -656,9 +519,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 if e.hard:
                     state["detect_hard_blocked"] = {
                         "reason": str(e), "platform": platform, "recorded_at": iso(utcnow())}
-                    # 剩下的平台也一起记一次失败：它们没跑，但"今天被拦了"
-                    # 这件事必须体现在预算里，否则连续被拦时预算永远攒不满，
-                    # 自动运行就永远停不下来。
+                    # 硬阻塞同步计入未运行平台的失败预算。
                     for rest in platforms[i + 1:]:
                         record_failure(state.setdefault(rest, blank_entry()),
                                        utcnow(), "同批次的 %s 被拦，本次未执行" % platform)
@@ -668,11 +529,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 save_state(path, state)
                 continue
             except (Exception, SystemExit) as e:
-                # 解析器/Playwright/存储之外的编程异常也必须进入同一套状态闭环。
-                # 否则无人值守任务只留下一个非 0 退出码，却不累计失败预算、
-                # 不更新 last_error，也不会通过通知把问题暴露给业务人员。
-                # Archive 的安全校验和部分配置入口会用 SystemExit 表达硬错误；
-                # 显式接住它，但仍不捕获 KeyboardInterrupt 等其它 BaseException。
+                # 编程与初始化错误同样记录失败；不吞掉 KeyboardInterrupt。
                 msg = "未预期异常（%s）：%s" % (
                     type(e).__name__, str(e) or "无错误详情")
                 print("[!] %s" % msg)
@@ -694,8 +551,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                       "合作帖判定可能漏判了，去 _rejected.jsonl 离线查"
                       % (res.rejected, len(res.suspect), "、".join(who[:4])))
             if res.stale_view():
-                # 不当失败处理：账号删掉最新一帖时也会这样，天天误报会把
-                # 失败预算耗光。但必须说出来——它是"没看到时间线"的强提示。
+                # 最新帖倒退可能是删帖，仅提示，不消耗失败预算。
                 print("[!] 看到的最新一篇（%s）比归档里最新的（%s）还旧 —— "
                       "确认一下是不是没拿到时间线"
                       % (res.newest_seen[:10], res.newest_known[:10]))
@@ -709,8 +565,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 entry["last_reconcile_at"] = entry["last_success"]
                 entry["last_reconcile_new_count"] = res.new
                 entry["reconcile_new_total"] = int(entry.get("reconcile_new_total", 0)) + res.new
-            # D3：检查放在写完状态之后、存盘之前——它要读刚更新的
-            # consecutive_quiet_days，而它自己的"报过了"标记也要一起落盘。
+            # 检查使用刚更新的状态，告警去重标记一并落盘。
             run_integrity(arc, entry, platform, suspect=res.suspect)
             save_state(path, state)
             quiet = entry["consecutive_quiet_days"]
@@ -787,14 +642,10 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
                "%s 连续失败达到预算，需要人工确认会话是否还有效"
                % "、".join(blocked_by_budget))
     if not due:
-        # ❌ 不得静默跳过：什么都没做也要说清楚是为什么，
-        # 否则"每天都在跑"会悄悄变成"一年没跑过"而无人察觉。
         print("没有到期的平台，本次不抓取。")
         return 2 if blocked_by_budget else 0
 
-    # 直接调用入口时也保留抖动；scheduler 已持久化随机时间，显式传 --no-jitter。
-    # ⚠️ 顺序是**先判 stale 再抖动**——反过来的话每次唤醒都要先睡半小时
-    # 才发现"其实不用跑"。
+    # 先判断 stale 再抖动；scheduler 已持久化时间时用 --no-jitter。
     if not args.no_jitter and not args.dry_run:
         delay = random.uniform(0, dcfg.schedule.interval_minutes(now)
                                * dcfg.schedule.jitter_ratio * 60)
@@ -809,15 +660,12 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
     if not cdp_ready(port, profile=profile):
         if dcfg.autostart_chrome:
             print("专用 Chrome 没在跑，正在拉起...")
-            # 这不是自动登录：会话是人留在 profile 目录里的，这里只是把
-            # 那个浏览器重新用起来（全项目红线 1 没有松动）。
+            # 只重启人工登录过的 profile，不代替登录。
             launch_error: Exception | SystemExit | None = None
             try:
                 launched = launch(port=port, profile=profile)
             except (Exception, SystemExit) as e:
-                # launch 的 profile.mkdir / cfg.chrome_exe / Popen 都可能失败；
-                # core.chrome 也用 SystemExit 表达部分配置错误。两种形态必须
-                # 汇入下面同一套失败状态闭环，但不要吞 KeyboardInterrupt。
+                # 启动错误并入失败状态，保留 KeyboardInterrupt。
                 launched = False
                 launch_error = e
             if not launched:
@@ -847,16 +695,13 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
             return 1
 
     run_rc = asyncio.run(_run_due(due, dcfg, state, path, args.dry_run))
-    # 一个平台预算耗尽、另一个仍可运行时，后者成功不能把“部分停摆”洗成 rc=0。
-    # 运行本身失败（rc=1）优先；否则用 2 让 Task Scheduler 看见需要人工介入。
+    # 部分平台停摆返回 2；实际运行失败的 1 优先。
     return run_rc if run_rc else (2 if blocked_by_budget else 0)
 
 
 def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     args = _parse_args(argv)
-    # 运行分隔线由 Python 打，不由 .bat 的 echo %DATE% 打：
-    # cmd 按控制台代码页（本机 936）写，会在一份 UTF-8 日志里插进 GBK 字节。
-    # 输出被 run_delta.bat 追加进 state/delta.log，没有这行就分不清哪段是哪次跑的。
+    # 由 Python 写 UTF-8 运行分隔线，避免 cmd 向日志混入 GBK。
     print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
                                      or "(无参数)"))
     dcfg = config or DeltaConfig.load()
@@ -878,8 +723,7 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     lock_path = path.with_name("delta.lock")
     try:
         with DeltaRunLock(lock_path):
-            # 锁前读出的 state 可能已经被另一个计划任务改过；拿到锁后才读，
-            # stale 判定和随后的原子写才能基于同一份最新状态。
+            # 持锁后重读状态，避免用旧值覆盖另一任务的进度。
             state = load_state(path)
             bind_target_state(state, cfg())
             if args.reset_failures:

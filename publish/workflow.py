@@ -1,4 +1,4 @@
-r"""G6/G6c 浏览器状态机；把每次状态转换耐久追加到 journal。"""
+r"""浏览器发布状态机；每次转换追加到 journal。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -97,7 +97,7 @@ async def _execute_unlocked(
         source_refs: tuple[str, ...] = (),
         target_channels: tuple[str, ...] | None = None
         ) -> AttemptOutcome:
-    """执行 G2–G6c；不登录、不清草稿、不取消排期、不关闭用户 Chrome。"""
+    """核验目标、填写内容并提交；保留人工会话和其他远端内容。"""
     c = cfg()
     target_channels = target_channels or (post.platform,)
     c.assert_publish_chrome_isolated()
@@ -187,9 +187,7 @@ async def _execute_unlocked(
                               ui_timezone=ui_timezone, timeout=timeout)
         await channels.verify_before_submit(page, target_channels)
         step = "G6 单次提交"
-        # 先把“即将允许一次点击”的意图耐久化为禁止自动重试态，再调用 click。
-        # 否则机器恰好在 click 已送达、SubmitResult/下一行 journal 尚未落盘时
-        # 崩溃，只剩 prepared；--force 会再次点击并造成重复发布。
+        # 点击前先耐久记录未决意图，避免点击后崩溃又被当作可安全重试。
         armed = journal.transition(
             prepared, journal.STATUS_SUBMIT_AMBIGUOUS,
             recorded_at=datetime.now().astimezone().isoformat(),

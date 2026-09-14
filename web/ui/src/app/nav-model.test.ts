@@ -19,7 +19,6 @@ describe('主导航只有四项业务界面', () => {
   })
 
   it('⛔ 不包含「运行状态」', () => {
-    // DECISION_LOG：它降级为顶栏入口，主导航里不同时保留。
     const labels = NAV_ITEMS.map((item) => item.label)
     expect(labels).not.toContain('运行状态')
     expect(NAV_ITEMS.map((item) => item.path)).not.toContain('/runtime')
@@ -40,12 +39,10 @@ describe('navKeyForPath：选中项由路由算，不另存 state', () => {
     ['/review/fa_neakasaofficial/122100548013379375', 'review'],
     ['/history/in_neakasa.tech/3975547640610092585', 'history'],
   ])('详情页仍然亮着它所属的列表：%s → %s', (path, expected) => {
-    // 她是从队列进去的，导航上就该继续亮着「审校队列」。
     expect(navKeyForPath(path)).toBe(expected)
   })
 
   it('带查询串不影响判断', () => {
-    // 传进来的是 pathname，但真实代码万一传了整串也不该乱亮。
     expect(navKeyForPath('/review')).toBe('review')
     expect(selectedNavKeys('/review')).toEqual(['review'])
   })
@@ -56,7 +53,6 @@ describe('navKeyForPath：选中项由路由算，不另存 state', () => {
     ['/'],
     [''],
   ])('不属于主导航的 %s 一项都不亮', (path) => {
-    // 宁可一项都不亮，也不要亮错一项。
     expect(navKeyForPath(path)).toBeNull()
     expect(selectedNavKeys(path)).toEqual([])
   })

@@ -1,18 +1,4 @@
-r"""Day 1 · 一次性历史回填（登录态 + 人工滚动 + 响应拦截）
-
-形态：脚本不驱动滚动，你自己滚。
-    因此没有任何可识别的自动化行为特征 —— 滚动的确实是人。
-    脚本只做三件事：挂响应监听、等你滚完、把捞到的 JSON 落盘。
-
-前置：
-    1. 双击 scripts\start_chrome.bat 起专用 Chrome
-    2. 在那个窗口里登录抓取用的小号
-    3. 保持窗口开着，运行本脚本
-
-跑一次就够。跑完这个账号的历史内容就全在 archive/ 里了，
-之后的新帖由 routes/delta.py 每天接手（方案 B：登录态 + CDP 附着，
-见 docs/HANDOFF.md 第 2.1 节的方案变更说明）。
-"""
+"""人工滚动回填：捕获登录会话响应并归档，覆盖范围取决于实际滚动和响应。"""
 from __future__ import annotations
 
 import asyncio
@@ -28,26 +14,12 @@ from core import integrity
 from core.parse import extract, partition_by_owner
 from core.store import Archive
 
-# 多久没有新响应就提示"可以收尾了"。页面滚到底之后不会再发请求，
-# 但操作者看不见网络活动，只能靠猜。给个明确信号。
+# 无新响应达到此时长后提示收尾。
 STALL_HINT_SECONDS = 20
 
 
 class ScrollProgress:
-    """给滚动的人看的进度。对应实施计划的 B8。
-
-    **旧版打印的是"已捕获 N 个响应 / M 段 JSON"，那两个数字对操作者没有意义**——
-    他无法据此判断还要滚多久、有没有到最早一篇。2026-08-30 的首次回填里，
-    Facebook 只拿到约 2 个月的内容而 Instagram 有 6 年，当时**没人能判断
-    这是"FB 就这么多"还是"没滚到底"**（后经用户确认是前者，但那是事后追认，
-    不是当场可见）。
-
-    这里只做增量解析用于显示：每次只解析新到的那几段 JSON，
-    结果并不参与最终归档——收尾时会对全部 payload 重新做一次权威解析。
-    显示用的统计允许有一点点偏差，换的是不卡住滚动的人。
-
-    ❌ **本类不得驱动页面。** 人工滚动的全部价值在于滚动的确实是人。
-    """
+    """增量解析响应以显示人工滚动进度；不驱动页面，最终归档重新解析全部响应。"""
 
     def __init__(self, platform: str, account: str) -> None:
         self.platform = platform
@@ -141,14 +113,11 @@ async def run(platform: str) -> int:
             width = max(width, len(line))
         print()
 
-        # 停止接收新事件，再等已经到达的响应体读完；否则用户按 Enter 时仍在处理的
-        # 最后几段 JSON 会被无声漏出 capture 文件。
+        # 停止监听后等待读取完成，避免遗漏末尾响应。
         page.remove_listener("response", response_handler)
         await col.drain()
 
-        # 无条件转储原始响应，且必须在解析之前。
-        # 解析器是按已知响应结构写的，真实结构一旦不同就会解析出 0 篇 ——
-        # 没有这份转储，你滚了 20 分钟的成果会全部丢失，且无从排查。
+        # 解析前先保存原始响应，结构变化时仍可离线重放。
         arc = Archive(c.archive_dir, f"{platform[:2]}_{account}")
         dump = arc.base / f"_capture_{int(time.time())}.json"
         atomic_write_json(dump, col.payloads)
@@ -161,9 +130,7 @@ async def run(platform: str) -> int:
             print(f"    原始数据在 {dump.name}，把它发给我，我按真实结构改解析器。")
             print("    不用重滚。")
 
-        # 人工滚动时页面会加载推荐内容和被 @ 的 UGC，它们和目标账号的帖子混在
-        # 同一批响应里。不筛的话下游会翻译并发布他人内容（2026-08-30 实测，
-        # Instagram 一次回填混进 266 条来自另外 195 个账号的帖子）。
+        # 过滤推荐内容，保留目标账号及合作帖。
         posts, rejected = partition_by_owner(posts, account)
         if rejected:
             n_rej = arc.record_rejected(rejected)
@@ -172,17 +139,13 @@ async def run(platform: str) -> int:
                   f"（来自 {len(others)} 个其它账号），已记入 _rejected.jsonl"
                   f"（新增 {n_rej} 条）")
 
-        # 原创 / 合作分开报。Instagram 实测 1019 篇里 263 篇是合作帖
-        # （别人发布、本账号是 coauthor，同样在本账号主页上），
-        # 而且**最近一年的主要内容形式就是合作帖**——只报一个总数的话，
-        # 合作帖判定哪天失效了，这里会安静地少掉几百篇而看不出来。
+        # 分开统计原创与合作帖，使合作归属异常可见。
         target = (account or "").strip().lower()
         n_authored = sum(1 for p in posts if p.owner == target)
         print(f"本账号帖子 {len(posts)} 篇"
               f"（原创 {n_authored} · 合作 {len(posts) - n_authored}）")
 
-        # 丢弃的里面有没有已知合作方？有就是"归属判定漏判"的强提示。
-        # 名单同时取自归档与本次留下的这批：第一次回填时归档是空的。
+        # 合作名单同时包含归档与本次结果，覆盖首次回填。
         suspect = integrity.check_dropped_partners(
             rejected,
             integrity.known_partners(
@@ -225,8 +188,6 @@ if __name__ == "__main__":
 
     force_utf8()
     if len(sys.argv) != 2 or sys.argv[1] not in ("facebook", "instagram"):
-        # 提示里给 .bat 的用法：实际跑这个脚本的人多半是双击 .bat 进来的，
-        # 告诉他一条他敲不出来的命令没有意义
         raise SystemExit(
             "用法：scripts\\run_backfill.bat <facebook|instagram>\n"
             "      （等价命令：.venv\\Scripts\\python.exe -m routes.backfill facebook）")

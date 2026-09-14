@@ -10,7 +10,6 @@ const at = (pathname: string) => ({ pathname })
 
 describe('确认文案', () => {
   it('详情', () => {
-    // 详情离开需要明确说明会放弃草稿。
     expect(UNSAVED_MESSAGES.detail).toBe('修改尚未保存，确定离开并放弃当前草稿？')
   })
 
@@ -25,7 +24,6 @@ describe('确认文案', () => {
 
 describe('shouldBlockNavigation', () => {
   it('不脏就不拦', () => {
-    // 总是弹确认框的守卫三天之内就会被训练成"闭着眼点继续"。
     expect(
       shouldBlockNavigation({
         dirty: false,
@@ -56,7 +54,6 @@ describe('shouldBlockNavigation', () => {
   })
 
   it('脏 + 换到另一篇详情 → 拦', () => {
-    // 「下一篇」也会丢草稿，它不是例外。
     expect(
       shouldBlockNavigation({
         dirty: true,

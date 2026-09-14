@@ -1,9 +1,4 @@
-"""Read the full rendered Planner month, including manual posts and active-time hints.
-
-Month day links, filters, published detail URLs and recommendation tooltip were
-observed on the DE account on 2026-09-12. Scheduled Post details keep the separately
-recorded v2 channel/ID contract. Unknown cards stop a complete inventory claim.
-"""
+"""读取完整月历及手工项，排除推荐时段；未知条目使覆盖判定不完整。"""
 from __future__ import annotations
 
 from publish.channel_evidence import require as channel_proof
@@ -62,11 +57,7 @@ async def settled(page, timeout):
 
 
 async def read_grid(page, *, timeout=30):
-    """Sweep every day twice, waiting for loaders and newly mounted cards each time.
-
-    Removing nested links/buttons from a copy yields the observed day label. No
-    generated CSS classes, React internals or API responses are read.
-    """
+    """Sweep every day twice, waiting for loaders and newly mounted cards; read labels from DOM copies."""
     deadline = time.monotonic() + timeout
     previous = None
     while True:
@@ -82,8 +73,7 @@ async def read_grid(page, *, timeout=30):
         result = []
         for index, day in enumerate(dates):
             cell = cells.nth(index)
-            # Background Chrome throttles RAF stability waits; the DOM scroll itself
-            # is read-only and explicit. Loaders and two complete sweeps prove readiness.
+            # DOM scrolling avoids background RAF throttling; loaders and two sweeps determine readiness.
             await cell.evaluate("el => el.scrollIntoView({block:'center', behavior:'instant'})")
             await settled(page, deadline - time.monotonic())
             # Top-level descendant links represent one card; nested wrappers repeat its time.
@@ -152,8 +142,7 @@ async def read_item(page, row, item, *, timeout=30):
         try:
             await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             await detail.bring_to_front()
-            # Direct insight URLs render as a page; in-place navigation wraps the
-            # same surface in a dialog. The URL is validated before this body read.
+            # Direct URLs render a page; in-place navigation wraps the same content in a dialog.
             dialog = detail.locator('body')
             # Metrics can continue loading after the post itself is fully observed.
             label = dialog.get_by_text(re.compile(r'Published on:'))
@@ -182,11 +171,7 @@ async def read_item(page, row, item, *, timeout=30):
 
 
 def published_channels(header, day, clock):
-    """Observed metadata row: platform icons + published time + optional collaborators.
-
-    The caption is outside this row and cannot supply channel/account evidence.
-    Direct detail navigation is scoped to the asset proven by both channel captures.
-    """
+    """Read channel evidence from metadata icons, time and collaborators, never from caption text."""
     match = re.search(r'Published on: \w{3} (\w{3} \d{1,2}), (\d{1,2}:\d{2}[ap]m)', header['text'])
     if not match:
         raise bs.PublishStepError('已发布详情缺少可核对的日期与时刻')

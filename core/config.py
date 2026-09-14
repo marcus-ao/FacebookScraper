@@ -1,8 +1,4 @@
-"""配置与 Chrome 路径探测（Windows 目标平台）。
-
-开发机可能是 macOS，但部署固定为 Windows，因此路径探测以 Windows 为主，
-其余平台保留最小回退，只为让核心逻辑能在开发机上跑测试。
-"""
+"""配置加载与 Chrome 路径探测。"""
 from __future__ import annotations
 
 import os
@@ -27,17 +23,7 @@ CHROME_CANDIDATES = [
 
 
 def per_platform(raw, platform: str, default):
-    """配置项允许写成一个数（两平台通用）或 ``{ facebook = 7, instagram = 21 }``。
-
-    用**内联表**而不是 ``[delta.facebook]`` 子表，是为了避开 TOML 的排序陷阱：
-    子表一旦插在普通键中间，它后面的键就全归子表了——项目里
-    ``[translate.glossary]`` 已经因为这条规则专门写过警告。内联表是一行，
-    放在哪儿都不改变语义。
-
-    为什么需要按平台分：实测两个账号的节奏差一个量级——Facebook 发帖
-    中位间隔 1.0 天（2026-08-25 还在发），Instagram 中位 1.6 天但已经
-    连续 45 天没发。同一个阈值不可能同时适配这两种。
-    """
+    """读取平台阈值：支持通用数值或 facebook/instagram 内联表。"""
     if isinstance(raw, dict):
         value = raw.get(platform)
         return default if value is None else value
@@ -178,20 +164,7 @@ def cfg() -> Config:
 
 
 def invalidate_cfg_cache() -> None:
-    """本进程自己写过 config.toml 之后重新读一次，不要交给文件时间戳去猜。
-
-    上面那段 ``(st_mtime_ns, st_size)`` 是给**别人**改配置用的：有人手工编辑
-    config.toml，字节数和修改时间几乎一定会变，探测得到。
-
-    运营在设置页保存走的是另一条路。``operating_settings.save()`` 按原格式回填
-    同一个键，``times = ["10:00", "17:00"]`` → ``["11:30", "18:00"]``、
-    ``snooze_default_days = 3`` → ``= 4``，字节数一模一样，于是 st_size 恒等，
-    能不能发现全看 mtime 这一个数。本机实测：5000 次等长背靠背改写里有 68.42%
-    共用同一个 st_mtime_ns（有效精度约 1ms）。也就是说长驻的 Web 进程可能在
-    「已保存」之后仍然按旧的默认排期时刻办事。
-
-    保存的人自己知道刚写过什么，不必去猜，所以这里直接作废。
-    """
+    """本进程写配置后显式失效缓存；等长快速改写可能保留同一 mtime 和 size。"""
     global _cfg
     if _cfg is not None:
         _cfg = Config(_cfg.path, runtime_path=_cfg.runtime_path)

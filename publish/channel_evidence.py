@@ -1,10 +1,4 @@
-"""Focused, read-only channel control captures, alongside the submission v2 probe.
-
-The older probe masks combobox labels along with editable text. This capture saves
-only an exact allowlist of known channel control names and boolean/count state;
-it never stores caption/date input values. All selectors below were observed in
-publish_probe_20260912_205317_056051.json and the live accessibility tree.
-"""
+"""只读捕获已知渠道控件名称及布尔/数量状态，不保存正文或日期输入值。"""
 from __future__ import annotations
 
 from core.chrome import _cdp_profile_matches

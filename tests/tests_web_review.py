@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 from core import config, review, translated  # noqa: E402
 from core.store import post_dirname  # noqa: E402
 from web.api import app as api_app  # noqa: E402
-import localize_images  # noqa: E402
+from localize import images as image_de  # noqa: E402
 
 
 class WebReviewTests(unittest.TestCase):
@@ -100,7 +100,7 @@ class WebReviewTests(unittest.TestCase):
             "post_id": self.post_id, "media_index": 0,
             "source_sha256": hashlib.sha256((self.post_dir / "01.jpg").read_bytes()).hexdigest(),
             "text_de_sha256": hashlib.sha256(text_de.strip().encode("utf-8")).hexdigest(),
-            "prompt_version": localize_images.IMAGE_PROMPT_VERSION,
+            "prompt_version": image_de.IMAGE_PROMPT_VERSION,
             "out_path": destination.relative_to(self.account).as_posix(),
             "output_sha256": hashlib.sha256(generated).hexdigest(),
             "model": "offline-fixture", "size_requested": "1080x1080",

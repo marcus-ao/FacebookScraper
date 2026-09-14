@@ -1,16 +1,4 @@
-r"""归档图片里的英文文字 -> 德语（K 组，GPT-Image-2）。
-
-本模块沿用 :mod:`translate` 已验证的批处理结构。原图与 ``manifest.jsonl``
-只读；付费产物写入每帖的 ``media_de/``，元数据追加到账号目录下的
-``images_de.jsonl``。人工放进 ``media_de/`` 的文件永远优先。
-
-真实 API 自检会产生费用，只有显式传入 ``--check`` 才会执行：
-
-    scripts\run_images.bat --check
-
-普通离线检查可使用 ``--show-prompt`` / ``--estimate`` / ``--dry-run``；
-它们都不会调用 API。
-"""
+"""将图内英文改为德语；产物写入 media_de/ 与 images_de.jsonl，人工图片优先。"""
 from __future__ import annotations
 
 import argparse
@@ -34,13 +22,7 @@ from typing import Any, Mapping
 
 from PIL import Image, ImageDraw
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-
-# 同 translate.py 顶部那段：`python localize_images.py` 会让本文件叫
-# `__main__`，而上层写的是 `import localize_images`。不登记就会加载两份。
-if __name__ == "__main__":                          # pragma: no cover
-    sys.modules.setdefault("localize_images", sys.modules[__name__])
+ROOT = Path(__file__).resolve().parents[1]
 
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
@@ -50,8 +32,6 @@ from core.store import (Archive, ArchivePathError,  # noqa: E402
                         account_dirs, assert_physical_direct_path,
                         post_directory, post_folder_matches_id, read_post_truth)
 from core.store import post_dirname as post_dirname  # noqa: E402 旧脚本公开入口
-# 这四个名字曾经是 `import translate`：为了判「这张图的译文还算不算数」，
-# 调图这一路要把翻译执行器整个拉起来。契约下沉到 core/ 之后就没这回事了。
 from core.translated import (effective_translation, image_translation, load_human_translated,  # noqa: E402
                              load_human_translation_history, load_translated,
                              render_glossary)
@@ -93,9 +73,7 @@ KEEP_VERBATIM_KEYS = frozenset({"promo_codes", "brands", "models", "events", "ma
 IMAGE_RATE_KEYS = frozenset({"text_input", "image_input", "image_output"})
 
 
-# ---------------------------------------------------------------------------
-# 配置与 API 客户端（K1）
-# ---------------------------------------------------------------------------
+# 配置与客户端
 
 def _non_bool_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -477,8 +455,7 @@ class ImageEditor(paid_model.PaidCaller):
                 **self.request_kwargs(image_file, prompt, size, quality=quality))
 
         response_raw = _as_dict(response)
-        # 响应已经产生费用：先取 usage，再做模型/内容契约。即使后续拒绝产出，
-        # paid ledger 也能记下真实成本，而不是退化成未知金额。
+        # 先记录已发生的 usage，再校验模型与产物，避免拒绝结果后漏记费用。
         usage_value = response_raw.get("usage", getattr(response, "usage", None))
         self.last_usage = normalize_usage(usage_value)
         usage_errors = usage_contract_errors(self.last_usage)
@@ -515,14 +492,7 @@ _DATA_URL_PREFIX_RE = re.compile(r"^data:image/[A-Za-z0-9.+-]+;base64,")
 
 
 def decode_image_payload(payload: str) -> bytes:
-    """严格解码网关返回的 base64，并确认 Pillow 可识别。
-
-    ``validate=True`` 保留（不接受任何非 base64 字母表的字符），但先把**空白**
-    和可选的 ``data:image/...;base64,`` 前缀剥掉再解码（CR-55）：
-    中转网关按 76 列折行返回 base64、或补上 data URL 前缀都是常见形态，
-    而这一步失败时**钱已经花掉了**，整批产出会被判"不是合法的裸 base64"丢弃。
-    剥空白不会放松校验 —— 折行是编码传输格式，不是数据内容。
-    """
+    """去除空白及可选 data URL 前缀后严格解码 base64，并验证图片可读。"""
     if not isinstance(payload, str) or not payload.strip():
         raise ValueError("b64_json 为空")
     cleaned = _DATA_URL_PREFIX_RE.sub("", payload.strip())
@@ -601,9 +571,7 @@ def run_check(settings: Settings, editor: ImageEditor | None = None) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# 尺寸合法化（K2）
-# ---------------------------------------------------------------------------
+# 尺寸合法化
 
 def _axis_candidates(target: float) -> list[int]:
     """给目标边长周围的 16 倍数；范围够跨过像素上下限的量化误差。"""
@@ -638,26 +606,13 @@ def aspect_drift_percent(source_width: int, source_height: int,
 
 def scale_factor(source_width: int, source_height: int,
                  output_width: int, output_height: int) -> float:
-    """线性缩放倍数（按面积开方）；>1 表示为了过像素下限把原图放大了。
-
-    **为什么单独记这一项**（CR-54）：`aspect_drift_percent` 只看宽高比，
-    等比放大的形变是 0，所以它抓不到"小图被放大"这件事。
-    真实归档实测（818 张）：772 张不缩放，但 13 张放大超过 1.3 倍，
-    最极端的 278x430 -> 656x1008 放大了 **2.35 倍**，而它的宽高比形变只有
-    0.66%，稳稳低于 2% 的告警线，会静默通过。发出去的德语图就是一张
-    2.35 倍放大的图 —— 与 IMAGE_PLAN 第 3.1 节
-    「在无法验证的介质上做不可逆的变换」是同一类问题。
-    """
+    """按面积开方计算线性缩放倍数，补充宽高比无法反映的等比放大信息。"""
     return math.sqrt((output_width * output_height)
                      / (source_width * source_height))
 
 
 def legal_size(width: int, height: int) -> tuple[int, int]:
-    """返回尽量贴近原比例、且满足 GPT-Image-2 四条约束的尺寸。
-
-    只做同比例缩放与 16 像素量化；不会裁剪或填充。若原图本身超过 3:1，
-    不可能在不改画面的前提下合法化，故显式失败。
-    """
+    """按原比例缩放并量化到 16 像素；不裁剪或填充，原比例超 3:1 时拒绝。"""
     if (not isinstance(width, int) or isinstance(width, bool)
             or not isinstance(height, int) or isinstance(height, bool)
             or width <= 0 or height <= 0):
@@ -711,9 +666,7 @@ def legal_size(width: int, height: int) -> tuple[int, int]:
                         + abs(candidate_height - target_height) / max(target_height, 1.0))
         width_rounding_error = abs(candidate_width - rounded_width)
         height_rounding_error = abs(candidate_height - rounded_height)
-        # 最后一项偏向较大候选，保证 1080x1080 的等距平局选到任务书指定的 1088。
-        # 先锁定宽边的最近 16 倍数，再用高边修正宽高比：任务书给出的
-        # 1080x1350 -> 1088x1360 与 1440x1080 -> 1440x1088 都依赖这个顺序。
+        # 先选最接近的宽度，平局取较大值，再用高度修正比例。
         return (width_rounding_error, drift, target_error, height_rounding_error,
                 -(candidate_width * candidate_height))
 
@@ -723,9 +676,7 @@ def legal_size(width: int, height: int) -> tuple[int, int]:
     return chosen
 
 
-# ---------------------------------------------------------------------------
-# 提示词（K4）
-# ---------------------------------------------------------------------------
+# 提示词
 
 _IMAGE_PROMPT_PLACEHOLDERS = frozenset({
     "{{TEXT_DE}}", "{{GLOSSARY}}", "{{KEEP_VERBATIM}}",
@@ -781,8 +732,7 @@ def build_image_prompt(settings: Settings, text_de: str, *, refine_instruction: 
             details.append(f"缺少占位符 {missing}")
         raise SystemExit("图片提示词模板契约失败：" + "；".join(details))
 
-    # 不可信正文必须最后插入；否则正文中的字面 ``{{KEEP_VERBATIM}}`` 会被后续
-    # 替换成真实规则，等于让外部数据改变了提示词结构。
+    # 最后插入外部正文，避免其字面占位符参与模板替换。
     substitutions = (
         ("{{GLOSSARY}}", render_glossary(settings.glossary)),
         ("{{KEEP_VERBATIM}}", render_keep_verbatim(settings.keep_verbatim)),
@@ -797,9 +747,7 @@ def build_image_prompt(settings: Settings, text_de: str, *, refine_instruction: 
     return template.strip()
 
 
-# ---------------------------------------------------------------------------
-# 产出硬校验（K5）
-# ---------------------------------------------------------------------------
+# 产物校验
 
 @dataclass(frozen=True)
 class ValidatedImage:
@@ -874,9 +822,7 @@ def validate_output(payload: str, source_path: Path,
         output.close()
 
 
-# ---------------------------------------------------------------------------
-# 真相源、人工优先与批处理（K6）
-# ---------------------------------------------------------------------------
+# 产物存储与批处理
 
 @dataclass
 class ImageState:
@@ -1039,15 +985,7 @@ def _extension(output_format: str) -> str:
 
 
 def image_record_is_current(job: ImageJob, record: Mapping[str, Any] | None) -> bool:
-    """完成判据：任务书那五项，**外加产出路径必须就是这次要写的那个**。
-
-    ⚠️ 与 IMAGE_PLAN 第 4 节的偏差，理由记在这里（CR-57）：
-    路径由 ``output_format`` 与帖子目录名共同决定。只认那五项时，
-    把 ``output_format`` 从 jpeg 改成 png 之后旧的 ``01.jpg`` 记录仍算"当前"，
-    新的 ``01.png`` 永远不会生成；一旦 ``--force``，``media_de/`` 里会同时
-    出现两个文件，而 ``publish/compose.py`` 见到同序号多候选就拒发（CR-48）。
-    加这一项只会让判定**更保守**（更容易重做），不会漏掉本该重做的图。
-    """
+    """核验来源、版本、产物及目标路径；输出格式变化后旧路径不算当前结果。"""
     if not isinstance(record, Mapping):
         return False
     return (record.get("post_id") == job.post_id
@@ -1110,7 +1048,7 @@ def _candidate_is_program_owned(candidate: Path, rel: str, state: ImageState) ->
     expected_hashes = state.owned_hashes.get(rel)
     if not expected_hashes:
         return False
-    # 旧版任务书 schema 没有 output_sha256；对这样的既有行保持兼容。
+    # 兼容不含 output_sha256 的既有记录。
     if None in expected_hashes:
         return True
     return sha256_file(candidate) in expected_hashes
@@ -1133,13 +1071,7 @@ def manual_override_paths(job: ImageJob, state: ImageState) -> list[Path]:
 
 
 def readonly_archive(arc_base: Path) -> Archive:
-    """构造 Archive，但先确认目录已存在，绝不靠 mkdir 兜底。
-
-    ``Archive.__init__`` 里有一句 ``posts_dir.mkdir(parents=True, exist_ok=True)``，
-    所以直接构造它的 ``--estimate`` / ``--dry-run`` 并不是真的"零写盘"（CR-50）。
-    先判后构造之后，目录已存在时 mkdir 是空操作，缺目录时给出可操作的错误
-    而不是悄悄建一个空壳。做法与 ``publish/compose.py::_find_source`` 一致。
-    """
+    """只读取已有归档目录，避免 dry-run/estimate 创建空目录。"""
     posts_dir = arc_base / "posts"
     assert_physical_direct_path(
         arc_base.parent, arc_base, kind="directory", label="账号归档目录")
@@ -1174,14 +1106,8 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                media_index_filter: int | None = None,
                allow_manual_refine: bool = False,
                report: Any = None) -> tuple[list[ImageJob], ImageState, RunStats]:
-    """把帖子展开成图片任务；没有当前译文、人工覆盖或已完成项均不入队。
-
-    **单张图的问题只跳过这一张**（CR-52）：原图缺失、无法解码、宽高比越界
-    都记进 ``stats.skipped_bad_source`` 并继续，不再掀掉整个账号的批次。
-    manifest 本身的形态错误仍然是致命的 —— 那是数据完整性问题，
-    与 ``translate.py::SourceDataError`` 同一条纪律。
-    """
-    # 只读边界校验；不新建任何目录（CR-50）。
+    """展开图片任务并跳过已完成、人工覆盖或缺当前译文项；坏单图跳过，坏 manifest 报错。"""
+    # 只读边界校验；不新建任何目录。
     readonly_archive(arc_base)
     translated = load_translated(arc_base / "translated.jsonl")
     human_history = load_human_translation_history(arc_base / "translated_human.jsonl")
@@ -1219,8 +1145,6 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 continue
             if not isinstance(media, dict) or media.get("kind") != "image":
                 continue
-            # 这一段的任何失败都只影响这一张图：缺文件、坏字节、超过 3:1
-            # 都是**单张素材**的问题，不该让同账号其它图片一张都跑不了（CR-52）。
             try:
                 source_path, source_rel = _source_from_manifest(
                     arc_base, row, media)
@@ -1312,15 +1236,12 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
         if manual and not versioned:
             raise RuntimeError("写盘前发现人工德语图，已放弃覆盖："
                                + "、".join(path.name for path in manual))
-        # 此时付费结果已在临时文件里完整 fsync 且通过全部硬闸。先把绑定输出哈希的
-        # 所有权记录 fsync：硬终止若发生在 replace 前，目标不存在/哈希不匹配，
-        # 下次仍会重试；若发生在 replace 后，记录与文件同时成立，不会误判成人工图。
+        # 先 fsync 所有权及输出哈希，再替换图片；中断后可据此区分程序产物与人工图。
         append_image_jsonl(job.arc_base / "images_de.jsonl", record)
         state.latest[job.key] = record
         state.owned_paths.add(job.out_rel)
         state.owned_hashes.setdefault(job.out_rel, set()).add(record["output_sha256"])
-        # JSONL fsync 本身有可见耗时。设计人员若恰在上一次检查之后放入同序号
-        # 文件（含覆盖同名程序旧图），必须在原子替换前最后再判一次，不能覆盖。
+        # 替换前再次核对人工文件，避免覆盖刚写入的修订。
         manual = manual_override_paths(job, state)
         if manual and not versioned:
             raise RuntimeError("所有权记录落盘后发现人工德语图，已放弃覆盖："
@@ -1342,11 +1263,7 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    """整批性错误的判据。实现在 core/paid_model，与 F 组共用同一份（CR-53）。
-
-    K 组特有的整批性错误（模型目录预检失败、模型不匹配、模型不可用、
-    响应契约破裂）通过 ``extra_fatal`` 补进去。
-    """
+    """复用公共致命错误分类，并补充图片模型与响应契约错误。"""
     return paid_model.is_fatal_api_error(exc, extra_fatal=(
         ModelCatalogPreflightError, ModelMismatchError,
         ModelUnavailableError, ResponseContractError,
@@ -1477,15 +1394,13 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 raise FatalBatchError(
                     f"连续 {consecutive_failures} 张失败，已达 "
                     f"[image].failure_budget={settings.failure_budget}，停止本批。"
-                    "\n    单张失败不再掀掉整批（CR-53），但连续失败说明问题不是"
+                    "\n    单张失败不再掀掉整批，但连续失败说明问题不是"
                     "单张素材 —— 先看上面每条的原因，修掉后重跑即可"
                     "（已成功的不会重复付费）。") from exc
     return stats
 
 
-# ---------------------------------------------------------------------------
-# K8 给 translate.run_review 使用的只读配对
-# ---------------------------------------------------------------------------
+# 审校清单的只读图片配对
 
 def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
                        translated: Mapping[str, Any],
@@ -1510,7 +1425,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         try:
             source_path, source_rel = _source_from_manifest(arc_base, row, media)
         except (ValueError, ArchivePathError):
-            # 旧布局/缺文件仍由 run_review 原有“配图”段展示；K8 只接受可物理比对的图片。
+            # 仅比较实际存在的图片；缺图与布局异常由配图检查报告。
             continue
         source_sha = sha256_file(source_path)
         record = state.latest.get((post_id, media_index))
@@ -1520,8 +1435,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         localized_rel: str | None = None
         current_record: dict[str, Any] | None = None
         manual = False
-        # 人工版本永远优先于程序当前版本：设计人员可能保留 01.jpg 程序图，
-        # 另放 01.png 修订图；K8 若先选程序记录，就会在唯一验收口审错文件。
+        # 人工修订优先，包括与程序图片同序号、不同扩展名的文件。
         media_de = source_path.parent / "media_de"
         assert_physical_direct_path(
             source_path.parent, media_de, kind="directory", label="media_de 目录")
@@ -1551,9 +1465,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
     return pairs
 
 
-# ---------------------------------------------------------------------------
-# 作用域、真实 usage 预算（K7）与 CLI
-# ---------------------------------------------------------------------------
+# 作用域、预算与 CLI
 
 def select_rows(settings: Settings, dirs: list[Path], *,
                 latest_posts: int | None = None,
@@ -1563,7 +1475,7 @@ def select_rows(settings: Settings, dirs: list[Path], *,
     rows_by_dir: dict[Path, list[dict]] = {}
     flat: list[tuple[Path, dict]] = []
     for arc_base in dirs:
-        arc = readonly_archive(arc_base)          # 只读；不新建目录（CR-50）
+        arc = readonly_archive(arc_base)          # 只读；不新建目录
         rows = arc.rows()
         rows_by_dir[arc_base] = rows
         flat.extend((arc_base, row) for row in rows)
@@ -1585,7 +1497,7 @@ def select_rows(settings: Settings, dirs: list[Path], *,
         if latest_posts <= 0 or latest_posts > MAX_LATEST_POSTS:
             raise ValueError(
                 f"--latest-posts 必须在 1..{MAX_LATEST_POSTS}；"
-                "它只用于 K9 最新三篇验收，不能替代全历史费用闸")
+                "仅限制选帖数量，不能替代全历史费用闸")
         ordered = sorted(
             flat,
             key=lambda pair: (
@@ -1756,7 +1668,7 @@ def main(argv=None) -> int:
                         help="当前指纹有效的程序产物也重做；人工文件仍绝不覆盖")
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument("--latest-posts", type=int, default=None,
-                       help="全账号合计只选最新 N 篇（K9 验收使用 3）")
+                       help="全账号合计只选最新 N 篇")
     scope.add_argument("--post-id", action="append", default=None,
                        help="只选指定 post_id；可重复传入")
     scope.add_argument("--all-history", action="store_true",
@@ -1775,11 +1687,10 @@ def main(argv=None) -> int:
             parser.error("--media-index 不能与 --check/--show-prompt 同时使用")
     if (args.latest_posts is not None
             and not 1 <= args.latest_posts <= MAX_LATEST_POSTS):
-        parser.error(f"--latest-posts 必须在 1..{MAX_LATEST_POSTS}（只用于 K9 验收）")
+        parser.error(f"--latest-posts 必须在 1..{MAX_LATEST_POSTS}")
     if args.confirm_all_history_cost and not args.all_history:
         parser.error("--confirm-all-history-cost 只能与 --all-history 同时使用")
-    # 组装根：预算策略由 pipeline_assisted 提供，core/ 不许知道 —— 同
-    # translate.py::main，理由见 RequestController 的 docstring。
+    # 由应用入口注入预算策略，避免 core 反向依赖流水线。
     from pipeline.engine import budget_preflight   # noqa: PLC0415
 
     settings = Settings()
@@ -1829,9 +1740,6 @@ def main(argv=None) -> int:
             print(f"[!] 指定帖子没有可处理的 media_index={args.media_index} 图片。")
             return 1
 
-    # 离线命令也要失败闭合成可读的一行，而不是抛 traceback（CR-52）：
-    # --estimate 是"要不要花这笔钱"的最后一道人类判断，它崩掉的代价是
-    # 看不见预算就直接跑。
     try:
         if args.show_prompt:
             return run_show_prompt(settings, scoped)
@@ -1880,7 +1788,7 @@ def main(argv=None) -> int:
               f"缺当前译文 {total.skipped_no_translation} / "
               f"素材问题 {total.skipped_bad_source}。")
         if total.succeeded:
-            print("下一步：运行 translate.py --review 生成含原图/德语图的 K8 审校清单。")
+            print("下一步：运行 localize/text.py --review 生成含原图/德语图的 K8 审校清单。")
     if total.skipped_bad_source:
         print(f"[!] 有 {total.skipped_bad_source} 张图因素材问题被跳过（原因见上），"
               "它们不会被静默当成已完成；修好素材后重跑即可。")

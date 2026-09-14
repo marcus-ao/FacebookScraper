@@ -1,23 +1,11 @@
-/**
- * 「为什么现在不能点」的判定。**纯函数，没有 React 依赖**，所以能单测。
- *
- * 这几句话是运营唯一能拿到的解释 —— 顺序排错了，她会先去做一件不该先做的事。
- * 所以每条 `if` 就是一级优先级，从「她自己动一下手就能解决的」排到
- * 「只能等系统的」：先说正在编辑，再说正在提交，最后才说条件不满足。
- *
- * ⛔ 不要把它们改回嵌套三元。原来 useApproval 里那一行是七层，
- *    ContentJobs 里两行各五、六层，读的人没法确认哪一条先赢。
- * ⛔ 也不要做成通用规则引擎。这里只有三个动作，多一层抽象就要多读一层。
- */
+/** 禁用原因按分支顺序取最高优先级。 */
 
 import type { DisplayStatus } from '@/types/domain'
 
 export interface ApprovalGate {
   readonly editing: boolean
   readonly busy: boolean
-  /** approval-options 正在读。 */
   readonly fetching: boolean
-  /** 状态允许通过（pending_review / edited）。 */
   readonly eligible: boolean
   readonly status: DisplayStatus
   readonly optionsFailed: boolean
@@ -51,7 +39,6 @@ export function approvalDisabledReason(gate: ApprovalGate): string {
   return ''
 }
 
-/** 初翻与单篇优化共用的前两条：都要先把编辑区腾出来。 */
 function contentJobCommon(gate: { readonly editing: boolean; readonly busy: boolean }): string {
   if (gate.editing) return '请先保存或放弃当前编辑'
   if (gate.busy) return '正在处理，请等待'
@@ -64,7 +51,6 @@ export interface InitialTranslationGate {
   readonly running: boolean
   readonly interrupted: boolean
   readonly available: boolean
-  /** 第三方作者的处理授权。 */
   readonly consented: boolean
 }
 
@@ -85,7 +71,6 @@ export interface RefinementGate {
   readonly running: boolean
   readonly interrupted: boolean
   readonly instruction: string
-  /** 可用次数与费用已经读到。 */
   readonly capabilitiesLoaded: boolean
   readonly kind: 'text' | 'image'
   readonly remaining: number
@@ -103,14 +88,7 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   return ''
 }
 
-/**
- * 默认排期时刻要不要填进去。
- *
- * 只有三件事同时成立才填：**没人碰过这个字段**、当前是空的、后端给了可选范围。
- * 她把时间清掉是一个决定 —— 下一次 approval-options 回来又替她填回去，
- * 等于和人抢输入框，而这个字段决定的是帖子什么时候公开发出去。
- * 换一篇任务时 `touched` 重置，新的一篇照样有默认值。
- */
+/** 仅未触碰且为空时预填；人工清空仍算已触碰，切换任务后重置。 */
 export function seedScheduleTime(state: {
   readonly current: string
   readonly touched: boolean

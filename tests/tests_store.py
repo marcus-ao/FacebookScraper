@@ -150,8 +150,7 @@ with tempfile.TemporaryDirectory() as d:
           "安全目录名只影响路径，post.json 保留远端原始 ID")
     check(not (Path(d) / "escaped").exists(), "账号目录外没有被路径穿越创建文件")
 
-    # 即使未来目录名生成器发生回归，Archive.post_dir 的独立 containment
-    # 仍必须拒绝越界路径。
+    # 目录生成器异常时，独立路径边界检查仍须拦截。
     from unittest.mock import patch
     with patch("core.store._new_folder_name", return_value="../escape"):
         try:
@@ -250,8 +249,7 @@ with tempfile.TemporaryDirectory() as d:
     check(new_dir == old_dir and old_dir.exists(),
           "created_at 反向纠正保留固定目录且只保留一个当前真相")
 
-    # 模拟修复前已经遗留的双 truth dirs。旧实现先按 created_at 排序再用
-    # post_id 后写胜出，会让 dated 旧残缺记录覆盖 undated 新完整记录。
+    # 模拟同 ID 双目录，按质量保留完整记录。
     duplicate = arc.posts_dir / "2026-08-29_1230_move_reverse"
     duplicate.mkdir()
     (duplicate / "post.json").write_text(json.dumps(old.to_row()), encoding="utf-8")
@@ -270,12 +268,6 @@ with tempfile.TemporaryDirectory() as d:
           and "按质量等级选择" in output.getvalue(),
           "reindex 对重复 truth dirs 显式告警并说明选择依据")
 
-# ==========================================================================
-# [J migrate] / [J migrate target] / [J migrate conflict] 三段已删除（2026-09-03）。
-# 它们测的是 tools/layout.py::migrate 的越界防护，而那段一次性迁移代码已随
-# 归档完成迁移而删除。防护本身（core/store.py::assert_physical_direct_path）
-# 没有动，tests_store_links.py 在仍然活着的路径上覆盖同一个威胁模型。
-# ==========================================================================
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

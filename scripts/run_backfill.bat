@@ -1,22 +1,8 @@
 @echo off
-REM ---------------------------------------------------------------------
-REM Backfill entry point. Usage:
-REM     run_backfill.bat facebook
-REM     run_backfill.bat instagram
-REM
-REM Prerequisite: start_chrome.bat has been run and the scraping account
-REM is logged in inside that window.
-REM
-REM Pure ASCII on purpose -- see the comment block in setup.bat.
-REM Argument validation and all Chinese output live in routes\backfill.py.
-REM ---------------------------------------------------------------------
+REM Requires the scraping account to be logged in via start_chrome.bat.
 setlocal
-REM Console code page here is 936; a redirected stdout would fall back to
-REM GBK and crash on the first non-encodable character. See core\console.py.
 set "PYTHONIOENCODING=utf-8"
-REM scripts\ lives one level below the project root -- go up first.
 cd /d "%~dp0.."
-
 
 call "%~dp0run_python.bat" -m routes.backfill %*
 set "RC=%ERRORLEVEL%"

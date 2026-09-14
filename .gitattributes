@@ -1,8 +1,6 @@
-# .bat 必须是 CRLF：LF 换行会让 cmd.exe 误解析整行，
-# 表现为 "'xxx' 不是内部或外部命令"。这些脚本原本是 LF，在 Windows 上直接坏掉。
+# cmd.exe 脚本使用 CRLF
 *.bat text eol=crlf
 
-# 其余文本一律 LF，避免 Python 源码被平台化
 *.py   text eol=lf
 *.md   text eol=lf
 *.toml text eol=lf

@@ -161,18 +161,11 @@ try:
 except Exception as e:
     check(False, f"崩了: {e}")
 
-# ==========================================================================
-# 以下样本**照抄 2026-08-30 首次真实回填的响应结构**（脱敏后），不是想象出来的。
-# 上面那些样本全绿的同时，真实响应里混进了 267 条别人的帖子、478 条轮播子项
-# 被当成独立帖子、20 篇视频帖被当成抓取失败 —— 测试覆盖的是我们想到的形态，
-# 不是真实的形态。这一段就是为了把真实形态钉住。
-# 复盘全文（CR-12 ~ CR-15）只在 git 历史里：`git show 0eeb099:docs/HANDOFF.md`。
-# ==========================================================================
+# 脱敏响应结构回归样本。
 from core.parse import _fb_slug, on_timeline_of, partition_by_owner   # noqa: E402
 
-print("\n[真实结构 1] 轮播子项不得成为独立帖子（CR-13）")
-# 真实形态：子项里 `code` 这个键**在**，值是 None；pk / taken_at 都在；
-# product_type == "carousel_item"。旧判定用 `"code" in d`，478 个子项全部命中。
+print("\n[真实结构 1] 轮播子项不得成为独立帖子")
+# 轮播子项保留 code=None 及 carousel_item，避免夹具过度简化。
 ig_carousel_real = {
     "pk": "3712000000000000001", "code": "DXpArent", "taken_at": 1756300000,
     "media_type": 8, "product_type": "carousel_container",
@@ -200,7 +193,7 @@ check(sum(1 for m in posts[0].media if m.kind == "video") == 1, "子项里的视
 check(posts[0].text.startswith("Three ways"), "正文来自父帖的 caption")
 check(posts[0].owner == "neakasa.tech", "归属取自 user.username")
 
-print("\n[真实结构 2] Facebook 归属：name 与 URL 里的账号名并不相等（CR-12）")
+print("\n[真实结构 2] Facebook 归属：name 与 URL 里的账号名并不相等")
 def fb_story(pid, actor_name, actor_url, attachments, text="hi", ts=1756400000):
     return {"post_id": pid, "creation_time": ts,
             "message": {"text": text},
@@ -230,7 +223,7 @@ check(_fb_slug("https://www.facebook.com/profile.php?id=100064709675058")
       == "id:100064709675058", "没有自定义用户名的主页退回数字 ID")
 check(_fb_slug(None) is None and _fb_slug("") is None, "空 URL 不崩")
 
-print("\n[真实结构 3] Facebook 视频帖必须被认成视频，而不是抓取失败（CR-14）")
+print("\n[真实结构 3] Facebook 视频帖必须被认成视频，而不是抓取失败")
 video_att = [{"__typename": "StoryAttachment",
               "media": {"__typename": "Video", "__isNode": "Video",
                         "id": "2895895450769921"},
@@ -275,7 +268,7 @@ check(av.media == [], "头像更新帖抽不到媒体（响应里本来就没有
 check(av.media_complete is True,
       "但它是完整的 —— 没有图可下不等于下载失败，否则会永远重试")
 
-print("\n[真实结构 4] 归属过滤：混进来的别人的帖子必须被拦下（CR-12）")
+print("\n[真实结构 4] 归属过滤：混进来的别人的帖子必须被拦下")
 mixed = extract([
     fb_story("122100000000000004", "Neakasa Official",
              "https://www.facebook.com/neakasaofficial", photo_att),
@@ -303,11 +296,9 @@ check(kept2 == [] and rejected2[0]["reason"] == "owner_unknown",
 kept3, _ = partition_by_owner(mixed, "NeakasaOfficial")
 check(len(kept3) == 1, "目标账号大小写不敏感（config 里怎么写都能匹配上）")
 
-print("\n[真实结构 5] 合作帖（collab）必须算本账号的（CR-19）")
+print("\n[真实结构 5] 合作帖（collab）必须算本账号的")
 
-# 照抄真实响应：`coauthor_producers` 与 `invited_coauthor_producers` 两个键
-# 在 1022 个节点上**全都存在**，绝大多数为空数组。很容易顺手一起收，
-# 而"邀请了但没接受"的帖子并不会出现在被邀请方主页上。
+# 保留已接受与待接受合作字段，只有前者决定归属。
 def ig_node(pk, owner, coauthors=(), invited=(), ts=1756000000, text="collab"):
     return {"pk": pk, "code": "c%s" % pk, "taken_at": ts,
             "product_type": "clips",
@@ -358,9 +349,7 @@ half = extract([{"items": [ig_node("7", "brand.a", coauthors=["neakasa.tech"])]}
 check(len(half) == 1 and half[0].coauthors == ["neakasa.tech"],
       "跨响应合并时 coauthors 会被补齐 —— 漏补就会把真帖子丢掉")
 
-# 两份响应各带一部分 coauthor：必须取**并集**。
-# "空了才补"在这里会让先到的那份把目标账号挡在外面 —— 又是一篇自家帖子
-# 被判成他人帖。真实数据里合作方超过一个的帖子有 21 篇（最多 4 个）。
+# 分片 coauthors 须取并集。
 subsets = extract([{"items": [ig_node("8", "brand.b", coauthors=["other.brand"])]},
                    {"items": [ig_node("8", "brand.b",
                                       coauthors=["neakasa.tech"])]}],
@@ -371,8 +360,7 @@ check(len(subsets) == 1
 check(partition_by_owner(subsets, "neakasa.tech")[0],
       "并集之后这篇留得下来 —— 只补空的话它会被丢掉")
 
-# 条目形态：真实响应给的是 {"username": ...}，裸字符串也认。
-# 认不出条目 = 整篇帖子被判成他人帖，代价不对称。
+# 同时覆盖对象与裸字符串作者项。
 strs = extract([{"items": [dict(ig_node("9", "brand.c"),
                                 coauthor_producers=["Neakasa.Tech", "", None])]}],
                "instagram", "neakasa.tech", route="backfill")

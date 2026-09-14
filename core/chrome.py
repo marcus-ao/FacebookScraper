@@ -1,13 +1,4 @@
-r"""CDP 附着到专用 Chrome profile。
-
-为什么是附着而不是 Playwright 自己启动浏览器：
-    附着到真实 Chrome 进程，指纹就是这台机器上真实 Chrome 的指纹 ——
-    没有 Playwright 注入的自动化标记，没有 CDP 启动参数留下的痕迹。
-    代价是需要先用 scripts\start_chrome.bat 把浏览器起起来。
-
-隔离：默认用 config.toml 的 [chrome]（抓取小号）；发布侧必须显式传入
-     [publish] 的 port/profile，使用另一份浏览器指纹。两个实例可以同时存在。
-"""
+"""通过 CDP 附着人工登录的 Chrome；回填、监测和发布使用独立 profile。"""
 from __future__ import annotations
 
 import http.client
@@ -26,22 +17,7 @@ from core.config import cfg
 # Chrome 冷启动到端口可连有几秒延迟，立刻去连 CDP 会失败，看起来像"脚本坏了"
 PORT_WAIT_SECONDS = 15
 
-# profile 归属核对的子进程超时。**这个数是实测标定的，不要凭感觉调小**（CR-63）。
-#
-# 2026-09-01 本机（Windows 11 / Chrome 152）逐段实测：
-#     powershell.exe 空跑（纯启动开销）      2.17s
-#     + Get-NetTCPConnection                7.84s   ← 光加载 NetTCPIP 模块就 ~5.7s
-#     + Get-CimInstance Win32_Process       3.84s
-#     netstat -ano（纯 exe，同一个 PID）      0.49s
-#
-# 原实现是 `Get-NetTCPConnection` + `Get-CimInstance` 一次跑完，实测
-# **7.4–9.4 秒**，而超时写的是 5 秒 —— 于是**每一次都超时**，
-# 被 `except SubprocessError` 吃掉、返回 None，一个完全正确的环境被判成
-# "核对不了"并失败闭合。用户看到的是"发布 Chrome 没起来"，其实它好好地开着。
-#
-# 现在端口→PID 改用 netstat（0.12s），只剩 PID→命令行 走 PowerShell（~3.5s）。
-# 20 秒是在实测 3.5s 上留了 5 倍余量：这条路径一轮只跑一两次，
-# 宁可慢也不能**误判**——误判的代价是把对的环境说成错的。
+# 为 Windows 进程命令行查询预留超时余量。
 PROFILE_PROBE_TIMEOUT = 20.0
 
 
@@ -73,14 +49,7 @@ def _profile_from_command_line(command_line: str) -> str | None:
 
 
 def listening_pid(port: int) -> int | None:
-    """监听 ``port`` 的进程 PID；读不出来返回 ``None``。
-
-    ⚠️ **用 `netstat -ano` 而不是 `Get-NetTCPConnection`**（CR-63）。
-    两者给出同一个 PID，但本机实测 `Get-NetTCPConnection` 光加载 NetTCPIP
-    模块就要约 5.7 秒，而 `netstat` 只要 **0.12 秒**——差 40 倍。
-    原实现把它和 `Get-CimInstance` 串在一条 PowerShell 里，
-    总耗时 7.4–9.4 秒却只给了 5 秒超时，于是**每次都超时**。
-    """
+    """通过 netstat 获取监听 PID，避免加载 PowerShell 网络模块；失败返回 None。"""
     if not sys.platform.startswith("win"):
         return None
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -108,12 +77,7 @@ def listening_pid(port: int) -> int | None:
 
 
 def _command_line_of(pid: int) -> str | None:
-    """进程的完整命令行；读不出来返回 ``None``。
-
-    这一步只能走 WMI/CIM —— Windows 上没有别的办法从 PID 拿到命令行
-    （`Get-Process` 只给可执行文件路径，那证明不了 ``--user-data-dir``）。
-    本机实测约 3.5 秒，是这条链路上剩下的主要开销。
-    """
+    """通过 CIM 读取进程命令行以核验 profile；失败返回 None。"""
     if not sys.platform.startswith("win"):
         return None
     script = (
@@ -134,27 +98,7 @@ def _command_line_of(pid: int) -> str | None:
 
 
 def _cdp_profile_matches(port: int, profile: Path) -> bool | None:
-    """Windows 上确认监听端口的 Chrome 命令行确实使用目标 profile。
-
-    ``/json/version`` 只能证明“这是 Chrome”，不能证明“这是哪份 profile”。
-    发布侧若只验端口，另一个 Chrome 恰好占了 9223 时仍会把 DE 内容带进
-    错误会话。Windows 是部署目标，因此用只读的进程信息补上这条归属证据。
-
-    **三态返回，调用方必须区分**（CR-63）：
-
-    - ``True``  归属确认，可以附着；
-    - ``False`` **确实是别的 profile** —— 危险，必须停下并让用户去关那个 Chrome；
-    - ``None``  **核对不了**（非 Windows、netstat/WMI 读不出来）。
-      仍然失败闭合，但**原因完全不同**：多半是工具链问题，不是环境错了。
-      把这两种混成同一句话，会让一个正确的环境被报成"你开错了浏览器"——
-      2026-09-01 用户调 G1 时就被这么误导过一次。
-
-    ⚠️ **这个调用不便宜**（实测约 3.5 秒，见 :data:`PROFILE_PROBE_TIMEOUT` 的标定）。
-    所以 :func:`launch` 的轮询循环**只用不带 profile 的轻量 CDP 探测**，
-    等端口真的起来了再核对一次归属（CR-59）。
-    **不要为了"更快"把归属核对整个去掉**：`/json/version` 证明不了是哪份
-    profile，而这条证据正是 G0 存在的全部理由。
-    """
+    """核验实际 profile：True 匹配，False 错配，None 无法核验；后两者均禁止附着。"""
     if not sys.platform.startswith("win"):
         return None
     pid = listening_pid(port)
@@ -180,11 +124,7 @@ def port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
 def cdp_ready(port: int | None = None, host: str = "127.0.0.1",
               timeout: float = 1.0, *,
               profile: Path | str | None = None) -> bool:
-    """确认端口是 CDP；可在 Windows 上同时核对其实际 profile。
-
-    port 不给仍读 [chrome]。profile 不给只验证 CDP（兼容所有现有调用）；
-    显式给 profile 时，Windows 上若进程归属不可确认也返回 False。
-    """
+    """检查 CDP 就绪；指定 profile 时还须确认进程归属。"""
     port = _resolved_port(port)
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
@@ -211,17 +151,7 @@ def launch(wait_seconds: float = PORT_WAIT_SECONDS,
            on_tick: Callable[[], None] | None = None, *,
            port: int | None = None,
            profile: Path | str | None = None) -> bool:
-    """起专用 Chrome 并等调试端口就绪。已在跑就直接返回 True。
-
-    ⚠️ **这不是"自动登录"。** 它只是把那个人工登录过一次的 profile 目录
-    重新用起来；会话是人留下的，程序从不代替人登录（全项目红线 1）。
-
-    ⚠️ 若该 ``user-data-dir`` 已被另一个 Chrome 实例占用，Chrome 会**静默复用
-    已有实例并忽略 --remote-debugging-port**，没有任何报错。所以这里只能靠
-    轮询端口来判断成败，不能看子进程的退出码。
-
-    `on_tick` 每等一秒回调一次，供命令行打进度点；不给就安静地等。
-    """
+    """复用人工登录的 profile 启动 Chrome；轮询端口并按秒调用 on_tick。"""
     verify_profile = profile is not None
     port = _resolved_port(port)
     profile = _resolved_profile(profile)
@@ -245,8 +175,7 @@ def launch(wait_seconds: float = PORT_WAIT_SECONDS,
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     subprocess.Popen(argv, creationflags=flags, close_fds=True)
 
-    # 轮询只做**轻量**的 CDP 探测：归属核对要 fork PowerShell，每秒一次太贵
-    # （CR-59）。端口真的起来之后再核对一次，判据完全不变。
+    # 轮询只查 CDP，端口就绪后再执行较慢的 profile 核验。
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         if cdp_ready(port):
@@ -261,14 +190,7 @@ async def attach(port: int | None = None,
                  profile: Path | str | None = None, *,
                  start_script: str | None = None,
                  login_hint: str | None = None):
-    """返回 (playwright, browser, context)。调用方负责 close。
-
-    ``port`` / ``profile`` 不给时退回 [chrome]，所以 backfill / delta 的现有
-    ``attach()`` 调用行为不变。发布侧显式传 [publish] 的两个值，避免把持有
-    DE 发布权的账号附着到抓取小号的浏览器指纹。
-
-    找不到调试端口时给出可直接照做的提示，而不是抛一个 CDP 连接错误。
-    """
+    """返回 (playwright, browser, context)，调用方负责关闭；发布须显式传入 port/profile。"""
     from playwright.async_api import async_playwright
 
     using_default_target = port is None and profile is None
@@ -283,11 +205,7 @@ async def attach(port: int | None = None,
 
     if not cdp_ready(port, profile=profile if verify_profile else None):
         if cdp_ready(port):
-            # ⚠️ **"是别的 profile" 与 "核对不了" 必须分开说**（CR-63）。
-            # 原来两句合成一句，于是 2026-09-01 用户调 G1 时，
-            # 一个**完全正确**的环境被报成"你开错了浏览器，去关掉它"——
-            # 真实原因是归属核对子进程超时（5 秒不够，实测要 7–9 秒）。
-            # 让人去关一个本来就对的 Chrome，是比不报错更坏的结果。
+            # 区分 profile 错配与核验失败，避免误导用户关闭正确会话。
             verdict = _cdp_profile_matches(port, profile)
             if verdict is False:
                 detail = (f"端口 {port} 是 Chrome 调试端口，但它用的**不是**目标 profile。\n"

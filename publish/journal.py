@@ -1,9 +1,4 @@
-r"""追加式发布状态机与幂等证据：``state/published.jsonl``。
-
-只有 ``scheduled`` 表示远端内容日历已经回读成功。点击提交后没看见成功信号、
-或看见信号但日历回读失败，都属于不可安全自动重试的状态；历史行永不重写。
-旧版 ``prepared/scheduled/failed`` 行在读取时会补齐兼容字段。
-"""
+"""追加式发布账本；未决提交禁止自动重试，scheduled 仅表示远端排期回读成功。"""
 from __future__ import annotations
 
 import hashlib
@@ -53,11 +48,7 @@ _HELD_PUBLISH_LOCKS: ContextVar[frozenset[str]] = ContextVar(
 
 
 class PublishOperationLock(AbstractContextManager):
-    """单帖 CLI 与 pipeline approve 共用的跨进程发布互斥。
-
-    OS 层的文件锁交给 :class:`core.paid_model.FileLock`；这里只加发布侧
-    特有的那一层——**同一执行上下文内的显式重入**。
-    """
+    """CLI 与流水线共用的跨进程发布锁；仅同执行上下文可显式重入。"""
 
     def __init__(self, path: Path, *, allow_reentrant: bool = False) -> None:
         self.path = Path(path)
@@ -72,9 +63,7 @@ class PublishOperationLock(AbstractContextManager):
         key = str(self.path.resolve())
         held = _HELD_PUBLISH_LOCKS.get()
         if key in held and self.allow_reentrant:
-            # ``pipeline approve`` 从远端槽位回读到整批提交始终持有发布锁；
-            # 单帖入口在同一 Context 内再次进入时复用它。别的进程/Context 仍会
-            # 经过下面的 OS 文件锁，不能借此并发越过。
+            # 同 Context 重入复用锁，其它上下文仍须竞争 OS 锁。
             self._reentrant = True
             return self
         if key in held:
@@ -150,9 +139,7 @@ class PublishAttempt:
     success_signal: str = ""
     readback_signal: str = ""
     remote_id: str = ""
-    #: 每个渠道各一个远端 ID，形如 ``("facebook=188…", "instagram=437…")``。
-    #: ⚠️ 实测 FB 与 IG 是**两个独立远端对象**（`docs/HANDOFF.md` 第 6 节），
-    #: 单个 `remote_id` 只能记住其中一个，跨渠道对账会缺一半。
+    # 各渠道分别记录 remote ID，不共用一个远端对象。
     remote_ids: tuple[str, ...] = ()
     verification: str = ""
     readback_diagnostics: dict = field(default_factory=dict)
@@ -277,10 +264,7 @@ def _validate_loaded_row(row: dict, *, path: Path, number: int) -> dict:
 
 
 def load(state_dir: Path) -> list[dict]:
-    """读全部留痕；坏 JSON 行失败闭合，旧行补兼容字段。
-
-    读法在 core/paid_model，与待人工确认队列共用一份。
-    """
+    """读取发布账本；坏行报错，旧字段兼容补齐。"""
     def corrupt(path, number, exc):
         if exc is None:
             return ValueError(
@@ -365,12 +349,7 @@ def pending_draft_record(state_dir: Path, post_id: str,
 
 def pending_record_for_refs(state_dir: Path,
                             refs: Iterable[str]) -> dict | None:
-    """按每个来源的最近转换找未闭合状态，返回最危险的一条。
-
-    合并候选可能以 FB 为 canonical，却同时覆盖 IG 来源。只查 canonical 会让
-    secondary 已经 ambiguous 的内容再次被提交。这里逐 ref 求最近状态；人工
-    “未排期”与 scheduled 都会闭合该 ref，自动失败仍保持阻塞。
-    """
+    """逐来源查最近未闭合状态，返回风险最高项，避免次要来源绕过防重。"""
     wanted = tuple(dict.fromkeys(
         str(value).strip() for value in refs if str(value).strip()))
     rows = load(state_dir)

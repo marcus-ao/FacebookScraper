@@ -287,8 +287,8 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(sorted(calls), [("reconcile", "facebook"), ("reconcile", "instagram")])
 
     def test_default_cli_scope_freezes_tech_and_explicit_paid_retry_is_blocked(self):
-        import translate
-        import localize_images
+        from localize import text as translation
+        from localize import images as image_de
         with tempfile.TemporaryDirectory() as td:
             config = Config()
             config._d["paths"]["archive"] = td
@@ -296,21 +296,21 @@ class MonitoringTests(unittest.TestCase):
                 folder = Path(td) / name
                 folder.mkdir()
                 (folder / "manifest.jsonl").write_text("")
-            with patch.object(translate, "cfg", return_value=config), \
-                    patch.object(translate, "run_translate", return_value=(0, 0)) as run, \
+            with patch.object(translation, "cfg", return_value=config), \
+                    patch.object(translation, "run_translate", return_value=(0, 0)) as run, \
                     contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(translate.main(["--dry-run"]), 0)
+                self.assertEqual(translation.main(["--dry-run"]), 0)
                 self.assertEqual({call.args[2].name for call in run.call_args_list}, set(config.active_accounts()))
                 run.reset_mock()
-                self.assertEqual(translate.main(["--account", "in_neakasa.tech"]), 2)
+                self.assertEqual(translation.main(["--account", "in_neakasa.tech"]), 2)
                 run.assert_not_called()
-            with patch.object(localize_images, "cfg", return_value=config), \
-                    patch.object(localize_images, "select_rows", return_value={}) as select, \
+            with patch.object(image_de, "cfg", return_value=config), \
+                    patch.object(image_de, "select_rows", return_value={}) as select, \
                     contextlib.redirect_stdout(io.StringIO()):
-                localize_images.main(["--dry-run"])
+                image_de.main(["--dry-run"])
                 self.assertEqual({path.name for path in select.call_args.args[1]}, set(config.active_accounts()))
                 select.reset_mock()
-                self.assertEqual(localize_images.main(["--account", "in_neakasa.tech"]), 2)
+                self.assertEqual(image_de.main(["--account", "in_neakasa.tech"]), 2)
                 select.assert_not_called()
 
     def test_scheduler_preview_has_no_files_or_callbacks(self):

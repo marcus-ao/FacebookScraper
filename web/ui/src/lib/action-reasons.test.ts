@@ -7,8 +7,6 @@ import {
   seedScheduleTime,
 } from './action-reasons'
 
-// 这几句话是她唯一能拿到的解释。测的不是"有没有话"，是**哪一条先赢** ——
-// 顺序错了，她会先去做一件不该先做的事。
 
 const approvalOk = {
   editing: false, busy: false, fetching: false, eligible: true,
@@ -52,7 +50,6 @@ describe('通过并创建排期：七个条件按她能动手的先后排', () =
   })
 
   it('已排期的那篇说的是"已有排期"，不是"请先恢复审校"', () => {
-    // 这两句指向完全相反的动作，混了她会去点恢复审校。
     expect(approvalDisabledReason({ ...approvalOk, eligible: false, status: 'scheduled' }))
       .toBe('这篇已有已确认的排期')
     expect(approvalDisabledReason({ ...approvalOk, eligible: false, status: 'snoozed' }))
@@ -133,7 +130,6 @@ describe('默认排期时刻：她清空之后就不要再替她填回去', () =
   })
 
   it('2–4. 她清空之后，approval-options 再回来也不许填回去', () => {
-    // 清空后仍是 touched，current 为空时不能把旧值写回。
     expect(seedScheduleTime({ current: '', touched: true, earliest, scheduledAt: null })).toBeNull()
   })
 

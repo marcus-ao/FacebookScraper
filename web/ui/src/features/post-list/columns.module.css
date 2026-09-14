@@ -1,10 +1,3 @@
-/*
- * 帖子行。
- *
- * ⛔ 行**不是卡片**：使用 1px 底分隔线，不要边框、圆角、阴影和 8px 间隙。
- * ⛔ 行里**不能有第二行文字**：48px 高度是按"单行摘要 + 40px 缩略图"算出来的，
- *    多一行会破坏首屏信息密度。
- */
 
 .thumbWrap {
   position: relative;
@@ -21,9 +14,6 @@
   background: var(--rc-surface-sunken);
 }
 
-/* 张数角标。压在缩略图右下角，不再单独占一列。
-   字号是 12px 的 meta —— 12px 是中文在 Windows ClearType 下仍清晰的下限，
-   11px 以下不够清晰。 */
 .count {
   position: absolute;
   right: 0;
@@ -39,7 +29,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 摘要单行截断，全文进 Tooltip（渐进披露 L2）。 */
 .summary {
   display: block;
   overflow: hidden;
@@ -53,7 +42,6 @@
 .summaryLink:hover { text-decoration: underline; }
 .platform { white-space: nowrap; }
 
-/* 没有缩略图时的空位。是"这一篇没有图"，不是加载失败。 */
 .thumbEmpty {
   display: inline-block;
   border: 1px solid var(--rc-border);
@@ -69,8 +57,7 @@
   overflow: hidden;
 }
 
-/* max-width 用 em 而不是 px：它是"最多几个字"，跟着字号走，
-   换字号时不会变成一个需要人工重算的魔法数。 */
+/* em 限制字符宽度，随字号变化。 */
 .tag {
   margin-inline-end: 0;
   max-width: 5em;
@@ -80,11 +67,6 @@
   font-size: var(--rc-font-meta);
 }
 
-/*
- * 终态行整行降饱和。
- * 「这篇不发」「已交人工处理」是她已经做完的决定，不需要再参与扫视；
- * 但也**不是错误**，所以是降饱和，不是红色。
- */
 .terminal td {
   color: var(--rc-fg-muted);
 }

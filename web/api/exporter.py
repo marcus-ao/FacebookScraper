@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-import localize_images
+from localize import images as image_de
 from core import translated
 from core.review import ReviewConflict
 from core.store import assert_physical_direct_path, read_post_truth
@@ -22,7 +22,7 @@ def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
     if not effective or not translated.translation_is_current(source, effective):
         raise ReviewConflict("请先保存并复核当前德语文案，再下载交由人工处理")
     image_entry = translated.image_translation(source, machine, human)
-    pairs = {pair.media_index: pair for pair in localize_images.review_image_pairs(
+    pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(
         account_dir, source, image_entry)} if image_entry else {}
     media = source.get("media")
     if not isinstance(media, list) or not media or any(item.get("kind") != "image" for item in media):
@@ -38,7 +38,7 @@ def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
         package.writestr("text_de.txt", effective["text_de"].encode("utf-8"))
         total = 0
         for index, media_item in enumerate(media):
-            original, _ = localize_images._source_from_manifest(account_dir, source, media_item)
+            original, _ = image_de._source_from_manifest(account_dir, source, media_item)
             pair = pairs.get(index)
             used_original = not (pair and pair.localized_rel)
             path = original if used_original else account_dir / pair.localized_rel

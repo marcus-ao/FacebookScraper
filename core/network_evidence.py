@@ -1,13 +1,4 @@
-"""本进程的出口 IP/ASN 观测；不发起社媒访问，不推断账号封禁。
-
-官方接口核对（2026-09-12）：
-https://ipinfo.io/developers/lite-api  /lite/me 提供 IP、ASN，不提供 ASN 类型。
-https://ipinfo.io/developers/core-api  /lookup/me 提供 as.type 和网络标志，需 Core 权限。
-https://ipinfo.io/developers 支持 Authorization Bearer；token 不进入 URL 或本地记录。
-
-这只能证明此进程到 IPinfo 的出口。Chrome 代理、VPN 分流可能不同，因此不声称
-这是 Facebook/Instagram 看到的地址，也不把 ISP 分类当成住宅 IP 证明。
-"""
+"""观测本进程到 IPinfo 的出口 IP/ASN；不代表 Chrome 的社媒出口，也不推断账号封禁。"""
 from __future__ import annotations
 
 import ipaddress

@@ -1,8 +1,4 @@
-"""任意人工时刻的离线排期策略；调用者负责提交前提供实时 Planner 读取。
-
-此处的通过仅表示时刻可用，不代表帖子已获批准或远端已创建排期。
-缓存可调用同一策略作提示，不能代替提交前的实时读取。
-"""
+"""离线判断人工排期时刻；提交前须提供实时 Planner 占用。"""
 from __future__ import annotations
 
 import math
@@ -61,11 +57,7 @@ def calendar_bounds(now: datetime, *, window: ScheduleWindow) -> CalendarBounds:
 def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory, *,
                   now: datetime, window: ScheduleWindow,
                   gap_minutes: float | None = None) -> SlotDecision:
-    """同渠道至少相隔指定分钟；拒绝手选时刻时只提供建议，不改变它。
-
-    建议按离目标的距离排列，同距离优先稍后；三个建议彼此也至少隔开一段
-    发布间隔，避免给出三个只差一分钟的选项。月底不足三个空档就如实少给。
-    """
+    """同渠道保留最小间隔；冲突只给互不冲突的邻近建议，不改变人工时刻。"""
     utc_target = aware_utc(target)
     aware_utc(now)
     if channel not in {"facebook", "instagram"}:
@@ -101,7 +93,7 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
         return SlotDecision(True, "available")
 
     suggestions: list[datetime] = []
-    # 输入控件以分钟为粒度，搜索范围受实测 UI 当月及排期窗口双重限制。
+    # 按分钟搜索，范围受已确认 UI 能力及排期窗口限制。
     anchor = utc_target.replace(second=0, microsecond=0)
     horizon = max(abs(bounds.earliest - anchor), abs(bounds.latest - anchor))
     for distance in range(int(horizon.total_seconds() // 60) + 2):

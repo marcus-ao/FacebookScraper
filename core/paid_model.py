@@ -1,21 +1,4 @@
-r"""付费模型调用的共用底座。文本翻译（F 组）与图内德语化（K 组）都走这里。
-
-**为什么有这个模块。** 2026-09-02 的架构审查发现 `translate.py` 与
-`localize_images.py` 是同一个模块被写了两遍：凭据读取、端点校验、客户端构造、
-限速、文件锁、usage 契约、成本计算、JSONL 落盘，17 组成对函数里有 8 组
-相似度 > 0.74，其中 timeout/retries 校验相似度是 1.00。
-
-双份实现不会停在"重复"，它会**漂移**，而且漂移是静默的：
-
-    CR-53 查清了 `isinstance(exc, openai.APIError)` 是错的——那是
-    RateLimitError(429)、APITimeoutError、BadRequestError(400) 的共同基类，
-    一张有问题的图可以永久堵住队列。修复只落到了 localize_images.py，
-    translate.py 直到 2026-09-02 仍是那个被判定为错的旧实现。
-    结果：同一次 429，翻译阶段掀掉整批 1051 篇，调图阶段只算单条失败。
-
-所以这里的规矩是：**任何两个付费阶段都会做的事，实现只能有一份。**
-阶段特有的东西（提示词、产出校验、业务闸）留在各自模块，不要往这里塞。
-"""
+"""付费模型共用的客户端、限速、锁、费用校验与耐久写入。"""
 from __future__ import annotations
 
 import json
@@ -39,24 +22,12 @@ __all__ = [
 ]
 
 
-# ==========================================================================
-# 跨进程文件锁
-#
-# 曾经这个类在仓库里有 5 份逐字节相同的副本（core/paid_requests.py、
-# routes/delta.py、publish/journal.py、pipeline_assisted.py、translate.py），
-# 差异只有类名、docstring 和抛出的异常类型。
-# ==========================================================================
-
 class FileLockBusy(RuntimeError):
     """锁被别的进程持有。调用方按自己的语义决定是等还是失败闭合。"""
 
 
 class FileLock(AbstractContextManager):
-    """跨进程独占锁。Windows 走 msvcrt，其它平台走 fcntl，都是非阻塞。
-
-    ``busy_message`` 是拿不到锁时给人看的那句话——这是各调用点唯一需要
-    定制的东西，所以它是参数而不是子类。
-    """
+    """非阻塞跨进程独占锁；busy_message 指定占用提示。"""
 
     def __init__(self, path: Path | str, *, busy_message: str,
                  error_type: type[Exception] = FileLockBusy) -> None:
@@ -101,17 +72,8 @@ class FileLock(AbstractContextManager):
         return False
 
 
-# ==========================================================================
-# 凭据
-# ==========================================================================
-
 class ModelCredentials:
-    """密钥读取。环境变量优先，其次项目内的 ``.env``。
-
-    支持 .env 是因为 ``setx`` 会把密钥写进用户注册表、对所有进程可见；
-    放项目里的 .env 收敛得多（已在 .gitignore 中）。不引入 python-dotenv：
-    只需要 ``KEY=value`` 这一种形态，十行够了，不值得多一个依赖。
-    """
+    """读取密钥：环境变量优先，其次项目 .env。"""
 
     def __init__(self, env_name: str, *, what: str = "API 密钥") -> None:
         self.env_name = env_name
@@ -163,10 +125,6 @@ class ModelCredentials:
         return "已设置（来源：%s）" % source if key else "(未设置)"
 
 
-# ==========================================================================
-# 配置校验
-# ==========================================================================
-
 def validate_endpoint(section: str, *, timeout: float, max_retries: int,
                       gap: float) -> None:
     """两个付费阶段共有的三个连接参数。曾经这段在两边逐字相同。"""
@@ -178,11 +136,7 @@ def validate_endpoint(section: str, *, timeout: float, max_retries: int,
 
 def validate_cost_rates(section: str, rates: Mapping[str, Any],
                         required: Iterable[str]) -> None:
-    """费率表：键必须精确匹配，值必须是非负有限数字（且不能是 bool）。
-
-    排除 bool 不是洁癖：``isinstance(True, int)`` 为真，而 ``True`` 会被
-    当成费率 1.0 静默算进成本。
-    """
+    """校验费率键及非负有限数值；bool 不视为数值。"""
     required = set(required)
     if set(rates) != required:
         raise SystemExit(
@@ -196,11 +150,7 @@ def validate_cost_rates(section: str, rates: Mapping[str, Any],
 
 
 def usage_number(value: Any) -> float | None:
-    """把 usage 里的一个字段读成非负有限数字，读不出来返回 None。
-
-    调用方据此决定"算得出钱"还是"记成 unknown"——**不要在这里猜 0**：
-    把未知当成 0 会让预算闸悄悄放行。
-    """
+    """读取非负有限 usage 数值；缺失返回 None，不能按零费用放行。"""
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
     number = float(value)
@@ -209,17 +159,9 @@ def usage_number(value: Any) -> float | None:
     return number
 
 
-# ==========================================================================
-# 客户端
-# ==========================================================================
-
 def build_client(*, api_key: str, base_url: str, timeout: float,
                  max_retries: int):
-    """构造 OpenAI 兼容客户端。
-
-    SDK 会按官方约定使用 ``Authorization: Bearer``，并负责连接错误、429 与
-    5xx 的退避重试；业务代码只负责请求与结果契约。
-    """
+    """构造 OpenAI 兼容客户端，由 SDK 处理鉴权和退避重试。"""
     from openai import OpenAI
 
     return OpenAI(api_key=api_key, base_url=base_url,
@@ -228,22 +170,7 @@ def build_client(*, api_key: str, base_url: str, timeout: float,
 
 def is_fatal_api_error(exc: BaseException, *,
                        extra_fatal: tuple[type, ...] = ()) -> bool:
-    """这个异常是否"整批都会重复犯"，从而应该立刻停止而不是跳过单条？
-
-    ⛔ **不要退回 ``isinstance(exc, openai.APIError)``。** 那是
-    ``RateLimitError``(429)、``APITimeoutError`` / ``APIConnectionError`` 和
-    ``BadRequestError``(400，含内容审核拒绝) 的**共同基类**。用它当判据的话：
-    SDK 重试用尽后的一次 429、一次网络抖动、或某一条被审核拒掉，都会掀掉
-    剩余全部条目，而且没有跳过这一条继续的办法——一条有问题的输入可以
-    永久堵住队列。这就是 CR-53。
-
-    只有鉴权 / 权限 / 端点不存在 / 响应契约破裂算致命：这几类**每一条都会
-    同样失败**，继续跑只是重复花钱。瞬时错误与单条 400 计为单条失败，由
-    调用方的 ``failure_budget`` 连续失败计数兜住。
-
-    ``extra_fatal`` 给各阶段补充自己的整批性错误（比如模型不匹配、
-    模型目录预检失败）。
-    """
+    """鉴权、权限、端点和响应契约错误停止整批；429、超时与单条 400 计入连续失败预算。"""
     if extra_fatal and isinstance(exc, extra_fatal):
         return True
     try:
@@ -260,23 +187,9 @@ def is_fatal_api_error(exc: BaseException, *,
     return bool(fatal) and isinstance(exc, fatal)
 
 
-# ==========================================================================
-# 落盘
-#
-# 曾经原子写在仓库里有 6 份实现，临时文件清理写了三种不同的写法。
-# ==========================================================================
-
 def atomic_write_text(path: Path, text: str, *, guard=None,
                       newline: str = "\n") -> None:
-    """同目录临时文件 → flush → fsync → ``os.replace``。
-
-    临时文件必须和目标**同目录**：跨卷时 ``os.replace`` 不是原子的。
-
-    ``guard(path, role)`` 让调用方插入路径安全断言，``role`` 是
-    ``"target"`` 或 ``"temp"``。它会被调用三次：写之前验目标、写之后验
-    临时文件、**替换之前再验一次目标**——最后那次是防目标在写临时文件
-    期间被换成链接（core/store.py 原本就这么做，合并时保留了）。
-    """
+    """同目录写入、fsync 后原子替换；guard 核验目标、临时文件及替换前的目标。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if guard is not None:
@@ -306,13 +219,7 @@ def atomic_write_json(path: Path, value: Any, *, guard=None,
 
 
 def append_jsonl(path: Path, row: Mapping[str, Any], *, guard=None) -> None:
-    """向真相源追加一行并 fsync。
-
-    ⚠️ 先补一个换行再写：上一次写入若在换行前被中断，不补的话这一行会和
-    残行粘成一行，两行一起变成无法解析的垃圾。
-
-    ``guard`` 在写之前对目标路径做一次检查（各阶段用它做路径安全断言）。
-    """
+    """追加 JSONL 并 fsync；先隔开上次残行，guard 在写入前核验路径。"""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if guard is not None:
@@ -329,15 +236,7 @@ def append_jsonl(path: Path, row: Mapping[str, Any], *, guard=None) -> None:
 
 
 class PaidCaller:
-    """付费模型调用方的共用状态机。
-
-    ``translate.Translator`` 与 ``localize_images.ImageEditor`` 原本各写了一遍
-    这一整套：客户端惰性构造、调用间隔、付费上下文（job_key / source_ref /
-    media_index）、收据与闭合。八个成员逐字节相同，只有 ``set_paid_context``
-    的 ``media_index`` 是图片侧特有的。
-
-    子类负责：在 ``__init__`` 里调 ``_init_paid``，以及真正发请求那一步。
-    """
+    """共用付费请求状态；子类初始化 _init_paid 并实现实际请求。"""
 
     def _init_paid(self, settings, client, paid_controller) -> None:
         self.s = settings
@@ -369,8 +268,7 @@ class PaidCaller:
 
     @property
     def client(self):
-        """惰性构造。**不要在 __init__ 里建**：``--dry-run`` / ``--estimate``
-        不该因为密钥没设就退出。"""
+        """惰性创建客户端，使 dry-run/estimate 无需凭据。"""
         if self._client is None:
             self._client = build_client(
                 api_key=self.s.api_key(), base_url=self.s.base_url,
@@ -389,18 +287,7 @@ class PaidCaller:
 
 
 def read_jsonl(path: Path, *, on_corrupt, transform=None) -> list[dict]:
-    """读一份追加式真相源。空行跳过，**坏行失败闭合**，非对象行也失败闭合。
-
-    ``on_corrupt(path, line_number, exc_or_none)`` 返回要抛的异常——各真相源
-    的异常类型与文案不同（付费账本、发布留痕、待人工确认队列），但"读法"
-    只该有一份。
-
-    ``transform(row, path, line_number)`` 在每一行上做各自的字段校验/补齐。
-    它拿到的是**真实行号**（空行不计入序号会让报错指错地方）。
-
-    ⚠️ 坏行绝不能静默跳过：这些文件是钱和"发出去了没有"的唯一凭据，
-    少读一行就是少算一笔或漏掉一次未闭合的提交。
-    """
+    """读取 JSONL，空行跳过、坏行报错；回调接收真实行号，transform 校验业务字段。"""
     path = Path(path)
     if not path.is_file():
         return []

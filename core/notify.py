@@ -1,19 +1,4 @@
-"""Windows 桌面通知。对应实施计划的 D2。
-
-**这个模块的头号要求不是"能弹窗"，而是"永远不会把主流程搞崩"。**
-它服务于每天自动跑的增量任务：通知本身失败（旧版 Windows、权限、
-PowerShell 被策略禁掉、会话不是交互式）都属于可预期情况，
-而"因为提醒你出了问题的代码出了问题，于是你连问题都不知道"是最坏结果。
-
-降级链，从上到下，任一级成功即停：
-    1. PowerShell toast   —— 正常情况下你在桌面右下角看到的那种
-    2. msg 命令           —— toast 不可用时的老式弹窗
-    3. state/alerts.log   —— 兜底，永远执行
-
-第 3 级**无条件先执行**，不是"前两级都失败才写"。
-落盘是唯一不依赖桌面会话的通道：计划任务在无人登录时触发、
-或者你根本不在电脑前，toast 弹了也等于没弹，日志才是能回溯的那份。
-"""
+"""Windows 告警：先落日志，再尝试 toast/msg；通知失败不阻断主流程。"""
 from __future__ import annotations
 
 import base64
@@ -27,8 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # 通知子进程的最长等待。日常任务里挂死比通知不到更糟。
 CHANNEL_TIMEOUT = 20
 
-# 借用 PowerShell 自己已注册的 AppUserModelID。
-# 不借的话得先给本项目注册一个开始菜单快捷方式，为一条通知不值得。
+# 复用 PowerShell 已注册的 AppUserModelID。
 _PS_APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
 _TOAST_PS = r"""
@@ -52,8 +36,7 @@ try {
 def _state_dir() -> Path:
     """告警日志的落点。config.toml 读不出来也要有地方写。"""
     try:
-        # 延迟导入：告警要在 config.toml 本身读不出来时也能落盘。模块级导入
-        # 会让"配置坏了"这条最需要告警的故障，恰好把告警一起带走。
+        # 延迟导入：配置损坏时仍须记录告警。
         from core.config import cfg
         return cfg().state_dir
     except (Exception, SystemExit):
@@ -82,8 +65,7 @@ def _run(argv: list[str], env_extra: dict | None = None) -> bool:
 def _toast(title: str, message: str) -> bool:
     if not sys.platform.startswith("win"):
         return False
-    # 用 -EncodedCommand 传脚本：base64(UTF-16LE) 彻底绕开 cmd/PowerShell 的
-    # 引号转义地狱，标题正文里带引号、换行、中文都不会把命令行拆坏。
+    # EncodedCommand 避免标题和正文参与 shell 解析。
     encoded = base64.b64encode(_TOAST_PS.encode("utf-16-le")).decode("ascii")
     return _run(
         ["powershell", "-NoProfile", "-NonInteractive",
@@ -118,11 +100,7 @@ def _log(title: str, message: str, channel: str) -> None:
 
 
 def notify(title: str, message: str, popup: bool = True) -> None:
-    """发一条告警。任何情况下都不抛异常。
-
-    popup=False 用于自动化测试：跳过桌面弹窗，只走日志，
-    免得跑一次测试往桌面糊一串通知。
-    """
+    """发送告警且不抛异常；popup=False 仅写日志。"""
     channel = "log"
     try:
         if popup:
@@ -138,7 +116,6 @@ def notify(title: str, message: str, popup: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    # 手工验收：python -m core.notify
     from core.console import force_utf8
 
     force_utf8()

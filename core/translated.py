@@ -1,22 +1,4 @@
-r"""德语译文这件产物的**契约**：写盘格式、什么算「当前可用」、不可改内容规则。
-
-这里没有一行会调用 API。它是 `translate.py`（写方）与三个读方
-—— `publish/compose.py`、`localize_images.py`、`pipeline_assisted.py` ——
-之间的那份共识。
-
-单独拆出来的直接原因：`publish/compose.py` 曾经一次从 `translate` 拉 10 个
-名字，其中 `apply_money_mapping` / `extract_money_tokens` /
-`normalize_money_token` / `extract_hashtags` 在 `translate.py` 内部**一次都没被
-调用过** —— 它们本来就是为 compose 写的，只是放错了地方。代价是发布组要
-import 翻译执行器（连着 openai SDK 和整个批处理循环）才能判一个金额。
-`localize_images.py` 同理，它只要这里的四个名字，却 import 了整个 translate。
-
-⛔ **PROMPT_VERSION 住在这里，不在 translate.py。** 它是写进
-``translated.jsonl`` 每一行的版本标记，判据 :func:`translation_is_current`
-就在本文件里读它。版本号属于**文件格式**，不属于跑批的那个脚本 ——
-放在写方会让读方为了判「这行还能用吗」而 import 写方。
-改提示词就在这里 +1。
-"""
+"""德语译文的存储、版本和保护规则；提示词变更须递增本模块的 PROMPT_VERSION。"""
 from __future__ import annotations
 
 import json
@@ -31,35 +13,20 @@ from uuid import UUID, uuid4
 from core import paid_model
 from core.store import assert_physical_direct_path, source_text_digest
 
-# 提示词版本。改了提示词就把它 +1：译文行里记着这个值，
-# 于是"这批译文是旧提示词产出的"变成可查的事实，而不是靠记忆。
 PROMPT_VERSION = 6
 _UNSET_REVISION = object()
 
 
 class SourceTextError(ValueError):
-    """归档正文不满足译文契约的最小输入要求。
-
-    ``translate.SourceDataError`` 继承它，好让翻译批次那边把它当作
-    「整批共享的致命错误」一起停下来。
-    """
+    """归档正文不满足译文输入要求。"""
 
 
 class HumanRevisionConflict(ValueError):
     """打开页面之后出现了更新的人工版本，旧页面不能把它覆盖。"""
 
 
-# --------------------------------------------------------------------------
-# 一、写盘格式与「当前可用」判据
-# --------------------------------------------------------------------------
-
 def source_text_sha256(text: str) -> str:
-    """绑定模型实际收到的正文，防止旧译文错配新正文。
-
-    口径本身住在 :func:`core.store.source_text_digest`（那里说明了为什么）。
-    这一层只多一道类型闸：读方拿到的是 manifest 里的任意 JSON 值，
-    不是字符串时要在调 API 之前停下来，而不是让 sha256 抛 AttributeError。
-    """
+    """校验正文类型并计算统一来源指纹。"""
     if not isinstance(text, str):
         raise SourceTextError("manifest 的 text 必须是字符串；已停止，未调用 API")
     return source_text_digest(text)
@@ -93,11 +60,7 @@ def effective_translation(source: dict, machine: dict | None,
 
 def image_translation(source: dict, machine: dict | None,
                        human: dict | None) -> dict | None:
-    """图片沿用当前机器文案；机器版缺失或过期时使用已复核的人工正文。
-
-    这样日常改文案不会无声触发整组图片重做，而新原文已经人工复核后也不会
-    因为机器译文过期而永远卡住。未复核的人工稿始终拦住新的图片费用。
-    """
+    """优先当前机器文案；机器版缺失或过期时，只接受已复核的人工正文。"""
     selected = effective_translation(source, machine, human)
     if selected is not None and selected["is_human"] and selected["stale"]:
         return None
@@ -118,8 +81,7 @@ def _translation_rows(path: Path, *, human: bool):
         return
     assert_physical_direct_path(
         path.parent, path, kind="file", label=path.name)
-    # 二进制逐行解码：若一次硬终止恰好截断 UTF-8 多字节字符，只跳过那一行；
-    # 后面已经 fsync 的付费结果仍然必须可见，不能被整文件 UnicodeDecodeError 吞掉。
+    # 逐行解码，避免一条 UTF-8 残行遮蔽其它已落盘结果。
     with path.open("rb") as f:
         for raw_line in f:
             raw_line = raw_line.strip()
@@ -211,10 +173,7 @@ def _append_human_row(path: Path, post_id: str, text_de: str,
 def append_human_translation(path: Path, source: dict, text_de: str, *,
                              now: datetime | None = None,
                              expected_revision=_UNSET_REVISION) -> dict:
-    """保存人工版本；显式传入 expected_revision 时，在追加锁内核对版本。
-
-    None 表示打开页面时尚无人工版；省略参数用于没有页面快照的调用方。
-    """
+    """持锁追加人工版并检查 revision；None 表示尚无人工版，省略表示不做快照检查。"""
     return _append_human_row(path, source.get("post_id"), text_de,
                              source_text_sha256(source.get("text")), now,
                              expected_revision=expected_revision)
@@ -232,10 +191,6 @@ def append_translated(path: Path, row: dict) -> None:
         p.parent, p, kind="file", label="translated.jsonl"))
 
 
-# --------------------------------------------------------------------------
-# 二、术语表渲染（写方与调图的提示词共用同一份口径）
-# --------------------------------------------------------------------------
-
 def render_glossary(glossary: dict) -> str:
     if not glossary:
         return ("（本账号还没有配置术语表。请在同一批译文里对反复出现的产品名与卖点词"
@@ -246,12 +201,7 @@ def render_glossary(glossary: dict) -> str:
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------
-# 需人工确认的数字（价格 / 尺码 / 英制单位）
-# --------------------------------------------------------------------------
-
-# 提示词要求模型**不要**换算金额与尺码，所以这些会原样留在德语译文里。
-# 这里把它们标出来，让审校人一眼看到"这篇要改价"，而不是在几十篇里自己找。
+# 标出保留的金额与单位，供业务审核。
 _MONEY_RE = re.compile(
     r"[$€£¥]\s?\d"                                       # $50、€ 50（符号在前）
     r"|\d[\d.,]*\s?[$€£¥]"                               # 19,99 €（德式后置，我们自己要求的格式）
@@ -287,9 +237,7 @@ def review_numeric_flags(src_en: str, text_de: str) -> list[str]:
     return out
 
 
-# 一个完整的金额 token：符号在前（$49.99）或在后（49,99 € / 50 USD）。
-# 用 \d+(?:[.,]\d+)* 而不是 [\d.,]* ——后者会把句尾的句号也吃进来，
-# 导致"原样出现"的比对因为一个标点而误报。
+# 金额允许前后币种标记，但不吞入句尾标点。
 _MONEY_TOKEN_RE = re.compile(
     r"[$€£¥]\s?\d+(?:[.,]\d+)*"
     r"|\d+(?:[.,]\d+)*\s?(?:(?:USD|EUR|Dollar|Euro)\b|[$€£¥](?!\w))",
@@ -311,11 +259,7 @@ def extract_money_tokens(text: str) -> tuple[str, ...]:
 
 
 def apply_money_mapping(text: str, mapping: Mapping[str, str]) -> str:
-    """按完整金额 token 应用业务价格表；空白差异沿用金额硬闸的归一化。
-
-    这一步只改最终发布副本，不回写 ``translated.jsonl``。配置里归一化后
-    重复且值不同的键会失败，避免字典顺序偷偷决定价格。
-    """
+    """将业务金额映射应用于发布副本；归一化后冲突的配置键报错。"""
     normalized: dict[str, str] = {}
     for raw_key, raw_value in mapping.items():
         key = _norm_money(str(raw_key))
@@ -331,21 +275,11 @@ def apply_money_mapping(text: str, mapping: Mapping[str, str]) -> str:
 
 
 def money_preserved(src_en: str, text_de: str) -> list[str]:
-    """检查原文每处金额是否原样出现，且译文没有新增金额。
-
-    这是对提示词第 3 节的**代码侧强制**：提示词要求模型逐字符复制金额，
-    但提示词只是要求，模型可能不听。金额被悄悄换算是本项目里
-    最贵的一类错误——格式看着完全正确，人工审校时极易滑过去——
-    所以必须有一道机器检查兜底。
-
-    只去空白后比对，不做任何数值或格式归一：
-    `$49.99` → `49,99 $` 币种没变，但写法和符号位置都变了，同样算违规。
-    """
+    """按金额多重集核对原样保留；仅忽略空白，不允许改格式或新增金额。"""
     source_tokens = _MONEY_TOKEN_RE.findall(src_en or "")
     translated_tokens = _MONEY_TOKEN_RE.findall(text_de or "")
 
-    # 必须按 token 精确、多重集比对。子串判断会把 $5 错认成存在于 $50 中；
-    # 单纯逐个 ``in`` 还会让原文出现两次、译文只留一次的金额漏检。
+    # 按完整 token 多重集比较，避免 $5 匹配 $50 或漏检重复金额。
     translated_left = Counter(_norm_money(t) for t in translated_tokens)
     missing: list[str] = []
     for token in source_tokens:
@@ -383,11 +317,7 @@ def _is_hashtag_char(ch: str) -> bool:
 
 
 def extract_hashtags(text: str) -> list[str]:
-    r"""按出现顺序提取 hashtag，并保留原始大小写与 Unicode 码点。
-
-    不用 ``\w+``：它会漏掉部分组合音标/分解式文字；也不用“读到空格为止”，
-    否则句尾逗号或句号会被误算进标签。
-    """
+    """按顺序提取标签，保留大小写和组合音标，排除尾部标点。"""
     value = text or ""
     out: list[str] = []
     i = 0

@@ -55,9 +55,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
   const tab = ['text', 'images', 'localization'].includes(search.get('tab') ?? '') ? search.get('tab')! : 'text'
   const changeTab = (value: string) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
-  // 标签页首次打开才挂载，之后一直留着。两边都要：图片没挂载就不会提前拉全尺寸原图/德语图
-  // （Cache-Control: no-cache，每次进详情都是真实往返），标签页留着则保证已经花钱生成的
-  // 标签建议不会因为切一下正文就消失。换篇时整棵子树随 AppShell 的 Outlet key 重建。
+  // 标签页首次打开才挂载，之后保留结果；切换任务时由 Outlet key 重建。
   const opened = useRef(new Set([tab]))
   opened.current.add(tab)
   const adoptCandidate = (job: ContentJob) => {

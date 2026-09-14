@@ -1,18 +1,4 @@
-/**
- * 响应形状的浅层断言。
- *
- * 边界（DECISION_LOG.md）：
- *   - **只在开发构建里跑。** 静态构建不做 runtime schema validation。
- *   - 不通过就 `console.error`，**然后照常返回数据**。绝不抛、绝不白屏。
- *
- * 为什么不上 zod：那会让契约变成两份（手写类型 + schema），而这里已经有一份
- * 手写类型了；而且它是新依赖。这一层只回答一个问题——"后端是不是换了形状"，
- * 那不需要一个校验库。
- *
- * 为什么实际不校验：这是内网工具，后端和前端同一个仓库同一次提交出去，
- * 契约漂移的风险在开发期而不是运行期；而运行机器上多一层校验就多一种
- * "页面因为校验失败而白屏"的故障形态，那比少一个字段糟得多。
- */
+/** 仅开发构建检查响应形状；发现差异记录错误，仍返回原数据。 */
 
 type Checker = (value: unknown) => boolean
 
@@ -37,7 +23,6 @@ export const shape = {
 
 export type ShapeSpec = Readonly<Record<string, Checker>>
 
-/** 逐键检查，返回不通过的键名列表（键缺失也算）。 */
 export function checkShape(value: unknown, spec: ShapeSpec): string[] {
   if (!isObject(value)) return ['<不是对象>']
   const problems: string[] = []
@@ -51,11 +36,6 @@ export function checkShape(value: unknown, spec: ShapeSpec): string[] {
   return problems
 }
 
-/**
- * 开发构建里检查，然后**原样返回 value**。
- *
- * 用法：`return assertShape(await request(...), REVIEW_LIST_SHAPE, 'GET /api/tasks')`
- */
 export function assertShape<T>(value: T, spec: ShapeSpec, label: string): T {
   if (!import.meta.env.DEV) return value
   const problems = checkShape(value, spec)
@@ -65,7 +45,7 @@ export function assertShape<T>(value: T, spec: ShapeSpec, label: string): T {
   return value
 }
 
-/** 数组里每一项都查，但只报第一项的问题——同一个接口的项形状一致。 */
+/** 数组逐项检查，只报告首个问题。 */
 export function assertItemShape<T>(items: readonly T[], spec: ShapeSpec, label: string): readonly T[] {
   if (!import.meta.env.DEV) return items
   const first = items[0]
@@ -73,7 +53,6 @@ export function assertItemShape<T>(items: readonly T[], spec: ShapeSpec, label: 
   return items
 }
 
-// ─── 各接口的浅层规格。键名与 types/domain.ts 一一对应。 ─────────────────────
 
 const PLATFORM = shape.oneOf('facebook', 'instagram')
 const DISPLAY_STATUS = shape.oneOf(
@@ -99,7 +78,6 @@ export const REVIEW_LIST_ITEM_SHAPE: ShapeSpec = {
   month: shape.string,
   review: shape.object,
   schedule: shape.nullable(shape.object),
-  // 字段名是 hard_alerts，不是 alerts（DECISION_LOG.md）。
   hard_alerts: shape.array,
   risk_count: shape.number,
   risk_scan_status: RISK_SCAN_STATUS,

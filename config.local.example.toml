@@ -1,5 +1,4 @@
-# Copy to config.local.toml only after backing up and validating the source data.
-# This file only binds local paths. Business rules remain in config.toml.
+# Copy to config.local.toml to bind local data and runtime paths.
 [paths]
 archive = "D:/path/to/existing/project/archive"
 state = "D:/path/to/existing/project/state"

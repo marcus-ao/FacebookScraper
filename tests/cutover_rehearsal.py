@@ -1,21 +1,4 @@
-"""切换演练：让真的 FastAPI 去伺服真的 dist，看部署形状到底成不成立。
-
-为什么单独写一个：`tests/browser_fixture.py` 的 UIFixture 是在 Playwright 那一侧
-拦路由的，找不到文件就自己回落 index.html —— 也就是说它**自带 SPA 回落**。
-浏览器回归全绿，证明的是「前端逻辑对」，不是「FastAPI 这样挂得起来」。
-React 使用真实路径（/review、/history、/review/<account>/<id>），所以服务端必须
-正确回落到 index.html；旧书签的查询参数路径仍须兼容。
-
-用法（每次是独立进程，因为 web.api.app 在 import 时就把 DIST 定死了；
-修改 config 后须重启服务才能采用新目录）：
-
-    scripts\\run_python.bat tests/cutover_rehearsal.py
-    scripts\\run_python.bat tests/cutover_rehearsal.py --dist web/ui/dist
-
-⛔ 真实 config.toml 不碰：演练用的是临时目录里的一份副本，退出时校验原文件未变。
-⛔ 真实 archive / state 不碰：临时归档，只放两篇夹具。
-⛔ 非 GET 一律 503：这一轮不做任何真实写入。
-"""
+"""用实际 FastAPI 和静态构建核验深链接及 404；临时配置与数据，非 GET 拒绝。"""
 from __future__ import annotations
 
 import argparse
@@ -96,7 +79,7 @@ def main() -> int:
             return connect(sock, address)
 
         stack.enter_context(patch.object(socket.socket, "connect", local_only))
-        from web.api.app import DIST  # noqa: E402  —— import 时就定死，见模块注释
+        from web.api.app import DIST  # noqa: E402  导入前须设定隔离配置。
         from web.api.app import app   # noqa: E402
         report["resolved_dist"] = str(DIST)
         assert DIST == (ROOT / args.dist).resolve(), f"web_dist 没有生效：{DIST}"

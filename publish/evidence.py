@@ -1,33 +1,4 @@
-r"""把 :mod:`publish.selectors` 的每一条定位**回查**到它自称的 probe dump。
-
-存在的理由只有一条：**让"不许猜选择器"从一句纪律变成一个可执行的检查。**
-
-红线 5（不得凭猜测编写 Business Suite 的选择器）此前只能靠人守。
-一个"看起来合理"的定位提交进来，比不提交更糟——下一个人会以为它验证过。
-有了这个模块，`tests/tests_publish.py` 可以在 dump 还在本机时逐条回查：
-**编出来的定位当场被打回。**
-
-⚠️ dump 在 `state/` 下，**不进版本库**。所以回查是"有则必查、无则跳过"：
-
-- dump 在 → 逐条比对，对不上就是错；
-- dump 不在（别人的机器 / CI）→ 只能做结构检查（来源字段填了没）。
-
-**跳过不等于通过**，调用方要把两种结果分开打印。
-
-## 这带来一条刻意接受的边界：自动发布是单机工具
-
-`business_suite.py` 的三道闸一律要求 `passed is True`，而 dump 缺失时本模块
-返回 `None`（跳过）。两者相加的结果是：**换一台机器、或这份 1.97 MB 的 dump
-丢了，`--submit` 就永久失效。**
-
-这是 2026-09-03 用户明确拍板接受的：dump 含真实 Business Suite 的语义快照与
-117 张截图（134 MB），把它连同截图塞进版本库既撑爆仓库、又有截图漏内容的风险；
-而导出脱敏摘要虽然能跨机，却证明不了 final 截图存在，等于把闸调松一档。
-
-代价写在明面上，不留给下一个人自己撞：
-- 错误信息直接给出重录命令（见下面 `validate_v2_dump` / `verify` 的返回文案）；
-- `README.md` 与 `docs/MANUAL_STEPS.md` 都记了"换机 = 必须重录探查"。
-"""
+"""将定位与信号回查到本机 probe；缺证据返回 None，真实提交必须为 True。"""
 from __future__ import annotations
 
 import json
@@ -39,9 +10,7 @@ from publish.selectors import (REGISTRY, SIGNALS, EvidenceSignal, Locator,
                                account_value_from_text,
                                normalize_account_value)
 
-#: dump 里能拿来核对 :attr:`Locator.attributes` 的字段。
-#: 其余键（``page_url`` / ``rendered_text`` / ``nested_editable_depth`` …）
-#: 是给人读的旁注，不参与逐字段比对。
+# 可参与 Locator.attributes 回查的字段。
 _CHECKABLE = ("tag", "input_type", "placeholder", "accept", "multiple",
               "explicit_role", "is_contenteditable")
 
@@ -70,11 +39,7 @@ def _parse_aware(value: object) -> datetime | None:
     return parsed
 
 
-# 校验结果缓存。**键含 mtime 与大小**，dump 在进程存活期间被换掉会重新校验。
-#
-# 一次 `--submit` 全程会沿 compose / workflow / business_suite 三条路径反复
-# 要同一份 dump：实测约 38 次解析、约 72 MB 读盘，每次得出完全相同的结论。
-# 这里只缓存"校验通过的结果"，失败路径照旧每次重算（失败是要给人看原因的）。
+# 仅缓存校验成功结果；mtime 或大小变化后重查。
 _DUMP_CACHE: dict[tuple, tuple[dict, str]] = {}
 
 
@@ -192,10 +157,7 @@ def _attributes_match(row: dict, spec: Locator) -> bool:
 
 
 def verify(spec: Locator, dumps_dir: Path) -> tuple[bool | None, str]:
-    """回查一条定位。
-
-    返回 ``(True, "")`` / ``(False, 原因)`` / ``(None, 跳过原因)``。
-    """
+    """返回 (True, 空串)、(False, 原因) 或 (None, 缺证据原因)。"""
     if not spec.source_dump or not spec.sequences:
         return False, "没写来源 dump 或来源交互序号"
     path = Path(dumps_dir) / spec.source_dump
@@ -258,13 +220,7 @@ def _signal_hits(item: dict, spec: EvidenceSignal) -> bool:
             if str(row.get("role") or "") == spec.role
             and spec.name in _row_text(row)]
     if spec.key == "composer_account_context":
-        # ⚠️ **2026-09-01 按真实 dump 收窄为只验 Facebook。**
-        # 实测（`publish_probe_20260901_054226_378622.json`，46 张 composer
-        # 快照）：composer 上**从头到尾没有出现过 IG 帐号名**，渠道只有
-        # `img 'Instagram'` 一个图标。所以"提交前同时证明两个渠道"这条
-        # 在这个 UI 上不可满足，不是没录到。IG 改由提交后的 Planner 详情
-        # 弹窗回读证明（见 `_verify_planner_structure`），
-        # **"少任一渠道就转人工"这条保证没有放松，只是挪到了提交之后。**
+        # 此账号信号仅覆盖 FB；IG 须由独立详情证据确认。
         attrs = spec.attributes
         expected = normalize_account_value(
             str(attrs.get("facebook_account_token") or ""))
@@ -280,8 +236,7 @@ def _signal_hits(item: dict, spec: EvidenceSignal) -> bool:
     return bool(rows)
 
 
-#: `planner_scheduled_card` v2 契约要求的属性。
-#: **2026-09-01 按真实 Planner 重写**，见 `docs/HANDOFF.md` 第 6 节。
+# Planner 条目 v2 契约属性。
 PLANNER_REQUIRED = (
     "date_format", "time_format", "datetime_regex",
     "entry_role", "entry_probe_text",
@@ -294,13 +249,7 @@ PLANNER_REQUIRED = (
 
 
 def parse_entry_moment(rendered: str, attrs: dict) -> datetime | None:
-    """从日历条目文本里解析出**唯一**一个时刻。
-
-    ⚠️ 判据是"只指向一个时刻"，**不是"只匹配一次"**。
-    可访问名与可见文本常常一模一样，拼起来天然就是两遍；
-    按次数判会把唯一正确的条目当成"两个时刻"丢掉。
-    真出现两个**不同**的时刻才返回 None —— 那时确实分不清哪个是目标。
-    """
+    """允许同一时刻重复出现；存在多个不同的时刻时返回 None。"""
     try:
         pattern = re.compile(str(attrs.get("datetime_regex") or ""))
     except re.error:
@@ -320,11 +269,7 @@ def parse_entry_moment(rendered: str, attrs: dict) -> datetime | None:
 
 
 def _planner_entries(items: list[dict], spec: EvidenceSignal) -> list[dict]:
-    """日历条目：同一条可访问名里同时带正文样本与可解析的完整时刻。
-
-    真实 Planner 没有"一张卡片带全部元数据"这种东西。周视图/待发列表里的
-    那条 ``link`` 是**唯一**同时承载正文与目标时刻的元素，所以它就是锚点。
-    """
+    """以同时包含正文与完整时刻的 link 作为条目锚点。"""
     attrs = spec.attributes
     probe = str(attrs.get("entry_probe_text") or "")
     out = []
@@ -342,15 +287,7 @@ def _planner_entries(items: list[dict], spec: EvidenceSignal) -> list[dict]:
 
 
 def token_present(haystack: str, token: str) -> bool:
-    """账号 token 是否作为**独立词**出现在一整串弹窗文本里。
-
-    ⚠️ 不能用 ``in``：``neakasa.de`` 是 ``neakasa.deals`` 的子串，
-    子串判会把一个近碰撞账号读成目标账号。前后都不许接字母/数字/点/@。
-
-    ⚠️ 这一条挡不住"目标名 + 后缀"（`Neakasa Deutschland Test`），
-    空格是合法词边界。挡它的是**提交前**那道 composer 账号闸：
-    那里比的是独立元素的**完整值**，多一个词就不等。
-    """
+    """按独立 token 匹配账号，防止子串碰撞；完整显示名另由提交前账号闸核验。"""
     needle = " ".join(str(token or "").split())
     if not needle:
         return False
@@ -360,13 +297,7 @@ def token_present(haystack: str, token: str) -> bool:
 
 def _channel_dialogs(items: list[dict], spec: EvidenceSignal,
                      channel: str) -> list[tuple[dict, str]]:
-    """某个渠道的详情弹窗 + 它的 remote id。
-
-    FB 与 IG 是**两个独立弹窗、两个独立 remote id**（实测
-    FB `1887083152480681` / IG `4378984725697354`）。账号名和正文只存在于
-    弹窗自己那一整串可访问名里 —— IG 侧连独立子元素都没有，
-    所以这里按"整串里同时含渠道标记与目标账号 token"判。
-    """
+    """从独立渠道详情读取目标账号与 remote ID。"""
     attrs = spec.attributes
     marker = str(attrs.get("%s_marker" % channel) or "")
     token = str(attrs.get("%s_account_token" % channel) or "")
@@ -394,18 +325,13 @@ def _channel_dialogs(items: list[dict], spec: EvidenceSignal,
 
 
 def _visible_month(items: list[dict], spec: EvidenceSignal) -> bool:
-    """Planner 的可见范围：`heading 'September'` + `heading '2026'` 两条。
-
-    ⚠️ 真实 UI **没有** "start - end" 那种范围串（旧契约那条被实测推翻）。
-    月份与年份是两条独立 heading，合起来就是当前视图覆盖的那个月。
-    """
+    """从独立的月份与年份 heading 解析可见月份。"""
     attrs = spec.attributes
     found = {"month": False, "year": False}
     for item in items:
         for row in _snapshot_candidates(item):
             role = str(row.get("role") or "")
-            # ⚠️ 逐个**单值**试。accessible_name 与 visible_text 常常一样，
-            # 拼起来就是 "September September"，怎么都解析不出来。
+            # 名称与可见文本逐一解析，不拼接重复的月份名。
             for raw in _row_text_values(row):
                 text = " ".join(raw.split())
                 for key in ("month", "year"):
@@ -421,16 +347,7 @@ def _visible_month(items: list[dict], spec: EvidenceSignal) -> bool:
 
 
 def _verify_planner_structure(items: list[dict], spec: EvidenceSignal) -> str:
-    """按**真实** Planner 证明：条目（时刻+正文）+ 两个渠道弹窗 + 可见月份。
-
-    与旧契约的区别（旧的是照着想象中的富卡片写的，2026-09-01 被实测推翻）：
-
-    - 时刻与正文**在同一条 link 上**，不是卡片内两个独立子元素；
-    - FB / IG 是**两个独立对象**，各有各的详情弹窗与 remote id，
-      不存在"一张卡片同时带两个渠道"；
-    - 可见范围是月份 + 年份两条 heading，不是 start-end 串；
-    - **图片数量在 Planner 侧完全不存在** —— 那条硬闸移到 composer 上传后。
-    """
+    """核验正文时刻条目、独立渠道详情及可见月份；不证明远端图片。"""
     attrs = spec.attributes
     missing = [key for key in PLANNER_REQUIRED if not attrs.get(key)]
     if missing:
@@ -477,9 +394,7 @@ def verify_signal(spec: EvidenceSignal,
                 sequence, spec.surface)
         declared.append(item)
     if spec.key == "planner_scheduled_card":
-        # ⚠️ 排期卡片的证据**天然跨多张快照**：条目在日历上，
-        # FB 与 IG 的详情弹窗各要点开一次才看得到，三者不可能同框。
-        # 所以这一条按声明的几张快照的**并集**验，其余信号仍然逐张验。
+        # 日历条目与各渠道详情跨快照，需按同一录证集合核验。
         problem = _verify_planner_structure(declared, spec)
         if problem:
             return False, "第 %s 条快照（并集）：%s" % (
@@ -546,12 +461,7 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
             return False
         return shot.is_file() and shot.stat().st_size > 0
 
-    # 逐 page_id 按 evidence_order 贪心串一次链。
-    #
-    # ⚠️ 2026-09-03 之前这里是五层嵌套循环（O(n⁵)，82 行）。要证明的命题只是
-    # 「这五条证据来自同一页，且 evidence_order 按 账号 < 提交 < 成功 ≤ 就绪
-    # ≤ 卡片 排列，之后还有一张同页的有效 final 截图」。按序贪心取每一步
-    # **最小可行**的那条即可：链是单调的，早选不会挡住后面任何可行解。
+    # 同页按证据顺序贪心选择最早可行节点，后续仍要求有效 final 截图。
     def orders_on(rows: list[dict], page: str) -> list[int]:
         return sorted(
             row["evidence_order"] for row in rows

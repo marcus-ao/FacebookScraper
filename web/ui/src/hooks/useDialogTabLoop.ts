@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 
-// 当前 antd 的 focusin 回收在 Chromium 将焦点移往浏览器工具栏时收不到事件。
-// 只补首尾 Tab 的循环；进入、Esc、恢复焦点仍由 Modal / Drawer 管理。
+// 补首尾 Tab 循环；进入、Esc 和焦点恢复仍由弹层处理。
 export function useDialogTabLoop() {
   useEffect(() => {
     const loop = (event: KeyboardEvent) => {

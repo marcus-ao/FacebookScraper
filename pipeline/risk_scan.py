@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import translate
+from localize import text as translation
 from core import paid_model, paid_requests
 
 
@@ -52,7 +52,7 @@ def _load(state_dir: Path) -> list[dict]:
 def _base_view(source_text: str, prompt_sha256: str) -> dict:
     return {
         "status": "not_scanned", "risks": [],
-        "source_text_sha256": translate.source_text_sha256(source_text),
+        "source_text_sha256": translation.source_text_sha256(source_text),
         "scan_text_sha256": _digest(source_text),
         "prompt_sha256": prompt_sha256, "prompt_version": PROMPT_VERSION,
         "source": None, "scanned_at": None,
@@ -149,13 +149,12 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
         return existing
     prompt, prompt_sha256 = _prompt(prompt_path)
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    # Risk coordinates and model input bind to the exact raw UTF-8 text.  The
-    # translation digest strips outer whitespace and cannot protect offsets.
+    # 风险偏移绑定原始 UTF-8 正文，不能使用 strip 后的翻译指纹。
     scan_text_sha256 = _digest(source_text)
     source = {"kind": "paid_model", "provider": "unknown", "model": "unknown"}
     row: dict[str, Any] = {
         "schema_version": 1, "task_id": task_id, "source_ref": source_ref,
-        "source_text_sha256": translate.source_text_sha256(source_text),
+        "source_text_sha256": translation.source_text_sha256(source_text),
         "scan_text_sha256": scan_text_sha256, "prompt_sha256": prompt_sha256,
         "prompt_version": PROMPT_VERSION, "source": source,
         "scanned_at": moment.isoformat(), "actor": None,
@@ -164,14 +163,12 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
     receipt = None
     try:
         if caller is None:
-            caller = translate.Translator(translate.Settings())
+            caller = translation.Translator(translation.Settings())
         settings = caller.s
         source.update(provider=str(getattr(settings, "provider", "unknown")),
                       model=str(getattr(settings, "model", "unknown")))
         row["source"] = source
-        # Translator constructs credentials/client lazily.  Validate locally
-        # before RequestController writes `started`, because a missing key did
-        # not make a provider request and must not become an uncertain charge.
+        # 写 started 前验证本机凭据，避免未发请求却产生未决费用。
         if getattr(type(caller), "client", None) is not None:
             _ = caller.client
         response, receipt = controller.run(
@@ -179,8 +176,8 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
             media_index=None, model=source["model"],
             request=lambda: caller.translate(source_text, prompt),
             usage_getter=lambda: caller.last_usage,
-            usage_errors=translate.translation_usage_errors,
-            usage_cost=lambda usage: translate.usage_cost_upper_bound(settings, dict(usage)))
+            usage_errors=translation.translation_usage_errors,
+            usage_cost=lambda usage: translation.usage_cost_upper_bound(settings, dict(usage)))
         risks = parse_response(response, source_text)
         row.update(status="completed", risks=risks,
                    message=("风险预扫完成，请逐项人工判断。" if risks

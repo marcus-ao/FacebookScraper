@@ -1,29 +1,4 @@
-"""审校台 UI 审计用的离线取景台（read-only audit harness）。
-
-它做一件事：用 `tests/browser_fixture.BrowserFixture` 的隔离数据起一个本机
-HTTP 宿主，再往里塞足够多、足够多样的样本，让 UI 的各种状态（硬闸告警、
-语义风险、人工稿、挂起/不发/已交人工、多图、IG 链接与 CTA）能被看见、
-被截图、被量尺寸。
-
-为什么需要它：真实归档当前 26 篇全是 `not_ready`，`risk_scan` 全是
-`not_scanned`，列表 24 行文字完全相同。那份数据能证明"扫不动"，但证明不了
-"有信号时长什么样"。审计需要两者都看到。
-
-安全边界（和浏览器回归夹具同一套）：
-
-* 数据在临时目录，真实 `archive/` 与 `state/` 一个字节都不碰；
-* `socket.connect` 被限制在回环地址，任何外部请求直接失败；
-* 除 `PUT /api/settings`、`PUT …/localization`、`POST …/check` 之外，
-  所有非 GET 请求返回 503 —— 点到"这篇不发"也不会真的写账本；
-* 退出时校验真实 `config.toml` 未被改动。
-
-用法：
-
-    python tests/audit_fixture_host.py
-    python tests/audit_fixture_host.py --port 8799
-
-不是自动化测试，不产生验收证据，不进回归套件。
-"""
+"""隔离 UI 样本宿主；仅允许回环网络和少量测试写入，不代表真实服务验收。"""
 from __future__ import annotations
 
 import argparse

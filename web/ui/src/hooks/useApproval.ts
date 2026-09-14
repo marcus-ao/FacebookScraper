@@ -11,8 +11,7 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const options = useQuery({ queryKey: ['approval-options', detail.id, detail.text.source_text_sha256, detail.text.human_revision, detail.review.revision, detail.localization.revision], queryFn: () => approvalOptions(detail.id), enabled: !detail.read_only })
   const [when, setWhenState] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null), [confirmed, setConfirmed] = useState(false)
   const [snapshot, setSnapshot] = useState<{ detail: TaskDetail; body: ApprovalBody } | null>(null)
-  // 她动过这个字段之后就不再自动填了（判据在 lib/action-reasons.ts 的 seedScheduleTime）。
-  // 清空也算动过 —— 那是一个决定，不是一个待补的空值。
+  // 人工修改或清空后不再自动预填。
   const touched = useRef(false)
   const setWhen = (value: string) => { touched.current = true; setWhenState(value) }
   useEffect(() => { touched.current = false; setWhenState('') }, [detail.id])
@@ -32,10 +31,7 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
       setSnapshot(null); setConfirmed(true); await refresh()
     } catch (cause) {
       setError(cause); setSnapshot(null)
-      // 回执不是严格 scheduled 时后端已经留下发布尝试。不重新读这一篇，
-      // detail.publication / detail.status 还停在提交前，DecisionPanel 的
-      // “核对并补齐本地回执”就不出现，运营只能刷新整页才能收尾。
-      // 重读失败不覆盖上面的原始错误。
+      // 提交未确认也重读详情以显示恢复入口；重读失败保留原始错误。
       await refresh().catch(() => undefined)
       await options.refetch()
     }

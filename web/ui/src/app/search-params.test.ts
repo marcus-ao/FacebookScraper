@@ -20,7 +20,6 @@ import {
 } from './search-params'
 import type { DisplayStatus } from '@/types/domain'
 
-// URL 契约是纯函数，可在不渲染界面的情况下验证。
 
 describe('队列分桶：参数叫 queue，不叫 status', () => {
   it('四个分桶', () => {
@@ -29,7 +28,7 @@ describe('队列分桶：参数叫 queue，不叫 status', () => {
 
   it('分桶覆盖全部八个展示态，且互不重叠', () => {
     const all = QUEUE_BUCKETS.flatMap((bucket) => [...QUEUE_BUCKET_STATUSES[bucket]])
-    expect(new Set(all).size).toBe(all.length) // 不重叠
+    expect(new Set(all).size).toBe(all.length)
     expect(all.sort()).toEqual(
       [
         'approved',
@@ -81,7 +80,7 @@ describe('队列分桶：参数叫 queue，不叫 status', () => {
     expect(parseQueue(null)).toBe(DEFAULT_QUEUE)
     expect(parseQueue(undefined)).toBe(DEFAULT_QUEUE)
     expect(parseQueue('')).toBe(DEFAULT_QUEUE)
-    expect(parseQueue('pending_review')).toBe(DEFAULT_QUEUE) // 真实 status 不是分桶名
+    expect(parseQueue('pending_review')).toBe(DEFAULT_QUEUE)
     expect(parseQueue('nonsense')).toBe(DEFAULT_QUEUE)
   })
 })
@@ -93,7 +92,6 @@ describe('详情 URL 携带来源列表上下文', () => {
     month: '2026-07',
     tag: 'Riko',
     alerts: '1',
-    // 这个不在白名单里，不该被带走
     somethingElse: 'x',
   })
 
@@ -256,13 +254,10 @@ describe('旧 URL 永久兼容（DECISION_LOG）', () => {
   })
 })
 
-// 她会手改 URL，也会把链接复制来复制去。这一组的口径逐个对过真实后端契约：
-// platform 有 pattern（web/api/app.py:95），month 与 tag 没有。
 describe('手改坏的 URL 不要甩一个 422 给她', () => {
   it('platform 只认后端 pattern 里的那两个', () => {
     expect(parsePlatform('facebook')).toBe('facebook')
     expect(parsePlatform('instagram')).toBe('instagram')
-    // 这个值会让 /api/tasks 直接 422，整页变成「暂时无法读取历史归档」。
     expect(parsePlatform('facebookk')).toBeNull()
     expect(parsePlatform('FACEBOOK')).toBeNull()
     expect(parsePlatform('tiktok')).toBeNull()
@@ -273,7 +268,6 @@ describe('手改坏的 URL 不要甩一个 422 给她', () => {
     expect(parseMonth('2026-09')).toBe('2026-09')
     expect(parseMonth('2026-01')).toBe('2026-01')
     expect(parseMonth('2026-12')).toBe('2026-12')
-    // core/index_db.py:113 给缺日期的帖子写的就是这个值，筛选下拉里会出现。
     expect(parseMonth('undated')).toBe('undated')
   })
 
@@ -287,11 +281,9 @@ describe('手改坏的 URL 不要甩一个 422 给她', () => {
   })
 
   it('⛔ tag 是自由业务标签，这里不许编白名单', () => {
-    // 归档里有什么标签是运营说了算的。前端拦一下就等于把真实数据筛没了。
     expect(parseTag('Riko')).toBe('Riko')
     expect(parseTag('促销')).toBe('促销')
     expect(parseTag('#Katzen 2026')).toBe('#Katzen 2026')
-    // 后端另外认这一个哨兵（core/index_db.py:186）。
     expect(parseTag('__untagged__')).toBe('__untagged__')
     expect(parseTag('  ')).toBeNull()
     expect(parseTag('')).toBeNull()
@@ -312,7 +304,6 @@ describe('手改坏的 URL 不要甩一个 422 给她', () => {
     const search = buildDetailSearch({ queue: 'review', platform: 'tiktok', month: '2026-99', tag: 'Riko' }, 'review', { tab: 'images' })
     expect(search).not.toContain('tiktok')
     expect(search).not.toContain('2026-99')
-    // 合法的那些一个都不能丢。
     expect(search).toContain('queue=review')
     expect(search).toContain('tag=Riko')
     expect(search).toContain('tab=images')

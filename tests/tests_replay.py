@@ -69,8 +69,7 @@ with tempfile.TemporaryDirectory() as temp:
     broken_dir.mkdir()
     (broken_dir / "post.json").write_text("{bad json", encoding="utf-8")
 
-    # 同一 kept ID 的旧 undated 真相源：只按 post_id 判断会把 dated 与
-    # undated 两份都留下，之后 reindex 的胜出顺序不再可靠。
+    # 同 ID 的 dated/undated 旧目录只保留预期事实源。
     duplicate_dir = arc.posts_dir / "undated_keep"
     duplicate_dir.mkdir()
     duplicate_media = duplicate_dir / "01.jpg"

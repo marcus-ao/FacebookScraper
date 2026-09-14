@@ -14,10 +14,7 @@ import {
   wallMinutesApart,
 } from './format'
 
-// 这份测试跑在 TZ=America/New_York 下（见 vitest.config.ts）：
-// 柏林和上海都不是本地时区，所以任何"偷偷用了浏览器本地时区"的实现
-// 都会在这里当场失败。这是业务后果最重的一组用例——
-// 把 10:00 柏林显示成别的时刻，就是把帖子发错时间。
+// 使用第三时区运行，避免宿主时区掩盖错误。
 
 describe('formatSchedule：柏林时刻必须按字符串里带的偏移显示，不经本地时区', () => {
   it('夏令时期间（+02:00）显示字符串里的墙上时刻', () => {
@@ -25,8 +22,6 @@ describe('formatSchedule：柏林时刻必须按字符串里带的偏移显示�
   })
 
   it('本地时区换算会给出别的小时 —— 证明上面那条不是巧合', () => {
-    // 同一时刻在 America/New_York 是 04:00。实现一旦改成
-    // new Date(iso).toLocaleString()，输出就会变成 04:00。
     const localHour = new Date('2026-07-01T10:00:00+02:00').getHours()
     expect(localHour).not.toBe(10)
     expect(formatSchedule('2026-07-01T10:00:00+02:00')).toContain('10:00')
@@ -37,13 +32,10 @@ describe('formatSchedule：柏林时刻必须按字符串里带的偏移显示�
   })
 
   it('UTC 后缀的字符串也按字面时分显示（不做偏移换算）', () => {
-    // formatSchedule 是"显示字符串里写的墙上时刻"，不是"换算到柏林"。
-    // 换算由后端负责；前端再换一次就会错两遍。
     expect(formatSchedule('2026-07-01T10:00:00Z')).toBe('7/1 周三 10:00 柏林')
   })
 
   describe('夏令时边界', () => {
-    // 2026 年欧盟夏令时：3/29 开始，10/25 结束。两天都是周日。
     it('切换日当天（3/29，+02:00）', () => {
       expect(formatSchedule('2026-03-29T03:00:00+02:00')).toBe('3/29 周日 03:00 柏林')
     })
@@ -53,17 +45,14 @@ describe('formatSchedule：柏林时刻必须按字符串里带的偏移显示�
     })
 
     it('同一天里 +02:00 与 +01:00 都只看墙上时刻 —— 这正是不能换算的原因', () => {
-      // 10/25 02:30 在柏林出现两次（一次 +02:00 一次 +01:00）。
-      // 前端不许"聪明地"消歧；它只显示后端给的那一个。
+      // 柏林重复时刻由后端消歧，前端显示返回的偏移。
       expect(formatSchedule('2026-10-25T02:30:00+02:00')).toBe('10/25 周日 02:30 柏林')
       expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30 柏林')
     })
   })
 
   it('星期用 UTC 算，不受本地时区影响', () => {
-    // 2026-09-13 是周日（与夹具截图上的「建议 9/13 周日 17:00 柏林」一致）。
     expect(formatSchedule('2026-09-13T17:00:00+02:00')).toBe('9/13 周日 17:00 柏林')
-    // 午夜时刻最容易因本地时区退到前一天。
     expect(formatSchedule('2026-09-13T00:05:00+02:00')).toContain('周日')
     expect(formatSchedule('2026-09-13T23:55:00+02:00')).toContain('周日')
   })
@@ -94,8 +83,8 @@ describe('formatTrailTime / formatWakeAt：操作记录是上海时刻', () => {
 
   it('不是本地时区（New York 会是 22:00 前一天），也不是 UTC', () => {
     const shown = formatTrailTime('2026-07-01T02:00:00Z')
-    expect(shown).not.toContain('22:00') // America/New_York
-    expect(shown).not.toContain('02:00') // UTC
+    expect(shown).not.toContain('22:00')
+    expect(shown).not.toContain('02:00')
   })
 
   it('跨日：UTC 20:00 在上海是次日 04:00', () => {
@@ -143,7 +132,6 @@ describe('文案表', () => {
 
   it('not_ready 显示「未就绪」 —— DECISION_LOG 定的唯一一处文案改动', () => {
     expect(STATUS_LABEL.not_ready).toBe('未就绪')
-    // 「待处理」会与「待我审」之外的分桶概念混淆。
     expect(STATUS_LABEL.not_ready).not.toBe('待处理')
   })
 
@@ -171,22 +159,16 @@ describe('文案表', () => {
 })
 
 describe('berlinToday：月历的「今天」按柏林算，不按浏览器本地时区', () => {
-  // 这组用例的价值全在"跑在 America/New_York 下"这件事上：下面每一个断言
-  // 换成 new Date().getDate() 都会是另一个日期。
   it('柏林已经跨到第二天，纽约和上海都还没有', () => {
-    // 2026-09-13T22:30Z：柏林 +02:00 → 09-14 00:30，纽约 -04:00 → 09-13 18:30。
     expect(berlinToday(new Date('2026-09-13T22:30:00Z'))).toBe('2026-09-14')
   })
 
   it('上海已经是第二天了，柏林还没有 —— 这台机器在中国', () => {
-    // 2026-09-13T17:00Z：上海 +08:00 → 09-14 01:00，柏林 +02:00 → 09-13 19:00。
     expect(berlinToday(new Date('2026-09-13T17:00:00Z'))).toBe('2026-09-13')
   })
 
   it('冬令时按 +01:00 算，不是固定偏移', () => {
-    // 2026-01-13T23:30Z：柏林 +01:00 → 01-14 00:30。
     expect(berlinToday(new Date('2026-01-13T23:30:00Z'))).toBe('2026-01-14')
-    // 同一个墙上钟点，夏令时那天就该停在当天。
     expect(berlinToday(new Date('2026-07-13T22:30:00Z'))).toBe('2026-07-14')
   })
 })

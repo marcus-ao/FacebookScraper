@@ -303,15 +303,13 @@ for when, want_hour in [
     check(slot.hour == 10 and shown.hour == want_hour,
           "德国槽始终 10:00；%s 的美西 UI 正确显示 %02d:00"
           % (slot.date(), want_hour))
-# ⚠️ now 必须与目标槽落在**同一个 UI 自然月**，否则先被跨月闸挡掉，
-# 测不到这里真正要测的 DST 歧义回退。原来那个 now（柏林 11-01 00:00）
-# 在美西还是 10-31，composer 的日历根本翻不到 11 月。
+# now 与目标时刻须在同一 UI 月份，避免月界检查遮蔽 DST 测试。
 fallback = A.next_slots(
     datetime.fromisoformat("2026-11-01T00:30:00-07:00"), (), 1, rules)[0]
 check(fallback.date().isoformat() == "2026-11-01" and fallback.hour == 17,
       "美西回拨日 10:00 槽无法在 UI 无歧义表达时，自动改用当天 17:00 安全槽")
 
-# composer 的日期选择器不允许跨月（2026-09-01 实测）。
+# 夹具限制为可见月份，跨月必须明确失败。
 month_end = A.next_slots(
     datetime.fromisoformat("2026-09-30T20:00:00-07:00"), (), 3, rules)
 check(month_end == (),
@@ -464,7 +462,7 @@ with tempfile.TemporaryDirectory() as folder:
           "load_sources 只放图文帖过去")
     check(skipped and skipped[0][0] == "facebook:vid"
           and "video" in skipped[0][1],
-          "跳过的帖子必须带 ref 和原因返回 —— 跳过不等于静默丢弃（CR-19）")
+          "跳过的帖子必须带 ref 和原因返回 —— 跳过不等于静默丢弃")
     result = A.reconcile(sources, account_pairs=TEST_ACCOUNT_PAIRS)
     check(len(result.candidates) == 1
           and result.candidates[0].canonical.post_id == "pic",
@@ -472,6 +470,8 @@ with tempfile.TemporaryDirectory() as folder:
 
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
+    # 创建配置指向的 state，避免目录缺失短路实际能力检查。
+    cfg().state_dir.mkdir(parents=True, exist_ok=True)
     verified = cfg().get("publish", "ui_constraints_verified", False) is True
     blockers = A.activation_blockers(state)
     check(any("单渠道真实验收记录" in item for item in blockers),

@@ -1,24 +1,4 @@
-r"""工作区卫生检查：把三个**已经犯过**的错变成会让测试变红的机器检查。
-
-2026-09-02 的架构审查发现，这个仓库的臃肿不是"有一堆死代码堆在那儿"——
-726 个定义里只有 9 个从来没被引用过。真正的病因是三条好习惯被无差别地
-执行到了极限、而且**从不回收**：
-
-1. **每个决定都把完整论证写在代码/配置里。** 于是 `config.toml` 613 行里
-   387 行是注释，真正的键只有 78 个；而其中两个键
-   （`schedule_min_minutes_ahead` / `schedule_max_days_ahead`）在全部
-   Python 代码里出现 **0 次**——改了不生效的旋钮，比没有更糟。
-2. **每次失败都留下防御，永不回收。** 登出增量方案 8/30 就被自己证伪，
-   720 行仍在维护；`harvest_embedded` 的理由被自己推翻后默认关闭、代码留着；
-   `_deprecated/` 三个文件里两个连 import 都过不了。
-3. **方案变更时并行新增，不删旧的。** 同一个文件锁类被逐字节复制了 5 遍，
-   两个 dHash 用不同的重采样滤波器给同一张图不同的值，
-   `_is_fatal_api_error` 在两个模块里语义分叉——CR-53 的修复只落到了一半，
-   同一次 429 让翻译整批崩、调图只算单条失败，持续两天没人发现。
-
-下面三条检查分别对着这三条。**它们会红，而且应该红**——红的时候不是去
-放宽阈值，是去回收那段代码；确实要保留的，写进各自的豁免表并说明理由。
-"""
+"""检查配置消费、无用定义、重复实现、文档链接、脚本换行及依赖边界。"""
 from __future__ import annotations
 
 import ast
@@ -45,14 +25,11 @@ def check(cond, msg):
 
 
 # 受检代码（不含测试、不含一次性脚手架）
-PROD_DIRS = ("core", "routes", "publish", "pipeline")
-PROD_ROOT_FILES = ("translate.py", "localize_images.py")
+PROD_DIRS = ("core", "routes", "localize", "publish", "pipeline")
 
 
 def python_files(*, include_tests: bool, include_scaffolding: bool) -> list[Path]:
     out: list[Path] = []
-    for name in PROD_ROOT_FILES:
-        out.append(ROOT / name)
     for folder in PROD_DIRS:
         out += [p for p in (ROOT / folder).rglob("*.py")
                 if "__pycache__" not in p.parts]
@@ -74,19 +51,14 @@ def rel(path: Path) -> str:
 
 # ==========================================================================
 print("[1] 病因 1 · 没有改了不生效的旋钮")
-# --------------------------------------------------------------------------
-# config.toml 里的每一个键都必须真的被某处 Python 代码读取。
-# `runs_per_day` 曾因为这个问题被删过一次，schedule_*_ahead 是同一个坑的复发。
+# 配置键须有实际读取方。
 
 CONFIG_KEY_EXEMPT = {
-    # [targets] 的值是账号名，键名就是平台名，由 cfg()["targets"][platform]
-    # 动态索引，grep 不到字面量。
+    # targets 通过平台名动态索引，不能只查字面量。
     "targets.facebook", "targets.instagram",
 }
 
-#: **整表消费**的数据表：键是业务数据（术语、价格、型号），不是旋钮。
-#: 对它们要检查的是"这张表被读了没"，而不是"每个词条被 grep 到没"——
-#: 后者永远会红，而红得没有信息量的检查会被人关掉。
+# 业务数据表检查整表消费，不逐一检索词条。
 CONFIG_DATA_TABLES = {
     "translate.glossary",       # 英→德术语表，render_glossary 整表渲染
     "publish.price_map",        # 美元→欧元定价表，apply_money_mapping 整表查
@@ -113,13 +85,7 @@ def config_keys() -> list[str]:
 sources = {p: p.read_text(encoding="utf-8")
            for p in python_files(include_tests=True, include_scaffolding=True)}
 
-# `web/` 不进模块图、不进重复检测 —— 它是叶子，而且 reader/writer 本来就该薄。
-# 但**配置键的读取方可以住在那里**：`[review].snooze_default_days` 就只被
-# `web/api/reader.py` 与 `writer.py` 读。只扫 core/routes/publish/pipeline 的话，
-# 这条检查会把一个真在生效的键报成「改了不生效的旋钮」，而下一个人面前只有
-# 两条错路：删掉键，或者加一条豁免。于是这个键干脆**从来没写进 config.toml**，
-# 代码里三处默认值各自写了个 3 —— 这条检查本来就是为了防住这种事。
-# 只扩 `is_read` 的文本语料；`sources` 不动，另外几条检查的边界照旧。
+# Web 可读取配置；仅扩展键消费检查，不改变模块分层范围。
 WEB_SOURCES = [p for p in (ROOT / "web").rglob("*.py") if "__pycache__" not in p.parts]
 all_python = "\n".join([*sources.values(),
                         *(p.read_text(encoding="utf-8") for p in WEB_SOURCES)])
@@ -151,9 +117,7 @@ check(not unread,
 
 # ==========================================================================
 print("\n[2] 病因 2 · 没有零引用的定义")
-# --------------------------------------------------------------------------
-# 每个函数/类都必须至少被引用一次（测试和脚手架都算）。
-# 留一个没人调的函数，下一个人会以为它有用途。
+# 检查函数和类是否有消费者。
 
 SYMBOL_EXEMPT = {
     # CLI 入口点由 argparse / __main__ 分派，或供外部按名调用
@@ -190,31 +154,15 @@ check(not orphans,
 
 # ==========================================================================
 print("\n[3] 病因 3 · 同一段逻辑不许在两个文件里各写一遍")
-# --------------------------------------------------------------------------
-# 滑动窗口比对：忽略空行、注释与字符串字面量后，连续 WINDOW 行完全相同
-# 且出现在两个不同文件里，就算重复实现。
-#
-# 这条检查如果早就在，CR-53 那次分叉不会发生：文件锁 5 份、dHash 2 份、
-# _is_fatal_api_error 2 份、原子写 6 份，当场就会红。
+# 忽略注释和字面量后，比较跨文件的连续代码窗口。
 
 WINDOW = 8
 
 DUPLICATE_EXEMPT = {
-    # 目前没有豁免。要加的话写成 frozenset({"文件A", "文件B"}) 并在这里
-    # 说明为什么这两处**必须**各写一遍——"改起来麻烦"不是理由。
+    # 豁免以文件对登记，并注明必要理由。
 }
 
-#: CLI 入口不参与重复检测。
-#:
-#: 归一化会把字符串字面量换成 S —— 那是抓到文件锁 5 份复制的关键（那 5 份的
-#: 差异只有类名和文案）。但同一招也会把两个 ``main()``（argparse 接线 +
-#: 诊断输出 + ``return 0/1``）判成重复，而那里的"相同"只是形状。
-#:
-#: 更要紧的是：那种内容差异往往是**承重的**。``start_chrome_publish.py`` 的
-#: 排查清单必须与 ``start_chrome.py`` 的不同——CR-63 正是因为它复用了抓取
-#: Chrome 的清单，让用户照着一份**全是错的**清单去排查了一整轮。
-#:
-#: 真正的逻辑不在 main 里。所以按函数名整段排除，比枚举各种句式的正则稳。
+# 排除 CLI 接线函数，避免字面量归一化将不同命令误判为重复逻辑。
 CLI_ENTRY_NAMES = {"main", "_cli"}
 
 
@@ -281,8 +229,7 @@ check(not clashes,
 
 # ==========================================================================
 print("\n[4] 文档引用必须指向真实存在的文件")
-# --------------------------------------------------------------------------
-# 删文档时最容易留下的尾巴：代码注释还指着一个已经不存在的路径。
+# 检查失效文档引用。
 
 missing = set()
 for path, text in sources.items():
@@ -303,8 +250,7 @@ check(not missing,
 
 # ==========================================================================
 print("\n[5] .bat 必须是 CRLF（裸 LF 会让 cmd 误解析整行）")
-# --------------------------------------------------------------------------
-# CR-62：切分支之后 .bat 会带着裸 LF，而 git status 看不见。
+# 检查工作文件的实际 CRLF，git status 不反映此差异。
 
 bad_bats = []
 for path in sorted((ROOT / "scripts").glob("*.bat")):
@@ -317,25 +263,7 @@ check(not bad_bats,
 
 # ==========================================================================
 print("\n[6] 模块图必须是 DAG，依赖只许向下")
-# --------------------------------------------------------------------------
-# 2026-09-03 的架构复查：`core/{config,store,chrome,...}` 之上的 13 个模块
-# 是**一个强连通分量**——不是"有几处循环"，是整个应用层根本没有分层，
-# 它是一个模块套着 13 个文件名。任何一块都不能单独读、单独测、单独换。
-#
-# 而它是**一次一行**长出来的：每次都是"就这一次，在函数体里 import 一下"。
-# 现场留下 28 处函数内导入，其中 6 处注释明写着"延迟导入，避免模块初始化环"。
-# 那些注释是唯一的记录——而注释不会让测试变红。
-#
-# 所以这里立两条：
-#
-#   6a  **模块级**导入图无环。这是会在 import 期直接炸的那一类。
-#   6b  **全部**导入（含函数体内）在排除组装根之后仍然无环。
-#       这一条抓的是"用延迟导入把环藏起来"——Python 不炸，但模块之间
-#       依旧互为前提。
-#
-# 组装根豁免（``main`` / ``_cli``）：进程入口的职责就是把对象图装起来，
-# 它**可以**向上够。`translate.main()` 要一个住在 pipeline_assisted 的预算
-# 策略，那是依赖注入，不是环。豁免只给这两个名字，且只给函数体。
+# 检查模块级和函数内导入环；仅 main/_cli 组装根允许注入上层策略。
 
 COMPOSITION_ROOTS = {"main", "_cli"}
 
@@ -372,8 +300,7 @@ def internal_imports(tree: ast.AST, own: set[str], *,
     found: set[str] = set()
     for node in nodes:
         if isinstance(node, ast.ImportFrom) and node.module:
-            # `from publish import evidence` 的目标是 publish.evidence，
-            # 不是 publish —— 两者分层不同，混为一谈会漏报也会误报。
+            # from package import submodule 应映射到子模块。
             names = [node.module] + [f"{node.module}.{a.name}"
                                      for a in node.names]
         elif isinstance(node, ast.Import):
@@ -449,13 +376,7 @@ for label, kwargs in (
               label, len(cycles),
               " ｜ ".join(" <-> ".join(c) for c in cycles) or "无"))
 
-# 组装根豁免不是"随便什么函数都能藏环"。函数体内导入本仓库模块的，
-# 只允许出现在 main/_cli 里，或者带一句说明它为什么必须晚绑定。
-#
-# 目前允许的两类理由：
-#   - 组装根（main/_cli）；
-#   - 明写 `# 延迟导入：`  开头的注释，说明晚绑定的**代价原因**
-#     （例如 pipeline/cli.py 不想为了看一眼积压就把 Pillow 拉起来）。
+# 非组装根的晚绑定须在导入附近注明“延迟导入：”理由。
 LAZY_REASON = re.compile(r"#\s*延迟导入[：:]")
 
 
@@ -511,7 +432,7 @@ database_consumers = []
 for name, tree in trees.items():
     if name == "core.index_db":
         continue
-    if name.split(".")[0] not in {"core", "routes", "pipeline", "publish", "translate", "localize_images"}:
+    if name.split(".")[0] not in set(PROD_DIRS):
         continue
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):

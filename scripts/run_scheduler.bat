@@ -1,6 +1,5 @@
 @echo off
-REM No arguments previews offline. --run opts into live monitoring.
-REM --run --process also opts into model processing under existing budgets.
+REM Default: offline preview. --run accesses social accounts; --process permits budgeted processing.
 setlocal
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0.."

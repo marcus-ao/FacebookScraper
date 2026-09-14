@@ -1,8 +1,4 @@
-"""外部存活心跳：只发送空 POST，缺席判断和告警由外部服务负责。
-
-URL 是匿名访问凭据，仅在启用且到期时读取环境变量；本地记录不保存地址、
-响应体或异常原文。调用者应在常驻调度器完成健康维护后调用 tick。
-"""
+"""发送空 POST 心跳；缺席告警由外部服务负责，凭据地址不落盘。"""
 from __future__ import annotations
 
 import json
@@ -34,10 +30,7 @@ class _PrivateRequestLogFilter(logging.Filter):
 
 @contextmanager
 def _private_request_logs():
-    """httpx INFO 会记录完整URL；只屏蔽本线程这次心跳的传输日志。
-
-    不改变应用日志级别，也不屏蔽其它线程的请求。心跳结果有不含地址的耐久记录。
-    """
+    """仅屏蔽本线程心跳请求的传输日志，避免泄漏 URL 凭据。"""
     names = {"httpx", *(name for name in logging.Logger.manager.loggerDict
                         if name.startswith("httpcore"))}
     loggers = [logging.getLogger(name) for name in names]

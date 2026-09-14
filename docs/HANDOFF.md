@@ -4,25 +4,28 @@
 
 ## 1. 当前工作区事实
 
-原 `main` 工作区是日常运行位置。2026-09-14T07:22:54Z 已在该工作区的 `a804c5e` 通过 `scripts/run_web.bat` 启动并完成本机只读检查；后续更新仍按同一入口复验。
+**2026-09-14 运行数据已整库清空，项目处在"从零逐阶段打磨"的起点。** 下面描述的是清空之后的真实状态，不是历史记录。
 
-**数据绑定。** 原 `main` 工作区没有 `config.local.toml`，它直接按 `config.toml` 的 `[paths]` 读同目录下的 `archive/` 与 `state/`——**这两个目录里是实际业务数据**，打开审校台、点保存都会落到真实账本。副本工作区（如 `.worktrees/business-workflow`）通过忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」。
+**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。两个目录**当前都是空的**：归档、审校账本、付费账本、发布账本、激活边界、probe dump 与截图全部删除，不做备份。副本工作区用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」。
 
-**归档现状。** 原激活 `2026-09-03T09:00:58.277710Z` 保留。归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，SQLite 实际记录/字段一致，历史第 1/2 页各 20 条且无重复，冻结详情已真实只读访问。核验备份 `runtime.zip` 共 5,246 文件、465,064,677 字节，含运行配置核验，凭据不进证据报告；原 10 份账本/激活与备份 SHA 于 06:58:19Z 再核未变。**这些不是 `.global` 回填基线**，不能重新 activate 或清空发布历史。
+**这意味着什么：**
 
-**审校台。** 2026-09-14 的当前集成版本只维护 `web/ui/` 下的 React + TypeScript 应用，构建输出为 `web/ui/dist/`；`config.toml` 的 `[paths].web_dist` 显式指向该目录。本地 `config.local.toml` 只接续 archive/state，不选择前端。原 `main` 已按 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台) 启动 PID 21928，`state/ui-consolidation-20260914T063209Z/main-entry.json` 记录静态字节、路由/刷新、旧链接、只读 API 和 404 契约通过，页面错误、阻止请求与外部动作均为零。
+| 项目 | 清空后的状态 |
+|---|---|
+| 归档 | 0 篇。FB 47 + 冻结 `.tech` 1,020 已删除，原图 CDN URL 带签名有时效，重抓不回来 |
+| 激活边界 | 未激活（`state/pipeline_state.json` 已删） |
+| 发布账本 | 空。原 45 条尝试记录（含 18 条可能已提交）已删，防重保护随之消失 |
+| 付费账本 | 空。原 12 行、3 笔共 US$0.274 已删 |
+| 持久停机记录 | 已删。IG `.global` 与 Google Trends 的 HTTP 429 停机标记不复存在，**下一次探测会当成全新会话**，大概率再撞 429 并重新写一遍 |
+| G6/G6c 发布闸 | 全关。`[publish].ui_probe_dump` 与 `ui_constraints_verified` 已退回未签字状态，见 [MANUAL_STEPS 第 8 节](MANUAL_STEPS.md#8-录制单渠道-business-suite-证据) |
 
-**浏览器会话。** 三个 Chrome 均已启动，但「启动」只证明进程和角色存在，不证明会话可抓取：
+**审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`。清理后依赖与构建产物须按 [Web 构建说明](../web/README.md#构建与启动) 重建，不入版本库。本地 `config.local.toml` 只接续 archive/state，不选择前端。
 
-- 9224 访问 `.global` 真实 HTTP 429，`delta_state.json` 已记 `detect_hard_blocked` 与失败；Google Trends 公开页同样实际 HTTP 429，`trends_export_state.json` 为 blocked。两者均已停止，**先人工核对会话与出口**，不清空状态、不连续请求。
-- 9223 已登录并观察到目标 FB `Neakasa Deutschland`、IG `neakasa.de`。2026-09-13T05:01:33Z 实际月历读到完整 35 格、4 条公开帖与 2 个明确推荐时段，含 3 个独立 IG remote ID。尚无本轮新发布/排期提交。
-- 发布浏览器里曾放入明确写有 "Technischer Entwurf…Nicht zur Veröffentlichung vorgesehen." 的技术长文案和 2 张历史原图，仅探查编辑器/缩略图数量顺序；未点 Schedule、Publish、Finish later 或 Cancel。**可能留有未保存或自动保存草稿**——不把它当业务候选，也不声称没有远端写入。
+**浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内），清库没有动它们，登录态应仍在。但「登录态还在」不等于「会话可抓取」——9224 与 Google Trends 此前都撞过 HTTP 429，而现在连那条停机记录都没有了，恢复探测前仍要人工核对账号与出口。
 
-**外部依赖缺口。** 尚无成功的真实模型验收，付费供应商核账未完成，也没有发送飞书消息。2026-09-14 用户确认的一次真实标签建议操作从 06:51:57Z 到 06:52:42Z 追加了一条 US$0.03747744 的付费记录，终态为 `output_rejected`，原因为 `ModelMismatchError`；账本保留且没有重放。它不是成功本地化或企业流程验收。`state/ui-consolidation-20260914T063209Z/cutover-data-before.json` 保存前端更新前 5,004 个实际数据文件的 SHA 快照；原九条付费账本字节前缀和其它 1,080 个事实文件未改变。飞书缺 AppSecret、两个接收组、云盘根目录与运营可达的审校 URL；镜像与外部心跳未启用，运营从飞书到排期尚未验收。只读 preflight exit 0，但阶段仍有 blocked/not_observed/disabled，两渠道 `acceptance.verified=false`。
+**外部依赖缺口。** 飞书缺 AppSecret、两个接收组、云盘根目录与运营可达的审校 URL；镜像与外部心跳未启用。尚无成功的真实模型验收或企业流程验收。
 
-**一条挂着的旧账。** attempt `d9853906-57d9-437c-9f71-4ed72d103a81`、post `3965025107383038890`，2026-09-09 10:00 +02:00 双渠道，无 remote ID 与快照。当前月历没卡**不能**判成未提交，需人工核对；不能重试，也不计入新 G8。
-
-**接手前先看 `git status`。** 主干与副本工作区都可能有未提交修订，只提交自己范围，不覆盖别人的改动。
+**接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
 ## 2. 红线
 
@@ -72,12 +75,12 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了临时真实后端验证。旧 FB 机器译文 prompt 5、当前 prompt 6；当前无可接受德语图，原 FB 目录未发现 media_de。找到的 3 张历史德语图均属冻结 `.tech`，不作 FB 或新 `.global` 素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
 - 飞书按帖聚合/两组/晨报/有效首图与摘要、原卡冻结/人工 resolve、多收件人部分失效漏发和镜像周期包/大证据独立版本已有离线验证。有效原卡补送保留 UUID；部分失效保留旧 cancelled 卡，只给漏收者生成仍有效的新提醒。企业投递和恢复仍待权限。
 - 完整月历实际读取本次已真实通过，公开观察按 remote ID，不按时钟；业务层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
-- 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。版本化浏览器已新增 FB 链接插入/准确计数，最终新 dist 的 7 场景通过，输出为 state/offline-browser-20260913T070144Z-3108/report.json。
+- 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。
 - 历史交接六项已逐项补上：canonical source_text_sha256/AST 守卫，风险 raw scan_text_sha256 保留偏移；补扫中途过期仍跑普通探测并给技术/晨间告警；付费恢复；outbox 默认 30 天完整终态组件按 SHA 归档且主状态保留去重；FB 光标 {{linkN}} 与 /check 最终计数；消除重复 alias。`afb6784` 为调度过期修复，`923091f` 为飞书终态归档，最终整合在 `565f17c`；共同回归已单列。
-- `.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话/权限和具体发布确认。FB 待制作包 `integration-candidates/facebook-122120460231379375`（在当时开发副本的 `state/` 下），来源 2026-08-16“Cat or CCTV”单图、拟 2026-09-15 10:00 柏林但未占位，缺最终德语图/受控样本许可/整包确认；不覆盖短链或多图。IG 没有新素材，过期活动/美元促销不是可以直接提交的联调包。
+- 两个平台都没有任何可提交的联调素材：归档已清空，此前准备的 FB 待制作包也一并删除。`.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话、权限和具体发布确认。
 - 审校台前端已收敛为单一 React 应用。深链接刷新由 `web/api/app.py::SinglePageFiles` 保住，契约钉在 `tests/tests_spa_static.py`；历史页首屏缩略图成本是已知待观察项（数字见 §7）。
-- 2026-09-14 当前集成 worktree 的 Python 66/66、React 26 文件 505 项测试、TypeScript + Vite 构建、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约、14 项静态路由测试、34 项 Web 审校测试和七项界面探测均通过。证据位于 `state/ui-consolidation-20260914T063209Z`、`state/offline-validation-20260914T065258Z` 与 `state/offline-browser-20260914T065304Z-21788`；隔离浏览器报告的模型、飞书、Meta 动作为零，不能外推整个真实账本或外部服务。
-- 2026-09-14T07:22:54Z 原 `main` 的 `a804c5e` 完成锁定安装（118 个包）、505 项 React 测试、TypeScript + Vite 构建和实际 8765 服务检查。`main-entry.json` 证明服务字节等于同次构建，七条业务路由直接打开/刷新、两条旧链接、只读业务 API 检查及 404 边界均通过；原数据读到历史 1,067 条、审校 26 条，月历仍是旧的 4 张卡片且界面正确警告。冻结详情首次 5 秒等待超时，45 秒上限复验为直接进入 8.625 秒、刷新 4.094 秒；其它页面为 0.366–3.233 秒，因此功能检查通过，性能观察不关闭。`cutover-data-verification.json` 于 07:24:30Z 证明前后 5,004 个实际数据文件 0 改动、0 缺失、0 新增，并保留用户确认的真实付费调用记录。上述结果只覆盖本机只读入口，不代表运营网络、模型、飞书或 Meta 流程验收。
+- 离线测试入口在清库后仍然全绿：Python 65/66，唯一失败的 `tests_browser_workflow` 是因为前端 `dist/` 随缓存一起删了，重新构建即恢复。这些测试跑在隔离夹具上，证明代码契约成立，不证明任何外部系统可用。
+- 一项留待跟进的性能观察：清库前在 1,067 篇归档上，冻结账号详情页首次打开 8.6 秒、刷新 4.1 秒，其余页面 0.4–3.2 秒。数据重建到相当规模后要重新量，别把空库上的"很快"当成结论。
 
 运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
@@ -111,13 +114,9 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 ## 6. 2026-09-01 Business Suite 真实探查
 
-历史来源是 `state/publish_probe_20260901_054226_378622.json`：56 条可信交互、71 条被动语义快照、117 张截图。旧工作区曾用下列命令检查信号：
+⛔ **这一节记的是 Business Suite 界面长什么样，来源 dump 已随 2026-09-14 清库删除。** 下面的观察本身仍然有用——它描述的是远端平台的形态，不是本地数据——但**没有任何一条现在能回查**。红线 5 要求定位必须能回查真实 dump，所以重新录证之前这些只能当线索，不能当依据。
 
-```powershell
-scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_378622.json
-```
-
-该旧文件来自原运行目录，绑定后的入口可能可读，但它没有单渠道切换交互。下列只作 2026-09-01 历史事实；新的选择器需对应本机新录证据。
+重录用 `scripts\run_python.bat -m tools._scaffolding.probe_publish`，复核用 `scripts\run_probe_signals.bat --report state\<新 dump>.json`。原来那份也没有单渠道切换交互，重录时要补上。
 
 ### Composer
 
@@ -164,11 +163,11 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 
 ### 2026-09-12/13 本轮新增观察
 
-- 单渠道控件：`state/channel_controls.json`；被动 v2 探查：`state/publish_probe_20260912_205317_056051.json`，22 条事件。已观察 FB `Neakasa Deutschland` 与 IG `neakasa.de`，尚无本轮新 Schedule 提交回读。
-- 月历控件：`state/planner_controls.json`；最新截图：`planner_month_20260913T044722903276.png`。早期 `043415712413` 截图仅证明 35 格控件可定位；随后 2026-09-13T05:01:33Z 实际 inventory 返回 ready，范围 8 月 30 日至 10 月 3 日、35 格、4 条公开帖，含 3 个独立 IG remote ID。
+- 单渠道控件与 22 条事件的被动 v2 探查都已删除。已观察 FB `Neakasa Deutschland` 与 IG `neakasa.de`，尚无本轮新 Schedule 提交回读。
+- 月历控件录证与截图均已删除。清库前 2026-09-13T05:01:33Z 实际 inventory 返回 ready，范围 8 月 30 日至 10 月 3 日、35 格、4 条公开帖，含 3 个独立 IG remote ID。
 - 真实详情页可由头部 Facebook/Instagram 图标、`Published on` 与合作作者信息区分渠道；未来两个仅显示时刻的项经 tooltip 确认为推荐时段，须排除于帖子/占用数。
 - 本次完整月历读取已通过，仍不能外推新的 scheduled 卡片、跨月/DST 或真实长文/多图回读。读取覆盖所有格子/时刻条目、手工任务和延迟加载，不能用 shell 就绪或已读一周声明空档；公开状态无充分依据仍显示 unknown。
-- 编辑器媒体探查：原 state 的 `composer_media_probe_20260913T054737Z_final.json/.png` 记录技术长文案和 2 张原图；后续 `composer_media_verification_20260913.json` 在 06:01:17Z 对两张 1536×2048 图片按顺序核验，dHash/RGB 误差 0、宽高比比值 1。未提交发布或排期，可能留下草稿；这不是有效业务联调内容，也不是远端 scheduled 图片证据。
+- 编辑器媒体探查曾记录技术长文案和 2 张 1536×2048 原图，按顺序核验 dHash/RGB 误差 0、宽高比比值 1；文件已删。未提交发布或排期，可能留下草稿；这不是有效业务联调内容，也不是远端 scheduled 图片证据。
 
 探查与提交是不同证据。最终两篇具体内容经用户确认后，分别完成 FB-only/IG-only 排期及回读；还要覆盖长文、多图、FB 链接、IG CTA 和运营从飞书开卡片到收到排期回执的完整流程。
 
@@ -178,14 +177,14 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 
 | 证据 | 能证明什么 | **不能**证明什么 |
 |---|---|---|
-| `state/channel_controls.json` | 当前 FB `Neakasa Deutschland`、IG `neakasa.de` 的单渠道控件与账号观察 | 新 Schedule 已提交或已回读 |
-| `state/publish_probe_20260912_205317_056051.json` | 本轮 22 条事件记录 | 自动等同 G8 真实排期验收 |
-| `state/planner_controls.json` | 月历日期格与条目控件来源 | 未加载内容可以被当成空档 |
-| `planner_month_20260913T044722903276.png` | 当前月历观察；结合实际读取证明本次 35 格内容已读取 | 未来 scheduled 卡片的完整正文/图片回读 |
-| `channel_facebook_*.png`、`channel_instagram_*.png` | 对应渠道当前可见状态 | 替代结构化资产 ID / remote ID 核验 |
+| 单渠道控件录证（已删，需重录） | 当前 FB `Neakasa Deutschland`、IG `neakasa.de` 的单渠道控件与账号观察 | 新 Schedule 已提交或已回读 |
+| 被动 v2 探查（已删，需重录） | 本轮 22 条事件记录 | 自动等同 G8 真实排期验收 |
+| 月历控件录证（已删，需重录） | 月历日期格与条目控件来源 | 未加载内容可以被当成空档 |
+| 月历截图（已删） | 当前月历观察；结合实际读取证明本次 35 格内容已读取 | 未来 scheduled 卡片的完整正文/图片回读 |
+| 渠道截图（已删） | 对应渠道当前可见状态 | 替代结构化资产 ID / remote ID 核验 |
 | 2026-09-13T05:01:33Z 实际 inventory | 4 条公开帖；2 个仅时刻项经正向 tooltip 确认为推荐时段并排除；3 个 IG remote ID 独立 | 把公开帖或推荐时段当成本次新建排期成功的证明 |
-| `state/composer_media_probe_20260913T054737Z_final.json/.png` | FB 单渠道编辑器技术长文案与 2 张历史原图的上传控件/缩略图数量顺序观察 | 业务候选就绪、长文完整远端回读或排期图片验证 |
-| `state/composer_media_verification_20260913.json` | 2026-09-13T06:01:17Z，两张 1536×2048 原图按顺序与编辑器图比较：dHash 距离 0、RGB 平均误差 0、宽高比比值 1 | 远端发布/排期详情的图片数量、顺序或字节已确认 |
+| 编辑器媒体探查（已删） | FB 单渠道编辑器技术长文案与 2 张历史原图的上传控件/缩略图数量顺序观察 | 业务候选就绪、长文完整远端回读或排期图片验证 |
+| 编辑器两图视觉核验（已删） | 2026-09-13T06:01:17Z，两张 1536×2048 原图按顺序与编辑器图比较：dHash 距离 0、RGB 平均误差 0、宽高比比值 1 | 远端发布/排期详情的图片数量、顺序或字节已确认 |
 
 公开状态按 remote ID 和明确远端观察记录，**不由当前时钟超过 `scheduled_at` 推算**。旧 journal 里的双渠道排期是旧历史，不能充当本轮独立 FB/IG 的新 G8 验收。当前远端图片数与顺序仍未证实——本地快照保存了多少张，不能替代平台回读看到多少张。
 
@@ -211,6 +210,16 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 动手前读取本文件、[FUNCTIONALITY.md](FUNCTIONALITY.md) 和相关模块测试。先用离线输入复现，再决定是否需要真实浏览器。任何真实发布前都准备具体内容给用户确认。
 
 验证报告必须写清：运行了什么、使用的是离线夹具还是真实账号、通过日期、哪些外部依赖仍未联调。不得用测试名称或 mock 回执替代真实证据。
+
+### 注释与说明
+
+协作入口统一为 [AGENTS.md](../AGENTS.md)。`docs/` 之外只保留当前位置必需的信息：
+
+- 源码注释解释不明显的约束或原因，通常一行；不复述代码，不保留实施过程、旧方案、验收编号和测试成绩。
+- 配置保留参数值、单位、取值范围及必要使用提示；完整操作步骤写入 MANUAL_STEPS。README 保留用途、启动和文档导航。
+- 同一规则只维护一处，其余引用。历史数字、运行状态和证据不写进源码；没有后续用途的过程记录直接删除，无需搬入文档。
+- 本目录保留业务、验收和恢复需要的细节；有效证据注明日期、代码范围、输入及限制，不要求逐次记录工具操作。
+- 简化不得修改配置值、接口、业务逻辑或模型提示词含义；按实际改动验证。
 
 ## 10. 文档与验证入口
 

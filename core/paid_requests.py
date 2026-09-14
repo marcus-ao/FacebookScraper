@@ -1,9 +1,4 @@
-r"""付费 API 的追加式请求/usage 账本与全局互斥。
-
-业务产物日志不能同时充当费用真相源：响应已经计费、但随后的金额/图片硬闸
-拒绝产出时，费用仍然真实发生。本模块先耐久写 ``started``，响应一到立即写
-``usage_recorded``，最后才由调用方写 ``accepted`` 或 ``output_rejected``。
-"""
+"""付费请求账本与互斥；先写 started，响应即记 usage，产出拒绝也保留费用。"""
 from __future__ import annotations
 
 import json
@@ -139,13 +134,7 @@ def _latest_by_request(rows: list[dict]) -> dict[str, dict]:
     return latest
 
 
-# 同一个 job_key 允许被拒几次。**不是无限重试，也不是一次就永久封死。**
-#
-# 拒绝写盘意味着钱已经花了但产出不合格（金额没原样保留、标签被改）。
-# 一次就永久封死的问题是：模型偶发抖动和"提示词真的有问题"长得一样，而
-# job_key 含 PROMPT_VERSION —— 用户想重试就必须先改提示词并 +1 版本号，
-# 哪怕问题只是这一次的抖动。日/月预算闸已经封住了总花费的上界，
-# 这里只需要防"同一条无限重扣"。
+# 限制同一 job_key 的付费产出拒绝次数；总费用另受日/月预算约束。
 REJECTED_RETRY_BUDGET = 2
 
 
@@ -190,18 +179,7 @@ def _base_event(receipt: PaidReceipt, event: str) -> dict[str, Any]:
 
 
 class RequestController:
-    """把一次真实 API 调用包进 started→usage 的耐久临界区。
-
-    ``preflight`` 是**必填**的，而且这里故意不提供默认值。
-
-    预算判据要同时读 `[pipeline]` 配置、付费账本、以及翻译/调图两边的计价
-    公式 —— 那是应用层的知识。core/ 一旦替它兜底，就会反过来 import
-    ``translate`` / ``pipeline`` / ``pipeline_assisted``，让最底层的模块依赖
-    最顶层的三个（这正是本次重构要拆掉的那条边）。
-
-    所以策略由**组装根**（各 CLI 的 ``main()``）注入：
-    ``pipeline_assisted.budget_preflight`` 是实际实现，测试传 ``lambda: None``。
-    """
+    """耐久记录 started→usage；预算策略由调用方通过必填 preflight 注入。"""
 
     def __init__(self, state_dir: Path, *,
                  preflight: Callable[[], None], operation_id: str | None = None) -> None:
@@ -416,13 +394,7 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
         tuple(dict.fromkeys(unknown)))
 
 
-# ==========================================================================
-# 人工结转入口
-#
-# 发布 journal 一直有 tools/publish_post.py 做人工结转，付费账本却一个都没有：
-# 一次 Ctrl-C 留下的 started 行会让 _assert_startable 永久拒绝**全部**后续付费
-# （文本和图片一起），而唯一的出路是手改 JSONL。这条命令补上那个出路。
-# ==========================================================================
+# 人工核对后结转未决请求。
 
 def _cli(argv=None) -> int:
     import argparse

@@ -1,22 +1,4 @@
-r"""英文文案 → 德语翻译。对应实施计划 F 组（F1 主流程 / F2 风格 few-shot / F3 审核清单）。
-
-用法（前置：scripts\setup.bat 已跑过，并已把 DeepSeek Key 放进项目 `.env`）：
-
-    scripts\run_translate.bat --check              极小请求验证 API（会产生少量 token）
-    scripts\run_translate.bat --estimate           离线估算 token / 费用
-    scripts\run_translate.bat --account in_neakasa.tech --limit 3
-    scripts\run_translate.bat                      翻译全部未翻译的帖子
-    scripts\run_translate.bat --review             生成人工审核清单 review.md
-
-**抓取产物不可变**：本模块只读 manifest.jsonl，译文写进同目录的
-translated.jsonl。manifest 是重跑抓取就能重现的事实，译文是花钱买的加工结果，
-两者混在一起会导致"重抓一次把译文冲掉"。
-
-**API 直接走 DeepSeek 官方 OpenAI 兼容端点**：复用 OpenAI SDK 的
-429/5xx 退避与分类异常，不手拼 HTTP，也不再经过 Anthropic 协议层。
-DeepSeek V4 的 thinking 显式开启，默认推理强度为 `high`；请求不发送
-`max_tokens` / `max_completion_tokens` 等客户端输出上限。
-"""
+"""将归档英文翻译为德语，译文独立写入 translated.jsonl；命令参数见 --help。"""
 from __future__ import annotations
 
 import argparse
@@ -32,15 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))
-
-# `run_translate.bat` 用的是 `python translate.py`，于是本文件的模块名是
-# `__main__`。上层模块（pipeline.engine 等）写的是 `import translate`，
-# 那会**再加载一份**本文件：两份 Settings、两份模块级常量、两份锁对象。
-# 先把自己登记成正规名字，让后来的 import 拿到同一个对象。
-if __name__ == "__main__":                         # pragma: no cover
-    sys.modules.setdefault("translate", sys.modules[__name__])
+ROOT = Path(__file__).resolve().parents[1]
 
 from core.config import cfg                        # noqa: E402
 from core.console import force_utf8                # noqa: E402
@@ -49,9 +23,6 @@ from core import paid_requests                     # noqa: E402
 from core.store import Archive, account_dirs        # noqa: E402
 from core.store import post_dirname as post_dirname  # noqa: E402 兼容旧脚本
 from core.paid_model import FileLock                # noqa: E402
-# 译文产物的契约（写盘格式、"当前可用"判据、不可改内容规则）住在 core/：
-# 发布、调图、流水线三路都要读它，不该为此 import 本文件（连着 openai SDK
-# 和整个批处理循环）。本文件是**写方**，用的是同一份定义。
 from core.translated import (PROMPT_VERSION,        # noqa: E402
                              SourceTextError, apply_money_mapping as apply_money_mapping,
                              extract_hashtags as extract_hashtags, extract_money_tokens as extract_money_tokens,
@@ -67,16 +38,11 @@ from core.localization import extract_urls, without_urls  # noqa: E402
 TEMPLATE_PATH = ROOT / "prompts" / "translate_de.md"
 DEEPSEEK_API_URL = "https://api.deepseek.com"
 
-# 模型偶尔会在译文外面裹一层解释或代码围栏，这里做最小限度的剥离。
-# 不做激进清洗——把模型真的想说的话删掉，比留着更难排查。
-# ⚠️ 顺序必须长的在前：短的排前面会抢先匹配，
-#    例如 "```de" 命中 "```deutsch" 只切掉 5 字符，留下 "utsch\n..." 污染译文。
+# 围栏前缀按长度降序，避免短前缀只剥掉部分语言标记。
 _FENCES = ("```deutsch", "```german", "```text", "```de", "```")
 
 
-# --------------------------------------------------------------------------
 # 配置
-# --------------------------------------------------------------------------
 
 class Settings:
     """[translate] 段的读取。所有可调项集中在这里，代码里不写死。"""
@@ -95,8 +61,7 @@ class Settings:
         self.max_retries: int = int(g("max_retries", 2))
         self.gap: float = float(g("request_gap_seconds", 1.0))
         self.failure_budget: int = int(g("failure_budget", 3))
-        # 官方 OpenAI 兼容接口的 thinking 档位。业务默认 high；代码会同时发送
-        # thinking.enabled，避免依赖端点默认值。
+        # 显式发送 thinking.enabled，不依赖端点默认值。
         self.reasoning_effort = str(g("reasoning_effort", "high") or "high").strip().lower()
         self.style_examples: int = int(g("style_examples", 6))
         self.tone: str = (g("tone", "") or "").strip()
@@ -147,11 +112,7 @@ class Settings:
         return self.credentials.api_key()
 
     def credential_status(self) -> str:
-        """给 --check 打印用。**只报告是否存在与来源**，不露密钥片段或长度。
-
-        （2026-09-02 之前这里叫 redacted()，会打印头尾各 4 位和密钥长度。
-        图片侧从一开始就没这么做，两边现在统一到更严的那个口径。）
-        """
+        """只报告凭据是否存在及来源，不输出密钥片段或长度。"""
         return self.credentials.status()
 
 
@@ -162,25 +123,11 @@ def build_client(s: Settings):
         timeout=s.timeout, max_retries=s.max_retries)
 
 
-# --------------------------------------------------------------------------
-# F2：风格 few-shot
-# --------------------------------------------------------------------------
+# 风格示例
 
 def pick_style_examples(rows: list[dict], n: int, exclude_id: str | None = None,
                         owner: str | None = None) -> list[str]:
-    """从该账号已抓到的英文文案里挑 N 篇作风格锚点。
-
-    取**长度中位数附近**的：最短的往往是"New drop 🔥"这种没信息量的，
-    最长的又会把模型带向啰嗦，两头都不能代表这个品牌的常态口吻。
-
-    注意这些是**单语示例**（只有英文原文，没有对应德文）——归档里本来就没有
-    德语对照。所以它们的作用是"这个品牌平时怎么说话"，不是"这句该怎么译"。
-
-    **每个账号只算一次**，不按帖排除当前篇：排除会让 system prompt 篇篇不同，
-    既拿不到提示词缓存，也让不同帖子的语域基准出现漂移。
-    某篇碰巧成为自己的风格参照是无害的（提示词已明确"不要翻译示例"），
-    这点冗余远比缓存全失效划算。exclude_id 参数保留给调用方按需使用。
-    """
+    """选取中等长度的英文风格示例；每账号复用同一组，保持语域和提示词缓存稳定。"""
     wanted_owner = (owner or "").strip().lower()
     texts = [without_urls(r.get("text") or "").strip() for r in rows
              if r.get("post_id") != exclude_id
@@ -204,8 +151,6 @@ def pick_style_examples(rows: list[dict], n: int, exclude_id: str | None = None,
     return picked
 
 
-# 三项品牌语域决策的渲染文本。它们是**模型无法自行知道的决策**——
-# 英文的 "you" 不含 du/Sie 的信息，不定死就会篇篇不一致。
 _ADDRESS_FORM = {
     "du": "**称呼形式：du（非正式第二人称单数）。** 全篇一致使用 du / dein / dir / dich，"
           "祈使句用 du 形式（`Shop now` → `Jetzt shoppen`）。"
@@ -237,8 +182,7 @@ _ANGLICISM = {
 def render_style_examples(examples: list[str]) -> str:
     if not examples:
         return "（暂无——该账号还没有抓到足够长的文案。回填完成后这里会自动填充。）"
-    # 抓到的正文属于不可信外部数据。用 JSON 字符串包裹而不是 Markdown 围栏：
-    # 正文即使自带 ``` 或“忽略前文”也只是一段可识别的数据，不会提前闭合围栏。
+    # 用 JSON 字符串包裹外部正文，避免其围栏改变提示词结构。
     encoded = [json.dumps(ex, ensure_ascii=False)
                .replace("<", "\\u003c").replace(">", "\\u003e")
                for ex in examples]
@@ -250,15 +194,7 @@ def render_style_examples(examples: list[str]) -> str:
 
 
 def build_system_prompt(s: Settings, examples: list[str]) -> str:
-    """渲染 prompts/translate_de.md 模板。
-
-    提示词放在独立文件而不是这里，有两个理由：
-    改翻译行为不需要改 Python（营销同事也能改），以及它足够长，
-    塞进源码会把这个模块变成一坨字符串。
-
-    渲染结果对同一个账号是**稳定的**（风格示例每账号只算一次），
-    因此能命中提示词缓存，也保证篇与篇之间语域基准一致。
-    """
+    """渲染独立翻译模板；每账号复用相同系统提示词。"""
     tpl = TEMPLATE_PATH.read_text(encoding="utf-8")
     # 剥掉给人看的 HTML 注释头，不发给模型
     while tpl.lstrip().startswith("<!--"):
@@ -284,8 +220,7 @@ def build_system_prompt(s: Settings, examples: list[str]) -> str:
         "{{GLOSSARY}}": render_glossary(s.glossary),
         "{{STYLE_EXAMPLES}}": render_style_examples(examples),
     }
-    # 先在原模板上找未知占位符；替换后再查会把风格示例正文里合法的 ``{{...}}``
-    # 也误当成模板错误。拼错占位符必须在调用 API 前失败，不能原样发给模型。
+    # 先校验模板占位符；外部样例中的字面占位符不属于模板。
     placeholders = set(re.findall(r"\{\{[^{}\r\n]+\}\}", tpl))
     unknown = sorted(placeholders - set(subs))
     if unknown:
@@ -293,14 +228,10 @@ def build_system_prompt(s: Settings, examples: list[str]) -> str:
     for k, v in subs.items():
         tpl = tpl.replace(k, v)
 
-    # 不在这里扫描最终文本：风格样例是外部数据，完全可能合法包含 ``{{TONE}}``
-    # 这样的字面文本。未知模板占位符已在插入样例之前由 placeholders 检查过。
     return tpl.strip()
 
 
-# --------------------------------------------------------------------------
-# F1：翻译主流程
-# --------------------------------------------------------------------------
+# 翻译
 
 def _strip_wrapper(text: str) -> str:
     """剥掉模型偶尔加的代码围栏。只处理围栏，不做别的清洗。"""
@@ -323,11 +254,7 @@ class FatalBatchError(RuntimeError):
 
 
 class SourceDataError(FatalBatchError, SourceTextError):
-    """归档正文不满足付费请求的最小输入契约。
-
-    同时继承 :class:`core.translated.SourceTextError`：契约本身住在 core/，
-    但翻译这边还要把它归进"整批共享的致命错误"，遇到就立刻停整批。
-    """
+    """归档输入契约错误，须在付费前停止整批。"""
 
 
 def _model_matches(requested: str, actual: str) -> bool:
@@ -364,13 +291,7 @@ def _usage_values(usage) -> dict[str, int]:
 
 
 def _is_fatal_api_error(exc: Exception) -> bool:
-    """整批性错误的判据。实现在 core/paid_model，与 K 组共用同一份。
-
-    ⚠️ 2026-09-02 之前这里是 ``isinstance(exc, openai.APIError)``——那是
-    429/超时/单条 400 的共同基类，一次限流就会掀掉整批 1051 篇。
-    CR-53 早已在 localize_images.py 里查清并修掉，但修复没有同步过来。
-    现在两边走同一个函数，不会再各自漂移。
-    """
+    """复用公共致命错误分类，避免文本与图片的失败预算语义分叉。"""
     return paid_model.is_fatal_api_error(
         exc, extra_fatal=(ModelMismatchError, paid_requests.PaidRequestBlocked))
 
@@ -383,8 +304,7 @@ class Translator(paid_model.PaidCaller):
         self._init_paid(settings, client, paid_controller)
         self.last_usage: dict[str, int] = {}
         self.last_model: str = ""
-        # 上一次响应实际返回的部分。--check 用它验证官方端点确实返回了思考内容，
-        # 而不是只凭请求参数猜测 thinking 已生效。
+        # 保存实际响应内容，供 --check 核验 thinking 生效。
         self.last_blocks: list[str] = []
         self.usage_totals: Counter = Counter()
 
@@ -399,8 +319,7 @@ class Translator(paid_model.PaidCaller):
             "reasoning_effort": self.s.reasoning_effort,
             "extra_body": {"thinking": {"type": "enabled"}},
         }
-        # 刻意不发送 max_tokens / max_completion_tokens / temperature / top_p。
-        # 前两者会人为限制输出；后两者在 thinking 模式下会被 DeepSeek 忽略。
+        # 不限制输出 token；thinking 模式忽略 temperature/top_p，故不发送。
         return kw
 
     def translate(self, text: str, system: str) -> str:
@@ -540,19 +459,12 @@ def TranslationRunLock(path: Path) -> FileLock:   # noqa: N802 保留原名
                     busy_message="另一个翻译批次正在运行。请勿重复双击；等它结束后再试。")
 
 
-# --------------------------------------------------------------------------
 # 归档读写
-# --------------------------------------------------------------------------
 
 
 def pending(rows: list[dict], done: dict[str, dict], force: bool,
             scope: frozenset[str] | None = None) -> list[dict]:
-    """待翻译：正文非空，且没有与当前正文指纹、提示词版本一致的译文。
-
-    ``scope`` 是可选的 post_id 白名单（见 :func:`resolve_scope`）。
-    **作用域过滤放在数据契约校验之后**：即使只翻一篇，整份 manifest 的
-    形态问题仍然要在联网前失败闭合，不能被作用域悄悄绕过去。
-    """
+    """选择非空且缺当前译文的帖子；先校验整个 manifest，再筛选作用域。"""
     out = []
     for r in rows:
         if not isinstance(r, dict):
@@ -578,23 +490,7 @@ def pending(rows: list[dict], done: dict[str, dict], force: bool,
 
 def resolve_scope(dirs: list[Path], *, post_ids: list[str] | None = None,
                   latest_posts: int | None = None) -> frozenset[str] | None:
-    """把 ``--post-id`` / ``--latest-posts`` 解析成一个 post_id 白名单。
-
-    返回 ``None`` 表示不限定作用域，保持既有行为（全账号待译队列、最老优先）。
-
-    **为什么需要它**（CR-47）：:func:`pending` 按 ``created_at`` **正序**排，
-    所以 ``--limit N`` 永远从最老那一头开始翻。而 K9 与 G8 的验收标的都是
-    **最新那几篇**，两组因此卡在同一件事上：K 的 ``--latest-posts 3``
-    算出 0 张待处理，G 的 ``compose_post`` 把点名的三篇全按"译文缺失"拦下。
-
-    参数形状**照抄** ``localize_images.py::select_rows``（同样是
-    ``--post-id`` 可重复 + ``--latest-posts N`` 跨账号取最新），
-    两边保持一致，免得下一个人要记两套语义。
-
-    ``--latest-posts`` 与 K 组一样**不按正文过滤**：选的是最新 N 篇帖子本身。
-    其中若有纯视频/无正文帖，:func:`pending` 会自然跳过，调用方负责把
-    "选了 N 篇、实际待译 M 篇"如实打出来，而不是偷偷替换成别的帖子。
-    """
+    """解析 post_id 白名单；None 表示不限范围，latest-posts 不用更早帖替换无正文项。"""
     if post_ids is None and latest_posts is None:
         return None
 
@@ -660,8 +556,6 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         print("  没有需要翻译的帖子。")
         return 0, 0
 
-    # system prompt 每个账号只构建一次：内容对所有帖子相同，
-    # 既能命中提示词缓存，也保证篇与篇之间的语域基准完全一致。
     account_owner = arc_base.name.split("_", 1)[-1].strip().lower()
     examples = pick_style_examples(rows, s.style_examples, owner=account_owner)
     system = build_system_prompt(s, examples)
@@ -709,7 +603,7 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
                 raise FatalBatchError(
                     f"连续 {consecutive_failures} 篇失败，已达 "
                     f"[translate].failure_budget={s.failure_budget}，停止本批。"
-                    "\n    单条失败不再掀掉整批（CR-53），但连续失败说明问题不在"
+                    "\n    单条失败不再掀掉整批，但连续失败说明问题不在"
                     "素材而在链路 —— 先看上面每条的原因，修掉后重跑即可"
                     "（已成功的不会重复付费）。") from e
             # 内容级输出错误只跳过这一条，保留批处理的断点续跑能力。
@@ -778,10 +672,7 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
                   "已全部拒绝写盘并计为失败。")
             print("     标签必须保持相同数量、内容、大小写与顺序；"
                   "不得翻译、删减、新增或调序。")
-        # ⚠️ 别再写"直接重跑即可"。这些 post_id 确实没被记成已完成，但**钱已经花了**，
-        # 付费账本给每个 job_key 记了一条 output_rejected。同一个 job_key 只允许被拒
-        # REJECTED_RETRY_BUDGET 次，之后 _assert_startable 会拒绝再发请求 ——
-        # 那是刻意的：反复重跑同一条只是重复扣费碰运气。
+        # 产出被拒仍已计费；重试受同一 job_key 的拒绝次数和预算限制。
         print(f"     这些 post_id 没被记成已完成，**但钱已经花了**。"
               f"同一条最多再重试 {paid_requests.REJECTED_RETRY_BUDGET - 1} 次；")
         print("     若是提示词的问题，改完提示词并把 PROMPT_VERSION +1，"
@@ -790,22 +681,11 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
     return ok, bad
 
 
-# --------------------------------------------------------------------------
-# F3：人工审核清单
-# --------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------
-# 连通性自检
-# --------------------------------------------------------------------------
+# 连通性检查
 
 def run_check(s: Settings,
               paid_controller: paid_requests.RequestController | None = None) -> int:
-    """--check：用一次极小的请求验证 API 配置对不对。
-
-    把"密钥错了"、"base_url 错了"、"模型名端点不认"等常见配置错误
-    分别报出来，而不是让人对着一个状态码猜。
-    """
+    """发起一次小额请求检查 API 配置。"""
     print("=== 翻译 API 自检 ===")
     print(f"  provider    : {s.provider}")
     print(f"  base_url    : {s.base_url}")
@@ -882,17 +762,7 @@ def run_check(s: Settings,
 
 def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
                  force: bool, scope: frozenset[str] | None = None) -> int:
-    """不联网，按真实待译正文与当前 prompt 给出保守 token/费用区间。
-
-    ⚠️ **thinking 开着时，字符换算出来的数字会严重低估。**
-    2026-08-31 实测：一篇 1261 字符的帖子，可见译文 420 tok，
-    而 reasoning **9899 tok** —— 98% 的输出费用花在看不见的地方。
-    只按正文长度估，会给出一个偏低一到两个数量级的预算。
-
-    所以这里**优先用已译帖子的真实 usage 外推**：每篇的 usage 已经写进
-    `translated.jsonl`，试跑 3 篇之后就有了真实的每篇 reasoning 量。
-    没有任何已译记录时才退回字符换算，并明确标注它不含 reasoning。
-    """
+    """离线优先按实际 usage 估算；无记录时按字符估算并注明未含 reasoning。"""
     total_posts = input_all_miss = input_cached = cache_hit = output_est = 0
     measured: list[dict] = []          # 已译帖子的真实 usage，用于外推
     per_account: list[tuple[str, int, list[dict]]] = []
@@ -947,8 +817,7 @@ def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
         print("注意：这是离线预算，不会调用 API，也不会产生费用。")
         return 0
 
-    # 用真实 usage 外推。取**中位数**而不是均值：单篇思考量长尾很重，
-    # 一篇特别难的帖子会把均值拉偏，而预算要的是"典型值 × 篇数"。
+    # 用 usage 中位数估算典型成本，避免单篇长尾主导均值。
     print("\n--- 按已译 %d 篇的**真实 usage** 外推（thinking=%s）---"
           % (len(measured), s.reasoning_effort))
     grand = 0.0
@@ -988,8 +857,6 @@ def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
 # --------------------------------------------------------------------------
 
 def main(argv=None) -> int:
-    # 本模块打 ❗金额被改动 —— 全项目最重要的一条安全信号。cp936 编不出这个字符，
-    # 输出一旦被重定向就会崩在那一行，正好是最需要它出现的时候。
     force_utf8()
 
     ap = argparse.ArgumentParser(
@@ -1011,15 +878,14 @@ def main(argv=None) -> int:
                     help="即使正文与提示词版本都有效也强制重翻（同版本重试时用）")
     ap.add_argument("--dry-run", action="store_true",
                     help="只列出将要翻译哪些帖子，不调用 API")
-    # 作用域（CR-47）。待译队列是**最老优先**的，所以 --limit 到不了最新那几篇；
-    # K9 / G8 的验收标的恰恰是最新几篇。形状与 localize_images.py 保持一致。
+    # limit 从最老待译项截取；latest-posts 用于选最近帖子。
     scope_group = ap.add_mutually_exclusive_group()
     scope_group.add_argument(
         "--post-id", action="append", default=None,
-        help="只翻指定 post_id（可重复传入）；K9/G8 验收就用这个精确补译文")
+        help="只翻指定 post_id，可重复传入")
     scope_group.add_argument(
         "--latest-posts", type=int, default=None,
-        help="全账号合计只选最新 N 篇（与 localize_images.py 的同名参数同义）")
+        help="全账号合计只选最新 N 篇（与 localize/images.py 的同名参数同义）")
     a = ap.parse_args(argv)
     if a.limit is not None and a.limit < 0:
         ap.error("--limit 不能为负数")
@@ -1029,8 +895,7 @@ def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")
 
-    # 组装根：预算策略住在 pipeline_assisted（它才同时知道账本与两边的计价
-    # 公式）。core/ 不许知道这件事，所以由这里注入 —— 见 RequestController。
+    # 由应用入口注入预算策略，避免 core 反向依赖流水线。
     from pipeline.engine import budget_preflight   # noqa: PLC0415
 
     s = Settings()
@@ -1071,7 +936,7 @@ def main(argv=None) -> int:
             print("=" * 72)
         print(f"\n模板文件：{TEMPLATE_PATH}")
         print(f"提示词版本：{PROMPT_VERSION}　"
-              f"（改了模板记得把 translate.py 的 PROMPT_VERSION +1）")
+              f"（改了模板记得把 core/translated.py 的 PROMPT_VERSION +1）")
         return 0
 
     if not dirs:
@@ -1099,9 +964,7 @@ def main(argv=None) -> int:
             return 1
 
     if a.review:
-        # 组装根：审校清单要同时读译文与调图两边的产物，所以住在 tools/
-        # （本模块**之上**）。这是 --review 唯一的入口，函数体内导入
-        # 是为了让 `import translate` 的人不用为此拉起 Pillow。
+        # 延迟导入跨模块审校工具，普通翻译无需加载图片依赖。
         from tools.review_report import run_review   # noqa: PLC0415
 
         print("=== 生成审核清单 ===")

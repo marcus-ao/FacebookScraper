@@ -1,7 +1,4 @@
-"""列表专用的 SQLite 查询入口。结果只选择展示候选，不能进入保存或发布判据。
-
-索引不可用或过期且重建失败时 task_ids=None，调用方沿用源文件筛选并展示 stale。
-"""
+"""展示索引不可用时返回 task_ids=None，回退源文件；写入不依赖索引。"""
 from __future__ import annotations
 
 import hashlib
@@ -31,8 +28,7 @@ def _file_stamp(path: Path) -> list | None:
 
 def _source_signature(archive: Path, state: Path, *, history=False) -> str:
     files = []
-    # 账号范围与 rebuild_index 共用 display_account_dirs：两边必须是同一批账号，
-    # 否则指纹描述的归档和 DB 里的内容不是一回事，每次请求都会判成 dirty 重建一遍。
+    # 与重建器共用账号范围，保证指纹对应数据库内容。
     for account in index_db.display_account_dirs(archive, include_frozen=history):
         for name in ('translated.jsonl', 'translated_human.jsonl', 'review_items.jsonl'):
             path = account / name
@@ -48,12 +44,7 @@ def _meta_guard(path, _role=None):
     return assert_physical_direct_path(path.parent, path, kind='file', label='展示索引重建记录')
 
 
-# 历史页的新鲜度检查要走遍全部账号的每篇 post.json。实测 1,067 篇一次 7.0 秒，其中
-# 6.0 秒花在 assert_physical_direct_path 的 resolve() 上（Windows 每次四回
-# _getfinalpathname），内容哈希只占 0.6 秒 —— 也就是说这笔钱买不到更快的写法。
-# 而 HistoryPanel 每换一次筛选、每翻一页都重新请求，不留窗口就是每点一下等七秒。
-# 历史页翻的是归档，半分钟的滞后看不出来；待审队列 candidates() 不用这个窗口，
-# 仍然每次请求都重新核对源文件。
+# 历史查询短时复用源校验，避免翻页反复扫描全档；待审查询仍逐次核对。
 HISTORY_INDEX_MAX_AGE_SECONDS = 30.0
 
 
@@ -78,9 +69,7 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                         previous = {}
                 except (OSError, ValueError):
                     previous = {}
-            # 锚点是 verified_at（上一次真的走完源文件核对的时刻），不能用 rebuilt_at。
-            # rebuilt_at 记的是「索引反映到哪一刻的归档」，取的是请求开始的时间，
-            # 而 1,067 篇的重建要 36 秒 —— 写下去就已经超出窗口，窗口永远不会生效。
+            # 窗口从校验完成时起算，不能使用重建开始时间。
             if (max_age_seconds > 0 and not force and database.exists()
                     and previous.get('schema_version') == 1
                     and isinstance(previous.get('verified_at'), str)):
@@ -110,10 +99,7 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                 # 刚走完一趟核对且结论是干净的；记下来，窗口内的后续请求不必重走。
                 previous = dict(previous, verified_at=moment.astimezone(timezone.utc).isoformat())
                 atomic_write_json(metadata_path, previous, guard=_meta_guard)
-            # 第二趟指纹只回答一个问题：**重建期间**源文件变了吗。没重建就没有那个
-            # 窗口，而这一趟要走遍所有账号的每篇 post.json —— 实测 1,067 篇约 1.7 秒，
-            # 而 candidates() 挂在每次 GET /api/tasks 上。白跑一次的体感就是
-            # 「点一下列表要多等一秒多」，且什么也没多守住。
+            # 仅重建后再取指纹，以检测重建期间的来源变化。
             stale = dirty and signature != _source_signature(archive, state, history=history)
             return {'available': True, 'stale': stale, 'rebuilt_at': previous['rebuilt_at'],
                     'error': 'source_changed_during_rebuild' if stale else None}

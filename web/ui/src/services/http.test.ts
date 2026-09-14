@@ -30,8 +30,6 @@ const jsonResponse = (status: number, body: unknown): Response =>
   }) as unknown as Response
 
 describe('idPath：逐段编码，斜杠必须活下来', () => {
-  // task id 自带一个斜杠。整体 encodeURIComponent 会把它变成 %2F，
-  // 后端的 {task_id:path} 就匹配不上，请求直接 404。
   const realId = 'in_neakasa.tech/3965025107383038890'
 
   it('普通 id 原样通过', () => {
@@ -210,7 +208,6 @@ describe('export 下载：文件名解析与延迟 revoke', () => {
   })
 
   it('objectURL 在 30 秒后才 revoke，不是立刻', () => {
-    // 立即 revoke 在部分 Chromium 上会让下载失败，所以这个延迟是功能的一部分。
     vi.useFakeTimers()
     const createObjectURL = vi.fn().mockReturnValue('blob:fake')
     const revokeObjectURL = vi.fn()

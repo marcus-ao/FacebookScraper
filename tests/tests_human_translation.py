@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
-import localize_images as images
+from localize import images as images
 from core import translated as T
 from core.console import force_utf8
 from core.store import Archive, Media, Post

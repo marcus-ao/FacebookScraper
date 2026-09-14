@@ -1,36 +1,4 @@
-r"""从一份 v2 probe dump 里**机械推导** G6/G6c 验收证据，回查通过后才落盘。
-
-存在的理由只有一条：**把「录完 dump → 发布校验打开」这一段从"再开一次开发会话"
-变成"跑一条命令"。**
-
-在此之前这条缝是这样的：用户录 20 分钟 dump → 交给一个 Agent 人工读 →
-手写五条 dataclass → 希望它没写错。这个项目已经为同型的手工环节吃过两次亏
-（63 条那份录错了界面、24 条那份录到一半被打断），
-而两次都是**录完之后**才发现的。
-
-本工具做三件事，一件都不越过红线 5：
-
-``--check``
-    只读体检。先跑 :func:`publish.evidence.validate_v2_dump` 的完整 v2 契约，
-    再逐项报告六件验收证据**能不能从这份 dump 推导出来**，
-    推不出来时直接说"缺哪一块、补录时要做什么"。零写盘。
-    **这是录完之后第一件该跑的命令**——30 秒就知道这次录制成不成立，
-    不用等到 `--submit` 才发现。
-
-``--emit``
-    推导 → **逐条丢回 evidence.verify_signal / verify_publish_chain 回查** →
-    全部通过才写 ``publish/signals_backfilled.py``。
-    任一条回查不过就整体拒绝落盘，退出码非 0。
-
-``--status``
-    当前发布校验是开是关，关着的话差哪一条。
-
-⛔ **这不是"让程序猜选择器"。** 每一个字段的值都是从 dump 里**抄**出来的：
-role、可访问名、容器归属、日期格式全部来自被动语义快照，
-regex 是拿一张候选表**逐个试到能解析为止**，试不出来就报缺口。
-推导完还要原路回查一遍——回查用的是 `evidence.py`，
-和 `--submit` 上发布校验用的是同一套代码。**编出来的值会当场被打回。**
-"""
+"""从 v2 dump 推导发布信号；--check 只读核查，--emit 全部回查通过后生成注册文件。"""
 from __future__ import annotations
 
 import argparse
@@ -63,8 +31,7 @@ _DATE_FORMS = (
     (r"\d{4}-\d{1,2}-\d{1,2}", "%Y-%m-%d"),
     (r"\d{1,2}/\d{1,2}/\d{2}", "%m/%d/%y"),
     (r"\d{1,2}\.\d{1,2}\.\d{2}", "%d.%m.%y"),
-    # 实测 Planner 用的是英文长月份名：'September 15, 2026, 10:00 AM'
-    # 和详情弹窗里的 'September 15 at 10:00 AM'（后者没有年份）。
+    # 支持条目的完整日期及详情中省略年份的日期。
     (r"[A-Z][a-z]{2,8} \d{1,2}, \d{4}", "%B %d, %Y"),
     (r"[A-Z][a-z]{2} \d{1,2}, \d{4}", "%b %d, %Y"),
 )
@@ -118,18 +85,7 @@ def _short_name(value: str) -> str:
 
 
 def _stable_label(row: dict, variables) -> str:
-    """挖掉随帖子/日期变化的部分，返回剩下最长的一段**固定**文字。
-
-    ⚠️ **这一步不是好看，是正确性。** 这些名字最后会变成运行时的
-    ``get_by_role(name=…, exact=False)``。如果直接把整条渲染文本当名字，
-    「Scheduled for 09/08/2026 10:00 AM」下个月就一张卡片都找不到——
-    而 `_planner_cards` 找不到卡片时会把结果读成"远端零占用"。
-    所以宁可只留「Scheduled for」这半句。
-
-    带数字的片段一律丢弃：数字几乎一定是日期、时刻或张数。
-    返回空串表示这一格上**没有**随内容变化之外的固定文字，由调用方决定
-    是退回整条文本并打醒目警告，还是直接判缺口。
-    """
+    """移除日期、数量等变化片段，取最长固定文字；无可用片段返回空串。"""
     raw = _row_text(row)
     marked = _norm(raw)
     for value in variables:
@@ -137,17 +93,14 @@ def _stable_label(row: dict, variables) -> str:
         if text:
             marked = marked.replace(text, "\x00")
     parts = [_norm(part) for part in marked.split("\x00")]
-    # 至少两个字母：不然像「 - 」这种标点残渣会被当成"固定文字"，
-    # 而它命中页面上一半的元素，唯一性检查会当场把整条证据判掉。
+    # 至少两个字母，避免将标点残片当成固定标签。
     parts = [part for part in parts
              if len(re.findall(r"[^\W\d_]", part)) >= 2
              and not re.search(r"\d", part) and part in raw]
     return max(parts, key=len, default="")
 
 
-# ---------------------------------------------------------------------------
-# 账号语义：把「Facebook account Neakasa Deutschland」拆成 前缀 + (?P<account>)
-# ---------------------------------------------------------------------------
+# 账号语义
 
 def _account_label(text: str, token: str) -> str | None:
     """返回账号值**之前**的那段固定标签；找不到 token 就返回 None。"""
@@ -200,9 +153,7 @@ def _derive_account_child(children: list[dict], token: str
     return None
 
 
-# ---------------------------------------------------------------------------
 # 容器分组
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Container:
@@ -233,9 +184,7 @@ def _container_is_addressable(snapshot: dict, container: Container,
                and name in _row_text(row) for row in _items(snapshot))
 
 
-# ---------------------------------------------------------------------------
-# 六件证据的推导
-# ---------------------------------------------------------------------------
+# 证据推导
 
 @dataclass
 class Derived:
@@ -245,18 +194,13 @@ class Derived:
     spec: object = None
     #: 推不出来时告诉用户补录要做什么。
     how: str = ""
-    #: 推出来了但有脆弱之处（多半是"这一格上只有会变的文字"）。
-    #: **不拦，但必须显眼地说出来**——这类失效是延迟的，而且只在下个月出现。
+    # 推导中的不稳定部分须随结果报告。
     warnings: tuple[str, ...] = ()
 
 
 def derive_account_context(data: dict, dump: str, facebook: str,
                            instagram: str) -> Derived:
-    """composer 上证明"这条会发到目标 FB 主页"的那条语义。
-
-    ⚠️ **只找 FB。** 实测 composer 上没有 IG 帐号名（findings 第一节），
-    IG 由提交后的 Planner 弹窗回读证明。
-    """
+    """推导 composer 中已录证的 FB 账号语义；IG 由独立详情证据确认。"""
     for snapshot in data["snapshots"]:
         if not _on(snapshot, SURFACE_COMPOSER):
             continue
@@ -301,10 +245,7 @@ def derive_account_context(data: dict, dump: str, facebook: str,
             "改 [publish].facebook_page_name。")
 
 
-#: 定时提交按钮的常见标签。**这不是选择器，是候选排序的先验**——
-#: 值仍然只能从 dump 里取，选完还要过 `verify_publish_chain` 的因果顺序。
-#: ⚠️ `Publish` 排在 `Schedule` 后面是有意的：两个按钮同时存在，
-#: 点错就是**立即发布**而不是定时（实测 composer 上两个都在）。
+# 标签只用于候选排序；值来自 dump，Schedule 优先于立即发布的 Publish。
 _SUBMIT_WORDS = ("schedule", "planen", "einplanen", "publish",
                  "veröffentlichen", "post", "share")
 #: 提交成功提示的常见措辞。
@@ -317,11 +258,7 @@ _BUTTON_ROLES = {"button", "menuitem", "link", "tab"}
 
 
 def _word_rank(text: str, words: tuple[str, ...]) -> int:
-    """按整词命中排序。
-
-    ⚠️ **必须按整词。** 实测踩过：子串匹配时 `schedule` 命中了成功提示
-    「Your post is **scheduled**」，于是"提交按钮"被推成了那条 toast 本身。
-    """
+    """按整词匹配排序，避免 schedule 误命中 scheduled 成功提示。"""
     lowered = text.casefold()
     for index, word in enumerate(words):
         if re.search(r"\b%s\b" % re.escape(word), lowered):
@@ -330,11 +267,7 @@ def _word_rank(text: str, words: tuple[str, ...]) -> int:
 
 
 def _success_candidates(data: dict, account_seq: int) -> list[dict]:
-    """提交后才出现、提交前没有的 status/alert 语义。
-
-    "提交前没有"这条不是好看而已：:func:`evidence.verify_publish_chain` 要求
-    成功信号**不能**在账号快照里就已经命中，否则它证明不了是这一次提交造成的。
-    """
+    """选取提交前不存在、提交后出现的状态信号。"""
     account_order = int(
         _by_seq(data["snapshots"])[account_seq].get("evidence_order") or 0)
     before = {(str(row.get("role") or ""), _norm(row.get("accessible_name")))
@@ -371,11 +304,7 @@ def _by_seq(rows: list[dict]) -> dict[int, dict]:
 
 def derive_success_signal(data: dict, dump: str, account: EvidenceSignal,
                           pick: str = "", submit_order: int = 0) -> Derived:
-    """提交成功信号：**点击之后**才出现的那条提示。
-
-    ⚠️ 只按"账号快照之后出现"筛是不够的 —— 实测那样会选中填正文期间
-    一闪而过的 `status 'Loading…'`。必须以**提交点击**为界。
-    """
+    """以提交点击为时间边界选择成功信号，排除填写期间的 Loading。"""
     candidates = [row for row in _success_candidates(data, account.sequences[0])
                   if row["order"] > submit_order]
     if pick:
@@ -409,12 +338,7 @@ def derive_success_signal(data: dict, dump: str, account: EvidenceSignal,
 
 
 def _named_candidate(interaction: dict) -> dict | None:
-    """取这次点击里**带真实 role 且有可访问名**的那个候选。
-
-    ⚠️ 候选表的第 0 条常常是最内层那个 div，``role`` 是空的。
-    空 role 能通过 dump 回查（`_role_matches` 对空 role 直接放行），
-    但运行时 `page.get_by_role("", …)` 是废的 —— 所以带真实 role 的优先。
-    """
+    """选取有真实 role 和可访问名的点击目标或祖先。"""
     named = [row for row in evidence._candidates(interaction)
              if _norm(row.get("accessible_name") or row.get("aria_label")
                       or row.get("visible_text"))]
@@ -426,13 +350,7 @@ def _named_candidate(interaction: dict) -> dict | None:
 
 def derive_submit_button(data: dict, dump: str,
                          account: EvidenceSignal) -> Derived:
-    """账号上下文之后、composer 上那次**提交**点击。
-
-    ⚠️ 不能简单取"最后一次点击"：实测提交之后用户还点了成功提示本身、
-    又点了关闭按钮，两次都在 composer 上。所以按标签措辞排序
-    （`Schedule` 优先于 `Publish` —— 两个按钮同时存在，点错就是立即发布），
-    措辞都不命中时才退回最后一次带名字的点击并打警告。
-    """
+    """在账号上下文后寻找提交点击，按标签排序且 Schedule 优先；不直接取最后点击。"""
     snapshots = _by_seq(data["snapshots"])
     low = int(snapshots[account.sequences[0]].get("evidence_order") or 0)
     clicks = []
@@ -507,7 +425,7 @@ def _datetime_regex(text: str) -> tuple[str, str, str] | None:
     return None
 
 
-#: 详情弹窗上区分渠道的固定文案（实测原样抄录，见 findings 第二节）。
+# 详情弹窗中用于区分渠道的固定文案。
 _CHANNEL_MARKERS = {
     "facebook": ("Facebook's Feed", "Facebook feed"),
     "instagram": ("Instagram feed", "your Instagram feed"),
@@ -518,10 +436,7 @@ _MONTH_FORMATS = ("%B", "%b")
 
 def _derive_entry(data: dict, caption_hint: str
                   ) -> tuple[dict, int, str, str, str, str] | None:
-    """日历条目：同一条可访问名里同时带正文与可解析的完整时刻。
-
-    返回 ``(行, 快照序号, role, 正文样本, datetime_regex, date_fmt\\x00time_fmt)``。
-    """
+    """推导同一条目中的正文与完整时刻，返回行、序号、角色和解析格式。"""
     probe = _norm(caption_hint)[:60]
     for snapshot in data["snapshots"]:
         if not _on(snapshot, SURFACE_PLANNER):
@@ -549,11 +464,7 @@ def _derive_entry(data: dict, caption_hint: str
 def _derive_channel_dialog(data: dict, channel: str, token: str,
                            after_order: int
                            ) -> tuple[int, str, str, str] | None:
-    """某渠道的详情弹窗；返回 ``(快照序号, dialog_role, dialog_name, marker)``。
-
-    渠道标记必须**只属于这个渠道**：两个渠道的弹窗都含 "Post details"，
-    靠的是 "Facebook's Feed" / "Instagram feed" 这半句区分开。
-    """
+    """推导独立渠道详情；返回快照序号、角色、名称和唯一渠道标记。"""
     pattern = re.compile(_REMOTE_ID_REGEX)
     other = "instagram" if channel == "facebook" else "facebook"
     for snapshot in data["snapshots"]:
@@ -565,8 +476,7 @@ def _derive_channel_dialog(data: dict, channel: str, token: str,
             if str(row.get("role") or "") != "dialog":
                 continue
             text = _row_text(row)
-            # 按**独立词**判：`neakasa.de` 是 `neakasa.deals` 的子串，
-            # 子串判会把近碰撞账号读成目标账号。与运行时同一个判据。
+            # 与运行时共用独立 token 判据，避免近似账号子串碰撞。
             if not evidence.token_present(text, token):
                 continue
             if pattern.search(text) is None:
@@ -597,8 +507,7 @@ def _derive_visible_month(data: dict, after_order: int
         month = year = None
         for row in _items(snapshot):
             role = str(row.get("role") or "")
-            # ⚠️ 逐个**单值**试，不能拼起来试：accessible_name 与 visible_text
-            # 常常一模一样，拼完就是 "September September"，怎么都解析不出来。
+            # 名称与文本分别解析，避免重复拼接月份。
             for text in (_norm(value) for value in _row_values(row)):
                 if month is None:
                     for fmt in _MONTH_FORMATS:
@@ -698,17 +607,7 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
 
 def derive_planner_loaded(data: dict, dump: str, card: EvidenceSignal,
                           after_order: int = 0) -> Derived:
-    """Planner 数据已就绪的语义（区分"还在转圈"与"真的空"）。
-
-    用**可见月份 heading**：它只在日历数据渲染完之后才出现，
-    而且已经在卡片推导时按声明格式解析验证过。
-
-    ⚠️ 月份名每月都变，所以这条的 `name` 是空的 —— 运行时按 role 全取回来
-    再逐条试解析（`_visible_calendar_range`），不靠固定名字定位。
-    但 `_wait_for_signal` 需要一个可等的名字，所以这里记的是**录制当月**
-    那个名字：等不到它不会误判成"数据没就绪"，因为
-    `_planner_cards` 在等待失败后仍会继续按 `entry_role` 枚举。
-    """
+    """推导可见月份信号；运行时仍须枚举实际条目，不能以 heading 证明数据加载完成。"""
     by = _by_seq(data["snapshots"])
     chosen = None
     for sequence in card.sequences:
@@ -754,9 +653,7 @@ def derive_planner_loaded(data: dict, dump: str, card: EvidenceSignal,
                              "按格式解析得到，不依赖这个名字。",))
 
 
-# ---------------------------------------------------------------------------
 # 编排
-# ---------------------------------------------------------------------------
 
 REQUIRED = ("composer_account_context", "composer_success_signal",
             "composer_submit_button", "planner_scheduled_card",
@@ -774,8 +671,7 @@ def derive_all(data: dict, dump: str, *, facebook: str, instagram: str,
             results.append(Derived(
                 key, False, "账号上下文没推导出来，本条无法定位因果区间"))
     else:
-        # 先定提交点击，再拿它当界找成功信号 —— 反过来会选中填正文期间
-        # 一闪而过的 `status 'Loading…'`（实测踩过）。
+        # 先确定提交点击，再寻找其后出现的成功信号。
         submit = derive_submit_button(data, dump, account.spec)
         results.append(submit)
         if submit.ok:
@@ -831,20 +727,11 @@ def verify_derived(results: list[Derived], dumps_dir: Path
     return out
 
 
-# ---------------------------------------------------------------------------
-# 落盘
-# ---------------------------------------------------------------------------
+# 生成文件
 
 _HEADER = '''\
-r"""**生成文件** —— 由 `tools/probe_signals.py --emit` 从一份 v2 probe dump
-机械推导并逐条回查后写出。⛔ 不要手工编辑：下一次 --emit 会整份覆盖。
-
-来源 dump：%s
-生成时间：%s
-
-每一条都通过了 `publish.evidence` 的回查（和 `--submit` 上发布校验用的是
-同一套代码），并且五条一起通过了 `verify_publish_chain` 的同页因果顺序检查。
-想知道它们是怎么推出来的，跑 `tools/probe_signals.py --check <dump>`。
+r"""由 tools._scaffolding.probe_signals --emit 生成，勿手改。
+来源：%s；生成时间：%s。
 """
 from __future__ import annotations
 
@@ -900,9 +787,7 @@ def emit(results: list[Derived], dump: str, target: Path) -> None:
     tmp.replace(target)
 
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
 
 def _targets() -> tuple[str, str, Path]:
     from core.config import cfg
@@ -940,13 +825,7 @@ def _print_results(results: list[Derived],
 
 
 def report(data: dict, facebook: str, instagram: str) -> None:
-    """把一份 dump 里**真实存在**的语义摊开给人看。
-
-    `--check` 回答"能不能解锁"；这个回答"那 UI 到底长什么样"。
-    两者的区别在 2026-09-01 那份 dump 上第一次显出价值：`--check` 说
-    "推不出账号上下文"，而真相是 **composer 上根本没有 IG 账号名这个东西**——
-    再录一百遍也不会有。这种时候要改的是证据契约，不是重录。
-    """
+    """展示 dump 中实际语义及缺失项，供人工复核。"""
     surfaces = {"composer": SURFACE_COMPOSER, "planner": SURFACE_PLANNER}
     print("\n=== 各界面的语义清单（role → 出现过的可访问名）===")
     for label, surface in surfaces.items():
@@ -1020,7 +899,7 @@ def report(data: dict, facebook: str, instagram: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(
-        description="从 v2 probe dump 推导 G6/G6c 验收证据并回查后落盘")
+        description="从 v2 dump 推导提交与排期回读证据，核验后保存")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", metavar="DUMP",
                        help="只读体检：这份 dump 能不能解锁发布提交")

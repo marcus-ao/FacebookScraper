@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
-import localize_images as images
+from localize import images as images
 from core import review, translated
 from core.config import cfg
 from pipeline import engine, refinement

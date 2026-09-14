@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
-import translate
+from localize import text as translation
 from core import localization, translated
 from core.config import cfg
 from publish import compose
@@ -30,7 +30,7 @@ class LocalizationPipelineTests(unittest.TestCase):
             self.assertNotIn(url, text + system)
             self.assertNotIn('#fragment', text)
             return 'Besuche unseren Shop. #Neakasa'
-        result = translate.run_translate(translate.Settings(), SimpleNamespace(translate=generate),
+        result = translation.run_translate(translation.Settings(), SimpleNamespace(translate=generate),
             self.account, 1, True, False, source_rows=[self.source],
             refine_instruction='优化 ' + url, refine_id='1' * 32, current_body='Alter Text ' + url)
         self.assertEqual(result, (1, 0))

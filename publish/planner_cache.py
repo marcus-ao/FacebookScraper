@@ -1,9 +1,4 @@
-"""只读 Planner 月历缓存：成功观测时间与最近刷新尝试分开保存。
-
-刷新者复用 publish.lock，争不过人工发布就跳过；本模块不创建浏览器。
-reader 由调用方注入，必须请求 include_cards=True。缓存只能用于展示和选时提示，
-提交前仍须重新读取 Planner，不能将缓存反序列化当作远端新证据。
-"""
+"""展示用月历缓存，刷新共用发布锁；提交前仍须读取远端，不能将缓存当新证据。"""
 from __future__ import annotations
 
 from publish.observations import record as record_publication

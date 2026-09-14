@@ -80,11 +80,7 @@ class QueryIndexTests(unittest.TestCase):
         self.assertEqual(query_index.candidates(status='scheduled', now=self.now)['task_ids'], ['in_neakasa.global/1'])
 
     def test_frozen_account_neither_enters_the_index_nor_makes_it_dirty(self):
-        """冻结账号的 1,020 篇占了冷启动全部成本，而列表永远显示不到它们。
-
-        这里同时钉住两件事：它不进候选，**而且**它变化不会让展示索引判脏重建 ——
-        后者才是 `GET /api/tasks` 那 7 秒的来源。
-        """
+        """冻结账号既不进入当前任务索引，也不使该索引失效。"""
         frozen = store.Archive(self.root / 'archive', 'in_neakasa.tech')
         legacy = store.Post('9', 'instagram', 'neakasa.tech', 'Legacy', '2026-09-11T10:00:00Z',
                             tags=['M1 Pro'])

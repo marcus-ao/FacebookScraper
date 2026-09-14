@@ -1,12 +1,4 @@
-"""独立复核探针：不引用上一位实现者的结论，自己量。
-
-只做 GET 与隔离夹具写入；approve / calendar refresh / 付费模型 / 飞书重发一律 0 次
-（UIFixture 的 BrowserFixture 会把这些请求挡在隔离宿主之外）。
-
-用法：
-    scripts\\run_python.bat tests/review_probe.py
-    scripts\\run_python.bat tests/review_probe.py --only images
-"""
+"""使用隔离数据测量界面与交互；外部动作均由夹具阻断。"""
 from __future__ import annotations
 
 import argparse
@@ -31,12 +23,7 @@ def image_requests(ui):
 
 
 def probe_images(page, ui, out):
-    """R1：只看正文时不许先把整张原图/德语图拉下来。
-
-    图片响应带 `Cache-Control: no-cache`（见 web/DESIGN.md），每进一篇详情就是一次
-    真实往返；原实现把图片工作区常驻在 hidden 容器里，于是运营根本没点开图片页
-    也会先付这份带宽。
-    """
+    """正文页不得提前下载未查看的完整图片。"""
     ui.requests.clear()
     page.goto(f"{ui.fx.base_url}/review/{ui.fx.fb_id}", wait_until="networkidle")
     page.wait_for_timeout(600)
@@ -54,11 +41,7 @@ def probe_images(page, ui, out):
 
 
 def probe_localization_state(page, ui, out):
-    """R2：标签页一旦打开过就要留在 DOM 里。
-
-    标签建议是付费动作（POST /api/hashtags/task/{id}）。原实现用条件渲染，
-    切一下正文就整块卸载，运营要想再看见候选只能再花一次钱。
-    """
+    """已打开的标签页保留 DOM，避免丢失付费生成的候选。"""
     ui.requests.clear()
     detail_url = f"{ui.fx.base_url}/review/{ui.fx.fb_id}"
     page.goto(detail_url, wait_until="networkidle")
@@ -127,12 +110,7 @@ def probe_marks_keyboard(page, ui, out):
 
 
 def probe_calendar_semantics(page, ui, out):
-    """月历：不许再有无效的 list/listitem，「今天」按柏林日期标。
-
-    夹具原始的月历没有缓存、也不覆盖本月，整个网格根本不渲染。这里按 stage F
-    同样的办法喂一个覆盖本月的载荷 —— 「今天」在不在显示范围里，要真的画出来
-    才量得到。
-    """
+    """检查日历语义及柏林“今天”，夹具覆盖当前月份。"""
     berlin_now = datetime.now(ZoneInfo("Europe/Berlin"))
     start = berlin_now.replace(day=1).date()
     end = (start + timedelta(days=32)).replace(day=1)
@@ -148,8 +126,6 @@ def probe_calendar_semantics(page, ui, out):
     page.wait_for_timeout(400)
     out["calendar_says_published"] = page.get_by_text("已发布", exact=True).count()
 
-    # 原来这里是 role="list"，直接子节点里却混着七个星期标题和月初补位格。
-    # 修法是把错的 ARIA 删掉（没有 > 错的），日期格改用 data-day 定位。
     out["calendar_invalid_list_roles"] = page.evaluate(
         """() => ({ lists: document.querySelectorAll('[role="list"]').length,
                     listitems: document.querySelectorAll('[role="listitem"]').length })""")

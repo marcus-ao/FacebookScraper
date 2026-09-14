@@ -1,15 +1,4 @@
-"""路线 B：官方 Graph API（Facebook Page / Instagram Professional）
-
-自有账号首选。零封号风险、可增量、可无人值守，且不需要 App Review
-（Business 类型应用自动获得 Standard Access，只要 Page 管理员本人
-在该应用上有 admin/developer/tester 角色即可）。
-
-两个必须记住的坑：
-  - 读取用 /published_posts 而不是 /feed。/feed 会混进访客发帖和
-    本 Page 被标记的帖子，那些不是你的内容。
-  - /{page-id}/videos 边只写不读，视频要从 published_posts 的
-    attachments 里取。
-"""
+"""通过官方 Graph API 读取授权账号；使用 published_posts 排除访客和被标记内容。"""
 from __future__ import annotations
 
 import os
@@ -100,9 +89,7 @@ def scrape_page(page_id: str, token: str, archive_root: str | Path = "archive",
                     created_at=item.get("created_time", ""),
                     permalink=item.get("permalink_url"),
                     media=media, source_route="graph_api",
-                    # Graph API 只会返回该 page 自己的帖子，归属是路径固有的，
-                    # 不像爬取路径那样会混进别人的内容。仍然显式写上：
-                    # 留 None 的话，将来任何按 owner 过滤的地方都会把它们全丢掉。
+                    # 显式记录路径确定的 owner，供下游统一归属检查。
                     owner=str(page_id).strip().lower(),
                 )
                 if not arc.should_append(post):
@@ -121,12 +108,7 @@ def scrape_page(page_id: str, token: str, archive_root: str | Path = "archive",
 
 def scrape_ig_professional(ig_user_id: str, token: str,
                            archive_root: str | Path = "archive") -> int:
-    """Instagram API with Instagram Login。
-
-    注意 Basic Display API 已废弃，个人账号已无任何官方 API 通道。
-    需要 Professional 账号；其中 Creator 账号不必绑定 Facebook 主页，
-    是最轻量的官方路径。
-    """
+    """通过 Instagram Login API 读取 Professional 账号。"""
     arc = Archive(archive_root, f"ig_{ig_user_id}")
     fields = "id,caption,media_type,media_url,permalink,timestamp,children{media_url,media_type}"
     url = f"{GRAPH}/{ig_user_id}/media"

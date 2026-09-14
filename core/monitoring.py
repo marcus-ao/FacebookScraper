@@ -1,9 +1,4 @@
-"""Monitoring analysis and durable scan/processing facts.
-
-This module is intentionally browser- and model-free.  The scheduler may use its
-previous-month analysis only to reduce polling outside a supported observed
-window; it can never make a configured interval shorter.
-"""
+"""Durable scan and processing facts; observed windows may lengthen, never shorten, polling intervals."""
 from __future__ import annotations
 
 from core import paid_requests
@@ -77,12 +72,7 @@ def _observed_window(by_hour: list[int], sample_count: int,
 
 
 def posting_distribution(directories, schedule: MonitorSchedule, now: datetime) -> dict:
-    """Analyze the previous complete Shanghai month from latest manifest rows.
-
-    Coverage is conservative: every active archive must contain a dated row on
-    both sides of the month.  Without that evidence, absence inside the month is
-    not treated as an observed posting pattern.
-    """
+    """Analyze the previous complete Shanghai month; require coverage on both sides for every active archive."""
     month_start, month_end, month = _month_bounds(schedule, now)
     summary = {
         "month": month, "by_hour": [0] * 24, "on_duty": 0, "off_duty": 0,
@@ -165,12 +155,7 @@ def monitor_interval_minutes(schedule: MonitorSchedule, distribution: dict | Non
 
 def batch_budget_minutes(schedule: MonitorSchedule, platform_count: int,
                          batch: dict | None = None) -> float:
-    """Budget both scans and a whole content batch.
-
-    The configured processing budget represents one post with one image.  More
-    posts/images expand it proportionally, while the last successful observed
-    duration remains a conservative lower bound for future batches.
-    """
+    """Budget both scans and the whole batch, accounting for post/image counts and observed duration."""
     if platform_count < 1:
         raise ValueError("platform_count must be positive")
     platforms = batch.get("platforms") if isinstance(batch, dict) else {}
@@ -419,8 +404,7 @@ class MonitoringJournal:
             if recorded is None:
                 continue
             if row.get("event") == "scan_skipped" and row.get("kind") == "reconcile":
-                # Large processing budgets may move this scan to the previous day.
-                # Its missed coverage still belongs to the saved target morning.
+                # A scan moved to the previous day still belongs to its saved target morning.
                 if row.get("business_date", str(MonitorSchedule.local(recorded).date())) == str(target):
                     reconcile_skipped += 1
                     reconcile_skipped_platforms.add(row["platform"])

@@ -1,14 +1,4 @@
-r"""起专用 Chrome 并开放调试端口。对应实施计划的 A3。
-
-由 scripts\start_chrome.bat 调用（用 venv 里的解释器）。
-
-**与原 start_chrome.bat 的关键差别**：Chrome 路径、profile 目录、调试端口
-全部从 config.toml 读，不再在 .bat 顶部写第二份。原来那份是重复来源——
-计划里专门警告过"改了 config.toml 的 debug_port 还要同步改 bat 顶部的 PORT"，
-现在没有第二处可改了。
-
-小号在这个 profile 里人工登录一次即可，与日常 Chrome 完全隔离。
-"""
+"""按配置启动回填专用 Chrome；会话由人工登录。"""
 from __future__ import annotations
 
 import sys
@@ -34,8 +24,7 @@ def main() -> int:
     print("调试端口:     %d" % port)
     print()
 
-    # 端口已在监听 = 专用实例已经在跑。再启一次只会聚焦已有窗口，
-    # 且新传的 --remote-debugging-port 会被静默忽略，反而制造误判。
+    # 已有实例时不重复启动，避免 Chrome 忽略新的调试端口参数。
     if cdp_ready(port):
         print("[i] 端口 %d 已在监听，说明专用 Chrome 已经在运行。" % port)
         print("    无需重复启动，直接去跑抓取脚本即可。")
@@ -45,8 +34,6 @@ def main() -> int:
         print("    请关闭占用程序，或修改 config.toml 的 [chrome].debug_port。")
         return 1
 
-    # 实际的拉起与端口轮询在 core.chrome.launch —— 每日增量（routes/delta.py）
-    # 在 Chrome 没开时也要做同一件事，两处各写一份必然漂移。
     print("等待调试端口就绪...", end="", flush=True)
     if launch(PORT_WAIT_SECONDS, on_tick=lambda: print(".", end="", flush=True)):
         print()

@@ -1,13 +1,4 @@
-r"""K8 人工审校清单：把一个账号的英文原文 / 德语译文 / 原图 / 德语图
-摆到同一页上，让审校同事一次看完。
-
-**为什么在 tools/ 而不在 translate.py 里。** 它要同时读译文和调图两边的产物，
-所以留在 `translate.py` 里就意味着翻译执行器要 import 调图执行器 ——
-那是 `translate <-> localize_images` 双向环唯一的一条边，原代码只能靠函数体内
-延迟导入绕过去。搬到这里之后方向就一路向下了：本模块在两者**之上**。
-
-零 API 调用、零费用。产物是每个账号目录下的 `review.md` 与 `text_de.txt` 副本。
-"""
+"""离线生成原文、译文和图片对照清单，以及 text_de.txt 副本。"""
 from __future__ import annotations
 
 import re
@@ -19,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import localize_images as image_de                  # noqa: E402
+from localize import images as image_de                  # noqa: E402
 from core.paid_model import FileLockBusy           # noqa: E402
 from core.store import (Archive, ArchivePathError,  # noqa: E402
                         assert_physical_direct_path, post_directory, read_post_truth)
@@ -32,11 +23,7 @@ from core.translated import (HumanRevisionConflict, effective_translation,  # no
 
 
 def run_review(arc_base: Path) -> int:
-    """生成 review.md：原文 / 译文 / 配图 / 图内英文待确认框。
-
-    图片用相对路径引用，review.md 就放在同目录，所以 Markdown 预览器
-    直接能显示——交给德语审校人时不用额外传文件。
-    """
+    """生成 review.md，用相对路径展示同目录的文案与配图。"""
     arc = Archive(arc_base.parent, arc_base.name)
     sync_notices: list[str] = []
     row_list = _review_sources(arc, sync_notices)
@@ -53,15 +40,13 @@ def run_review(arc_base: Path) -> int:
         print(f"  {arc_base.name}：还没有译文，跳过（先跑一次翻译）")
         return 0
     image_state = image_de.load_image_state(arc_base / "images_de.jsonl")
-    # [image] 配置只用来打一行形变/放大告警。**不能因为它不合法就让 F 组的
-    # 审校清单整条命令跑不出来**（CR-56）：Settings() 会做双向配置审计并
-    # SystemExit，而这个账号可能一张德语图都没有。
+    # 图片配置仅供告警，错误时不阻断文案审校清单。
     try:
         image_settings = image_de.Settings()
     except SystemExit as exc:
         image_settings = None
         print(f"  ! [image] 配置当前不可用（{exc}）；"
-              "K8 并排与逐类清单照常生成，只是不打印形变/放大告警")
+              "仍生成对照清单，跳过形变和放大告警")
 
     eligible = {pid for pid, r in rows.items() if (r.get("text") or "").strip()}
     orphan_ids = sorted((set(machine) | set(human)) - set(rows))
@@ -101,11 +86,8 @@ def run_review(arc_base: Path) -> int:
         "",
         "两类必须人工处理的事：",
         "",
-        "1. **数字**。提示词**刻意不换算**货币金额与数字尺码——德国站的定价与尺码"
-        "对照是商务决策，模型无从知道，擅自换算就是把文案问题变成商业事故。"
-        "含这类数字的帖子下面会标出来。",
-        "2. **图内德语图**。程序产出、人工可覆盖；逐张并排核对德语正确性、"
-        "不可改内容与产品外观。K3 预扫描已取消，因此下面的逐类人工清单是唯一验收口。",
+        "1. **数字**：人工确认德国定价和尺码，模型不换算。",
+        "2. **图片**：逐张核对德语、保留文字和产品外观；人工图优先。",
         "",
     ]
     for notice in sync_notices:
@@ -145,9 +127,7 @@ def run_review(arc_base: Path) -> int:
         lines += [f"## {i}. `{pid}`　{created}", ""]
         if src.get("permalink"):
             lines += [f"原帖：<{src['permalink']}>", ""]
-        # 合作帖：它在本账号主页上，但**内容是别人创作的**。
-        # 审校人需要知道这一点——二次发布到 DE Page 涉及的是对方的著作权，
-        # 而译文本身看不出这个区别。
+        # 展示合作作者，供审核二次使用授权。
         if (src.get("owner")
                 and str(src["owner"]).strip().lower() != this_account):
             lines += [f"> 🤝 **合作帖**：原作者是 `@{src['owner']}`，"
@@ -205,7 +185,7 @@ def run_review(arc_base: Path) -> int:
             arc_base, src, image_translation(src, machine.get(pid), human.get(pid)) or {},
             state=image_state)
         if image_pairs:
-            lines += ["**原图 / 德语图并排审校（K8）**", "",
+            lines += ["**原图 / 德语图对照**", "",
                       "| 原图 | 德语图 |", "| --- | --- |"]
             for pair in image_pairs:
                 source_ref = pair.source_rel.replace("\\", "/")
@@ -269,7 +249,7 @@ def run_review(arc_base: Path) -> int:
             lines.append("- [ ] **话题标签已恢复为与原帖完全一致**（模型改动过，必查）")
         if flags:
             lines.append("- [ ] 数字已按德国站确认/替换")
-        lines += ["- [ ] 图内德语图已逐张完成 K8 审校（见上方逐类清单）",
+        lines += ["- [ ] 已逐张核对德语图片",
                   "", "---", ""]
 
     out = arc_base / "review.md"
@@ -317,22 +297,13 @@ def _review_sources(arc: Archive, notices: list[str]) -> list[dict]:
 
 def sync_text_de(arc_base: Path, rows: list[dict], trans: dict[str, dict], *,
                  notices: list[str] | None = None) -> int:
-    """把译文同步一份 `text_de.txt` 到每帖文件夹里（J 组布局）。
-
-    机器与人工分别留在两个追加账本，副本始终优先使用人工版。旧文件若不等于
-    任一历史产物且尚无人工稿，先以未绑定原文的人工版本留档。已经存在人工稿
-    时保留未知旧文件供人比较，不能把它当成更晚的编辑覆盖正式版本。
-
-    副本的价值在人：设计同事拿到一个文件夹，里面英文、德文、配图齐全，
-    不用再去翻一个几 MB 的 JSONL。删了也没关系，跑一次 --review 就回来了。
-    """
+    """同步人工优先的德文副本；未知旧文件先留档，不覆盖已有人工版本。"""
     written = removed = 0
     human_path = arc_base / "translated_human.jsonl"
     human = load_human_translated(human_path)
     history = translation_text_history(arc_base)
     for row in rows:
-        # manifest 可能有脏行（run_review 明确承诺脏输入不崩）。
-        # 这是个派生副本的生成器，没有任何理由成为整批的失败点。
+        # 派生副本跳过脏输入，不改变事实源。
         if not isinstance(row, dict) or not row.get("post_id"):
             continue
         pid = row["post_id"]

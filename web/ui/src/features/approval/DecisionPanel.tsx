@@ -12,7 +12,6 @@ import { isCompleteScheduleTime } from '@/lib/action-reasons'
 import styles from './DecisionPanel.module.css'
 
 export function ApprovalAction({ controller: c }: { controller: ApprovalController }) {
-  // 这是整个界面唯一的主动作。它灰着的时候，「为什么」必须键盘也拿得到。
   return <DisabledReason label="通过并创建排期" reason={c.reason}>
     <Button aria-label="通过并创建排期" type="primary" disabled={!!c.reason} loading={c.busy} onClick={c.open}>通过并创建排期</Button>
   </DisabledReason>

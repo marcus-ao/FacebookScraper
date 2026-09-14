@@ -59,13 +59,7 @@ class IndependentLaneTests(unittest.TestCase):
         self.assertEqual(attempt.target_channels, ("facebook",))
 
     def test_missing_channel_evidence_stops_before_browser_attach(self):
-        """证据闸要在 attach 之前拦住；只替换 workflow.cfg 拦不住。
-
-        capabilities 与 snapshots 各自 import 自己的 cfg，只打 workflow.cfg 时它们
-        仍读真实 state/：本机一旦录过探查证据，这一闸就被真证据放行，一路跑到
-        snapshots.ensure 才因为桩对象缺字段报错。替换共享的 config._cfg，这条断言
-        在录过证和没录证的机器上验的才是同一件事。
-        """
+        """替换共享 config._cfg，使所有能力与快照读取均使用隔离状态。"""
         import asyncio
         from types import SimpleNamespace
         from unittest.mock import AsyncMock

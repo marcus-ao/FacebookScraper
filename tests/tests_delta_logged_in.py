@@ -1,20 +1,4 @@
-"""登录态增量自测（方案 B）。对应实施计划 C2–C7 的【验收】里能离线做的部分。
-
-这套测试盯的**不是"顺利时能抓到帖子"**，而是不顺利时的行为——增量每天跑一次、
-无人盯着，所以下面几件事比解析正确更要紧：
-
-  1. **异常即停**：登录墙 / 401 / 429 / 解析出 0 篇，都必须当次立即停止，
-     不重试、不换 UA、不绕。继续试探是把"可能被注意到"变成"确定被注意到"；
-  2. **深度上限**：只滚 `max_scrolls` 屏，绝不滚到底；
-  3. **失败也要写状态**：否则"连续三天失败"和"连续三天没新帖"长得一模一样，
-     而这两件事一个要人去重新登录、一个什么都不用做；
-  4. **失败预算**：连续失败达阈值就停止自动运行——每天硬撞一个已失效的会话，
-     是这条路径上最坏的行为；
-  5. **先判 stale 再抖动**：反过来的话每次唤醒都要先睡半小时才发现不用跑。
-
-⚠️ 真实抓取的验收（owner 全对、连跑两次第二次 0 新增）要对真实账号跑，
-不在这套里——每跑一次就是一次真实露面。
-"""
+"""隔离验证扫描深度、异常停止、状态写入和失败预算；不访问真实账号。"""
 import asyncio
 import json
 import sys
@@ -158,8 +142,7 @@ def ig_payload(pk="111", code="abc", ts=1755000000, owner="acme_us",
     node = {"pk": pk, "code": code, "taken_at": ts,
             "user": {"username": owner, "full_name": "Acme US"},
             "caption": {"text": text},
-            # 真实响应里这两个键在**每个**节点上都有，绝大多数为空数组。
-            # 构造样本时也带上，免得测试用例的形态比真实数据更干净（CR-19）
+            # 保留响应中通常为空的两类 coauthor 字段。
             "coauthor_producers": [{"pk": "9%d" % i, "username": u}
                                    for i, u in enumerate(coauthors)],
             "invited_coauthor_producers": [],
@@ -228,8 +211,7 @@ deltas = {dy for _, dy in page.mouse.wheels}
 check(len(deltas) > 1, "每屏的滚动距离不相同 —— 匀速等距滚动本身是行为指纹")
 check(all(0 < dy for _, dy in page.mouse.wheels), "只向下滚")
 
-# 2026-08-30 实测踩到的坑：mouse.wheel 在**当前鼠标位置**派发事件，
-# 默认位置 (0,0) 是导航栏，滚轮打在那儿页面一动不动，而日志里看不出异常。
+# 滚轮作用于鼠标所在位置，测试须覆盖主视口定位。
 check(page.mouse.moves and page.mouse.moves[0] == (640, 400),
       "滚之前先把鼠标移到视口中间（默认 (0,0) 是导航栏，滚了也白滚）")
 check(moved > 0, "返回值报出页面实际移动了多少像素")
@@ -256,7 +238,6 @@ with tempfile.TemporaryDirectory() as d:
     check(any(p.suffix == ".jpg" for p in post_dirs[0].iterdir()),
           "配图下载进了该帖自己的文件夹")
 
-    # 【C2 验收】连续运行两次，第二次新增 0 篇
     arc2 = Archive(Path(d), "in_acme_us")
     page2 = FakePage([resp(ig_payload())])
     n2 = asyncio.run(delta_once(FakeCtx(page2), "instagram", "acme_us", arc2, test_cfg()))
@@ -277,7 +258,7 @@ with tempfile.TemporaryDirectory() as d:
     check("222" not in json.dumps(arc.rows()), "他人帖没有进归档")
 
 with tempfile.TemporaryDirectory() as d:
-    # 残缺帖必须能被补全：用 should_append 而不是 has()（CR-03）
+    # 残缺帖必须能被补全：用 should_append 而不是 has()
     arc = Archive(Path(d), "in_acme_us")
     stub = Post(post_id="111", platform="instagram", account="acme_us",
                 text="", created_at="2025-08-12T00:00:00Z", owner="acme_us",
@@ -383,9 +364,7 @@ check(not delta.ScanResult(new=0, own=6, newest_seen="2026-08-25T00:00:00Z",
                            newest_known="2026-08-25T00:00:00Z").stale_view(),
       "看到的和归档一样新 → 不报警（这就是 FB 那次『真的没新帖』）")
 
-# 缺陷三：own 这一个数字看不出它是怎么来的。IG 实测那 36 篇里 35 篇是合作帖、
-# 自己发的只有 1 篇 —— 合作判定一漂移，own 就从 36 掉到 1，而那和
-# "今天真的只发了一篇"在旧摘要里长得一模一样。
+# 分别检查原创和合作数，使合作解析退化可见。
 split = delta.ScanResult(new=2, own=36, authored=1, collab=35, rejected=3,
                          newest_seen="2026-08-27T00:00:00Z",
                          oldest_seen="2026-06-06T00:00:00Z",
@@ -394,12 +373,11 @@ check("原创 1" in split.summary() and "合作 35" in split.summary(),
       "摘要把『本账号 N 篇』拆成原创/合作两半 —— 合作判定失效时一眼可见")
 
 
-print("\n[3c] 丢弃的里面有已知合作方 → 归属判定漏判的哨兵（CR-19 那一类）")
+print("\n[3c] 丢弃的里面有已知合作方 → 归属判定漏判的哨兵（那一类）")
 
 with tempfile.TemporaryDirectory() as d:
     arc = Archive(Path(d), "in_acme_us")
-    # 归档里有一篇合作帖：brand.x 发布、本账号是 coauthor。
-    # 于是 brand.x 从此是"已知合作方"。
+    # 先归档已知合作关系。
     arc.append(Post(post_id="c1", platform="instagram", account="acme_us",
                     text="collab", owner="brand.x", coauthors=["acme_us"],
                     created_at="2026-07-01T00:00:00Z"))
@@ -407,8 +385,7 @@ with tempfile.TemporaryDirectory() as d:
         arc.append(Post(post_id="o%d" % i, platform="instagram", account="acme_us",
                         text="own", owner="acme_us",
                         created_at="2026-07-%02dT00:00:00Z" % (10 + i)))
-    # 本次扫描：3 篇自家的（够过 min_own_posts），外加一篇 brand.x 发的、
-    # 但**没带 coauthor 信息** —— 正是"合作判定漏了"该长的样子。
+    # 本次响应保留作者但缺合作字段，模拟合作解析漂移。
     items = [ig_payload(str(700 + i))["data"]["items"][0] for i in range(3)]
     items.append(ig_payload("777", owner="brand.x")["data"]["items"][0])
     items.append(ig_payload("778", owner="chicagofire")["data"]["items"][0])
@@ -421,8 +398,7 @@ with tempfile.TemporaryDirectory() as d:
           "陌生账号的推荐位照常丢弃、不进哨兵（否则这条告警会天天响、然后被无视）")
 
 with tempfile.TemporaryDirectory() as d:
-    # 全面退化：合作判定完全失效时，min_own_posts 那道闸先响，
-    # **中止理由里要带上"来自已知合作方"** —— 否则下一个会话又会先去猜"是不是被拦了"。
+    # 合作判定退化时，中止原因须包含已知合作方信息。
     arc = Archive(Path(d), "in_acme_us")
     for i in range(4):
         arc.append(Post(post_id="c%d" % i, platform="instagram", account="acme_us",
@@ -592,8 +568,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "Facebook 侧的归属取自 actors[0].url 的账号名段，不是展示名")
 
 with tempfile.TemporaryDirectory() as tmp:
-    # 媒体修复是一次成功写入，但不是社媒刚发布的新帖；否则会把 quiet 时钟
-    # 错误刷新到今天，长期零新增告警最多再被推迟一个完整阈值周期。
+    # 补齐旧媒体不算发现新帖，不能刷新 quiet 时钟。
     arc = Archive(Path(tmp), "in_acme_us")
     arc.append(Post(
         post_id="111", platform="instagram", account="acme_us", text="old",
@@ -613,8 +588,6 @@ with tempfile.TemporaryDirectory() as tmp:
           "但 last_new_at/last_new_count 不冒充新发布内容，quiet 时钟不被洗掉")
 
 with tempfile.TemporaryDirectory() as tmp:
-    # 非 DeltaBlocked 的异常以前会穿透 _run_due：既不落状态也不通知，
-    # 无人值守时只剩 Task Scheduler 的一个退出码，失败预算永远攒不起来。
     state = {}
     saved_once = delta.delta_once
 
@@ -636,8 +609,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "非预期异常也会通知，不会在计划任务里静默消失")
 
 with tempfile.TemporaryDirectory() as tmp:
-    # Archive 构造发生在 delta_once 之前，也必须属于当前平台的异常闭环。
-    # 这是我们本地的目录/权限问题，不应像登录墙那样硬停另一个平台。
+    # 本地归档初始化失败只影响当前平台。
     state = {}
     ig_page = FakePage([resp(ig_payload())])
     saved_archive = delta.Archive
@@ -671,8 +643,7 @@ with tempfile.TemporaryDirectory() as tmp:
     saved_attach, saved_notify = delta.attach, delta.notify
 
     async def broken_attach(**_kwargs):
-        # core.chrome.attach() 的端口竞态/无 context 失败契约是 SystemExit，
-        # 它不属于 Exception；这条防止兜底看似存在、真实失败却仍穿透。
+        # attach 的 SystemExit 不属于 Exception，须单独覆盖。
         raise SystemExit("CDP context missing")
 
     try:
@@ -710,10 +681,7 @@ with tempfile.TemporaryDirectory() as tmp:
         delta.notify = saved
     check([h["kind"] for h in hits] == ["quiet"], "零新增超阈值 → 检查命中")
     check(len(notices) == 1, "一个平台一条通知，不是一项一条")
-    # 断言的是"文案里有平台、实际天数、配置阈值"，**不写死阈值的数值**：
-    # 阈值是按真实发帖节奏标定的、会随数据修正（2026-08-30 当天就改过一次），
-    # 把它写死在测试里，等于每次重标都要改测试，而测试真正要保证的是
-    # "这条通知说得够具体，不是『发现问题』"。
+    # 核验通知包含平台、实际天数和配置阈值，不固定业务阈值。
     _, threshold = delta.integrity.params("instagram")
     check("30 天" in notices[0][1] and ("%d 天" % threshold) in notices[0][1]
           and "instagram" in notices[0][1],
@@ -722,9 +690,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "标题点名是哪个平台")
 
 with tempfile.TemporaryDirectory() as tmp:
-    # ⚠️ D3 原验收写的是"把 consecutive_quiet_days 改大"，**那样测不出来**：
-    # record_success 每次都会用 last_new_at 重算这个字段，手改的值当场被覆盖。
-    # 能真正触发的是把 last_new_at 往前推。这条差异写进 MANUAL_STEPS 了。
+    # 推进 last_new_at 触发告警；派生的 quiet 天数会被重算。
     seed = Archive(Path(tmp), "in_acme_us")      # 这篇已经在归档里 -> 本次 0 新增
     seed.append(Post(post_id="111", platform="instagram", account="acme_us",
                      text="hello world", owner="acme_us",
@@ -827,8 +793,7 @@ check(effective_stale_hours(quiet, dcfg, "facebook", now=NOW) == 0.75,
       "同样 10 天，FB 阈值是 14 天 → 在岗频率，最小45分钟")
 check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9,
       "阈值写成一个数时两个平台通用（向后兼容，不强制写成表）")
-# 断言的是"内联表能按平台解析出来"，**不要求两个值必须不同** ——
-# 两个账号目前节奏一样（近一年间隔中位都是 1.0 天），值相同是正确的标定结果。
+# 平台阈值允许相同，只检查按平台解析。
 loaded = DeltaConfig.load()
 check(all(isinstance(loaded.quiet_days_before_slowdown(p), int) and
           loaded.quiet_days_before_slowdown(p) > 0 for p in delta.PLATFORMS),
@@ -939,8 +904,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rc == 0 and saved_state["facebook"]["consecutive_failures"] == 0,
           "--reset-failures 清零，人工确认后能继续")
 
-    # 每日任务和补跑任务是两个不同的 Task Scheduler task；各自的
-    # MultipleInstancesPolicy 挡不住彼此，必须由进程锁兜底。
+    # 不同计划任务仍须共用进程锁。
     rec = Recorder()
     held = delta.DeltaRunLock(Path(tmp) / "delta.lock")
     held.__enter__()
@@ -956,8 +920,6 @@ with tempfile.TemporaryDirectory() as tmp:
     run_main([], dict(state), rec, cdp=False, tmp=tmp)
     check(rec.launched, "Chrome 没在跑时会自动拉起（用户 2026-08-30 拍板）")
 
-    # 明确关闭自动拉起时也必须进入失败状态闭环；旧实现只打印/通知，
-    # last_error 与失败预算完全不动。
     saved_load = DeltaConfig.__dict__["load"]
     try:
         DeltaConfig.load = classmethod(
@@ -977,8 +939,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check(rec.notices and "没能启动" in rec.notices[0][0],
           "禁止自动拉起的启动失败也会通知")
 
-    # launch() 既可能返回 False，也可能在建 profile / 读配置 / Popen 时抛异常；
-    # 尤其 core.chrome 的部分配置错误用 SystemExit 表达，Exception 捕不到。
+    # 覆盖 launch 返回 False、普通异常及 SystemExit。
     for launch_error in (PermissionError("profile denied"),
                          SystemExit("chrome exe missing")):
         rec = Recorder()

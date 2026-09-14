@@ -1,8 +1,4 @@
-"""Isolated data and local HTTP host for the offline React browser regression.
-
-Nothing here opens an authenticated browser or calls a model. The temporary TOML
-is the settings writer's actual path, including after Config reloads it.
-"""
+"""Isolated data and loopback FastAPI host; temporary configuration also covers settings reloads."""
 from __future__ import annotations
 
 import ipaddress
@@ -48,7 +44,9 @@ class BrowserFixture:
             text, changed = re.subn(r"(?m)^(times\s*=)", "# " + SETTINGS_NOTE + "\n" + r"\1", text, count=1)
             if changed != 1:
                 raise AssertionError("The browser fixture requires publish.schedule_rule.times")
-            self.config_path.write_text(text, encoding="utf-8")
+            # newline="" 不可省：config.toml 若是 CRLF，默认换行翻译会把 \r\n 写成
+            # \r\r\n，tomllib 在第 1 行就报 "Expected newline"，而报错里看不出是换行问题。
+            self.config_path.write_text(text, encoding="utf-8", newline="")
             runtime = self.root / "runtime.toml"
             runtime.write_text('[paths]\narchive = ' + json.dumps(str(self.root / "archive"))
                                + '\nstate = ' + json.dumps(str(self.root / "state")) + '\n', encoding="utf-8")
@@ -62,8 +60,7 @@ class BrowserFixture:
                                    "Offline frozen fixture " + str(index),
                                    f"2021-01-{index + 1:02d}T12:00:00Z", tags=["OfflineFixture"]))
 
-            # Also guard accidental server-side network calls. Only this HTTP
-            # loopback is permitted (the ASGI host and Python's event-loop pipes).
+            # Only loopback connections are allowed, including event-loop pipes.
             listen = socket.socket()
             self.stack.callback(listen.close)
             listen.bind(("127.0.0.1", 0))

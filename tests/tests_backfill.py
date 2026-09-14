@@ -163,9 +163,7 @@ with tempfile.TemporaryDirectory() as d:
     check(json.loads(target.read_text(encoding="utf-8")) == [{"new": True}],
           "成功写入得到完整合法 JSON")
 
-    # 原子写现在实现在 core/paid_model（此前全仓 6 份各写一遍）。
-    # 注入点随之改到那一层，并且测得比原来更强：序列化中断和**提交中断**
-    # 两种都不许截断上一份可用文件。
+    # 分别注入序列化和原子替换失败，验证旧文件完整保留。
     from core import paid_model
 
     original_dumps = paid_model.json.dumps
@@ -297,7 +295,7 @@ with tempfile.TemporaryDirectory() as d:
     check(current["media_complete"] is True and len(current["media"]) == 2,
           "归档最终由残缺封面升级为完整两图记录")
 
-    # ↓ 2026-08-30 新增：真实回填混进了 266 条别人的帖子，主流程必须拦住
+    # 排除不属于目标账号且未被识别为合作帖的内容。
     check("x9" not in rows, "别人账号的帖子没有进 manifest")
     check("x9" not in downloaded,
           "别人账号的帖子连媒体都不下载（省流量，更省下游的麻烦）")

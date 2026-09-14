@@ -7,7 +7,6 @@
   white-space: nowrap;
 }
 
-/* 走 currentColor，不用品牌色 —— 见组件注释。 */
 .icon {
   display: inline-flex;
   font-size: var(--rc-icon-size);

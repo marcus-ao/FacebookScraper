@@ -1,12 +1,4 @@
-r"""翻译层自测。对应实施计划 F 组的【验收】中不依赖真实 API 的部分。
-
-**这套测试不调用任何 API**：翻译器被整体替换成假的。
-真实 DeepSeek 的验收走 `scripts\run_translate.bat --check`，真实译文质量的验收
-（F1「对 3 篇试跑」、F2「人工检查 3 篇」）必须等 B 组抓到真实文案之后。
-
-这里保证的是：管道本身对不对——挑哪几篇、写到哪、重跑会不会重复花钱、
-以及**绝对不碰 manifest.jsonl**。
-"""
+"""用替代模型验证翻译筛选、写盘与幂等，不修改源 manifest 或调用真实 API。"""
 import json
 import sys
 import tempfile
@@ -17,9 +9,7 @@ from core.console import force_utf8   # noqa: E402
 
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
-import translate as T
-# K8 审校清单搬去 tools/ 了：它要同时读译文与调图两边的产物，
-# 留在 translate.py 里就得让翻译执行器 import 调图执行器。
+from localize import text as T
 import tools.review_report as R   # noqa: E402
 
 fails = []
@@ -74,10 +64,7 @@ print("[1] Settings 从 config.toml 读到 [translate]")
 check(s.provider == "deepseek", f"provider={s.provider}")
 check(s.base_url == T.DEEPSEEK_API_URL, f"base_url={s.base_url}")
 check(s.api_key_env == "DEEPSEEK_API_KEY", f"api_key_env={s.api_key_env}")
-# 断言"在允许集合内"而不是写死某一个：**用 pro 还是 flash 是业务在
-# config.toml 里做的取舍**（质量 vs 费用），不是代码契约。写死的后果实测过——
-# 2026-08-31 业务把 model 改成 flash，这条断言当场变红，而实现完全正常。
-# 真正的代码契约是 Settings.validate() 那个白名单，下面这条跟着它走。
+# 检查模型白名单，不固定业务配置选择。
 check(s.model in {"deepseek-v4-pro", "deepseek-v4-flash"}, f"model={s.model}")
 check(s.reasoning_effort == "high", "DeepSeek 翻译默认 high thinking")
 check(s.style_examples == 6, f"style_examples={s.style_examples}")
@@ -142,8 +129,7 @@ check("不要凭空提高精度" in sp, "换算后不得虚增有效位数")
 check("不要自己补" in sp, "禁止凭空造原文没有的数字")
 
 print("\n[5b] 排版规范与金额规则之间不得留下矛盾")
-# 这是实测踩到的坑：排版表里原本有一行「货币符号 -> 19,99 €」，
-# 与「金额原样不动」直接打架，模型完全可以「合规地」把 $49.99 改成 49,99 $。
+# 排版提示不能与金额原样保留规则冲突。
 typography = sp[sp.index("## 4."):sp.index("## 5.")]
 check("货币符号" not in typography,
       "排版规范表里已无货币行（它会和「金额原样不动」打架）")
@@ -328,8 +314,7 @@ check(T._strip_wrapper("```\nHallo\n```") == "Hallo", "剥掉裸围栏")
 check(T._strip_wrapper("Hallo Welt") == "Hallo Welt", "无围栏时原样返回")
 check(T._strip_wrapper("Preis: ```code``` hier").startswith("Preis"),
       "正文中间的围栏不动（不做激进清洗）")
-# 回归：_FENCES 曾把短的排在前面，"```de" 抢先匹配 "```deutsch"，
-# 只切掉 5 个字符，留下 "utsch\n..." 直接污染译文。
+# 短围栏前缀不得抢先截断长语言名称。
 for fence in ("```deutsch", "```german", "```text", "```de"):
     check(T._strip_wrapper(f"{fence}\nHallo Welt\n```") == "Hallo Welt",
           f"{fence} 围栏被完整剥掉（长的必须先匹配）")
@@ -543,8 +528,8 @@ with tempfile.TemporaryDirectory() as tmp:
           "外部正文自带三反引号时使用更长围栏，不破坏审校清单结构")
     check("![a1](media/a1_0.jpg)" in md, "图片用相对路径引用，预览器能直接显示")
     check("(1440×1800)" in md.replace("（", "(").replace("）", ")"), "标了分辨率")
-    check(md.count("- [ ] 图内德语图已逐张完成 K8 审校（见上方逐类清单）") == 3,
-          "每篇都有 K8 图内德语图审校总确认框")
+    check(md.count("- [ ] 已逐张核对德语图片") == 3,
+          "每篇都有图片审校总确认框")
     check(md.count("- [ ] 译文已审校") == 3, "每篇都有审校勾选框")
     check("媒体不全" in md, "media_complete=False 的帖子有警示")
     check("https://www.instagram.com/p/a1/" in md, "带原帖链接便于比对")
@@ -566,10 +551,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("需人工确认的数字" not in a2_sec, "不含数字的 a2 没被误标")
 
     print("\n[19b-2] 合作帖的授权提示 —— 这一条是业务上的硬要求")
-    # 用户 2026-08-30 拍板：229 篇第三方创作者的合作帖全部进流水线，
-    # **但 review.md 里的原作者与授权提示保留**。那条提示是这个决定的配套条件，
-    # 而它此前一个测试都没有 —— 静默丢掉的话，审校人再也看不到
-    # "这篇的著作权在别人手里"。
+    # 合作帖审校须展示原作者及授权提示。
     with tempfile.TemporaryDirectory() as cbase:
         cb = Path(cbase)
         collab_posts = [
@@ -608,7 +590,7 @@ with tempfile.TemporaryDirectory() as tmp:
     import hashlib as _hashlib
     import re as _re
     from PIL import Image as _Image
-    import localize_images as _images
+    from localize import images as _images
 
     with tempfile.TemporaryDirectory() as kbase:
         kb = Path(kbase)
@@ -697,7 +679,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
         k_count = R.run_review(karc)
         kmd = (karc / "review.md").read_text(encoding="utf-8")
-        check(k_count == 3 and kmd.count("原图 / 德语图并排审校（K8）") == 3,
+        check(k_count == 3 and kmd.count("原图 / 德语图对照") == 3,
               "三篇帖子都生成原图/德语图并排表")
         linked = _re.findall(r"\]\(<([^>]+)>\)", kmd)
         check(len(linked) == 6 and all((karc / path).is_file() for path in linked),
@@ -726,10 +708,7 @@ with tempfile.TemporaryDirectory() as tmp:
           "上一版人工批注保存在 review.previous.md")
 
     print("\n[19d] --estimate 用真实 usage 外推，而不是只按字符数猜")
-    # thinking 开着时字符换算会低估一到两个数量级：2026-08-31 实测，
-    # 一篇 1261 字符的帖子可见译文 420 tok、reasoning 9899 tok ——
-    # **98% 的输出费用花在看不见的地方**。每篇 usage 已经写进 translated.jsonl，
-    # 试跑几篇之后就该用真实数字外推，而不是让人自己拿计算器。
+    # 费用估算须计入实际 reasoning usage。
     import io as _io
     import contextlib as _ctx
 
@@ -752,7 +731,7 @@ with tempfile.TemporaryDirectory() as tmp:
               "一篇都没译过时说清楚为什么估不了 reasoning，而不是编一个数")
         check("US$" in out0, "但字符换算的基础参考仍然给出")
 
-        # 译过一篇、且带真实 usage：此后就该按实测外推
+        # 已有 usage 时按实际用量估算。
         with (earc / "translated.jsonl").open("w", encoding="utf-8") as f:
             f.write(json.dumps({
                 "post_id": "e1", "text_de": "DE::e1",
@@ -760,7 +739,6 @@ with tempfile.TemporaryDirectory() as tmp:
                 "model": "deepseek-v4-flash",
                 "source_text_sha256": T.source_text_sha256(e_posts[0]["text"]),
                 "prompt_version": T.PROMPT_VERSION,
-                # 实测量级：可见译文 420 tok，reasoning 9899 tok
                 "usage": {"input_tokens": 250, "output_tokens": 10319,
                           "prompt_cache_hit_tokens": 3840,
                           "prompt_cache_miss_tokens": 250,
@@ -883,9 +861,8 @@ except SystemExit as e:
 check(negative_limit, "--limit 为负数时 argparse 明确拒绝")
 
 
-print("\n[CR-47] 作用域：--post-id / --latest-posts")
-# 待译队列是**最老优先**的，所以 --limit 到不了最新那几篇；
-# 而 K9 与 G8 的验收标的恰恰是最新几篇。这一节钉住那个缺口已经被补上。
+print("\n[] 作用域：--post-id / --latest-posts")
+# latest-posts 与从最老待译项截取的 limit 语义不同。
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp) / "archive"
     rows_by_account = {

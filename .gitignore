@@ -6,11 +6,9 @@ __pycache__/
 *.pyc
 .fbscraper-chrome/
 .fbscraper-publish/
-_deprecated/__pycache__/
 .venv/
 venv/
 .ruff_cache/
 .history/
-# 前端依赖与构建产物由锁文件和源码生成，不进版本库。
 web/ui/node_modules/
 web/ui/dist/

@@ -4,9 +4,7 @@ from __future__ import annotations
 from pipeline.risk_scan import result_for
 from core import localization, translated
 from core.store import assert_physical_direct_path
-import localize_images
-
-
+from localize import images as image_de
 def material(account, source):
     identifier = source['post_id']
     machine = translated.load_translated(account / 'translated.jsonl').get(identifier)
@@ -24,10 +22,8 @@ def material(account, source):
     if effective and effective.get('stale'):
         notes.append('当前德语稿的源文已有变化，请重新核对。')
     image_text = translated.image_translation(source, machine, human)
-    pairs = localize_images.review_image_pairs(account, source, image_text) if image_text else []
-    # 首图是 media 里第一张 image，不是 media_index == 0 —— media_index 是整个 media
-    # 列表的下标，视频排在前面时 0 号就不是图片，德语首图会被判成「没有」，于是卡片
-    # 拿英文原图配一句「尚无有效德语首图」发出去。
+    pairs = image_de.review_image_pairs(account, source, image_text) if image_text else []
+    # 首图取第一项 image；media_index 可能包含前置视频。
     lead = next(((index, item) for index, item in enumerate(source.get('media') or [])
                  if isinstance(item, dict) and item.get('kind') == 'image'), None)
     first = next((p for p in pairs if lead is not None and p.media_index == lead[0]), None)
@@ -35,7 +31,7 @@ def material(account, source):
     if first and first.localized_rel:
         path, variant = account / first.localized_rel, 'de'
     if path is None and lead is not None:
-        path, _ = localize_images._source_from_manifest(account, source, lead[1])
+        path, _ = image_de._source_from_manifest(account, source, lead[1])
     if path:
         assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
     caption = localization.render(draft) if effective else '德语稿尚未就绪，请进入页面查看待处理问题。'

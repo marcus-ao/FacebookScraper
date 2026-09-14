@@ -1,4 +1,3 @@
-/* 时刻要上下对齐着扫，所以等宽数位。 */
 .time {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import localize_images
-import translate
+from localize import images as image_de
+from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review, translated
 from core.process_identity import current_worker, worker_alive
 from core.config import cfg
@@ -38,8 +38,7 @@ def _events_lock():
 
 @contextmanager
 def _wait_lock(name):
-    # These locks cover local ledger reads/writes only. A queued worker remains
-    # pending while another short transaction finishes; no paid request has begun.
+    # Locks cover local transactions only; queued workers have not started paid requests.
     lock = paid_model.FileLock(cfg().state_dir / name, busy_message='内容任务正在领取')
     while True:
         try:
@@ -116,7 +115,7 @@ def recover(job_id: str, *, expected_updated_at: str) -> dict:
             if result and result.get('refine_id') == job_id and result.get('text_de'):
                 event.update(status='succeeded', error=None, text_de=result['text_de'], message='已找回本次保存的文案')
         elif row['kind'] == 'image':
-            result = localize_images.load_image_state(directory / 'images_de.jsonl').latest.get(
+            result = image_de.load_image_state(directory / 'images_de.jsonl').latest.get(
                 (row['post_id'], row['media_index']))
             if result and result.get('refine_id') == job_id:
                 path = (directory / result.get('out_path', '')).resolve()
@@ -129,13 +128,13 @@ def recover(job_id: str, *, expected_updated_at: str) -> dict:
 
 def capabilities(account_dir: Path, post_id: str) -> dict:
     """费用为当前有效样本中位数；无样本时明确使用业务测量参考，绝非预算上界。"""
-    settings = localize_images.Settings()
+    settings = image_de.Settings()
     costs = []
     for directory in account_dirs(cfg().archive_dir):
-        for row in localize_images.load_image_state(directory / 'images_de.jsonl').latest.values():
+        for row in image_de.load_image_state(directory / 'images_de.jsonl').latest.values():
             usage = row.get('usage')
             if isinstance(usage, dict):
-                cost = localize_images.image_usage_cost(settings, usage)
+                cost = image_de.image_usage_cost(settings, usage)
                 if cost is not None:
                     costs.append(cost)
     jobs = [row for row in latest().values()
@@ -204,7 +203,7 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
             raise review.ReviewConflict('这篇已有优化任务在处理，请等待结果；重启遗留任务需先核对付费账本')
         if kind == 'image':
             count = sum(row['kind'] == 'image' and row.get('media_index') == media_index for row in previous)
-            if count >= localize_images.Settings().max_refine_per_media:
+            if count >= image_de.Settings().max_refine_per_media:
                 raise review.ReviewConflict('这张图片已达到优化次数上限，请下载后交人工处理')
         engine.budget_preflight()
         now = datetime.now(timezone.utc).isoformat()
@@ -242,10 +241,10 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
         source, effective = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
         controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight, operation_id=row['job_id'])
         if row['kind'] == 'text':
-            settings = translate.Settings()
-            translator = translator or translate.Translator(settings, paid_controller=controller)
-            with translate.TranslationRunLock(cfg().state_dir / 'translate.lock'):
-                ok, failed = translate.run_translate(settings, translator, account_dir, 1, True, False,
+            settings = translation.Settings()
+            translator = translator or translation.Translator(settings, paid_controller=controller)
+            with translation.TranslationRunLock(cfg().state_dir / 'translation.lock'):
+                ok, failed = translation.run_translate(settings, translator, account_dir, 1, True, False,
                     scope=frozenset([source['post_id']]), source_rows=[source],
                     refine_instruction=row['instruction'], refine_id=row['job_id'],
                     current_body=(effective or {}).get('text_de', ''))
@@ -254,14 +253,14 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
             result = translated.load_translated(account_dir / 'translated.jsonl')[source['post_id']]
             event['text_de'] = result['text_de']
         else:
-            settings = localize_images.Settings()
-            editor = editor or localize_images.ImageEditor(settings, paid_controller=controller)
-            with localize_images.ImageRunLock(cfg().state_dir / 'images.lock'):
-                stats = localize_images.run_localize(settings, editor, account_dir, [source], 1, True, False,
+            settings = image_de.Settings()
+            editor = editor or image_de.ImageEditor(settings, paid_controller=controller)
+            with image_de.ImageRunLock(cfg().state_dir / 'images.lock'):
+                stats = image_de.run_localize(settings, editor, account_dir, [source], 1, True, False,
                     row['media_index'], refine_instruction=row['instruction'], refine_id=row['job_id'])
             if stats.succeeded != 1:
                 raise ValueError('图片优化未通过产出检查；已有图片保持原样')
-            result = localize_images.load_image_state(account_dir / 'images_de.jsonl').latest[
+            result = image_de.load_image_state(account_dir / 'images_de.jsonl').latest[
                 (source['post_id'], row['media_index'])]
             event['out_path'] = result['out_path']
         event['status'] = 'succeeded'

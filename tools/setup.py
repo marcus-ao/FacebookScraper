@@ -1,15 +1,4 @@
-r"""一次性环境搭建。对应实施计划的 A1。
-
-由 scripts\setup.bat 调用，也可以直接 `py -3 tools\\setup.py` 跑。
-
-**为什么这些逻辑在 Python 里而不在 .bat 里**：cmd.exe 解析含非 ASCII 字符的
-批处理文件不可靠——实测中文 REM 注释行会被从中间劈开，后半段当命令执行
-（`'录下双击运行。' is not recognized as an internal or external command`），
-加不加 `chcp 65001` 都会犯。而 Python 在 Windows 控制台走 Unicode API
-（WriteConsoleW），任何码页下中文都正确显示。所以 .bat 只留纯 ASCII 的壳。
-
-本文件用系统 Python 启动（venv 还不存在），因此只用标准库、不用 3.11+ 语法。
-"""
+"""环境安装入口；仅用系统 Python 标准库，批处理保留 ASCII 包装。"""
 import os
 import shutil
 import subprocess
@@ -21,9 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.console import force_utf8   # noqa: E402  纯标准库，系统 Python 也能导
 
-# PyPI 镜像。官方源 files.pythonhosted.org 在国内网络实测吞吐近 0：
-# playwright（36 MB）跑 8 分钟零进展，换清华镜像后 45 秒装完。
-# 境外网络可设环境变量 PYPI_INDEX_URL= （空值）走官方源。
+# PYPI_INDEX_URL 覆盖镜像；空值使用官方源。
 DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 INDEX_URL = os.environ.get("PYPI_INDEX_URL", DEFAULT_INDEX).strip()
 
@@ -108,8 +95,7 @@ def install_deps(toolchain):
 
 
 def install_playwright():
-    # 抓取用的是 start_chrome 起的系统 Chrome（CDP 附着），附着本身不需要这个
-    # chromium。装它是给 G 组的 playwright codegen 用。
+    # CDP 使用系统 Chrome；另装 Chromium 供 codegen 使用。
     if run([str(VENV_PY), "-m", "playwright", "install", "chromium"]) != 0:
         die("playwright install 失败")
 
@@ -128,14 +114,7 @@ def self_check():
 
 
 def run_tests():
-    """离线测试是 B 组校准的基线，必须全绿才算 A1 通过。
-
-    原版 setup.bat 不检查测试退出码，测试挂了照样打印"完成"——
-    那会让 A2 的"基线全绿"形同虚设。
-
-    用 glob 而不是写死文件名：后续任务每新增一套 tests_*.py 就自动纳入基线，
-    不需要回来改这里（改这里很容易忘，忘了就等于那套测试没人跑）。
-    """
+    """运行离线测试并检查退出码。"""
     paths = sorted(ROOT.glob("tests/tests_*.py"))
     if not paths:
         die("tests/ 下一套离线测试都没找到，请确认目录结构完整")
@@ -154,9 +133,7 @@ def run_tests():
 
 def main():
     force_utf8()
-    # 子进程（尤其是 run_tests 里的每一套离线测试）也得是 UTF-8：
-    # 本机代码页是 936，测试里的 ß / ⚠ 一旦被重定向就编不出来，整套崩掉。
-    # setup.bat 已经设了同一个变量，这里是给 `py -3 tools\setup.py` 直调的路径兜底。
+    # 子进程使用 UTF-8，避免 Windows 重定向回落到 GBK。
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
     step("检查工具链")

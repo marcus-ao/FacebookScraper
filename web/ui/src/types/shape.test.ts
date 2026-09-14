@@ -33,12 +33,7 @@ import taskDetailActive from './__fixtures__/task-detail-active.json'
 import taskDetailFrozen from './__fixtures__/task-detail-frozen.json'
 import templateText from './__fixtures__/template-text.json'
 
-// 这些夹具是 state/audit-probe/ 里**真实响应**的机械脱敏产物
-// （重构期用一个脱敏脚本生成，只动值不动键）。
-// 它们回答一个问题：手写的类型和后端实际返回的形状还对得上吗。
-//
-// 取证规模：审校队列 26 条、历史 1,067 条中的第 1 页、两份详情
-// （活账号 FB + 冻结 IG）、月历 4 张卡、设置七组受控配置、运行五阶段。
+// 样本为已捕获响应的脱敏副本，用于检查字段形状。
 
 const ok = (value: unknown, spec: Parameters<typeof checkShape>[1], label: string) => {
   const problems = checkShape(value, spec)
@@ -56,9 +51,6 @@ describe('GET /api/tasks（审校队列）', () => {
   })
 
   it('字段名是 hard_alerts，没有 alerts', () => {
-    // 类型禁止把 hard_alerts 误写成 alerts。
-    // 新类型里没有 alerts 键，tsc 会挡住同样的笔误；这一条守的是
-    // "后端哪天真的加了 alerts" 这种反向漂移。
     for (const task of reviewList.tasks) {
       expect(task).toHaveProperty('hard_alerts')
       expect(task).not.toHaveProperty('alerts')
@@ -92,8 +84,6 @@ describe('GET /api/tasks（审校队列）', () => {
   })
 
   it('审校队列的列表项**没有** read_only 与 created_at —— 不许当成列表字段用', () => {
-    // 历史项有这两个，队列项没有。把详情/历史字段假装成队列字段是
-    // DECISION_LOG 明确禁止的事，这一条把它钉住。
     const first = reviewList.tasks[0]
     expect(first).toBeDefined()
     expect(first).not.toHaveProperty('read_only')
@@ -101,7 +91,6 @@ describe('GET /api/tasks（审校队列）', () => {
   })
 
   it('审校队列的列表项没有 text.de_human / machine_current —— 所以做不了「译文四态」列', () => {
-    // DECISION_LOG：区分机器/人工/旧提示词的依据只在详情里。
     const first = reviewList.tasks[0]
     expect(first).not.toHaveProperty('text')
     expect(first).not.toHaveProperty('machine_current')
@@ -178,7 +167,6 @@ describe('GET /api/tasks/{id}（详情）', () => {
   })
 
   it('risk_scan 真实数据是 not_scanned —— DECISION_LOG 的前提', () => {
-    // 真实归档 26/26 篇都是这个状态，所以它不能渲染成满宽黄色告警。
     expect(taskDetailActive.risk_scan.status).toBe('not_scanned')
     expect(taskDetailActive.risk_scan.risks).toEqual([])
   })
@@ -191,7 +179,6 @@ describe('GET /api/tasks/{id}（详情）', () => {
   })
 
   it('review 对象在有账本事件时会铺开额外键（冻结那篇没有事件）', () => {
-    // 形状随有无事件变化，所以类型中相关字段是可选的。
     expect(taskDetailFrozen.review.revision).toBeNull()
     expect(taskDetailFrozen.review).not.toHaveProperty('action')
   })
@@ -246,7 +233,6 @@ describe('GET /api/settings', () => {
   })
 
   it('editable_help 里确实带着 config.toml 的注释 —— 所以不能常驻渲染', () => {
-    // help 含源码路径；数据保留，但不应常驻显示给运营人员。
     const help = settings.editable_help as Record<string, string>
     expect(Object.keys(help).length).toBeGreaterThan(0)
   })

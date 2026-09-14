@@ -5,11 +5,6 @@ import { antdComponents, antdToken, cssVariables, tokens } from './theme'
 
 const { neutral, primary, status, space, typography, layout } = tokens
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 主色定值
-//
-// 这一组断言是该选择的可复算依据；换任何一个值都会失败。
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe('最终主色 #155EEF', () => {
   it('使用 #155EEF', () => {
@@ -17,15 +12,11 @@ describe('最终主色 #155EEF', () => {
   })
 
   it('判据 1：填充按钮上的白字 ≥ 4.5:1', () => {
-    // 主按钮上写的是「通过并创建排期」这种不能看错的文案，
-    // 而她一天要按几十次。4.5:1 是 WCAG AA 的正文门槛。
     expect(contrastRatio(primary.base, primary.fg)).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(primary.base, '#ffffff')).toBeCloseTo(5.41, 1)
   })
 
   it('判据 1 续：hover / active 只会让对比度更高，不会更低', () => {
-    // antd 默认的 hover 是**变浅**，白字对比度会在 hover 那一刻掉下 4.5。
-    // 我们的 hover/active 往深走，所以这条永远成立。
     const base = contrastRatio(primary.base, '#ffffff')
     expect(contrastRatio(primary.strong, '#ffffff')).toBeGreaterThan(base)
     expect(contrastRatio(primary.deep, '#ffffff')).toBeGreaterThan(base)
@@ -47,11 +38,10 @@ describe('最终主色 #155EEF', () => {
   })
 
   it('判据 5：不是"通用 AI 紫"', () => {
-    // 主色应保持在冷蓝范围，而不是紫色范围。
     const hue = hueOf(primary.base)
     expect(hue).toBeGreaterThan(200)
     expect(hue).toBeLessThan(240)
-    expect(hueOf('#4f46e5')).toBeGreaterThan(240) // 对照：旧主色确实在紫区
+    expect(hueOf('#4f46e5')).toBeGreaterThan(240)
   })
 
   it('浅底上的前景用 strong 而不是 base —— 12px 不适用大文本豁免', () => {
@@ -60,13 +50,9 @@ describe('最终主色 #155EEF', () => {
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 其余颜色的可读性
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe('状态色与中性色的对比度', () => {
-  // 断言按"这个颜色实际落在什么底色上"分组，不搞一刀切。
-  // 内容都在白色表面上（表格行、卡片）；#f1f5f9 是页面底，内容区不在上面写字。
+  // 按颜色实际使用的底色验证对比度。
 
   it.each([
     ['错误红', status.error],
@@ -82,8 +68,6 @@ describe('状态色与中性色的对比度', () => {
     ['次要文字', neutral.fgMuted],
     ['正文', neutral.fg],
   ])('%s 在页面底色 #f1f5f9 上也 ≥ 4.5:1', (_name, color) => {
-    // 这两个确实会直接写在页面底上（面包屑、空状态说明）。
-    // 12px 的元信息不适用大文本豁免（DESIGN.md）。
     expect(contrastRatio(color, neutral.bg)).toBeGreaterThanOrEqual(4.5)
   })
 
@@ -93,14 +77,7 @@ describe('状态色与中性色的对比度', () => {
     ['错误红在自己的浅底上', status.error, status.errorSoft],
     ['风险黄在自己的浅底上', status.risk, status.riskSoft],
   ])('%s 作为图标/标记线 ≥ 3:1（WCAG 非文本门槛）', (_name, color, on) => {
-    // 这些组合不满足 4.5:1：
-    //    #dc2626 on #f1f5f9 = 4.41:1
-    //    #dc2626 on #fee2e2 = 3.95:1
-    //    #b45309 on #fef3c7 = 4.28:1
-    // 所以这两个颜色**只做图标、下划线、边框与正文标记的底**，
-    // 不做 12px 的彩色文字。ProblemIndicator 是图标 + Tooltip，符合这条；
-    // 正文标记 mark.mk-* 的文字色是继承的 #0f172a，也符合。
-    // 这些颜色仅用于非文本元素和带继承文字色的正文标记。
+    // 这些颜色仅用于非文本元素；正文标记继承文字色。
     expect(contrastRatio(color, on)).toBeGreaterThanOrEqual(3)
   })
 
@@ -113,19 +90,11 @@ describe('状态色与中性色的对比度', () => {
   })
 
   it('红与黄本身也要能互相区分', () => {
-    // 混成一种，用几次她两种都不信（DESIGN.md）。
     expect(hueDistance(status.error, status.risk)).toBeGreaterThan(15)
   })
 })
 
-// ─────────────────────────────────────────────────────────────────────────────
-// token 单一来源
-//
-// 这一组是 DESIGN.md 的机器化断言：antd 那边和 CSS 变量那边**必须同源**。
-// 另有一条更硬的纪律（src/ 里不许出现字面值）在 design-discipline.test.ts。
-// ─────────────────────────────────────────────────────────────────────────────
 
-/** 把 tokens 里所有字符串叶子摊平，用来证明"CSS 变量的值都是派生来的"。 */
 function flattenLiterals(node: unknown, out: Set<string> = new Set()): Set<string> {
   if (typeof node === 'string' || typeof node === 'number') {
     out.add(String(node))
@@ -155,7 +124,7 @@ describe('token 单一来源', () => {
     const orphans = Object.entries(antdToken)
       .filter(([, value]) => typeof value === 'string' || typeof value === 'number')
       .filter(([, value]) => !literals.has(String(value)))
-      // 这几项是 antd 自己的开关/字体栈，不是设计 token。
+      // 这些项是组件开关和字体栈，不参与数值 token 校验。
       .filter(([key]) => !['wireframe', 'sizeUnit', 'sizeStep', 'fontFamily'].includes(key))
       .map(([key, value]) => `${key}=${String(value)}`)
     expect(orphans).toEqual([])
@@ -167,9 +136,8 @@ describe('token 单一来源', () => {
       for (const [key, value] of Object.entries(overrides)) {
         if (typeof value !== 'string' && typeof value !== 'number') continue
         const text = String(value)
-        if (text === 'transparent') continue // 表头分隔线：要的就是"没有"
+        if (text === 'transparent') continue
         if (literals.has(text)) continue
-        // 组合值（`0 16px`）：把里面的数逐个拆出来验，0 例外。
         const numbers = text.match(/[\d.]+/g)
         const looksComposed = numbers !== null && numbers.length > 0
         if (looksComposed && numbers.every((n) => n === '0' || literals.has(n))) continue
@@ -180,7 +148,6 @@ describe('token 单一来源', () => {
   })
 
   it('外壳尺寸由 token 驱动：48 / 200 / 48', () => {
-    // AppShell 不许把这三个数写死 —— 它们同时要进 antd 的 Layout 和 CSS 变量。
     expect(layout.topbarHeight).toBe(48)
     expect(layout.sidebarWidth).toBe(200)
     expect(layout.sidebarCollapsedWidth).toBe(48)

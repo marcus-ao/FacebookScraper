@@ -29,7 +29,6 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   useEffect(() => { setConsent(false) }, [detail.text.source_text_sha256, detail.review.revision])
   const eligible = ['pending_review', 'edited', 'not_ready'].includes(detail.status) && !detail.text.stale
   const remaining = Math.max(0, (capabilities.data?.max_refine_per_media ?? 0) - (capabilities.data?.image_attempts[String(media)] ?? 0))
-  // 两条原因链的优先级写在 lib/action-reasons.ts 里，那里有单测；这里只喂事实。
   const firstReason = initialTranslationDisabledReason({ editing, busy, running: jobRunning(first.job),
     interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: consent })
   const nextReason = refinementDisabledReason({ editing, busy, eligible, running: jobRunning(next.job),

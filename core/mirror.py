@@ -1,9 +1,4 @@
-"""本地文件到飞书云盘的单向、不可覆盖快照；上传失败不改变业务真相。
-
-云端只返回创建/上传回执与移动任务状态，不提供下载、恢复或反向写入接口。
-上传契约：open.feishu.cn/document/server-docs/docs/drive-v1/upload/upload_all
-及 github.com/larksuite/oapi-sdk-python 的 drive/v1/model 请求模型。
-"""
+"""向飞书云盘上传不可覆盖的单向快照；上传失败不改变本地事实。"""
 from __future__ import annotations
 
 import base64
@@ -130,35 +125,17 @@ def _stamp(now: datetime) -> str:
     return now.astimezone(timezone.utc).isoformat()
 
 
-# --------------------------------------------------------------------------
-# state 备份的范围
-# --------------------------------------------------------------------------
-# F2-4 给「`state/` 一起镜像」的理由只有一条：`published.jsonl`（112 KB）
-# **不可重建**，丢了会让已发过的帖子再发一遍 —— 原话是「成本可忽略」。
-#
-# 但这份快照是**按小时重跑**的，而真实 state/ 里 2026-09-12 实测
-# 166 MB 中有 163.8 MB 是 228 张 PNG（probe 截图 + 提交/失败证据）。
-# 全收的后果：PNG 压不动，每小时冻结一份 166 MB 的 zip，base64 进 spool
-# 是 222 MB/次 ≈ 5.3 GB/天，spool 和 snapshots 都没有回收口，
-# 云盘那边还会每月多出 ~720 个 `快照_vN` 目录。那条「成本可忽略」就不成立了。
-#
-# 所以范围收成「能校验完整性的账本 + 纯文本日志」：
-# :func:`MirrorService._stable_state_bytes` 本来也只会校验 .json / .jsonl，
-# 对 PNG 没有任何完整性概念 —— 它只能赌读取期间文件没变。
-# 新增的账本会自动进快照，二进制排查产物不进。
+# 周期备份仅含账本与文本日志；二进制证据另传，避免小时级重复复制。
 STATE_BACKUP_SUFFIXES = ('.json', '.jsonl', '.log')
 
-#: probe dump 另有一条独立理由：HANDOFF §8 明写换机器必须重录一次探查，
-#: 它是机器绑定的，镜像它既贵又没有用。
+# 排除绑定本机环境的探查转储。
 STATE_BACKUP_SKIP_FILE = re.compile(r'^publish_probe_.*\.json$')
 
-#: 按目录排除的：mirror_spool 会让快照递归吃自己；另外三个是 PNG 证据目录，
-#: 要留证的话应该**各自上传一次**，不是每小时跟着整包重传。
+# 排除镜像自身和二进制证据目录，避免递归备份。
 STATE_BACKUP_SKIP_DIRS = ('mirror_spool', 'publish_attempts', 'publish_failures',
                           'publish_snapshots', 'runtime-backups')
 
-#: 超过这个大小就失败闭合。账本涨到几十 MB 意味着范围又漏进了 bulk 文件，
-#: 这时候要的是一条「备份未完成」的告警，不是每小时静默上传一个 GB 级对象。
+# 超限报备份失败，避免静默上传意外的大文件。
 STATE_BACKUP_MAX_BYTES = 32 * 1024 * 1024
 
 
@@ -385,8 +362,7 @@ class MirrorService:
                         info = zipfile.ZipInfo(relative)
                         info.compress_type = zipfile.ZIP_DEFLATED
                         archive.writestr(info, self._stable_state_bytes(path))
-                # Small mutable receipts stay in the ledger backup. Frozen image
-                # bytes are uploaded separately once per content version below.
+                # 账本只备份回执；冻结图片按内容版本单独上传。
                 snapshots = state_dir / 'publish_snapshots'
                 if snapshots.exists():
                     assert_physical_direct_path(state_dir, snapshots, kind='directory', label='冻结快照备份')

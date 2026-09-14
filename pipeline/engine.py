@@ -1,4 +1,4 @@
-r"""G9 assisted 对账流水线：每次从各阶段真相源重建，不建立发布任务队列。"""
+r"""assisted 对账流水线：从各阶段业务文件重建状态。"""
 from __future__ import annotations
 
 from publish import capabilities
@@ -17,14 +17,13 @@ from core.config import cfg
 from core.store import Archive, post_directory
 from publish import journal
 from publish.compose import ComposeError, _read_post_truth, compose_post
-import translate as translation
+from localize import text as translation
 from core.paid_model import FileLock
 from core import operating_settings, paid_model, paid_consent, review
 from core import translated as translated_content
 from pipeline.settings import pipeline_settings
 from pipeline import risk_scan
-import localize_images
-import localize_images as image_de
+from localize import images as image_de
 from core import paid_requests
 from core.chrome import attach
 from routes import delta
@@ -345,8 +344,7 @@ def append_human_item(state_dir: Path, item: HumanItem,
     path.parent.mkdir(parents=True, exist_ok=True)
     event = item.opened_event(now or datetime.now(timezone.utc))
     if current is not None:
-        # 条件曾被结转、后来又真实出现时必须重开；否则旧 resolved 会把
-        # 当前硬闸静默藏掉。连续重复 run 仍因 latest=open 而幂等。
+        # 已结转的问题再次出现时重开，连续重复运行仍保持幂等。
         event["event"] = "reopened"
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(
@@ -406,8 +404,7 @@ def resolve_cleared_items(state_dir: Path, source_refs: Iterable[str], *,
     return len(matches)
 
 
-# 这些类型 **不能** 用 approve 结转：它们是硬闸，靠改配置/补素材再 run 才会消失。
-# 页面必须明说，否则人会对着一个 unmapped_price 反复敲 approve 然后被顶回来。
+# 硬闸须补素材或配置后重新对账，不能靠 approve 解除。
 _GATE_ITEM_KINDS = {
     "material_gate": "补齐素材（重跑增量把图下全）后重跑 pipeline run",
     "unknown_owner": "确认归属后重跑 pipeline run",
@@ -424,19 +421,14 @@ _GATE_ITEM_KINDS = {
 
 
 def _approve_hints(open_rows: list[dict]) -> str:
-    """把「读 ID → 手抄进命令行」变成「复制一行」。
-
-    这是稳态里人**每天**都要做的那一下。ID 是内容哈希，手抄必然出错，
-    出错的表现又是"命令报错"而不是"发错帖"，于是只会让人越来越不想看这个页面。
-    """
+    """生成可直接复制的确认命令。"""
     ready = [row for row in open_rows if row.get("kind") == "ready_to_publish"]
     similar = [row for row in open_rows
                if row.get("kind") == "similar_cross_platform"]
     gates = [row for row in open_rows if row.get("kind") in _GATE_ITEM_KINDS]
     blocks = []
     if ready:
-        # item_id 是 `kind-hash20`、ref 是 `platform:post_id`，都只含
-        # [a-z0-9.:-]，cmd.exe 下不需要引号 —— 加了反而会被 html.escape 成 &quot;。
+        # ID 与 ref 的受控字符集可直接用于 cmd 命令。
         command = ("python -m pipeline approve"
                    + "".join(" --item-id %s" % row["item_id"] for row in ready))
         cards = []
@@ -543,21 +535,7 @@ def _open_items_intersecting(state_dir: Path, source_refs: Iterable[str], *,
 
 
 def out_of_scope_reason(row: Mapping[str, Any]) -> str | None:
-    """这篇帖子**本来就不该**进发布流水线吗？在范围内返回 None。
-
-    ⚠️ **这与 ``material_gate`` 是两件事，不要合并。**
-
-    - 本函数判的是「永远不会变得可发」：视频帖、纯文字帖、无媒体帖。
-      本项目的范围是**图文帖**（视频只在 manifest 里留记录，从不下载）。
-      把它们排进 ``needs_human`` 是纯噪声 —— 实测最近 90 天 125 篇里
-      **59 篇是视频帖**，账号还在日更，队列每天都会多出谁也处理不掉的项。
-      队列一旦失去信号，人就不看了，那比没有队列更糟。
-    - ``material_gate`` 判的是「本该可发，但素材现在不齐」：漏下载、0 字节、
-      轮播缺图。**那类是人能处理的**，必须继续进队列。
-
-    ⛔ 跳过 ≠ 静默丢弃（CR-19 那 263 篇的教训）：调用方**必须**把条数和原因
-    报出来，`load_sources` 的第三个返回值就是为此存在的。
-    """
+    """返回不支持的媒体类型原因；可补齐的素材问题留给 material_gate，调用方记录跳过原因。"""
     if not isinstance(row, Mapping):
         return "不是合法归档行"
     if not isinstance(row.get("text"), str) or not row["text"].strip():
@@ -570,8 +548,7 @@ def out_of_scope_reason(row: Mapping[str, Any]) -> str | None:
         for item in media
     })
     if kinds != ["image"]:
-        # 图片 + 视频的混合帖同样出局：只发其中的图会**丢内容**，
-        # 而 compose 的硬闸本来就要求媒体项全是 image。
+        # 混合媒体整帖跳过，避免只发布其中图片而丢失内容。
         return "非纯图文帖（媒体：%s）" % "、".join(kinds)
     return None
 
@@ -659,8 +636,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
                 % source.ref,
                 {"source_ref": source.ref, "human_revision": human.get("revision"),
                  "source_text_sha256": translated_content.source_text_sha256(source.text)})
-    # exact merge 最终会把所有来源一起写进 journal；secondary 的残缺轮播或
-    # 缺失原图不能躲在 canonical 的完整素材后面。
+    # 所有待记入 journal 的来源都须通过素材检查。
     for material_source in candidate.sources:
         material_row = material_source.row
         media = material_row.get("media")
@@ -680,8 +656,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
                 "%s 的正文/图片/轮播完整性硬闸未通过，未调用付费服务。"
                 % material_source.ref,
                 {"source_ref": material_source.ref})
-    # 合并候选会用一篇 canonical 代表多个来源并共同记入 journal；因此每个
-    # 来源的 owner/coauthors 都是版权真相，不能只审 canonical。
+    # 逐一核验所有来源作者，不能只检查代表帖。
     for provenance in candidate.sources:
         source_row = provenance.row
         owner = str(source_row.get("owner") or "").strip().lower()
@@ -720,8 +695,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
         external = set(coauthors)
         external.discard(account)
         if owner != account:
-            # 真实归档约定：合作帖 owner 是原作者，目标账号必须出现在
-            # coauthors；缺这条关系时不能仅凭名字推断它是合作帖。
+            # 合作归属必须有 coauthors 关系，不能仅凭作者名称推断。
             if account not in coauthors:
                 return HumanItem(
                     _item_id("unknown_collaborator", candidate.sources,
@@ -764,11 +738,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
 
 
 def prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | None:
-    """`_prepaid_issue` 的公开名字。
-
-    给 `pipeline preflight` 这类**只读预演**用：预检必须用实际同一套判据，
-    否则"预检说能跑"和"真跑起来"会分叉 —— 那正是本项目一再吃亏的形状。
-    """
+    """供只读预检复用实际付费前置判据。"""
     return _prepaid_issue(candidate, rules)
 
 
@@ -906,13 +876,7 @@ def assert_budget(account_dirs: Iterable[Path], settings: Mapping[str, Any], *,
 
 
 def budget_preflight() -> None:
-    """在 paid lock 内按全账号真相源重算日/月预算。
-
-    这是 :class:`core.paid_requests.RequestController` 的实际 ``preflight``。
-    它住在这里而不是 core/，是因为它要同时知道 `[pipeline]` 预算、付费账本、
-    以及翻译/调图两边的计价公式 —— 三样都在 core/ 之上。各 CLI 的 ``main()``
-    负责把它注入进去。
-    """
+    """在付费锁内按全账号账本重算日/月预算，由应用入口注入请求控制器。"""
     c = cfg()
     assert_budget(
         translation.account_dirs(c.archive_dir), pipeline_settings(),
@@ -960,7 +924,7 @@ class RealStageRunner:
             "--post-id", source.post_id])
 
     def image(self, source: SourcePost, media_index: int) -> int:
-            return localize_images.main([
+            return image_de.main([
             "--account", source.account_dir.name,
             "--post-id", source.post_id,
             "--media-index", str(media_index)])
@@ -980,8 +944,8 @@ def translation_needed(source: SourcePost) -> bool:
 def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
     """调用 K 组已有内容寻址判据，准确识别哪些单图会产生付费请求。"""
     try:
-        settings = localize_images.Settings()
-        jobs, _state, _stats = localize_images.build_jobs(
+        settings = image_de.Settings()
+        jobs, _state, _stats = image_de.build_jobs(
             settings, source.account_dir, [dict(source.row)], report=None)
     except SystemExit as exc:
         raise PipelineRunError("[image] 配置不可用：%s" % exc) from exc
@@ -993,14 +957,7 @@ def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
 
 def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
                rules: PublishRules) -> tuple[datetime, ...]:
-    """分配还没被占的德国 10:00/17:00 槽。
-
-    ⚠️ **可能返回少于 ``count`` 个，调用方必须自己判断。**
-    composer 的日期选择器**不允许跨月**（2026-09-01 实测），所以可排的槽在
-    每个月末会真的用完 —— 那不是异常，是 UI 的事实。以前这里是
-    ``while len(found) < count`` 的无上界循环，加了月末边界就必须给它一个出口，
-    否则要么死循环、要么在月末把整次 run 抛崩。
-    """
+    """返回配置范围内可用的柏林候选时刻；不足时可能少于 count。"""
 
     zone = ZoneInfo(rules.timezone)
     ui_zone = bs.resolve_ui_timezone(rules.ui_timezone)
@@ -1045,10 +1002,7 @@ def _ready_item(candidate: Candidate, post) -> HumanItem:
          "source_text_sha256": translated_content.source_text_sha256(source.text),
          "relation": candidate.relation,
          "publish_fingerprint": fingerprint,
-         # ⬇️ 以下只为让人**在批准之前**能判断，不参与任何判据。
-         # 稳态里人每天只做一件事：看一眼待确认清单然后 approve。
-         # 清单上只有 item_id / kind / 一句通用说明的话，那一眼**什么也判断不了**，
-         # 人只能盲批 —— 而这是整条链上唯一一次人工复核。
+         # 以下字段只辅助人工确认，不参与业务判据。
          "text_de_preview": _preview(post.text_de),
          "image_count": len(post.image_paths),
          "image_sources": list(post.image_sources),
@@ -1122,8 +1076,6 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
     report("[pipeline] 激活后来源 %d 条；候选 %d；新增待确认 %d。"
            % (result.source_count, len(result.candidates), added))
     if result.source_count == 0 and not out_of_scope:
-        # 刚 activate 完的第一次 run 必然是这个样子（边界之后还没有新帖）。
-        # 不说清楚的话，联调时很容易把"设计如此"读成"没接上"。
         report("[pipeline] 激活边界（%s）之后还没有新帖 —— **这是正常的**："
                "流水线不补发历史，要等下一次增量抓到新帖才会有事做。"
                % activated.isoformat())
@@ -1152,9 +1104,7 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
         refs = set(candidate.source_refs)
         scheduled_overlap = refs & scheduled_refs
         if scheduled_overlap and scheduled_overlap != refs:
-            # 典型场景：FB 已独立排期，30h 窗口内的 IG 抓取迟到。静默跳过会
-            # 没给新 IG ref 留下耐久覆盖；若以后 greedy 换边，它就可能再次付费/
-            # 发布。先交给人确认“这条 IG 已由既有远端帖覆盖”。
+            # 为后到的来源补耐久覆盖，避免重新对账后重复付费或发布。
             scheduled = journal.scheduled_record_for_refs(
                 state_dir, scheduled_overlap)
             late = HumanItem(
@@ -1271,9 +1221,7 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
         # 仅用于离线硬闸的未来占位槽；真正槽位在 approve 前读取远端后重分配。
         placeholder_slots = next_slots(now, (), 1, rules)
         if not placeholder_slots:
-            # 月末：composer 不允许跨月，本月已经没有可排的槽了。翻译/调图的
-            # 产物不会作废，只是这一轮排不出 ready 项。**这不是错误**，
-            # 所以照常 mark_run_success，不要让死人开关误报。
+            # 窗口内无剩余时刻不等于处理失败；保留产物并记录运行成功。
             report("[pipeline] 本月已无可排槽位（composer 不允许跨月）；"
                    "本轮不生成待确认项，进入下个月后重跑即可。")
             break
@@ -1359,8 +1307,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         raise PipelineRunError("流水线尚未激活；G8 通过前不能批准任何发布项")
     rows = open_human_items(state_dir, item_ids)
 
-    # 相似版本选择本身不花钱、不碰浏览器。一次可结转多个；下一次 run 会从
-    # 追加式选择证据重新构建 canonical candidate。
+    # 选择证据追加落盘，下次运行重新构建候选。
     ready_rows: list[dict] = []
     selections_to_apply: list[tuple[dict, str]] = []
     coverage_rows: list[dict] = []
@@ -1381,8 +1328,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 "待确认项 %s（%s）不能直接批准发布；先处理它点名的硬闸"
                 % (row.get("item_id"), row.get("kind")))
 
-    # 同一批 ready 不得覆盖同一个来源；旧 ready 与后到的跨平台配对重叠时，
-    # 两篇都提交会把同一内容发两次。让下一次 run 重新对账并结转旧项。
+    # 同批候选不得覆盖同一来源，重叠时先重新对账。
     seen_refs: set[str] = set()
     for row in ready_rows:
         refs = {str(ref) for ref in row.get("source_refs") or [] if str(ref)}
@@ -1403,8 +1349,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
             "ready 项至少一个来源仍有未闭合发布状态 %s；"
             "必须先人工结转，整批未触碰浏览器" % pending.get("status"))
 
-    # ready 不是任务队列。批准时必须从全部账号的最新归档重新对账，证明
-    # canonical 与完整 source_refs 仍是同一个候选；旧配对不能直接拿来发。
+    # 批准前从最新归档核验候选及全部 source_refs，不能直接提交旧 ready。
     rules = publish_rules()
     all_dirs = translation.account_dirs(cfg().archive_dir)
     latest_sources, boundary_issues, _out_of_scope = load_sources(
@@ -1554,8 +1499,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         raise PipelineRunError("读取远端已占用槽位失败：%s" % exc) from exc
     slots = next_slots(now, inventory.occupied, len(prepared), rules)
     if len(slots) < len(prepared):
-        # 远端已占槽位读回来之后本月剩余槽位可能不够。**整批不提交** ——
-        # 这里已经开过浏览器，但一个提交都还没点。
+        # 远端读取后可用时刻不足时，整批不提交。
         raise PipelineRunError(
             "扣掉远端已占用的槽位后，本月只剩 %d 个可排槽位，而本批有 %d 篇；"
             "composer 不允许跨月。本批零提交。"
@@ -1636,8 +1580,7 @@ def approve(*, item_ids: list[str], selections: Mapping[str, str],
             confirm: Callable[[str], bool] | None = None) -> int:
     """以 pipeline 全局互斥锁执行批量批准。"""
     with PipelineOperationLock(Path(state_dir) / "pipeline.lock"):
-        # 远端空槽回读、最终排期分配及逐篇提交属于同一个临界区；否则单帖
-        # CLI 能在回读后抢占槽位。workflow 内的同 Context 重入会复用此锁。
+        # 远端占用读取、选期和提交共用发布锁；同 Context 重入复用此锁。
         with journal.PublishOperationLock(Path(state_dir) / "publish.lock"):
             return _approve_unlocked(
                 item_ids=item_ids, selections=selections, state_dir=state_dir,

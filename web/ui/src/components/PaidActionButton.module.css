@@ -8,7 +8,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 剩余次数是元信息，不抢按钮的位置。 */
 .remaining {
   color: var(--rc-fg-muted);
   font-size: var(--rc-font-meta);

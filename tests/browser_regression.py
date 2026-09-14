@@ -216,9 +216,7 @@ def stage_d4(page, ui):
     expect(page.get_by_text('排期尚未确认，请核对回执后再处理',exact=True)).to_be_visible()
     body=[r['body'] for r in ui.requests if r['path'].endswith('/approve')][-1]
     assert body=={'scheduled_at':'2026-09-15T10:30','source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision'],'content_fingerprint':'fixture-fingerprint'}
-    # 回执不是严格 scheduled 时后端已经留下发布尝试，必须重新读这一篇 ——
-    # 不读的话 detail.publication / detail.status 还停在提交前，DecisionPanel 的
-    # 「核对并补齐本地回执」就不出现，运营只能刷新整页才能收尾。
+    # 非严格成功回执也须重读详情，使本地回执恢复入口可见。
     order=[i for i,r in enumerate(ui.requests) if r['method']=='POST' and r['path'].endswith('/approve')]
     reread=[i for i,r in enumerate(ui.requests) if r['method']=='GET' and r['path']==f'/api/tasks/{task_id}' and i>order[-1]]
     assert reread, '提交失败之后没有重读这一篇，恢复入口不会出现'
@@ -364,8 +362,6 @@ def stage_f(page, ui):
     expect(page.get_by_text('本次月历未完整更新，仍展示已取得的记录，请稍后重试',exact=True)).to_be_visible()
     expect(page.get_by_text('已观测到公开发布',exact=True)).to_be_visible();expect(page.get_by_text('已创建定时任务',exact=True)).to_have_count(0)
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
-    # 日期格用 data-day 定位。原来靠 role="listitem"，但那套 list 语义是无效的
-    # （直接子节点里混着星期标题和补位格），已经删掉，断言不能再依赖它。
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
     return {'F':'PASS','published_scheduled_distinct':True,'failure_payload_cards_retained':True,'refresh_body':{},'empty_day_min_height':min(heights)}
@@ -498,11 +494,7 @@ def main():
                 headless=True,viewport={"width":1366,"height":768},timezone_id="America/New_York")
             try:
                 page=context.new_page(); page.set_default_timeout(8000)
-                # 断言仍然 8 秒：真出了 UI 问题要立刻红。放宽的只有导航 ——
-                # 历史列表首屏会为每一行发一次缩略图 GET（默认 50 行）。空载时这一页
-                # 走到 networkidle 要 3.9 秒，本机同时在跑构建/测试时实测到过 13.6 秒，
-                # 8 秒的导航预算盖不住，跟前端改了什么没有关系。
-                # 复现：tests/history_thumbnail_cost.py，说明见 web/README.md。
+                # 导航等待缩略图请求，预算独立于交互断言。
                 page.set_default_navigation_timeout(30000)
                 ui.attach(page)
                 result=STAGES[args.stage](page,ui)

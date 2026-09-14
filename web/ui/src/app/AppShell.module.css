@@ -1,14 +1,8 @@
-/*
- * 应用外壳。只引用 --rc-* 语义变量，**没有一个字面值**（DESIGN.md）。
- * 尺寸的真相源是 src/app/theme.ts；这里改不了 48 / 200 / 48。
- */
 
 .shell {
   min-height: 100vh;
 }
 
-/* ---------- 顶栏 ---------- */
-/* 48px，固定，为工作区保留垂直空间。 */
 .header {
   position: sticky;
   top: 0;
@@ -36,7 +30,6 @@
   color: var(--rc-fg);
 }
 
-/* DE 图形标识。方块 + 两个字母，不引图片、不引字体。 */
 .mark {
   display: inline-flex;
   align-items: center;
@@ -55,15 +48,10 @@
   font-size: var(--rc-font-body);
 }
 
-/* 折叠按钮 */
 .collapse {
   flex: none;
 }
 
-/* 顶栏中部：当前页面标题 / 面包屑。
-   ⛔ 这里不放营销式副标题。旧 UI 那两行永久说明
-   （US 站图文帖 → … / 保存与排期均会留档…）是已决定删除的。 */
-/* 顶栏中部的定位文字。不是 h1 —— 界面的 h1 在正文里（.pageTitle）。 */
 .title {
   flex: 1 1 auto;
   min-width: 0;
@@ -84,7 +72,6 @@
   white-space: nowrap;
 }
 
-/* 面包屑最后一段：当前界面的名字。 */
 .crumbTitle {
   display: inline;
   margin: 0;
@@ -101,7 +88,6 @@
   gap: var(--rc-space-2);
 }
 
-/* 运行状态入口。是链接不是按钮：要能中键新开、要能复制地址。 */
 .runtime {
   display: inline-flex;
   align-items: center;
@@ -119,7 +105,6 @@
   color: var(--rc-fg);
 }
 
-/* ---------- 左侧导航 ---------- */
 .sider {
   position: sticky;
   top: var(--rc-topbar-h);
@@ -133,15 +118,11 @@
   padding-top: var(--rc-space-2);
 }
 
-/* ---------- 内容 ---------- */
 .content {
-  /* 24px 左右边距是刻度上的 space-5；不给内容区套卡片（DESIGN.md）。 */
   padding: var(--rc-space-5);
   min-width: 0;
 }
 
-/* 工作区头的第一行：界面的 h1，20 / 600。
-   筛选、计数和动作与标题同列，不另起页面标题。 */
 .pageTitle {
   margin: 0 0 var(--rc-space-4);
 }

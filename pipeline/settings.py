@@ -1,15 +1,4 @@
-r"""`[pipeline]` 配置的严格读取。**这个模块只认识 config.toml，不认识流水线。**
-
-它被单独拆出来，是因为有三个不同高度的调用方都要它：
-
-- ``pipeline/cli.py``（L 组 CLI）—— 最顶层，读 autonomy / dead_man_days；
-- ``pipeline/engine.py``（执行引擎）—— 预算判据要读日/月上限；
-- 各阶段 CLI 的 ``main()`` 组装 ``RequestController`` 时经由上面那条。
-
-放回 ``cli.py`` 会让引擎反过来 import CLI，那就是一条环。
-放进 ``core/config.py`` 又不合适：那里是通用配置层，不该知道 `[pipeline]`
-这一段的业务语义。所以它自己成一层：**只依赖 core.config，谁都能用。**
-"""
+"""严格读取 [pipeline] 配置，仅依赖 core.config。"""
 from __future__ import annotations
 
 import math
@@ -18,9 +7,7 @@ from typing import Any
 
 from core.config import cfg
 
-# `[pipeline]` 的全部合法键。CR-40 立的规矩：不许有改了不生效的死旋钮，
-# 也不许有拼错了却静默被忽略的键。所以这张表是双向的 ——
-# 表外的键报错，表里标 False 的键在 status 里显式说明"还没接上"。
+# 支持的键及其接入状态；未知键拒绝，未接入项在状态中说明。
 PIPELINE_CONFIG_KEYS: dict[str, bool] = {
     "autonomy": True,
     "dead_man_days": True,         # ← cli.py 的 check-alive 就在消费它
@@ -35,11 +22,7 @@ class PipelineConfigError(RuntimeError):
 
 
 def pipeline_settings(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """严格读 `[pipeline]`；未知键、错类型都失败闭合。
-
-    形状照抄 ``localize_images.Settings.validate`` 的双向对账，
-    但这里只有四个键，不值得为它建一个类。
-    """
+    """校验 pipeline 配置；未知键或错类型报错。"""
     if raw is None:
         raw = cfg()._d.get("pipeline", {}) or {}
     if not isinstance(raw, Mapping):

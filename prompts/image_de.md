@@ -1,7 +1,4 @@
-<!--
-K 组图内英文德语化提示词。修改规则后同时递增 localize_images.py 的
-IMAGE_PROMPT_VERSION。占位符由代码注入；不要新增未在代码中登记的占位符。
--->
+<!-- 图片模板；占位符由 localize/images.py 注入。修改规则须同步递增 IMAGE_PROMPT_VERSION。 -->
 
 # 任务
 

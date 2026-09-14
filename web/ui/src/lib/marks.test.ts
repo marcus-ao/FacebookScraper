@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { MARK_ERROR, MARK_RISK, MARK_WARN, buildMarks, charLength, segment } from './marks'
 import type { BodyRisk, Highlight, Mark } from '@/types/domain'
 
-// 这些用例守的是 marks.ts 里那三条"改了就静默出错"的规则。
-// 它们不是覆盖率练习：每一条都对应一次实测过的故障形态。
 
 const highlight = (over: Partial<Highlight>): Highlight => ({
   kind: 'money',
@@ -26,7 +24,7 @@ const risk = (over: Partial<BodyRisk>): BodyRisk => ({
 describe('charLength：码点计数，和后端 Python 数出来的是同一个数', () => {
   it('补充平面表情算一个字符，不是两个', () => {
     // 🚀 在 Python 里 len() == 1，在 JS 里 .length == 2。
-    expect('🚀'.length).toBe(2) // 先确认前提成立，否则这个测试没有意义
+    expect('🚀'.length).toBe(2)
     expect(charLength('🚀')).toBe(1)
   })
 
@@ -43,8 +41,6 @@ describe('charLength：码点计数，和后端 Python 数出来的是同一个�
 })
 
 describe('segment：按码点下标切，不按 UTF-16 码元切', () => {
-  // 实测结论（marks.ts 的注释）：1498 字符那篇的标记整体偏了 4 个字符，
-  // 正好是它前面的 4 个表情。这个用例是那次故障的最小复现。
   const en = '🚀 $20 off'
 
   it('表情之后的 span 落在正确的字符上', () => {
@@ -57,7 +53,6 @@ describe('segment：按码点下标切，不按 UTF-16 码元切', () => {
   })
 
   it('用 UTF-16 切会切错 —— 证明上面那条不是巧合', () => {
-    // 如果实现改成 value.slice(2, 5)，拿到的是 ' $2'。
     expect(en.slice(2, 5)).toBe(' $2')
     expect(Array.from(en).slice(2, 5).join('')).toBe('$20')
   })
@@ -94,15 +89,12 @@ describe('segment：按码点下标切，不按 UTF-16 码元切', () => {
       [],
     )
     const parts = segment('abcd', marks, 'en')
-    // 两个相邻的 error 片段归属不同标记（index 0 与 1），所以不合并；
-    // 但同一个标记被切成两段时必须合并。这里断言至少不会切出四段单字符。
+    // 仅合并同一标记的相邻片段，保留不同标记的跳转锚点。
     expect(parts.length).toBeLessThanOrEqual(2)
   })
 })
 
 describe('segment：重叠时 error > risk > warn', () => {
-  // 同一个 $219.99 会同时被 money(error) 与 money_review(warn) 命中。
-  // 两个 <mark> 套不起来，必须选一个，而"错了"永远压过"注意看"。
   const pick = (marks: Mark[]) => segment('abcdef', marks, 'en').find((p) => p.type !== null)?.type
 
   it('error 压过 warn', () => {
@@ -176,7 +168,6 @@ describe('buildMarks：排序规则', () => {
   })
 
   it('只有德语侧位置的排最后 —— 那种恰恰最需要看见，不能丢掉', () => {
-    // 原文没有、译文里凭空多出来的金额。
     const marks = buildMarks(
       [
         highlight({ en_span: null, de_span: [3, 5], label: '译文里多出来的' }),

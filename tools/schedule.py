@@ -1,34 +1,4 @@
-r"""注册 / 查看 / 删除每日增量的 Windows 计划任务。对应实施计划的 E3。
-
-    python -m tools.schedule xml       只打印将要注册的 XML，什么都不改
-    python -m tools.schedule install   注册（--dry-run 只看命令）
-    python -m tools.schedule status    查询已注册的任务
-    python -m tools.schedule remove    删除
-
-**为什么是三个任务而不是一个**：Task Scheduler 的一个任务只能有一个 Action，
-而这些触发器需要三种参数：
-
-  FBScraperDelta         每天固定时刻 → run_pipeline.bat run
-  FBScraperDeltaCatchup  登录时 / 解锁时 → run_pipeline.bat run --if-stale
-  FBScraperAlive         登录时 / 每天 20:00 → run_pipeline.bat check-alive
-
-⚠️ **每天那个不能带 `--if-stale`。** `stale_after_hours = 26`，而每天同一时刻
-的间隔是 24 小时——带上就会"跑一天、跳一天"。补跑触发器才需要它去重。
-
-⚠️ **`FBScraperAlive` 是死人开关（L0c），它必须独立于上面两个。**
-它要抓的失效正是「上面两个不跑了而没人知道」——挂进它们里面就会跟着一起哑掉。
-它只读 `state/` 下的运行标记：**不联网、不抓取、不花钱**，
-所以也**不设** `RunOnlyIfNetworkAvailable`（没网不能成为警报不响的理由）。
-
-**为什么用 XML 而不是拼 schtasks 参数**：`/SC ONLOGON` 有，但"解锁时触发"
-（SessionStateChangeTrigger）只能通过 XML 表达。计划里也写明允许走 XML 导入。
-
-⚠️ **注册之后每天就会真的调用一次流水线。** `manual` 模式只对账；
-`assisted` 会访问 Facebook / Instagram 并按预算执行增量、翻译与调图，
-但 `pipeline run` 仍不会接触发布浏览器。方案 B 的累积敞口从激活并切到
-`assisted` 后开始计。装之前先用 `pipeline status` 核对当前状态，否则装上去的
-可能是一个每天准时失败的任务。
-"""
+"""管理 Windows 每日及常驻计划任务；参数见 --help，安装前先预览。"""
 from __future__ import annotations
 
 import argparse
@@ -49,8 +19,7 @@ CATCHUP_TASK = "FBScraperDeltaCatchup"
 ALIVE_TASK = "FBScraperAlive"
 SCHEDULER_TASK = "FBScraperScheduler"
 
-# 任务名保持纯 ASCII：A1 的结论是 cmd 处理非 ASCII 不可靠，
-# 而 schtasks 的任务名会经过命令行。描述走 XML（UTF-16），中文没问题。
+# 任务名使用 ASCII；中文描述写入 UTF-16 XML。
 NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 
 
@@ -61,11 +30,7 @@ def _user() -> str:
 
 
 def _settings(network: bool = True, time_limit: str = "PT2H") -> str:
-    """任务共用的 Settings 段。每一项都有理由，不是抄来的模板。
-
-    ⚠️ ``network=False`` 只给**死人开关**用，理由在 :func:`alive_xml`：
-    那个检查一个字节都不联网，而**"没网"绝不能成为警报不响的原因**。
-    """
+    """共用任务设置；本地缺席检查不要求网络可用。"""
     return """  <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <!-- 笔记本常在电池上跑。勾着"仅交流电"等于这个任务大半时间不工作。 -->
@@ -92,12 +57,7 @@ def _settings(network: bool = True, time_limit: str = "PT2H") -> str:
 
 
 def _principal() -> str:
-    """⚠️ InteractiveToken = "只在用户登录时运行"。
-
-    **不要改成 Password / S4U（"不管用户是否登录都运行"）**：那样拉起的
-    Chrome 没有桌面会话，CDP 附着行为不确定。这条路径本来就依赖一个真实的、
-    有人在用的浏览器。
-    """
+    """使用 InteractiveToken，保证 Chrome 运行在人工登录的桌面会话。"""
     return """  <Principals>
     <Principal id="Author">
       <UserId>%s</UserId>
@@ -172,23 +132,7 @@ def catchup_xml(bat: Path, root: Path) -> str:
 
 
 def alive_xml(bat: Path, root: Path) -> str:
-    r"""死人开关（L0c）。登录时 + 每天 20:00 各查一次，**只读、不联网**。
-
-    ⚠️ **为什么必须是一个独立任务，而不是挂进上面两个**：
-    `PIPELINE_PLAN` 第 7 节要抓的失效是「整条流水线停了而没人知道」——
-    而计划任务被禁用/删除正是最常见的停法。**挂在增量任务里的检查，
-    会跟着增量任务一起哑掉**，恰恰在最需要它的时候不响。
-    独立任务意味着要**两个**东西同时失效才会静默，而不是一个。
-
-    ⚠️ **`RunOnlyIfNetworkAvailable` 必须是 false。**
-    `pipeline check-alive` 一个字节都不联网（它只读 `state/` 下的运行标记），
-    而"家里网断了"绝不该成为"流水线死了但没告警"的原因。
-
-    ⚠️ **不加 SessionUnlock 触发器**（上面的补跑任务有）。
-    这个检查一天最多只会得出一个新结论，锁屏解锁一次就弹一次是纯噪音——
-    `core/integrity.py` 已经立过规矩：**误报的代价不是打扰，
-    是让整条告警通道失效**，用户关掉通知之后真故障就再没人知道了。
-    """
+    """独立缺席告警任务：登录及每日检查，不依赖网络，也不随解锁重复触发。"""
     return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="%s">
   <RegistrationInfo>
@@ -219,10 +163,7 @@ def alive_xml(bat: Path, root: Path) -> str:
 
 
 def plan(root: Path | None = None, at: str | None = None) -> list[tuple[str, str]]:
-    """返回 [(任务名, XML)]。抽成纯函数是为了能离线断言。
-
-    `status` / `remove` 都遍历这个列表，所以在这里加一项就等于处处都加上了。
-    """
+    """返回任务名与 XML，供安装、查询和删除共用。"""
     root = root or Path(__file__).resolve().parent.parent
     bat = root / "scripts" / "run_pipeline.bat"
     alive_bat = bat
@@ -233,8 +174,7 @@ def plan(root: Path | None = None, at: str | None = None) -> list[tuple[str, str
 
 
 def _write_xml(name: str, xml: str) -> Path:
-    # schtasks 要求 XML 是 Unicode：UTF-16 LE + BOM 是它最稳的一种。
-    # 写进 state/（已 gitignore），不污染仓库。
+    # schtasks 导入使用带 BOM 的 UTF-16 LE。
     path = cfg().state_dir / ("task_%s.xml" % name)
     path.write_bytes(b"\xff\xfe" + xml.encode("utf-16-le"))
     return path
@@ -304,11 +244,7 @@ def remove() -> int:
 
 
 def scheduler_xml(root: Path | None = None) -> str:
-    """常驻调度器模板：系统只负责启动和崩溃恢复，时间窗口由 Python 管理。
-
-    这里只生成文本。旧每日任务迁移需要人工停用，不能让两个调度源同时提频。
-    InteractiveToken 保证 Chrome 使用人工登录的桌面会话。
-    """
+    """生成常驻任务 XML；系统负责重启，Python 管理轮询时间，不能与每日调度并用。"""
     root = root or Path(__file__).resolve().parent.parent
     settings = _settings(network=False, time_limit="PT0S").replace(
         "  </Settings>",

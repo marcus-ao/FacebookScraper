@@ -1,7 +1,4 @@
-"""L0b/L0c 的离线测试：零网络、零费用、零真实归档写入。
-
-**每条断言都指向一件"不许被顺手改回去"的事**，不只是防回归。
-"""
+"""流水线状态与告警的离线验证，使用隔离归档。"""
 from __future__ import annotations
 
 import contextlib
@@ -65,7 +62,7 @@ check(P.pipeline_settings(GOOD_CONFIG)["dead_man_days"] == 3,
 check(raises(P.PipelineConfigError,
              lambda: P.pipeline_settings({**GOOD_CONFIG, "dead_man_dayz": 3}),
              "不认识的键"),
-      "拼错的键被拒绝——静默失效的配置项是这个项目明令不许有的（CR-40）")
+      "拼错的键被拒绝——静默失效的配置项是这个项目明令不许有的")
 check(raises(P.PipelineConfigError,
              lambda: P.pipeline_settings(
                  {k: v for k, v in GOOD_CONFIG.items() if k != "dead_man_days"}),
@@ -145,7 +142,6 @@ def silent_notify():
 
 with tempfile.TemporaryDirectory() as d:
     base = Path(d)
-    # 验收原文：人为把 last_successful_run 改到 4 天前 → 告警；改回当天 → 不响。
     stale = (NOW - timedelta(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
     state = write_state(base, delta_state__json={"facebook": {"last_success": stale}})
     sent, fn = silent_notify()
@@ -260,7 +256,7 @@ with tempfile.TemporaryDirectory() as d:
 
 
 # ---------------------------------------------------------------------------
-print("\n[6] 本月花费按真实 usage 算，不按字符/张数外推（CR-40）")
+print("\n[6] 本月花费按真实 usage 算，不按字符/张数外推")
 
 with tempfile.TemporaryDirectory() as d:
     acct = Path(d) / "in_x"
@@ -375,7 +371,7 @@ print("\n[9] run_pipeline.bat 的字节约定（cmd 对这三样零容忍）")
 raw = (ROOT / "scripts" / "run_pipeline.bat").read_bytes()
 crlf = raw.count(b"\r\n")
 check(raw.count(b"\n") - crlf == 0,
-      "没有裸 LF——LF 换行会让 cmd 误解析整行（CR-62 刚踩过一次）")
+      "没有裸 LF——LF 换行会让 cmd 误解析整行（刚踩过一次）")
 check(not raw.startswith(b"\xef\xbb\xbf"), "没有 BOM")
 check(all(byte < 128 for byte in raw), "纯 ASCII：中文消息一律留在 pipeline.py 里")
 text = raw.decode("ascii")

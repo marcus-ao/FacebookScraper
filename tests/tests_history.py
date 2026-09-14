@@ -53,10 +53,7 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(payload['index']['stale'])
 
     def test_history_window_absorbs_paging_while_review_queue_stays_per_request(self):
-        """历史页的源文件核对要走遍全部账号：实测 1,067 篇一次 5.6 秒，而换筛选、
-        翻页都会重新请求。窗口内复用上一次核对结论（0.06 秒），过期后立刻重新核对。
-        待审队列不吃这个窗口 —— 她改完一篇要马上在列表里看到。
-        """
+        """历史分页复用有限时间的源校验；待审队列仍逐请求核对。"""
         base = datetime(2026, 9, 13, 8, 0, tzinfo=timezone.utc)
         self.assertEqual(query_index.history_page(tag='M1', limit=50, now=base)['total'], 3)
 

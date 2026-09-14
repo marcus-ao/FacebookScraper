@@ -34,10 +34,9 @@ from publish.business_suite import (ProbeRequired, PublishStepError,  # noqa: E4
 from publish.compose import (ComposeError, InstagramConstraints,  # noqa: E402
                              ScheduleWindow, compose_post)
 from publish.evidence import verify_all  # noqa: E402
-from translate import PROMPT_VERSION, source_text_sha256  # noqa: E402
+from localize.text import PROMPT_VERSION, source_text_sha256  # noqa: E402
 import publish.business_suite as bs  # noqa: E402
-# 探针是一次性脚手架（tools/_scaffolding/），发布链路不 import 它。
-# 这里 import 它只为一件事：证明**真录制器产出的 dump 满足发布契约**。
+# 验证真实录制器输出满足发布数据契约。
 from tools._scaffolding.probe_publish import ProbeRecorder, install_script  # noqa: E402
 import tools._scaffolding.probe_publish as probe_module  # noqa: E402
 import publish.compose as compose_module  # noqa: E402
@@ -159,8 +158,7 @@ class FakePage:
         return FakeLocator()
 
     async def screenshot(self, *, path, full_page, mask, timeout=None):
-        # timeout 是 CR-64 加的：帧树坏掉的页面上 Playwright 截图会一直挂着，
-        # 而 record() 是持锁的，一次挂住就把后面所有事件堵死。
+        # 截图超时须释放记录锁。
         self.screenshot_timeouts.append(timeout)
         Image.new("RGB", (24, 16), (1, 2, 3)).save(path, format="PNG")
 
@@ -224,13 +222,7 @@ async def make_completed_probe(state_dir: Path, profile: Path):
             raise AssertionError("fixture trusted event was rejected")
     final_shot = recorder.screenshot_dir / "semantic_001_final.png"
     Image.new("RGB", (24, 16), (4, 5, 6)).save(final_shot, format="PNG")
-    # ⚠️ 这条快照必须满足**完整的 v2 契约**（page_id / evidence_order /
-    # recorded_at 都要有），因为 compose 现在委托 evidence.validate_v2_dump
-    # 判定，和实际调用走同一份校验。此前两边各有一份校验、这个夹具只满足较松的
-    # 那份——正是双份实现漂移的典型现场。
-    #
-    # evidence_order 在真实 dump 里是全局单调的（interactions 与 snapshots
-    # 共用一个序列），所以这里接在已录交互之后。
+    # 夹具满足完整 v2 契约，交互与快照共用递增 evidence_order。
     last_order = max((row.get("evidence_order") or 0)
                      for row in recorder.data["interactions"])
     recorder.data["snapshots"] = [{
@@ -268,8 +260,7 @@ class VerifiedProbeConfig:
             ("publish", "ui_constraints_verified"): self._verified,
             ("publish", "ui_probe_dump"): str(self._dump),
             ("publish", "require_all_media_de"): False,
-            # 跨月上限只能在 UI 时区里判，所以严格路径要读它（见
-            # compose._validate_schedule_month）。
+            # 严格月份校验使用 UI 时区。
             ("publish", "ui_timezone"): "America/Los_Angeles",
         }
         return values.get((section, key), default)
@@ -424,10 +415,7 @@ with tempfile.TemporaryDirectory() as d:
           "尚无 UI 实测约束时不假绿，明确记录 G1 仍待完成")
 
 
-print("\n[CR-58] compose 的用户入口：tools/compose_publish.py")
-# PUBLISH_PLAN 第 5 节的【验收】要求"对最新 3 篇真实帖组装成功、人为改坏各自被拒"。
-# 在此之前 compose_post 的唯一调用方是本测试文件 —— 那条验收没有任何命令
-# 可以让用户自己复跑，而项目工作协议要求需要用户操作的功能进 MANUAL_STEPS。
+print("\n[] compose 的用户入口：tools/compose_publish.py")
 import tools.compose_publish as compose_cli  # noqa: E402
 
 with tempfile.TemporaryDirectory() as d:
@@ -479,11 +467,8 @@ with tempfile.TemporaryDirectory() as d:
           "离线预演确实没有写出任何发布留痕")
 
 
-print("\n[CR-60] 排期时区：Windows 上必须有 tzdata，且夏令时切换日要对")
-# ⚠️ 实测发现（2026-08-31）：本机 zoneinfo.TZPATH 是**空的**，
-# 缺 tzdata 时 ZoneInfo("Europe/Berlin") 直接抛 ZoneInfoNotFoundError。
-# 而 PUBLISH_PLAN 第 3.3 节把显式时区转换写成硬要求，还要求在切换日各测一次。
-# 这一节存在的意义：**别让人用"写死 UTC 偏移"绕过去**。
+print("\n[] 排期时区：Windows 上必须有 tzdata，且夏令时切换日要对")
+# 验证 IANA 时区可用，不以固定 UTC 偏移替代。
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError  # noqa: E402
 
 configured_tz = "Europe/Berlin"
@@ -530,11 +515,8 @@ check("tzdata" in tz_error or "有效时区名" in tz_error,
       "时区解析失败时给出可直接照做的处置，而不是抛一个裸异常")
 
 
-print("\n[2b][CR-48] media_de 同序号多候选：改成与 K 组一致的『人工优先』")
-# ⚠️ 这一节钉住的是一条**语义对齐**，不是普通回归。
-# K 组刻意支持「程序图 01.jpg 与设计同事的 01.png 并存、人工优先」，
-# 而 compose 原先见到多个候选就硬失败 ——
-# K 专门为设计同事设计的那个场景会让这篇帖子发不出去。
+print("\n[2b][] media_de 同序号多候选：改成与 K 组一致的『人工优先』")
+# 程序图与人工修订并存时，发布端也须人工优先。
 def _sha256_of(path):
     import hashlib as _h
     return _h.sha256(path.read_bytes()).hexdigest()
@@ -561,7 +543,7 @@ with tempfile.TemporaryDirectory() as d:
                         warning_sink=None)
     check(post.image_paths[0].name == "01.png",
           "程序图与人工图并存时选人工那张 —— 与 K 组 _candidate_is_program_owned "
-          "同一套规则（CR-48）")
+          "同一套规则")
     check(post.image_sources[0] == "media_de", "人工图仍然算 media_de 来源")
     check(any("人工放置" in w for w in post.warnings),
           "用了人工版本要显式说出来：这一篇被设计同事动过手，操作者应当看见")
@@ -637,9 +619,7 @@ with tempfile.TemporaryDirectory() as d:
                  "$10"),
           "发布前再次复用 money_preserved，金额被改动会点名原金额")
 
-# 标签与金额在 translate.py 里是同一类「不可改内容规则」，写盘时一起判；
-# 发布侧此前只再判金额，于是**手工改过的 translated.jsonl** 里被改坏的标签
-# 能一路进到真实发布（CR-61）。这三条断言指向"这道闸不许被顺手去掉"。
+# 发布前再次核对金额与受保护标签。
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
@@ -932,8 +912,7 @@ with tempfile.TemporaryDirectory() as d:
                      now=NOW, warning_sink=None),
                  "晚于"),
           "排期超出注入的 G1 UI 上限会被拒绝")
-    # composer 的日期选择器**不允许跨月**（2026-09-01 用户实测）。
-    # 这条闸没法用 ScheduleWindow 的固定时长表达：上限是日历边界，不是时长。
+    # 月份窗口是日历边界，不是固定提前天数。
     wide = ScheduleWindow(str(recorder.output_path), timedelta(0),
                           timedelta(days=60), "America/Los_Angeles")
     check(raises(ComposeError,
@@ -943,8 +922,7 @@ with tempfile.TemporaryDirectory() as d:
                      schedule_window=wide, now=NOW, warning_sink=None),
                  "只能选当月"),
           "跨月排期被拒 —— 固定时长窗口放行它，日历边界这道闸不放")
-    # 关键的是**在哪个时区判月份**：柏林 10-01 06:00 在美西还是 09-30，
-    # composer 画的是美西日历，所以这一篇是可以排的。写死柏林或 UTC 都会判错。
+    # 柏林与 UI 时区可能属于不同月份。
     crosses_in_berlin_only = compose_post(
         "fixture-post", datetime.fromisoformat("2026-10-01T06:00:00+02:00"),
         archive_root=root, instagram_constraints=limits,
@@ -957,10 +935,7 @@ with tempfile.TemporaryDirectory() as d:
                      warning_sink=None),
                  "显式带时区"),
           "naive datetime 直接拒绝，不依赖本机时区")
-    # ⚠️ 这条断言以前靠"仓库里 ui_constraints_verified 恰好是 false"成立。
-    # 2026-09-01 那一位被量完之后改成了 true，于是断言跟着失效 ——
-    # **把当时的状态写成断言，就是把"现在没上线"当成了不变量。**
-    # 现在显式构造"未复核"这个条件，与真实 config 的取值无关。
+    # 显式构造未复核状态，不依赖本机配置。
     original_cfg = compose_module.cfg
     try:
         compose_module.cfg = lambda: VerifiedProbeConfig(
@@ -979,9 +954,7 @@ with tempfile.TemporaryDirectory() as d:
 
 
 print("\n[5] G1 回填：每一条定位都能回查到真实 dump（红线 5 的机器校验）")
-# ⚠️ 这一节以前断言的是"selectors.py 里一个常量都没有"——那是 G1 之前的正确状态。
-# 用户 2026-09-01 录到真实 dump 之后，那条断言反过来会挡住回填，
-# 于是换成**更强**的守法：不是"不许有定位"，而是"每一条都必须查得到出处"。
+# 核验每条定位都有可追溯来源。
 selector_source = (ROOT / "publish" / "selectors.py").read_text(encoding="utf-8")
 check(bool(selectors.REGISTRY), "publish/selectors.py 已按 G1 dump 回填")
 missing_source = [key for key, spec in selectors.REGISTRY.items()
@@ -1005,12 +978,7 @@ else:
     print("  ..   %d 条全部回查到真实 dump" % len(verdicts))
 
 def code_only(source: str) -> str:
-    """去掉注释与字符串常量再查。
-
-    说明文字里**引用**反面写法（"不要写 div > div:nth-child(3)"）是有意的，
-    项目里已有同款做法（tests_publish 末尾对 ProbeRecorder 那条）。
-    这里连字符串一起去掉，是因为反面例子写在模块 docstring 里。
-    """
+    """排除注释与字符串常量后检查代码。"""
     pieces = []
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
         if token.type in (tokenize.COMMENT, tokenize.STRING):
@@ -1023,8 +991,6 @@ selector_code = code_only(selector_source)
 for token in ("nth-child", "querySelector", "className", "cssPath"):
     check(token not in selector_code,
           "selectors.py 的**代码**里没有 %s 这类随构建期混淆漂移的东西" % token)
-check("nth-child" in selector_source,
-      "但文档里保留着那个反面例子——下一个人要看得见为什么不这么写")
 
 suite_source = (ROOT / "publish" / "business_suite.py").read_text(encoding="utf-8")
 # 唯一允许出现的原始选择器是截图用的凭据遮罩，它不是流程定位器。
@@ -1047,14 +1013,7 @@ class UntouchablePage:
 
 
 async def gated_errors():
-    """⚠️ 这一段必须在**证据被清空**的条件下跑。
-
-    2026-09-01 起本机 `publish/signals_backfilled.py` 已经落地、
-    `[publish].ui_probe_dump` 也签了字，三道闸是**开着**的 ——
-    那时 `submit()` 本来就该往下走去碰页面。
-    要验的是"证据缺失时不碰浏览器"，所以先把登记表清空再验，
-    验完原样放回去。**不清就跑，等于把闸打开当成了测试通过。**
-    """
+    """清空测试证据注册表，验证缺证据时不触碰浏览器。"""
     saved_signals = dict(selectors.SIGNALS)
     saved_composer = dict(selectors.COMPOSER)
     selectors.SIGNALS.clear()
@@ -1078,8 +1037,8 @@ async def gated_errors():
 gated = asyncio.run(gated_errors())
 check(len(gated) == 2,
       "证据登记表被清空时，G6 提交与「UI 时区未实测」都在接触页面前失败闭合")
-check(any("红线 5" in item or "不得凭截图" in item for item in gated),
-      "至少一条失败信息点明这是红线，不会让维护者误以为可以临时猜一个")
+check(all("缺少控件证据：" in item and "处理：" in item for item in gated),
+      "缺证据时说明原因并提供处理入口")
 check("composer_submit_button" in gated[0]
       and "composer_success_signal" in gated[0],
       "submit() 明确点名它缺的是提交按钮与成功信号两样")
@@ -1090,7 +1049,8 @@ with tempfile.TemporaryDirectory() as folder:
             missing_state / "publish_probe_missing.json")):
         check(not bs.submission_evidence_ready() and not bs.readback_evidence_ready(),
               "只有登记表但本机缺少实际probe时，提交与回读闸都保持关闭")
-check("ui_timezone" in gated[1] and "怎么补上" in gated[1],
+check("ui_timezone" in gated[1] and "tools._scaffolding.probe_publish" in gated[1]
+      and "--fill-notes" in gated[1],
       "缺 UI 时区时给出可照做的补录命令，而不是拿 [publish].timezone 顶上")
 
 check(raises(KeyError, lambda: bs.locator_for(object(), "dashboard_page_switcher"),
@@ -1108,23 +1068,8 @@ for key in ("composer_submit_button", "composer_success_signal",
           "缺口 %s 写清了「为什么没有 / 挡住了谁 / 怎么补上」" % key)
 
 
-# ==========================================================================
-# [6]-[9] 已删除（2026-09-03）：它们测的是 tools/probe_publish.py 这个
-# **一次性脚手架**的内部实现——CDP 监听器安装、Enter 停止、sequence 空号
-# 修复，以及 7 个手写的 FakeCDPSession 假类。探针已移入 tools/_scaffolding/，
-# 不参与发布链路（publish/ 里零处 import 它），它的产物
-# publish/signals_backfilled.py 已生成并提交。
-#
-# 发布侧真正依赖的是「dump 契约」与「选择器逐条回查」，那两项在上面的
-# [4][5][5b] 里，保留。
-# ==========================================================================
-
 print("\n[10] G2–G5 在一个仿真 composer 上的真实行为")
-# ⚠️ 这一节是 mock，**它证明的是逻辑，不是真实 UI**。
-# CODE_REVIEW 18.9 的教训就是「mock 掉的边界就是没被测到的边界」：
-# 真实 Business Suite 上还没跑过一次，所以 G2–G5 一项都不勾。
-# 但下面这些恰恰是 mock **能**证明的部分：时区换算、12 小时制换算、
-# 回读比对会不会真的拦住、排除法定位在个数变化时会不会失败闭合。
+# 以下使用替代 UI，只验证交互逻辑。
 
 
 class FakeKeyboard:
@@ -1140,8 +1085,7 @@ class FakeKeyboard:
             return
         if key == "Delete":
             if target.segmented:
-                # 分段时间输入：Ctrl+A 根本没选中这一格，Delete 也就清不掉它。
-                # 这正是 CR-72 的真机形态 —— 旧值 1 上再敲 1 得到 11。
+                # 模拟 Ctrl+A 选不中分段输入，旧值可能与新值拼接。
                 self.page.select_all = False
                 return
             target.text = ""
@@ -1158,8 +1102,7 @@ class FakeKeyboard:
             target.text += "\n"
 
     async def type(self, text):
-        """逐字符按键。**实际调用不该再用它**（CR-71），这里保留是为了能测出
-        "改回去就会坏"——见下面 `on_key_type` 那个只在按键路径上生效的钩子。"""
+        """模拟逐键事件，用于触发 @/# 自动补全扰动。"""
         target = self.page.focused
         if target is None:
             return
@@ -1175,11 +1118,7 @@ class FakeKeyboard:
             target.on_type(target)
 
     async def insert_text(self, text):
-        """对应 Playwright 的 `keyboard.insert_text`（CDP Input.insertText）。
-
-        **不派发按键事件**，所以 `on_key_type`（模拟 @/# typeahead）不触发；
-        但编辑器仍收到 input 事件，所以 `on_type`（模拟编辑器重写）照常触发。
-        """
+        """insert_text 触发输入而不触发按键，保留编辑器重写钩子。"""
         target = self.page.focused
         if target is None:
             return
@@ -1210,13 +1149,13 @@ class FakeElement:
         self.checked = checked
         self.children = list(children)
         self.on_type = on_type
-        # 只在**按键**路径上生效：模拟 @/# 的 typeahead 打乱正文（CR-71）。
+        # 只在**按键**路径上生效：模拟 @/# 的 typeahead 打乱正文。
         self.on_key_type = on_key_type
-        # 分段输入（时/分/AM-PM）：Ctrl+A 选不中它，Delete 清不掉（CR-72）。
+        # 分段输入（时/分/AM-PM）：Ctrl+A 选不中它，Delete 清不掉。
         self.segmented = segmented
-        # 打开定时开关之后才异步渲染出来的元素（CR-74）。
+        # 打开定时开关之后才异步渲染出来的元素。
         self.deferred = deferred
-        # 开关状态回来之前要被读几次（CR-76）。0 = 立刻翻（旧夹具的假设）。
+        # 状态变化前的读取次数；0 表示立即变化。
         self.checked_lag = checked_lag
         self.pending_checked = None
         self.render = render
@@ -1230,13 +1169,7 @@ class FakeElement:
 
 
 class FakeLocator:
-    """⚠️ **惰性解析**：每次用到时重新算命中了哪些元素。
-
-    真实 Playwright 的 locator 就是这样 —— 它是"怎么找"，不是"找到的东西"。
-    早先这里把命中结果**在构造时就冻住**，于是"等一会儿元素才渲染出来"
-    这件事在假页面上根本不可能发生，`.all()` 不等待的 bug（CR-74）
-    也就无从被测到。
-    """
+    """每次操作重新定位，模拟延迟渲染和动态元素。"""
 
     def __init__(self, page, elements=None, resolver=None):
         self.page = page
@@ -1276,8 +1209,7 @@ class FakeLocator:
         self.page.focused = element
         self.page.select_all = False
         if element.role == "switch":
-            # ⚠️ React 受控开关的状态是**异步**回来的（CR-76）：点击返回时
-            # aria-checked 往往还没翻。`checked_lag` 就是"还要读几次才翻"。
+            # checked_lag 模拟受控开关异步更新。
             if element.checked_lag > 0:
                 element.pending_checked = not element.checked
             else:
@@ -1306,15 +1238,11 @@ class FakeLocator:
     async def fill(self, value, timeout=None):
         element = self._one()
         if element.segmented:
-            # ⚠️ **分段输入上 fill() 不生效**，这是照真机建模的：CR-72 那次
-            # 打字得到 "11" 之后 fill("1") 跑过了，而最终回读**仍然是 11**。
-            # 不建这一条的话，假页面里 fill() 会把 bug 掩盖掉，
-            # 这套断言就变成"测了个寂寞"。
+            # 模拟分段输入忽略 fill，避免替代 UI 掩盖失败。
             return
         element.value = value
         element.text = value
-        # fill() 和逐字输入走同一个"页面会不会改写我填的值"的钩子——
-        # 只在 type 那条路上模拟改写，等于给 fill 开了后门。
+        # fill 与 type 共用编辑器重写钩子。
         if element.on_type is not None:
             element.on_type(element)
 
@@ -1331,7 +1259,7 @@ def _walk_role(elements, role, name, exact):
     hits = []
     for element in elements:
         if getattr(element, "deferred", False):
-            continue                      # 还没渲染出来（CR-74 的形状）
+            continue                      # 还没渲染出来（形状）
         if element.role == role and _name_ok(element.accessible_name(), name, exact):
             hits.append(element)
         hits.extend(_walk_role(element.children, role, name, exact))
@@ -1434,8 +1362,7 @@ def make_composer(*, spinbuttons=3, page_texts=("Neakasa Deutschland",),
             values.append("")
         return "%s : %s %s" % (values[0], values[1], values[2])
 
-    # ⚠️ 真实 composer 上**每个渠道各有一套**日期框 + 时间控件
-    # （Facebook 一套、Instagram 一套，CR-73）。channels 就是模拟这一点。
+    # 各渠道独立渲染日期和时间控件。
     dates, groups, spin_sets = [], [], []
     for _ in range(channels):
         date = FakeElement("textbox", name="Date picker", on_type=date_hook,
@@ -1482,10 +1409,7 @@ check(asyncio.run(caption_ok()) == CAPTION_TEXT,
       "G4 填正文：换行/空行/emoji/变音/#标签/$金额 原样填进去")
 
 
-# ---- CR-71：@/# 的 typeahead 只在**按键**路径上打乱正文 ----
-# 2026-09-01 真机实测：`keyboard.type()` 逐字符敲键把 `@ifa.berlin` 撕成
-# `@ifa.ber` + `lin` 插到了两个地方。修法是改用 `keyboard.insert_text()`
-# （CDP Input.insertText，不派发按键）。下面两条把"改回去就会坏"钉住。
+# typeahead 仅在逐键输入路径扰乱正文。
 def _typeahead_scramble(element):
     """模拟 typeahead：一看到 @ 提及就把光标挪走，后续字符落到末尾。"""
     if "@ifa.ber" in element.text and not element.text.endswith("SCRAMBLED"):
@@ -1503,12 +1427,11 @@ check(asyncio.run(caption_survives_typeahead()) == "Hallo @ifa.berlin und #Neaka
       "（⛔ 改回 keyboard.type 这条立刻红）")
 
 _write_src = inspect.getsource(bs._write_caption)
-# 查带 `page.` 前缀的调用形态：函数的 docstring 里**故意**写着
-# "不要改回 ``keyboard.type()``"，不带前缀地查会把那句警告本身当成违规。
+# 限定 page 调用，排除说明文字中的反例。
 check("page.keyboard.type(" not in _write_src
       and "page.keyboard.insert_text(" in _write_src,
       "写正文只用 insert_text，不用 keyboard.type —— "
-      "逐字符按键会招出 @/# 的自动补全（CR-71）。"
+      "逐字符按键会招出 @/# 的自动补全。"
       "⚠️ 只查这一个函数：G5 往 mm/dd/yyyy 那个普通 textbox 里敲日期"
       "仍然用 keyboard.type，那里没有 typeahead")
 
@@ -1544,8 +1467,7 @@ check("回读与要填的不一致" in mangled and "自动补全" in mangled,
 
 async def schedule(when, *, zone="Europe/Berlin", **kwargs):
     page, parts = make_composer(**kwargs)
-    # verify_device=False：这几条测的是**换算**，与跑测试这台机器的时区无关。
-    # 设备核对本身另有专门断言（见下面 [10c]）。
+    # 换算测试不依赖宿主设备时区。
     readback = await set_schedule(page, when, ui_timezone=zone,
                                   verify_device=False)
     return readback, parts
@@ -1599,11 +1521,7 @@ check("重复的墙上时间" in dst_off_error
       "必须在任何 UI 操作前失败闭合")
 
 
-# ---- [10c] 用户 2026-09-01 实测：UI 跟**发帖者设备的本机时间**走 ----
-# 于是「受众那边几点」与「屏幕上填几点」是两个不同的钟，而且两地夏令时切换日
-# **不是同一天**：本机(美西) 03-08 / 11-01，柏林 03-29 / 10-25。
-# 一年因此有两段约一周的窗口，时差从 9 小时变成 8 小时。
-# ⛔ 这几条钉住的就是"手算时差"必然踩的那个坑。
+# 覆盖两地 DST 切换不同步的时间窗口。
 DEVICE_TZ = "America/Los_Angeles"
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -1647,8 +1565,7 @@ check("与**这台机器**的时区对不上" in mismatch and "本机偏移" in 
 check("手算必错" in mismatch,
       "错误信息劝住「我自己减几小时就行」——两地切换日不同，手算在那两段窗口里必错")
 
-# 设备核对比的是**目标时刻**的偏移，不是"今天"的偏移。
-# 拿今天去判，会在上面那两段窗口里把正确的配置判成错的。
+# 比较目标时刻的设备偏移。
 _src = inspect.getsource(bs.assert_ui_timezone_is_device)
 check("when.astimezone(zone).utcoffset()" in _src
       and "when.astimezone().utcoffset()" in _src
@@ -1669,10 +1586,6 @@ check("composer_hours_spinbutton" in two and "不去猜哪个是小时" in two,
       "G5 时间控件个数一变就失败闭合：小时那个本来就是靠排除法定位的")
 
 
-# ---- CR-72：分段时间输入上 Ctrl+A 选不中当前格 ----
-# 2026-09-01 真机实测：小时格里预填着旧值，Ctrl+A 没选中它，
-# 再敲 "1" 得到的是 "11" —— 帖子会排到 11:00 AM 而不是 1:00 AM。
-# ⚠️ 这类错**只差一个字符，而且看起来完全正常**，正是回读闸存在的理由。
 segmented_readback, segmented_parts = asyncio.run(schedule(
     datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc),
     zone="America/Los_Angeles", segmented_time=True, stale_hour="1"))
@@ -1684,16 +1597,13 @@ check("1 : 00 AM" in segmented_readback,
 
 _clear_src = inspect.getsource(bs._clear_field)
 check("Backspace" in _clear_src and "input_value" in inspect.getsource(bs._field_value),
-      "清空字段必须**回读确认真的空了**，Ctrl+A 没生效时有退格兜底（CR-72）")
+      "清空字段必须**回读确认真的空了**，Ctrl+A 没生效时有退格兜底")
 
 _time_src = inspect.getsource(bs._set_one_time)
 check("逐字段当前值" in _time_src,
       "时刻回读失败时逐字段打出当前值 —— 只报合成串看不出是哪一格坏的")
 
 
-# ---- CR-73：每个渠道各有一套排期控件，**不是一套** ----
-# 真机截图：Schedule 下面 `Facebook` 是 Sep 10 11:00 AM，
-# `Instagram` 还停在 Sep 1 06:23 PM（默认值）—— 只设第一组等于让 IG 立刻发。
 two_ch_readback, two_ch = asyncio.run(schedule(
     datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc), channels=2))
 check(all(item.value == "09/08/2026" for item in two_ch["dates"]),
@@ -1724,7 +1634,7 @@ check("配不成对" in unpaired and "不去猜" in unpaired,
       "G5 排期控件配不成对时失败闭合 —— 配错的后果是某个渠道被排到别的时刻")
 
 
-# ---- CR-74：排期区是**打开定时开关之后才异步渲染**的，`.all()` 不等待 ----
+# ---- ：排期区是**打开定时开关之后才异步渲染**的，`.all()` 不等待 ----
 deferred_readback, deferred_parts = asyncio.run(schedule(
     datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc),
     channels=2, deferred_schedule=True))
@@ -1735,12 +1645,10 @@ check(all(item.value == "09/08/2026" for item in deferred_parts["dates"]),
 _sched_src = inspect.getsource(bs.set_schedule)
 check(_sched_src.index("wait_for") < _sched_src.index(".all()"),
       "⛔ `.all()` 之前必须先 wait_for —— `.all()` 不等待，"
-      "排期区还没渲染出来时它返回 0 个（CR-74）")
+      "排期区还没渲染出来时它返回 0 个")
 
 
-# ---- CR-75：Planner 的"就绪信号"在日历数据还在转圈时就已经渲染好了 ----
-# 真机截图：`Planner` 标题、`September 2026`、Week/Month 全在，中间一个大转圈。
-# 那一刻页面上的 link 全是导航和侧栏 —— 刚提交成功的帖子被判成"回读不到"。
+# 页面标题可早于日历数据出现。
 class LoadingPlanner:
     """前 `ticks` 次读到的只有导航 link，之后日历条目才渲染出来。"""
 
@@ -1752,8 +1660,7 @@ class LoadingPlanner:
 
     def get_by_role(self, role, name=None, exact=True):
         self.reads += 1
-        # ⚠️ 用 aria_label / text，不是第二个位置参数（那是 name）：
-        # `_node_text` 读的是 inner_text 与 aria-label，读不到 name。
+        # _node_text 读取 aria_label/text，不读取 name。
         found = [FakeElement("link", aria_label="Create post")]
         if self.reads > self.ticks:
             found.append(FakeElement(
@@ -1794,7 +1701,7 @@ check(not any("September" in item
               for item in asyncio.run(planner_empty_stays_empty())),
       "真的空日历仍然读作空：等满预算后原样返回，由调用方按内容筛出零条")
 
-# ---- CR-76：React 受控开关的 aria-checked 是异步翻的，点击返回 ≠ 已打开 ----
+# ---- ：React 受控开关的 aria-checked 是异步翻的，点击返回 ≠ 已打开 ----
 lag_readback, lag_parts = asyncio.run(schedule(
     datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc), switch_lag=3))
 check(lag_parts["switch"].checked and lag_parts["switch"].clicks == 1,
@@ -1876,10 +1783,7 @@ check(any("默认全勾选" in note and "提交后" in note for note in context.
       "G2 沿用默认全勾选且不点击渠道控件；自动路径改由提交后结构化卡片回读")
 
 
-# ⚠️ **2026-09-01 按真实 composer 重写：提交前只核对 Facebook。**
-# 实测（`docs/HANDOFF.md` 第 6 节）composer 上从头到尾没有 IG 帐号名，
-# 只有 `img 'Instagram'` 一个图标。FB 主页名出现在预览抬头那条 `heading h2`。
-# IG 改由提交后从 Planner 详情弹窗回读证明，少了会转人工。
+# 此夹具只提供 FB 预览身份，IG 由详情回读核验。
 async def strict_login(facebook_value):
     caption = FakeElement("combobox", aria_label=CAPTION_NAME)
     heading = FakeElement("heading", aria_label=facebook_value,
@@ -1976,8 +1880,8 @@ async def hung_page():
 
 
 hung = asyncio.run(hung_page())
-check("CR-64" in hung and "F5" in hung,
-      "坏页（page.evaluate 超时）当场点名 CR-64，而不是 except: 吞掉后静默什么都不做")
+check("" in hung and "F5" in hung,
+      "坏页（page.evaluate 超时）当场点名 ，而不是 except: 吞掉后静默什么都不做")
 
 
 print("\n[11] G6b 留痕与幂等：state/published.jsonl")

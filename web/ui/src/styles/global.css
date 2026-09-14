@@ -1,15 +1,6 @@
-/*
- * 全局样式。**极少** —— 只有三类东西配得上进这里：
- *   1. 页面骨架与字体栈；
- *   2. 焦点环与 prefers-reduced-motion；
- *   3. 正文里的三档标记 mark.mk-*。
- *
- * 其余一律 CSS Modules。颜色/间距/字号的字面值只在 src/app/theme.ts 里，
- * 这里只引用语义变量。
- */
 
 :root {
-  /* 字体走系统栈：运行机器要求断网也能跑，外链字体会挂住首屏。 */
+  /* 系统字体避免外网请求阻塞首屏。 */
   --rc-font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
   --rc-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
@@ -37,9 +28,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---------- 排版层级 ---------- */
-/* 七级，同级必须同字号。
-   正文对照的 15 / 1.7 是唯一例外，由对应组件声明。 */
 h1 {
   font-size: var(--rc-font-page-title);
   font-weight: var(--rc-weight-strong);
@@ -61,8 +49,6 @@ h3 {
   margin: 0;
 }
 
-/* 数字一律等宽数位：时刻列、计数、字符数、金额在列表里要上下对齐着扫。
-   错一个金额或一个柏林时刻是有真实业务后果的（DESIGN.md）。 */
 body,
 table,
 time,
@@ -71,39 +57,19 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
-/* 焦点环：全局统一，2px 主色 + 2px offset。
-   ⛔ 任何地方都不许把它去掉而不给替代；它是键盘可见性的保障。
-   主色 #155EEF 对白底 5.41:1、对 #f1f5f9 4.94:1，都远高于非文本的 3:1 门槛
-   （断言在 src/app/theme.test.ts）。
-
-   为什么带 `!important`：antd 自己至少有八条组件级的 `:focus-visible` 规则，
-   特指度从 0,1,1（`a:focus-visible`）一路到 0,4,0
-   （`.ant-menu-light .ant-menu-item:not(.ant-menu-item-disabled):focus-visible`），
-   全都写死 `outline-offset: 1px`。实测过：裸选择器、`:root ` 前缀都压不住，
-   结果是同一屏上出现两种焦点环（链接 2px offset、按钮与菜单 1px offset）。
-
-   用选择器去追那八条，等于把 antd 的内部类名抄进我们的样式表，
-   每次升级都要重新对一遍。这里选择和 `prefers-reduced-motion` 同一个手法：
-   **这是无障碍底线，不接受任何组件覆盖**，所以用 `!important` 一次说清。
-   宽度那一侧不用抢 —— antdToken 里 `lineWidthFocus` 就是同一个 token。 */
+/* 用 !important 统一焦点环 offset，覆盖组件库的高优先级规则。 */
 html:root :focus-visible {
   outline: var(--rc-focus-w) solid var(--rc-primary) !important;
   outline-offset: var(--rc-focus-offset) !important;
 }
 
-/* ---------- 正文里的三档标记 ---------- */
-/* 留在全局而不是 CSS Modules：它作用在动态生成的片段序列上，
-   而且要在只读层与编辑镜像层两处同样生效，走 module 会让两层类名对不上。
-
-   ⚠️ 视觉重量排序必须是 error > warn > risk。warn 管的是金额与
-   尺码，发错一个价格有真实业务后果；risk 只使用黄下划线。 */
+/* 标记类由只读层和编辑镜像共用；视觉重量为 error > warn > risk。 */
 mark.mk {
   background: none;
   color: inherit;
-    /* 1px / 2px 是跟随字形的行内标记几何，不属于 8px 版面刻度。 */
+    /* 行内标记几何跟随字形，不属于版面间距刻度。 */
   padding: 1px 0;
   border-radius: 2px;
-  /* 跳转时不被吸顶条盖住。高度由 token 驱动，不能写死。 */
   scroll-margin-block: var(--rc-review-header-h, 56px);
   cursor: pointer;
 }
@@ -122,13 +88,11 @@ mark.mk-risk {
   box-shadow: inset 0 -2px 0 var(--rc-risk);
 }
 
-/* 当前跳到的那一处 */
 mark.mk-active {
   outline: 2px solid var(--rc-primary);
   outline-offset: 1px;
 }
 
-/* ---------- 滚动条 ---------- */
 ::-webkit-scrollbar {
   width: var(--rc-space-3);
   height: var(--rc-space-3);
@@ -137,23 +101,13 @@ mark.mk-active {
 ::-webkit-scrollbar-thumb {
   background: var(--rc-border-strong);
   border-radius: var(--rc-radius);
-  /* 3px 透明边把滑块收细。这是滑块几何，不是版面间距，所以不进刻度。 */
+  /* 透明边收细滑块，属于控件几何。 */
   border: 3px solid transparent;
   background-clip: content-box;
 }
 
-/* ---------- 动效 ---------- */
-/* 2/10：只有状态过渡（hover / focus / active / 抽屉 / 折叠 / 弹层 / 加载），
-   没有入场编排。这是天天要用的工作台，每次打开都演一遍动画的界面，
-   第三天就开始烦人。
-   ⛔ 禁止：页面入场动画、列表 stagger、数字滚动、parallax、装饰动效、
-      渐变动画。 */
 
-/* ⛔ `scroll-behavior: smooth` 全局禁用 —— 这不是风格偏好。
-   内嵌 Chromium 中
-   平滑滚动静默不动，不报错也不滚。而「下一处」是详情页唯一不能失灵的东西，
-   它失灵时界面看起来完全正常（标记确实高亮了），只是跳不过去，
-   人会以为自己已经看完了。 */
+/* 使用即时滚动，避免内嵌 Chromium 的平滑滚动失效。 */
 html {
   scroll-behavior: auto;
 }
@@ -168,20 +122,7 @@ html {
   }
 }
 
-/* ---------- 按钮 loading 图标的离场 ---------- */
-/* antd 的 Button 用 @rc-component/motion 做 loading 图标的进出场，`removeOnLeave: true`
-   但**没有 motionDeadline**（node_modules/antd/es/button/DefaultLoadingIcon.js）。
-   loading 在一次 180ms 动效之内 true→false 时 —— 本机 FastAPI 的请求基本都这么快，
-   保存失败返回 409 实测 8ms —— 离场的 transitionend 收不到，节点就永远停在
-   `-leave-active` 上。
-
-   它 width/opacity/transform 都是 0，屏幕上看不见，所以这不是一个视觉故障；
-   问题在无障碍树：里面那个 `role="img" aria-label="loading"` 还在，于是按钮的
-   可及名永远是「loading 保存分类」而不是「保存分类」。屏幕阅读器会念一个早就
-   结束的 loading，按可及名定位的自动化也再也找不到这个按钮 ——
-   离场态直接不渲染：视觉上它进入离场时已经被 onLeaveActive 压到 0 宽，去掉的只是
-   那 180ms 的收缩动画，而 DESIGN.md 的口径本来就是「只有状态过渡，没有入场编排」。
-   用 `!important` 和焦点环、prefers-reduced-motion 同一个理由：这是底线，不接受组件覆盖。 */
+/* 快速请求可能遗留离场 loading 图标；隐藏残留节点，避免污染按钮可访问名。 */
 .ant-btn-loading-icon-motion-leave {
   display: none !important;
 }

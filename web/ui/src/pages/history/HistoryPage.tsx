@@ -25,9 +25,7 @@ export function HistoryPage() {
     }
   }, [search, filters.page, filters.limit, setSearch])
   const href = (row: HistoryListItem) => `/history/${idPath(row.id)}?${buildDetailSearch(search, 'history')}`
-  // 历史比队列多两列：日期在最前，账号在分类之前。这两列的字段只有历史载荷才有，
-  // 按 columns.tsx 的第 2 条约束不进共用列工厂，所以在这里按最终列序拼一次。
-  // ⛔ 不要改回 splice(下标)：改一次上面的列清单就会静默换掉列序。
+  // 按键插入历史专有列，避免共用列变化后下标错位。
   const columns: TableColumnsType<HistoryListItem> = [
     { key:'date', title:'日期', width:tokens.layout.platformColumnWidth,
       render: (_:unknown,row:HistoryListItem) => <time dateTime={row.created_at}>{row.created_at?.slice(0,10) || '—'}</time> },

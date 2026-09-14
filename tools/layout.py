@@ -1,18 +1,4 @@
-r"""归档布局工具。对应实施计划的 J 组。
-
-四个子命令：
-
-    python -m tools.layout reindex  <facebook|instagram>   从 posts/ 重建 manifest.jsonl
-    python -m tools.layout index    <facebook|instagram>   生成 index.html 总览
-    python -m tools.layout reindex-db                     重建 state/index.sqlite 展示索引
-                                                          （只含 [targets] 当前账号）
-    python -m tools.layout migrate  <facebook|instagram>   显式迁移旧目录，保留备份
-
-`reindex` 是"文件夹与索引冲突时以文件夹
-为准"那条规则的执行者，随时可跑。`index` 是给业务同事看的那份，随时可重生成。
-
-全部支持 `--dry-run`。
-"""
+"""重建归档索引、生成总览或迁移布局；各子命令支持 --dry-run。"""
 from __future__ import annotations
 
 import argparse
@@ -219,8 +205,7 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
         imgs = [m for m in media if m.get("kind") == "image" and m.get("local_path")]
         n_vid = sum(1 for m in media if m.get("kind") == "video")
         tags = []
-        # 合作帖：别人发布、本账号是 coauthor，但同样在本账号主页上。
-        # 标出来是因为**它的内容著作权在原作者手里**，二次使用要看授权。
+        # 标出合作作者，供审核二次使用授权。
         if (r.get("owner") or "") != account.lower():
             tags.append('<span class="tag c">合作 · @%s</span>'
                         % html.escape(r.get("owner") or "?"))
@@ -251,9 +236,6 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
         (rows[0].get("created_at") or "?")[:10], with_text, collab))
     page = PAGE.format(title=html.escape(account), sub=html.escape(sub),
                        cards="".join(cards))
-    # 原创/合作的拆分**打到 stdout**，不只是埋在 HTML 副标题里。
-    # 人工核对合作帖修复效果时看的就是这个数（实测 1019 = 756 + 263），
-    # 而"要双击 HTML 才看得到"意味着它没法被复制回报、也没法在终端里比对。
     print("总计 %d 篇：原创 %d · **合作 %d**（别人发布、本账号是 coauthor，"
           "同样在本账号主页上）" % (len(rows), len(rows) - n_collab, n_collab))
     out = base / "index.html"

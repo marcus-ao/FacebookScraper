@@ -1,15 +1,4 @@
-r"""浏览器响应捕获与媒体下载 —— 回填与增量共用的那一半。
-
-**为什么单独成模块**：`routes/backfill.py`（人工滚动）和 `routes/delta.py`
-（每日增量）在"身份"和"节奏"上完全不同，但"怎么把浏览器发出的接口响应捞下来"
-和"怎么下载媒体"这两件事逐字相同。抄一份过去的代价不是重复代码，而是
-**语义漂移**：CR-04 确立的「下载失败必须留下 media_complete=False，
-下次才会被 should_append 接受并重试」这条规则一旦只在一处生效，
-另一条路径就会安静地把失败记成完整，且要几周后才会被人发现。
-
-本模块**不含任何驱动页面的动作**。滚动策略是两条路径各自的事：
-回填由人滚（这是它的全部价值），增量按 C7 的深度上限自己滚几屏。
-"""
+"""回填与增量共用的响应捕获和媒体下载；页面操作由调用方负责。"""
 from __future__ import annotations
 
 import asyncio
@@ -69,21 +58,12 @@ def validated_image_content_type(value: str | None, data: bytes) -> str | None:
 
 
 def atomic_write_json(path: Path, value) -> None:
-    """把不可替代的 capture JSON 在同目录完整落盘后再原子替换。
-
-    实现在 core/paid_model；此前全仓有 6 份各写一遍的原子写，
-    临时文件清理写了三种不同的写法。
-    """
+    """在同目录完整落盘后原子替换 capture JSON。"""
     paid_model.atomic_write_json(path, value)
 
 
 class Collector:
-    """把页面发出的接口响应体收集成一批 JSON payload。
-
-    注意 :meth:`submit` 与 :meth:`drain` 的配对：响应体是异步读的，
-    停止监听之后必须 drain，否则最后到达的几段 JSON 会在页面关闭时被取消，
-    形成**无提示的数据缺口**（CR-05）。
-    """
+    """异步收集响应；停止监听后须 drain，避免丢失尚未读完的响应。"""
 
     def __init__(self) -> None:
         self.payloads: list[dict] = []
@@ -110,8 +90,7 @@ class Collector:
         if not any(k in response.url for k in INTEREST):
             return
         if response.status != 200:
-            # 401/403/429 是增量最需要看见的信号：会话失效与限流都长这样。
-            # 回填有人盯着，增量没有——所以状态码必须留痕，不能只看有没有 JSON。
+            # 保留会话失效和限流信号，即使响应没有 JSON。
             self.statuses.append((response.status, response.url))
             return
         try:
@@ -131,16 +110,10 @@ class Collector:
             except json.JSONDecodeError:
                 continue
         if got:
-            # 记下是哪个接口给的。排查"帖子怎么没抓到"时，
-            # 知道哪些接口出过数据、哪些没出，比只看段数有用得多。
             self.sources.append(response.url.split("?")[0])
 
     def blocked_status(self) -> tuple[int, str] | None:
-        """捕获期间有没有出现"被拦"的状态码。有就返回第一个。
-
-        401/403 = 会话失效或权限没了；429 = 限流。三者的处理办法都是
-        **当次立即停止**（C7「异常即停」），区别只在给人的提示文案。
-        """
+        """返回首个 401/403/429，供调用方立即停止会话。"""
         for status, url in self.statuses:
             if status in (401, 403, 429):
                 return status, url
@@ -148,14 +121,7 @@ class Collector:
 
 
 async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
-    """用浏览器自己的请求栈下载，复用其 cookie 与 TLS 指纹。
-
-    视频不下载（范围外），但保留 URL 与元数据，
-    否则连续性检查会把视频帖误报成缺口。
-
-    ⚠️ 媒体 CDN URL 带签名且有时效，必须在拿到响应的**同一次运行内**下完，
-    不能先存 URL 事后再取（存了就是 403）。
-    """
+    """复用浏览器请求栈下载静态媒体；签名 URL 须在当前运行内使用，视频只留元数据。"""
     downloads_complete = True
     for i, m in enumerate(post.media):
         if m.kind == "video":
@@ -194,21 +160,12 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
         p = arc.media_path(post, i, content_type)
         p.write_bytes(data)
         m.local_path = str(p.relative_to(arc.base))
-    # ``media_complete`` 同时表示源响应是否给全、以及已知图片是否均已落盘。
-    # 下载失败必须留下 False，下一次抓取才会被 Archive.should_append 接受并重试。
+    # 源响应或下载不完整时保留 False，让后续抓取继续补齐。
     post.media_complete = post.media_complete and downloads_complete
 
 
 def prune_captures(base: Path, keep: int, prefix: str = "_capture_delta_") -> int:
-    """只保留最近 ``keep`` 份增量转储，返回删掉的份数。
-
-    **回填的 `_capture_*.json` 不在此列**（前缀不同，且那两份是离线重放的唯一
-    输入，删了就要用户重滚 40 分钟）。这里裁的是增量每天产生的那份。
-
-    为什么增量也要转储：解析器悄悄失效时，"每天抓到 0 篇"和"这几天确实没发帖"
-    在日志里长得一样，没有原始响应就无从分辨。
-    为什么要裁：每天一份 MB 级 JSON，一年就是几个 GB。
-    """
+    """保留最近 keep 份增量转储；不清理回填转储。"""
     if keep < 0:
         return 0
     files = sorted(base.glob(prefix + "*.json"))
@@ -222,10 +179,7 @@ def prune_captures(base: Path, keep: int, prefix: str = "_capture_delta_") -> in
 
 
 def prune_captures_days(base: Path, keep_days: int, *, now: datetime | None = None) -> int:
-    """按文件名中的捕获时刻保留整段排查历史，不因提频缩短保留期。
-
-    仅清理当前账号目录中的标准增量转储。陌生名字、链接及回填文件保留。
-    """
+    """按捕获日期清理增量转储；保留未知文件、链接和回填文件。"""
     if keep_days < 1:
         raise ValueError("keep_captures_days 至少为 1")
     now = now or datetime.now(timezone.utc)

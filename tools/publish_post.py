@@ -1,30 +1,4 @@
-r"""单帖 Business Suite 入口：默认停在提交前，``--submit`` 才自动提交并回读。
-
-它做的事，按顺序：
-
-    离线组装（publish/compose.py 的全部硬闸）
-      → 打印待确认清单，人点头
-      → 附着到发布专用 Chrome（9223 / .fbscraper-publish）
-      → 新开标签页进 composer
-      → 核对登录态与目标主页
-      → 交图 → 填正文 → 设排期 → 逐项回读
-      → 默认停在提交前；或显式 --submit 后只点一次并回读内容日历
-      → 每次状态转换追加 state/published.jsonl
-
-它**不做**的事：
-
-- 默认不点提交。只有显式 ``--submit`` 且同一份 v2 dump 已回填账号上下文、
-  提交、成功、Planner 数据就绪与结构化卡片因果证据，并通过严格 UI 约束时才会
-  开放；否则在附着浏览器前失败闭合。
-- ❌ 不自动登录（全局红线 1）。会话过期就提示你去登。
-- ❌ 失败时不删除任何东西。半成品必须看得见（G7）。
-
-用法::
-
-    scripts\run_publish_post.bat --post-id 122123185335379375 --at 2026-09-08T10:00
-
-只想离线看清单、不碰浏览器的话用另一个入口：``scripts\run_publish.bat``。
-"""
+"""单帖发布入口：默认在编辑器准备草稿，--submit 才提交并回读；纯离线使用 run_publish.bat。"""
 from __future__ import annotations
 
 import argparse
@@ -59,10 +33,7 @@ def _parse_when(raw: str) -> datetime:
         zone = ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise SystemExit(
-            "[publish].timezone 不可用：%r（%s）。\n"
-            "  Windows 不自带 IANA 时区库，装 tzdata：\n"
-            "      uv pip install --python .venv\\Scripts\\python.exe tzdata\n"
-            "  ❌ 不要改成写死 UTC 偏移绕过去（CR-60 / PUBLISH_PLAN 3.3）。"
+            "[publish].timezone 不可用：%r（%s）。\n安装时区数据：uv pip install --python .venv\\Scripts\\python.exe tzdata\n固定 UTC 偏移无法处理夏令时。"
             % (name, exc)) from exc
     try:
         parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
@@ -82,9 +53,7 @@ def print_checklist(post, when: datetime, ui_timezone: str) -> None:
     for path, kind in zip(post.image_paths, post.image_sources):
         label = "德语图" if kind == "media_de" else "⚠ 原图（图内可能仍有英文）"
         print("    %-14s %s" % (path.name, label))
-    # ⚠️ 两个时刻一起打。UI 上显示的是**本机时间**（用户 2026-09-01 实测：
-    # Business Suite 跟发帖者设备的本机时间走），而人心里想的是德国受众那边的
-    # 时间——只打一个，他要么核对不了屏幕，要么以为排错了。
+    # 同时显示业务时刻与 UI 时刻，便于核对。
     print("  目标时刻：%s" % when.isoformat())
     try:
         shown = when.astimezone(ZoneInfo(ui_timezone))
@@ -123,7 +92,7 @@ def _pending_blocks_force(row: dict | None) -> bool:
 
 
 def _resolve_ui_timezone(strict: bool) -> str:
-    """取 `[publish].ui_timezone`，严格模式下还要与 G1 观察对得上。"""
+    """读取 UI 时区；严格模式须与人工记录一致。"""
     name = (cfg().get("publish", "ui_timezone", "") or "").strip()
     if not name:
         raise SystemExit(bs.describe_gap("ui_timezone"))
@@ -152,8 +121,7 @@ async def prepare(post, when: datetime, *, ui_timezone: str,
 
 def _manual_resolve(state_dir: Path, post_id: str, *, scheduled: bool) -> int:
     """以明确的人工证据闭合准备/模糊/未回读尝试。"""
-    # 人工结转和自动提交操作同一份 journal，也必须共用发布锁；否则人刚结转
-    # “未排期”时，后台那次点击可能仍在进行，状态会被错误地重新放开。
+    # 人工结转与提交共用发布锁，避免并发时错误放开未决记录。
     try:
         with journal.PublishOperationLock(Path(state_dir) / "publish.lock"):
             row = journal.last_resolvable(state_dir, post_id)

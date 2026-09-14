@@ -1,24 +1,4 @@
-r"""用已保存的 capture 离线重建归档。对应实施计划的 B7。
-
-**这个工具存在的理由**：2026-08-30 的首次真实回填暴露了三个解析器缺陷
-（跨账号污染、轮播子项被当成帖子、FB 视频帖被当成抓取失败），
-产出的 manifest 数字是错的。修完解析器之后需要重建归档——
-但**不能让用户再滚一次 40 分钟**。
-
-`routes/backfill.py` 在解析**之前**无条件转储了原始响应
-（`_capture_<时间戳>.json`），所以重建完全可以离线做。
-那条兜底设计就是为这一刻准备的，第一次兑现价值。
-
-用法（项目根目录，已激活 venv）：
-
-    python -m tools.replay facebook            # 用 config.toml 的账号，取最新 capture
-    python -m tools.replay instagram --dry-run # 只看结果，不写盘
-    python -m tools.replay facebook --capture archive/fa_x/_capture_123.json
-
-**媒体一律不重新下载。** CDN 签名 URL 早已过期，重下必然 403
-（计划第 1 节：媒体 URL 带签名且有时效）。已经在盘上的文件按 URL 重新关联，
-关联不上的移进 `_orphan_media/` —— **移动不是删除**，确认无误后再由人清理。
-"""
+"""从 capture 离线重建归档并重连已有媒体；不重新下载，未关联文件移入可恢复的孤儿目录。"""
 from __future__ import annotations
 
 import argparse
@@ -43,29 +23,14 @@ PREFIX = {"facebook": "fa", "instagram": "in"}
 
 
 def newest_capture(base: Path) -> Path | None:
-    """最新的一份**回填** capture。多次回填会留下多份，取时间戳最大的那份。
-
-    ⚠️ **必须排除 `_capture_delta_*.json`。** 增量每天也会转储，而且名字排序
-    永远排在回填那份后面——不排除的话，"重建归档"会拿一份只有几十条的
-    增量快照去重建整个归档，把 700 多篇冲成几十篇。
-    """
+    """取最新回填转储，排除仅含近期内容的增量转储。"""
     caps = sorted(p for p in base.glob("_capture_*.json")
                   if not p.name.startswith("_capture_delta_"))
     return caps[-1] if caps else None
 
 
 def old_local_paths(base: Path) -> dict[tuple[str, str], str]:
-    """从**所有**历史 manifest 建 `(post_id, media_url) -> 记录里的路径` 映射。
-
-    **按 URL 关联而不是按下标**：修复后媒体的排列顺序可能变
-    （FB 会在图片后面追加视频），下标关联会张冠李戴。
-    而 URL 来自同一份 capture，两次解析必然逐字符相同，是可靠的键。
-
-    **为什么要读全部备份而不只读当前 manifest**：
-    上一次重建把 263 篇合作帖当成他人帖丢掉了，它们的媒体记录只存在于
-    更早的那几份备份里。只读当前 manifest 的话，这些帖子加回来也没有图。
-    读取顺序是"所有备份（按名字）→ 当前 manifest"，**新的覆盖旧的**。
-    """
+    """按 (post_id, URL) 重连媒体；依次读历史备份与当前 manifest，后者优先。"""
     out: dict[tuple[str, str], str] = {}
     live = base / "manifest.jsonl"
     backups = sorted(p for p in base.glob("manifest.jsonl*") if p != live)
@@ -123,12 +88,7 @@ def _resolve_relative_file(base: Path, rel: str) -> Path | None:
 
 
 def _resolve(base: Path, rel: str, *, fail_unsafe: bool = False) -> Path | None:
-    """记录里的相对路径 → 盘上真实存在的文件。
-
-    历史记录里的路径有两代（旧扁平布局 `media/<id>_<n>.jpg`、
-    J 组之后的 `posts/<文件夹>/01.jpg`），而**文件可能已经被上一次重建
-    移进了 `_orphan_media/`**。三个地方都找一遍，找不到才算丢。
-    """
+    """在当前布局、旧媒体目录及 _orphan_media 中寻找已有文件。"""
     try:
         direct = _resolve_relative_file(base, rel)
         if direct is not None:
@@ -143,12 +103,7 @@ def _resolve(base: Path, rel: str, *, fail_unsafe: bool = False) -> Path | None:
 
 def preflight_replay_paths(base: Path, posts: list[Post],
                            known: dict[tuple[str, str], str]) -> None:
-    """写盘前验证所有 kept 目标叶及会参与重连的历史媒体路径。
-
-    这里故意不只验证“这次有媒体可搬”的帖子。replay 随后会为每个 kept
-    无条件写 ``post.json`` / ``text.txt``；这两个叶子若是 hardlink 或
-    reparse point，必须在 manifest 备份、媒体搬移和旧目录隔离之前整体失败。
-    """
+    """写入前核验全部目标与历史媒体路径，含无媒体帖；链接或冲突导致整批拒绝。"""
     posts_root = assert_physical_direct_path(
         base, base / "posts", kind="directory", label="posts 根目录")
     if not posts_root.exists():
@@ -176,8 +131,7 @@ def preflight_replay_paths(base: Path, posts: list[Post],
             destination = assert_physical_direct_path(
                 target, source if source.parent == target else target / f"{index + 1:02d}{suffix}", kind="file",
                 label=f"kept 媒体目标 {post.post_id}[{index}]")
-            # 同一路径表示媒体已经位于最终位置，不需要搬。其它既有普通文件
-            # 也是冲突，不能依赖 shutil.move 在不同平台上的覆盖语义。
+            # 相同路径无需移动；其它既有文件一律视为冲突，不覆盖。
             if (destination.exists()
                     and source.resolve(strict=True) != destination.resolve(strict=True)):
                 raise ArchivePathError(
@@ -203,18 +157,7 @@ def _available_orphan_path(root: Path, name: str) -> Path:
 
 def isolate_stale_post_dirs(base: Path, posts: list[Post],
                             move: bool) -> list[tuple[Path, Path]]:
-    """找出并可恢复地隔离本轮不再保留的旧帖子目录。
-
-    replay 的新 manifest 只包含 ``posts``（即 owner 校验后的 kept），但旧实现
-    把不再保留的目录继续留在 ``posts/``。之后一次 ``Archive.reindex()`` 就会
-    把这些旧 ``post.json`` 重新写回 manifest。这里把它们移到账号目录下的
-    ``_orphan_posts/``；不删除、不覆盖同名历史隔离目录。
-
-    ``move=False`` 只返回 ``(源, 目标)`` 计划，不创建目录也不移动，供
-    ``--dry-run`` 展示。每个 kept 只按稳定目录规划保留唯一的预期
-    目录；不能只按 post_id 保留，否则同一帖的 ``undated`` 与 ``dated`` 两个
-    真相源会同时留下，reindex 时其中一份仍可能覆盖另一份。
-    """
+    """将非预期帖子目录移入 _orphan_posts，保持同 ID 唯一事实源；move=False 只返回计划。"""
     posts_root = base / "posts"
     if not posts_root.exists():
         return []
@@ -244,13 +187,7 @@ def isolate_stale_post_dirs(base: Path, posts: list[Post],
 
 def relink(posts: list[Post], known: dict[tuple[str, str], str],
            base: Path, arc: Archive, move: bool) -> tuple[int, int, int]:
-    """把盘上已有的媒体文件重新挂到新解析出的帖子上。
-
-    返回 `(挂上的, 从 _orphan_media 捞回来的, 记录里有路径但文件已不在的)`。
-    最后一个数字不为零说明有人手工删过文件，值得知道。
-
-    `move=False` 时只做统计不动文件（`--dry-run`）。
-    """
+    """返回重连数、孤儿目录恢复数及缺失数；move=False 仅统计。"""
     linked = recovered = missing = 0
     for post in posts:
         for i, m in enumerate(post.media):
@@ -272,8 +209,7 @@ def relink(posts: list[Post], known: dict[tuple[str, str], str],
                     target, src if src.parent == target else target / f"{i + 1:02d}{src.suffix or '.jpg'}",
                     kind="file", label="媒体重连目标")
             if want is not None and src.resolve() != want.resolve():
-                # 文件在孤儿区、或在按旧编号命名的位置：搬到这篇帖子该在的地方。
-                # ⚠️ 用真实后缀，别让 .png 变成 .jpg
+                # 保留真实扩展名。
                 if want.exists():
                     raise ArchivePathError(f"媒体重连目标已存在，拒绝覆盖：{want}")
                 shutil.move(str(src), str(want))
@@ -365,8 +301,6 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
     if others:
         print("               %s%s" % (", ".join(others[:6]),
                                        " …" if len(others) > 6 else ""))
-    # 丢弃的里面有没有已知合作方？重放是校准解析器的场合，这个信号在这里
-    # 最有用：改完 parse.py 跑一次 --dry-run，它会直接告诉你还漏没漏。
     suspect = integrity.check_dropped_partners(
         rejected, integrity.known_partners([p.to_row() for p in kept], account))
     if suspect:
@@ -390,8 +324,7 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
         print("\n--dry-run：什么都没写。去掉这个参数才会真正重建。")
         return 0
 
-    # 规划输出与真正写盘之间仍可能经过一段人工可见时间；在第一份备份产生前
-    # 再做一次完整预检，缩小目标被替换成链接/冲突文件的竞态窗口。
+    # 首次写入前再次完整核验，防止计划生成后目标被替换。
     try:
         preflight_replay_paths(base, kept, known)
     except ArchivePathError as exc:
@@ -399,23 +332,15 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
               % exc)
         return 1
 
-    # ---- 写盘。顺序很重要：先备份/重连媒体，再隔离旧真相源，最后重建 ----
-    # 同一 kept ID 可能同时遗留 undated 与 dated 两个目录。先把已知媒体搬到
-    # 本轮唯一的预期目录，再隔离其余目录；否则媒体会跟旧目录一起被隔离。
-    # live manifest 到隔离完成后才删除，中途失败仍有原索引和备份可恢复。
+    # 先备份并重连媒体，再隔离旧目录，最后重建；中断时原索引与备份仍可恢复。
     if manifest.exists():
-        # ⚠️ 备份名带时间戳，**不覆盖上一次的备份**。
-        # 上一轮的 `manifest.jsonl.bak` 是唯一还记着那 263 篇合作帖媒体路径的
-        # 地方；固定名字的备份会把它冲掉，而那时候图片已经在 _orphan_media/ 里，
-        # 没有这份记录就再也对不上号了。
+        # 时间戳备份不覆盖历史记录，保留重连媒体所需路径。
         bak = base / ("manifest.jsonl.%d.bak" % int(time.time()))
         bak = _available_orphan_path(base, bak.name)
         shutil.copy2(manifest, bak)
         print("\n旧 manifest 已备份 → %s" % bak.name)
 
-    # `_rejected.jsonl` 也要重来：它是"这次解析丢了什么"的记录，
-    # 而 record_rejected 按 post_id 去重、只追加。上一轮误丢的 263 篇
-    # 若不清掉，会永远留在里面，看起来像还在被丢弃。
+    # 重建拒绝记录，避免已修正的归属仍显示为被丢弃。
     rej_path = base / "_rejected.jsonl"
     if rej_path.exists():
         rej_bak = base / ("_rejected.jsonl.%d.bak" % int(time.time()))

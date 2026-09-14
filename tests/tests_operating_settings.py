@@ -36,14 +36,7 @@ class OperatingSettingsTests(unittest.TestCase):
         self.assertEqual(config.cfg().get('pipeline', 'daily_budget_usd'), 5)
 
     def test_save_is_visible_when_the_rewrite_lands_in_the_same_timestamp_tick(self):
-        """等长改写 + 同一个 mtime 刻度：只有显式作废缓存才读得到新值。
-
-        save() 按原格式回填，``["10:00", "17:00"]`` → ``["11:30", "18:00"]``、
-        ``= 3`` → ``= 4``，字节数都不变，所以 st_size 恒等，(st_mtime_ns, st_size)
-        这个判据就只剩 mtime 一个数。本机实测 5000 次背靠背等长改写里有 68% 命中
-        同一个 st_mtime_ns（有效精度约 1ms），这里把那一刻钉死 —— 不 sleep，
-        也不靠跑很多遍碰运气。
-        """
+        """固定相同 mtime 和字节数，验证保存后主动失效配置缓存。"""
         before = operating_settings.read()
         stamp = self.path.stat()
         real_replace = os.replace

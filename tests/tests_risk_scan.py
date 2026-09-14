@@ -92,7 +92,7 @@ class RiskScanTests(unittest.TestCase):
         self.assertIn("人工", result["message"])
 
     def test_model_configuration_failure_is_persisted_as_failed(self):
-        with patch.object(risk_scan.translate, "Settings", side_effect=SystemExit("missing model config")):
+        with patch.object(risk_scan.translation, "Settings", side_effect=SystemExit("missing model config")):
             result = risk_scan.scan_source(
                 self.root, task_id="fa_brand/config", source_ref="facebook:config",
                 source_text="Ordinary caption", controller=self.controller,
@@ -159,7 +159,7 @@ class RiskScanTests(unittest.TestCase):
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['risks'][0]['en_span'], [2, 7])
         row = json.loads((self.root / risk_scan.STATE_NAME).read_text('utf-8'))
-        self.assertEqual(row['source_text_sha256'], risk_scan.translate.source_text_sha256('sucks'))
+        self.assertEqual(row['source_text_sha256'], risk_scan.translation.source_text_sha256('sucks'))
         self.assertEqual(row['scan_text_sha256'], risk_scan._digest(source))
         self.assertEqual(risk_scan.current_view(self.root, 'fa_brand/padded', 'sucks',
                          prompt_path=self.prompt)['status'], 'stale')

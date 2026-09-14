@@ -1,24 +1,4 @@
-<!--
-这是发给 LLM 的 system prompt 模板。translate.py 读取本文件，把 {{...}} 占位符
-替换成 config.toml 里的配置后发送。**改这个文件就能调整翻译行为，不用改 Python。**
-
-改完先看渲染结果：scripts\run_translate.bat --show-prompt
-
-占位符：
-  {{ADDRESS_FORM}}       由 [translate].address_form 渲染（du / Sie）
-  {{GENDER_STYLE}}       由 [translate].gender_style 渲染
-  {{ANGLICISM_POLICY}}   由 [translate].anglicism_policy 渲染
-  {{TONE}}               [translate].tone 原文
-  {{GLOSSARY}}           由 [translate.glossary] 渲染成术语表
-  {{STYLE_EXAMPLES}}     从该账号已抓到的英文原文里取的风格参照
-
-编写原则（后来改这个文件的人请遵守）：
-  只写**模型不可能自己知道的决策和事实**——品牌语域、术语、平台约束、
-  哪些数字不许动。不要加"要准确、要通顺、要专业"这类话：
-  对当代模型，过度规定的提示词会降低输出质量，不会提高。
-  本文件的指令用中文写，是为了让营销同事能直接改；
-  真正承载规则的是下面的**德语示范**，语言不影响模型理解。
--->
+<!-- 文案模板；占位符由 localize/text.py 注入。修改规则须递增 core.translated.PROMPT_VERSION，使用 scripts\run_translate.bat --show-prompt 查看结果。 -->
 
 你是为消费品牌做德语本地化的资深社媒文案。把用户消息里的英文文案改写成德语，
 用于发布到该品牌的**德国** Facebook / Instagram 账号。

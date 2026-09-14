@@ -1,8 +1,4 @@
-r"""审校台 HTTP 接口：归档读取、人工文案保存与即时检查。
-
-人工文案、本地化选择、审校状态与 ZIP 导出写入真实归档；排期需通过本机核验。
-React 前端静态产物由本应用直接提供。
-"""
+"""FastAPI 审校接口与 React 静态服务；写操作调用共享业务入口。"""
 from __future__ import annotations
 
 import re
@@ -12,8 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-# StaticFiles 抛的是 starlette 那一个；fastapi.HTTPException 是它的子类，
-# 捕不到父类，所以这里必须单独引。
+# StaticFiles 抛父类异常，FastAPI 的子类捕获不到。
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -29,9 +24,7 @@ from core.paid_model import FileLockBusy                 # noqa: E402
 from pipeline.engine import BudgetStopped              # noqa: E402
 from publish.compose import ComposeError               # noqa: E402
 
-# 每个可执行入口都要调一次：本机代码页是 936，uvicorn 的日志一旦被重定向到
-# 文件就回落到 GBK，而告警文案里的 ⚠ ✅ ❌ ß 一个都编码不出来，print 会直接
-# 把进程带走。双击运行时看不到这个故障，它只在真正需要可靠时发作。
+# 确保重定向日志使用 UTF-8。
 force_utf8()
 
 app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
@@ -47,11 +40,7 @@ DEFAULT_DIST_REL = "web/ui/dist"
 
 
 def _dist_dir() -> Path:
-    """解析 ``[paths].web_dist``；越界配置回落默认值，缺少构建时提示构建命令。
-
-    只允许 ROOT 之内的目录：这个路径会被 ``StaticFiles`` 直接伺服，
-    指到仓库外面就等于把任意目录挂上 HTTP。判据和归档那边同一条纪律。
-    """
+    """解析 web_dist，仅允许项目内目录；越界回落默认值。"""
     raw = str(cfg().get("paths", "web_dist", DEFAULT_DIST_REL) or DEFAULT_DIST_REL).strip()
     candidate = Path(raw)
     resolved = (candidate if candidate.is_absolute() else ROOT / candidate).resolve()
@@ -85,9 +74,7 @@ async def review_validation(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-# ---------------------------------------------------------------------------
 # 查询与预览
-# ---------------------------------------------------------------------------
 
 @app.get("/api/tasks")
 def get_tasks(status: str | None = None, tag: str | None = None, month: str | None = None,
@@ -100,8 +87,7 @@ def get_tasks(status: str | None = None, tag: str | None = None, month: str | No
     return JSONResponse(payload)
 
 
-# ⚠️ 顺序要紧：``{task_id:path}`` 是贪婪的，图片这条必须先注册，
-# 否则 /api/tasks/<id>/image/0 会被上一条整个吞掉。
+# 图片路由须先于贪婪的 task_id:path 注册。
 @app.get("/api/tasks/{task_id:path}/image/{index}")
 def get_task_image(task_id: str, index: int,
                    variant: str = Query("de", pattern="^(de|original)$")
@@ -125,9 +111,7 @@ def get_task(task_id: str) -> JSONResponse:
     return JSONResponse(detail)
 
 
-# ---------------------------------------------------------------------------
-# 文案、审校状态、分类与导出；排期由独立 approval 路由调用业务流程
-# ---------------------------------------------------------------------------
+# 文案、审校、分类与导出
 
 @app.post("/api/tasks/{task_id:path}/skip")
 async def post_skip(task_id: str, request: Request) -> JSONResponse:
@@ -195,19 +179,11 @@ async def put_text_de(task_id: str, request: Request) -> JSONResponse:
         review_revision=_state_revision(body)))
 
 
-# ---------------------------------------------------------------------------
-# 编辑时的实时校验（第 11.4 节）——**只算不写**，所以它属于只读那一半
-# ---------------------------------------------------------------------------
+# 即时检查，只算不写
 
 @app.post("/api/tasks/{task_id:path}/check")
 async def post_check(task_id: str, request: Request) -> JSONResponse:
-    """编辑德语正文时实时跑 regex 校验，当场标红。
-
-    ⛔ **保存时不拦。** 这几个检查是给人看的辅助，不是硬闸——她可能有正当理由
-    改一个金额（比如原文写错了）。硬拦人工修改等于说"机器比人懂"，
-    而这个系统的既定原则正好相反（第 11.4 节）。所以本端点只回结果，
-    没有任何一条路径会因为校验不过而拒绝保存。
-    """
+    """返回德文即时检查结果，不保存内容；提示性差异不阻止人工保存。"""
     body = await _json_body(request)
     detail = reader.task_detail(task_id)
     if detail is None:
@@ -261,9 +237,7 @@ def _review_input(body: dict) -> dict:
             "handoff_url": body.get("handoff_url", "")}
 
 
-# ---------------------------------------------------------------------------
-# 前端静态产物
-# ---------------------------------------------------------------------------
+# 静态文件
 
 @app.get("/")
 def index() -> Response:
@@ -285,17 +259,10 @@ def index() -> Response:
 
 
 class SinglePageFiles(StaticFiles):
-    """为直接访问和刷新 React 路由提供 index.html。
-
-    接口错误、带扩展名的资源及不接受 HTML 的请求不回落到页面。
-    HTTP 方法和文件边界继续由 StaticFiles 检查。
-    实际服务入口由 tests/cutover_rehearsal.py 验证；
-    路由和资源错误契约由 tests/tests_spa_static.py 验证。
-    """
+    """为 HTML 深链接返回 index.html；保留 API、资源、方法及路径边界错误。"""
 
     async def get_response(self, path: str, scope):
-        # StaticFiles 找不到文件时是**抛** HTTPException，不是返回 404 的响应；
-        # 按返回值判会永远判不到（这条实测踩过）。
+        # StaticFiles 以异常报告 404。
         try:
             response = await super().get_response(path, scope)
             if response.status_code != 404:
@@ -305,8 +272,7 @@ class SinglePageFiles(StaticFiles):
             if exc.status_code != 404:
                 raise
             response, missing = None, exc
-        # 判 `/api/` 要看请求路径，不能看 StaticFiles 给的 path —— 它在 Windows 上
-        # 已经被 normpath 成 `api\xxx`，`startswith("api/")` 会永远不成立。
+        # 用请求 URL 判断 /api/，避免 Windows 规范化后的反斜杠。
         request_path = scope.get("path", "")
         if not request_path.startswith("/api/") and not Path(request_path).suffix:
             accept = dict(scope.get("headers") or []).get(b"accept", b"").decode("latin-1")
@@ -318,6 +284,5 @@ class SinglePageFiles(StaticFiles):
 
 
 if DIST.is_dir():
-    # 构建产物存在才挂载；不存在时上面那条 / 会给出可操作的提示，
-    # 而不是启动时就崩掉。
+    # 无构建时保留首页提示，使服务仍可启动。
     app.mount("/", SinglePageFiles(directory=str(DIST), html=True), name="ui")
