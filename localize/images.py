@@ -890,7 +890,9 @@ def _valid_sha256(value: Any) -> bool:
 def _record_path_matches_key(post_id: str, media_index: int, out_rel: str) -> bool:
     """所有权记录必须绑定到自己的帖子目录、media_de 与两位媒体序号。"""
     pure = PurePosixPath(out_rel)
-    if (len(pure.parts) not in {4, 5} or pure.parts[0] != "posts"
+    # 4=旧平铺，5=posts/<月份>/，6=posts/<月份>/<tag>/。少认一种层级会让程序产出的
+    # 德语图被当成人工图，从此永不重做，而且没有任何报错。
+    if (len(pure.parts) not in {4, 5, 6} or pure.parts[0] != "posts"
             or pure.parts[-2] != "media_de"):
         return False
     filename = PurePosixPath(pure.parts[-1])
@@ -898,7 +900,7 @@ def _record_path_matches_key(post_id: str, media_index: int, out_rel: str) -> bo
             or filename.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}):
         return False
     folder = pure.parts[-3]
-    if (len(pure.parts) == 5 and pure.parts[1]
+    if (len(pure.parts) > 4 and pure.parts[1]
             != (folder[:7] if not folder.startswith("undated_") else "undated")):
         return False
     return post_folder_matches_id(folder, post_id)

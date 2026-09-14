@@ -143,8 +143,8 @@ with tempfile.TemporaryDirectory() as d:
                    text="safe", created_at="2026-08-25T14:23:20Z", owner="acct")
     check(arc.append(hostile) is True, "异常 post_id 仍可归档，不丢业务数据")
     hostile_dir = arc.post_dir(hostile)
-    check(hostile_dir.resolve().parent.parent == arc.posts_dir.resolve(),
-          "异常 post_id 的目录 resolve 后仍严格位于 posts/月份 下一层")
+    check(hostile_dir.resolve().parent.parent.parent == arc.posts_dir.resolve(),
+          "异常 post_id 的目录 resolve 后仍严格位于 posts/月份/标签 下一层")
     hostile_row = json.loads((hostile_dir / "post.json").read_text(encoding="utf-8"))
     check(hostile_row["post_id"] == hostile_id,
           "安全目录名只影响路径，post.json 保留远端原始 ID")

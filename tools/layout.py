@@ -20,7 +20,7 @@ from core import index_db, paid_model                       # noqa: E402
 from core.store import (                                     # noqa: E402
     Archive, ArchivePathError, Post, _atomic_write_text, _new_folder_name,
     archive_write_lock, assert_physical_direct_path, assert_post_directory,
-    infer_tags, iter_post_dirs,
+    infer_tags, iter_post_dirs, primary_tag_folder,
 )
 
 PREFIX = {"facebook": "fa", "instagram": "in"}
@@ -72,9 +72,10 @@ def _migration_plan(base: Path) -> list[dict]:
             post = Post(**values)
             name = row.get("folder_name") or _new_folder_name(post)
             updated = dict(row, folder_name=name, tags=row.get("tags") if isinstance(row.get("tags"), list) else infer_tags(row["text"]))
-            # 规划目标强制月份层级；post_directory 的旧平铺兼容仅用于日常读取。
+            # 规划目标强制月份 + 主 tag 层级；post_directory 的旧平铺兼容仅用于日常读取。
             month = name[:7] if name[:4].isdigit() else "undated"
-            target = assert_post_directory(base, base / "posts" / month / name)
+            target = assert_post_directory(
+                base, base / "posts" / month / primary_tag_folder(updated) / name)
             if directory == target and updated == row:
                 continue
             plan = {"post_id": row["post_id"], "status": "started", "source": directory.relative_to(base).as_posix(),

@@ -9,9 +9,10 @@ import re
 import shutil
 import stat
 import unicodedata
+from contextlib import suppress
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from core import paid_model
 from core.config import cfg
 
@@ -235,6 +236,35 @@ def _safe_folder_name(value: object) -> str:
     return value
 
 
+UNCATEGORISED = "未分类"
+# tag 母目录名上限。月份 7 + tag 20 + folder_name 最长 ~60，整条路径仍在 Windows 260 以内。
+TAG_COMPONENT_MAX = 20
+
+
+def tag_component(value: object) -> str:
+    """主 tag 的目录名。与云盘同名规则，但另守本地的保留名与长度上限。
+
+    ⚠️ 不能复用 `_safe_folder_name()`：它只允许 ASCII，而 `未分类` 和业务自定义 tag 都可能不是。
+    """
+    cleaned = re.sub(r'[\s/\\<>:"|?*\x00-\x1f]+', "-", str(value or "")).strip(" .-")
+    if (not cleaned or cleaned in {".", ".."}
+            or cleaned.split(".", 1)[0].upper() in _WINDOWS_RESERVED):
+        return UNCATEGORISED
+    if len(cleaned) > TAG_COMPONENT_MAX:
+        return cleaned[:TAG_COMPONENT_MAX - 7] + "-" + hashlib.sha256(
+            cleaned.encode("utf-8")).hexdigest()[:6]
+    return cleaned
+
+
+def primary_tag_folder(indexed: object) -> str:
+    """落点只由主 tag 决定；目录树表达不了一篇帖归两个产品，其余 tag 留在字段里。"""
+    tags = indexed.get("tags") if isinstance(indexed, dict) else None
+    if not isinstance(tags, list):
+        return UNCATEGORISED
+    first = next((tag for tag in tags if isinstance(tag, str) and tag.strip()), None)
+    return tag_component(first) if first else UNCATEGORISED
+
+
 def _stable_post_id_component(post_id: str) -> str:
     safe_id = _safe_post_id_component(post_id)
     if len(safe_id) > 48:
@@ -275,21 +305,31 @@ def infer_tags(text: str, models: list[str] | None = None) -> list[str]:
     return list(dict.fromkeys(canonical[match.group().casefold()] for match in pattern.finditer(text)))
 
 
+def _is_month_name(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{4}-\d{2}|undated", value))
+
+
 def assert_post_directory(account_dir: Path, directory: Path) -> Path:
-    """校验旧平铺或新月份层级；逐层拒绝链接，不能仅校验最末一层。"""
+    """校验旧平铺、月份层级或新的月份/tag 层级；逐层拒绝链接，不能仅校验最末一层。"""
     account_dir, directory = Path(account_dir), Path(directory)
     assert_physical_direct_path(account_dir.parent, account_dir, kind="directory", label="账号归档目录")
     posts = assert_physical_direct_path(account_dir, account_dir / "posts", kind="directory", label="posts 根目录")
     if directory.parent != posts:
-        month = directory.parent
-        if month.parent != posts or not re.fullmatch(r"\d{4}-\d{2}|undated", month.name):
-            raise ArchivePathError("帖子目录必须位于 posts/ 或 posts/<月份>/ 内")
+        tag = directory.parent
+        month = tag if _is_month_name(tag.name) else tag.parent
+        if month.parent != posts or not _is_month_name(month.name):
+            raise ArchivePathError("帖子目录必须位于 posts/、posts/<月份>/ 或 posts/<月份>/<tag>/ 内")
         assert_physical_direct_path(posts, month, kind="directory", label="归档月份目录")
+        if tag is not month:
+            assert_physical_direct_path(month, tag, kind="directory", label="归档标签目录")
     return assert_physical_direct_path(directory.parent, directory, kind="directory", label="帖子目录")
 
 
 def iter_post_dirs(account_dir: Path):
-    """只遍历有效的两层布局，不递归进入恢复区或任意嵌套目录。"""
+    """只遍历有效的布局层级，不递归进入恢复区或任意嵌套目录。
+
+    帖子目录带 `post.json`，tag 母目录不带——据此区分，不必重算 tag 名。
+    """
     account_dir = Path(account_dir)
     posts = assert_physical_direct_path(account_dir, account_dir / "posts", kind="directory", label="posts 根目录")
     if not posts.exists():
@@ -297,30 +337,63 @@ def iter_post_dirs(account_dir: Path):
     for child in sorted(posts.iterdir()):
         try:
             assert_physical_direct_path(posts, child, kind="directory", label="帖子或月份目录")
-            if re.fullmatch(r"\d{4}-\d{2}|undated", child.name):
-                for directory in sorted(child.iterdir()):
-                    try:
-                        yield assert_post_directory(account_dir, directory)
-                    except ArchivePathError as exc:
-                        print("    ! 跳过不安全的帖子目录：%s" % exc)
-            else:
+            if not _is_month_name(child.name):
                 yield child
+                continue
+            for entry in sorted(child.iterdir()):
+                try:
+                    assert_physical_direct_path(child, entry, kind="directory", label="帖子或标签目录")
+                    if (entry / "post.json").exists():
+                        yield assert_post_directory(account_dir, entry)
+                        continue
+                    for directory in sorted(entry.iterdir()):
+                        try:
+                            yield assert_post_directory(account_dir, directory)
+                        except ArchivePathError as exc:
+                            print("    ! 跳过不安全的帖子目录：%s" % exc)
+                except (ArchivePathError, NotADirectoryError, OSError) as exc:
+                    print("    ! 跳过不安全的帖子目录：%s" % exc)
         except ArchivePathError as exc:
             print("    ! 跳过不安全的归档目录：%s" % exc)
 
 
+def _existing_tagged_dirs(account_dir: Path, month: Path, name: str) -> list[Path]:
+    """按 folder_name 在月份下的各 tag 目录里找现存落点。
+
+    不按当前 `tags[0]` 直接拼路径：索引可能落后于一次改 tag 的移动，
+    照着旧 tag 拼会得到一个不存在的路径，把已归档的帖子报成不存在。
+    """
+    if not month.is_dir():
+        return []
+    found = []
+    for entry in sorted(month.iterdir()):
+        candidate = entry / name
+        if entry.is_dir() and not (entry / "post.json").exists() and candidate.is_dir():
+            found.append(assert_post_directory(account_dir, candidate))
+    return found
+
+
 def post_directory(account_dir: Path, indexed: dict) -> Path:
-    """统一定位稳定 folder_name/月目录与旧平铺目录；只读，不创建目录。"""
+    """统一定位稳定 folder_name/月目录/tag 目录与旧平铺目录；只读，不创建目录。"""
     account_dir = Path(account_dir)
     posts = account_dir / "posts"
     folder_name = indexed.get("folder_name")
     if folder_name is not None:
         name = _safe_folder_name(folder_name)
-        monthly = assert_post_directory(account_dir, posts / _folder_month(name) / name)
+        month = posts / _folder_month(name)
+        tagged = _existing_tagged_dirs(account_dir, month, name)
+        if len(tagged) > 1:
+            raise ArchivePathError("同一 folder_name 在多个标签目录下同时存在，请先核对归档")
+        monthly = assert_post_directory(account_dir, month / name)
         legacy = assert_post_directory(account_dir, posts / name)
-        if monthly.exists() and legacy.exists():
+        if sum(map(bool, (tagged, monthly.exists(), legacy.exists()))) > 1:
             raise ArchivePathError("同一 folder_name 同时存在新旧目录，请先核对归档")
-        return legacy if legacy.exists() else monthly
+        if tagged:
+            return tagged[0]
+        if legacy.exists() or monthly.exists():
+            return legacy if legacy.exists() else monthly
+        return assert_post_directory(
+            account_dir, month / primary_tag_folder(indexed) / name)
     name = _safe_folder_name(post_dirname(str(indexed.get("post_id") or ""), indexed.get("created_at")))
     legacy = assert_post_directory(account_dir, posts / name)
     if legacy.exists():
@@ -333,7 +406,7 @@ def post_directory(account_dir: Path, indexed: dict) -> Path:
     return matches[0] if matches else legacy
 
 
-def planned_post_directory(account_dir: Path, post: Post) -> Path:
+def planned_post_directory(account_dir: Path, post: Path | Post) -> Path:
     """新帖/重放的无写盘路径规划；固定对象元信息后执行阶段使用同一路径。"""
     if post.folder_name is None:
         existing = post_directory(account_dir, post.to_row())
@@ -343,6 +416,10 @@ def planned_post_directory(account_dir: Path, post: Post) -> Path:
             row, _directory = read_post_truth(account_dir, post.to_row())
             if isinstance(row.get("tags"), list):
                 post.tags = list(row["tags"])
+    if post.tags is None:
+        # 必须在算落点之前定下来：媒体下载先于 append 发生，
+        # 晚一步会让图片落进 未分类/ 而 post.json 落进 <tag>/。
+        post.tags = infer_tags(post.text)
     return post_directory(account_dir, post.to_row())
 
 
@@ -366,6 +443,36 @@ def read_post_truth(account_dir: Path, indexed: dict) -> tuple[dict, Path]:
     return source, post_dir
 
 
+def _relocate_for_tag(account_dir: Path, directory: Path, row: dict) -> Path:
+    """改主 tag 时在同一月份目录内移动落点，并就地改写每个媒体的 local_path。
+
+    `local_path` 相对账号目录，不跟着改会让图片、镜像和图片本地化一起指向旧路径。
+    留证保护的是内容不被改写，不是路径永不变（F2-4 规则 4）。
+    """
+    wanted = primary_tag_folder({"tags": row.get("tags")})
+    if directory.parent.name != wanted and (
+            _is_month_name(directory.parent.name) or _is_month_name(directory.parent.parent.name)):
+        month = directory.parent if _is_month_name(directory.parent.name) else directory.parent.parent
+        target = assert_post_directory(account_dir, month / wanted / directory.name)
+        if target != directory:
+            if target.exists():
+                raise ArchivePathError("目标标签目录下已有同名帖子目录，请先核对归档")
+            previous_parent = directory.parent
+            target.parent.mkdir(parents=True, exist_ok=True)
+            directory.rename(target)
+            directory = target
+            if previous_parent != month:
+                # 最后一篇搬走后收掉空的 tag 母目录，否则月份下会积一堆空壳。
+                with suppress(OSError):
+                    previous_parent.rmdir()
+    relative = directory.relative_to(account_dir).as_posix()
+    for media in row.get("media") or []:
+        if isinstance(media, dict) and isinstance(media.get("local_path"), str):
+            media["local_path"] = relative + "/" + PurePosixPath(
+                media["local_path"].replace("\\", "/")).name
+    return directory
+
+
 def update_post_tags(account_dir: Path, indexed: dict, tags: list[str], *,
                       expected_tags=_UNSET, expected_source_sha256: str | None = None) -> dict:
     """人工标签只写源帖；与抓取共用锁，并在锁内核对页面看到的版本。"""
@@ -380,6 +487,7 @@ def update_post_tags(account_dir: Path, indexed: dict, tags: list[str], *,
         if expected_source_sha256 is not None and source_hash != expected_source_sha256:
             raise ArchiveRevisionConflict("源帖已更新，请重新载入后保存标签")
         row = dict(current, tags=normalized)
+        directory = _relocate_for_tag(Path(account_dir), directory, row)
         _atomic_write_text(directory / "post.json", json.dumps(row, ensure_ascii=False, indent=2), label="post.json")
         paid_model.append_jsonl(Path(account_dir) / "manifest.jsonl", row,
                                 guard=lambda path: assert_physical_direct_path(
@@ -696,11 +804,10 @@ class Archive:
             return self._append_locked(post, previous)
 
     def _append_locked(self, post: Post, previous: dict | None) -> bool:
-        self.post_dir(post)
+        # 人工改过的 tag 优先于重新推断，且要早于落点计算。
         if previous is not None and isinstance(previous.get("tags"), list):
             post.tags = list(previous["tags"])
-        elif post.tags is None:
-            post.tags = infer_tags(post.text)
+        self.post_dir(post)
         if previous is not None and self._source_changed(previous, post):
             old_media = previous.get("media") or []
             if previous.get("media_complete") is True and not post.media_complete:
