@@ -25,15 +25,33 @@
 | 五阶段运行状态 | 离线通过 | Web/CLI 共用只读 snapshot，含费用/恢复、处理 P50/P95/晨间就绪率、采样阻塞、投递；UI 夹具回归已过 |
 | 柏林选时与范围 | 离线通过 | 依录证可见窗口/DST 验证任意合法时刻；范围变化须重录，不永久固定同月 |
 
+## 两份前端
+
+`web/ui/`（Vue，旧）与 `web/ui-next/`（React，新）并存，各自构建到自己的 `dist/`。
+生产挂哪一份由 `config.toml` 的 `[paths].web_dist` 决定，缺省是 `web/ui/dist`。
+**切换与回滚都是改这一个值 + 重启 Web 进程**，不碰接口、字段、账本或归档。
+逐步操作见 [../docs/MANUAL_STEPS.md](../docs/MANUAL_STEPS.md) 第 13 节。
+
+React 那一侧的设计与决策口径在 [ui-next/DESIGN.md](ui-next/DESIGN.md)、
+[ui-next/DECISION_LOG.md](ui-next/DECISION_LOG.md)；接口契约仍以本目录的
+[DESIGN.md](DESIGN.md) 为准，两者冲突时接口契约赢。
+
+⛔ **换掉 `web/api/app.py` 的 `SinglePageFiles` 前先看 `tests/tests_spa_static.py`。**
+旧 Vue 的 URL 全都长在 `/` 上（`/?task=`、`/?view=`），服务端从不需要管前端路由；
+React 用真实路径（`/review`、`/calendar`、`/review/<账号>/<帖子>`），裸的
+`StaticFiles` 找不到同名文件就是 404 —— 侧栏点着能走，一按 F5、一个收藏、
+一条粘给同事的链接就只剩一行 `{"detail":"Not Found"}`。回落同时要守住三条反例：
+`/api` 的 404 必须还是 JSON，漏掉的产物必须当场 404，不收 `text/html` 的请求不回落。
+
 ## 启动
 
-开发机构建前端：
+开发机构建前端（两份都要，旧的那份是回滚保险）：
 
 ```powershell
-cd web\ui
-npm install
-npm run build
-cd ..\..
+npm.cmd --prefix web/ui install
+npm.cmd --prefix web/ui run build
+npm.cmd --prefix web/ui-next install
+npm.cmd --prefix web/ui-next run build
 ```
 
 启动服务：
@@ -50,6 +68,21 @@ scripts\run_python.bat -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
 npm.cmd --prefix web/ui run build
 scripts\run_python.bat tests/tests_browser_workflow.py -v
 ```
+
+React 那一侧另有几个只读脚本，都跑在同一套隔离夹具上，产物落 `state/ui-regression/`：
+
+```powershell
+scripts\run_python.bat tests/browser_regression.py --stage ALL
+scripts\run_python.bat tests/network_compare.py
+scripts\run_python.bat tests/cutover_rehearsal.py --dist web/ui-next/dist
+scripts\run_python.bat tests/review_probe.py
+```
+
+⚠️ 已知性能项，切换后第一周盯一下：历史列表首屏会为每一行发一次缩略图请求，
+React 默认每页 50 条、旧 Vue 是 30 条，同一个接口新 UI 首屏要多付 1.67 倍
+（空载实测 3.86s vs 1.95s）。成本在 `core/store.assert_physical_direct_path` 的
+路径解析上。太慢时先让运营把分页改成 20 条/页；根治要缓存那段解析。
+复现：`scripts\run_python.bat tests/history_thumbnail_cost.py`。
 
 保存/来源冲突/历史/设置走临时真实 ASGI；运行恢复、消息未知、模拟排期/公开显示走明确浏览器 API 夹具，只验 UI。`tests/browser_fixture.py` 管临时数据与独立 Chrome，输出记录实际构建哈希和断言，不能把模拟排期显示当真实提交。
 

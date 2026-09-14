@@ -46,7 +46,7 @@ app.include_router(runtime.router)
 #:
 #: 迁移期间 web/ui/（Vue）与 web/ui-next/（React）并存，两者构建到各自的
 #: dist/。切换与回滚都是改这一个值 + 重启进程，不碰接口、字段、账本或归档
-#: （docs/ui-refactor/REACT_MIGRATION_PLAN.md §2.2）。
+#: （web/ui-next/REACT_MIGRATION_PLAN.md §2.2）。
 DEFAULT_DIST_REL = "web/ui/dist"
 
 
@@ -301,7 +301,7 @@ class SinglePageFiles(StaticFiles):
     浏览器回归没照出这一条：``tests/browser_fixture.py`` 的 UIFixture 在 Playwright
     那一侧拦路由，找不到文件自己就回落 index.html —— 它自带 SPA 回落，
     所以 12/12 全绿证明的是前端逻辑对，不是这个部署形状立得住。
-    复现在 ``docs/ui-refactor/tools/cutover_rehearsal.py``。
+    复现在 ``tests/cutover_rehearsal.py``，契约钉在 ``tests/tests_spa_static.py``。
 
     ⛔ 三种情况**不回落**，回落了反而会把真问题藏起来：
        1. ``/api/...``：接口的 404 必须还是 JSON，不能变成一页 HTML；

@@ -1,7 +1,0 @@
-D:\VSCodeWorkspace\Facebook\FacebookScraper\.worktrees\business-workflow\core\imagehash.py:41: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
-  pixels = list(grayscale.getdata())
-....
-----------------------------------------------------------------------
-Ran 4 tests in 1.103s
-
-OK

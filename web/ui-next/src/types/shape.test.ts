@@ -34,7 +34,7 @@ import taskDetailFrozen from './__fixtures__/task-detail-frozen.json'
 import templateText from './__fixtures__/template-text.json'
 
 // 这些夹具是 state/audit-probe/ 里**真实响应**的机械脱敏产物
-// （docs/ui-refactor/tools/redact_probe.py，只动值不动键）。
+// （重构期用一个脱敏脚本生成，只动值不动键）。
 // 它们回答一个问题：手写的类型和后端实际返回的形状还对得上吗。
 //
 // 取证规模：审校队列 26 条、历史 1,067 条中的第 1 页、两份详情

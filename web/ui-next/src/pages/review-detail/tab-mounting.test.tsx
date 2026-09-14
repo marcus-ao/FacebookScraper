@@ -21,7 +21,7 @@ import detailFixture from '@/types/__fixtures__/task-detail-active.json'
  * 用条件渲染，切一下正文就把已经付费生成的标签建议整块卸载掉。
  *
  * 这里只验第一次渲染时谁在 DOM 里 —— 这一条 SSR 就能答。"打开过之后要一直留着"
- * 需要真实交互，由 docs/ui-refactor/tools/review_probe.py 在 Playwright 里守。
+ * 需要真实交互，由 tests/review_probe.py 在 Playwright 里守。
  */
 const detail = detailFixture as unknown as TaskDetail
 const [account, postId] = detail.id.split('/') as [string, string]
