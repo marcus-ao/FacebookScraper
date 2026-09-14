@@ -1,14 +1,14 @@
 r"""审校台的**只读数据层**：从归档算出任务列表与详情。
 
 列表以归档索引定位源帖，再读取 post.json 真相；文案同时读取机器与人工账本，
-人工稿优先展示，源文变化保留稿件并提示复核。历史原型状态不参与读取。
+人工稿优先展示，源文变化保留稿件并提示复核。
 
 源帖、译文和发布事实只读；列表会按需重建可删除的 SQLite 展示索引。
 不调用任何付费 API，不启动浏览器。
 
 一条贯穿全文的纪律（REQUIREMENTS.md 第 5.2 节）：
 
-    **Web 层不许复制任何流水线逻辑，只能调用生产代码。**
+    **Web 层不许复制任何流水线逻辑，只能调用业务代码。**
 
 所以下面每一个判断都指得到一个既有函数：
 
@@ -230,7 +230,7 @@ def _alert_label(issue: engine.HumanItem) -> str:
     """一行能看懂的告警文案。
 
     ⛔ **不做 kind → 文案的全量映射表**：那张表会在 ``prepaid_issue`` 新增一种
-    kind 时静默漏掉一类告警。这里只对已知几种做短句，**其余一律回落到生产自己
+    kind 时静默漏掉一类告警。这里只对已知几种做短句，**其余一律回落到实际自己
     写的那句 summary**——可能长一点，但绝不会消失。
     """
     details = issue.details or {}
@@ -366,7 +366,7 @@ class _Context:
         选择器不允许跨月（2026-09-01 实测），可排的槽在每个月末真的会用完。
         分不到的任务 ``schedule`` 是 null，界面上排在最后。
 
-        没有译文的任务**不参与分配**——生产侧 ``pipeline run`` 本来也只给
+        没有译文的任务**不参与分配**——流水线侧 ``pipeline run`` 本来也只给
         ``ready_to_publish`` 的候选分配槽位，凭空给它们编一个时刻就是把假数据
         混进了"读全真"的那一半。
         """
@@ -710,7 +710,7 @@ def source_post(task_id: str) -> engine.SourcePost | None:
 def image_bytes(task_id: str, index: int, variant: str = "de", *,
                 days: int = DEFAULT_DAYS,
                 now: datetime | None = None) -> tuple[bytes, str] | None:
-    """直接读归档字节（Demo board 已验证这条路），返回 (数据, media type)。
+    """直接读归档字节，返回 (数据, media type)。
 
     ``variant=de`` 且这张没有德语图时**回退原图**，与 ``compose._choose_images``
     的行为一致（缺德语图不是"没有图"，是"用了原图"）。降级不会被藏起来：

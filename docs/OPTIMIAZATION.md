@@ -1,6 +1,6 @@
 # 五阶段实施与验收清单
 
-**记录日期：2026-09-12，事实同步至 UTC 2026-09-13；代码截至 `b1a56bb`（核心集成 `565f17c`），全量与相关补跑已留证。** [FUNCTIONALITY.md](FUNCTIONALITY.md) 保存详细业务规则和原功能编号；[本轮集成记录](INTEGRATION_2026-09-12.md) 保存实际输入与证据边界。本文件把代码、外部依赖和验收分别列出，保持已接受的五阶段、八批范围。
+**记录日期：2026-09-12，事实同步至 2026-09-14；核心集成 `565f17c`，历史证据和当前 React 单目录的完整离线复验分别留存。** [FUNCTIONALITY.md](FUNCTIONALITY.md) 保存详细业务规则和原功能编号；[本轮集成记录](INTEGRATION_2026-09-12.md) 保存 2026-09-12/13 的实际输入与证据边界。本文件把代码、外部依赖和验收分别列出，保持已接受的五阶段、八批范围。
 
 ## 0. 状态与证据范围
 
@@ -17,12 +17,13 @@
 - **规划历史**：基线 `c67c56a` 曾通过 47 个 Python 脚本、Vue 构建及六处既有修改的相关回归，不覆盖本轮全部新代码。
 - **监测定向验证**：`205c660`、`20d917a`；`tests_monitoring`、`tests_scheduler_recovery`、`tests_pipeline_service` 共 56 项通过，调度 XML/命令测试与相关脚本通过，复审五项修复已关闭。任务调用在测试中被替换，尚无真实安装验收。
 - **本地化定向验证**：`d0649d1`、`5eca730` 实现风险/三类采样，`f02b2ed` 的 C7 持久停机与 count 结构修复已复审。`7f131a3` 补 Trends 控件证据门控导出、持久停止/恢复及周/月 CSV 解析，22 项相关测试与 6 项 rank 通过，尚无真实导出。
-- **版本化浏览器验证**：`42c8bc9` 首次有 6 条，后续增加 FB 光标插入链接和最终计数，共 7 场景已在实际 Vue dist、临时真实 ASGI 和独立浏览器通过。保存/历史/设置与 runtime/远端状态 UI 夹具范围分别记录，不是实际平台验收。
+- **历史浏览器验证**：`42c8bc9` 首次有 6 条，后续增加 FB 光标插入链接和最终计数，共 7 场景曾在 Vue dist、临时真实 ASGI 和独立浏览器通过。它是 2026-09-13 的旧版本证据，不覆盖当前 React。
 - **历史交接补齐**：统一来源摘要及 AST 守卫、补扫中途过期保留普通探测/通知、30 天 outbox 终态归档、FB 链接占位符/最终计数已有定向证据；恢复和重复 alias 在前批已处理。最终集成的全量与补跑结果如下。
-- **最终集成验证**：065156Z 全量执行 65 脚本，64/65；唯一测试文件编码问题修复后，065631Z/065531Z/070142Z 相关补跑通过，65 脚本均有最新通过记录。Vue 50 modules 与新 dist 浏览器 7/7 通过；最新修改的 12 个生产 Python 模块 Ruff 和 diff --check 通过，细项/路径见集成记录。
-- **真实本机接续**：本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip` 已核验，5,246 文件、465,064,677 字节；本机配置绑定原 archive/state/.env/解释器。激活 `2026-09-03T09:00:58.277710Z` 保留；1,067 篇为 FB 47 + 冻结 `.tech` 1,020。
+- **2026-09-12/13 集成验证**：065156Z 全量执行 65 脚本，64/65；唯一测试文件编码问题修复后，065631Z/065531Z/070142Z 相关补跑通过，65 脚本均有当时通过记录。同期 Vue 50 modules 与浏览器 7/7 通过；最新修改的 12 个 Python 业务模块 Ruff 和 diff --check 通过，细项/路径见集成记录。
+- **2026-09-14 React 整理结果**：`web/ui/` 是唯一前端，`web/ui/dist` 是唯一构建目录；锁定安装通过，26 个文件共 505 项测试通过，TypeScript + Vite 构建通过，证据在 `state/ui-consolidation-20260914T063209Z`。日期格式修改的相关用例先出现 9 个预期失败，修正后 46 个动作与禁用原因用例通过；锁文件中的 162 个依赖条目未升级，只调整根包标识。当前集成 worktree 的完整 66 个 Python 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和实际 FastAPI 静态演练均通过，证据在 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-regression`。现有 1.39 MB JavaScript chunk 警告保留为性能观察。这些是离线或隔离证据，不沿用上两条旧结果，也不升级真实外部系统状态。
+- **真实本机接续**：本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip` 已核验，5,246 文件、465,064,677 字节；当前 `config.local.toml` 绑定原 archive/state，`web_dist` 由已提交的 `config.toml` 提供。激活 `2026-09-03T09:00:58.277710Z` 保留；1,067 篇为 FB 47 + 冻结 `.tech` 1,020。
 
-当前真实结果：原 1,067 篇归档与 SQLite 实际一致，历史按 20 条读取第 1/2 页无重复，冻结只读已验证。生产月历在 `2026-09-13T05:01:33Z` 返回 ready：35 格（8/30–10/3）、4 条公开帖、2 个经 tooltip 确认并排除的推荐时段，包含 3 个独立 IG remote ID。证据为 planner/channel controls、最新月历截图 `planner_month_20260913T044722903276.png` 和 22 事件 probe；这不是本轮新 Schedule 回读。
+当前真实结果：原 1,067 篇归档与 SQLite 实际一致，历史按 20 条读取第 1/2 页无重复，冻结只读已验证。实际月历在 `2026-09-13T05:01:33Z` 返回 ready：35 格（8/30–10/3）、4 条公开帖、2 个经 tooltip 确认并排除的推荐时段，包含 3 个独立 IG remote ID。证据为 planner/channel controls、最新月历截图 `planner_month_20260913T044722903276.png` 和 22 事件 probe；这不是本轮新 Schedule 回读。
 
 `.global` 尚未回填；IG 9224 的 HTTP 429/detect_hard_blocked 与 Trends 公开页的 HTTP 429/trends_export_state blocked 均持久记录、未重试。9223 目标 FB `Neakasa Deutschland`、IG `neakasa.de` 已确认。飞书 Secret/两个接收组/云盘根目录/可达审校 URL 缺失，外部心跳未启用；本轮无真实模型/飞书调用和新发布/排期提交。编辑器已放入不可发布的技术文案与 2 张原图作控件观察，可能留下草稿，不声称零远端写入。旧双渠道 submit_ambiguous 另待人工核对，两渠道 G8 仍未通过。
 
@@ -123,14 +124,14 @@
 | F5-1/F5-2 同渠道 90 分钟 | 离线通过 | 同帖去重与占用分开，人工冲突拒绝+3 建议，不擅自顺延 | 远端完整月历另验 | 90 分钟边界、不同渠道不冲突、别人正文也占槽 |
 | F5-3 柏林时刻/实际 UI 范围 | 离线通过 | 按录证的可见窗口验证合法任意时刻、月界/DST；范围改变需重录，不永久写死自然月 | 当前 UI 范围改变后重录 | 发布/批准时区与窗口回归；未证实新月份不自动放行 |
 | F5-4 七态/挂起/接管 | 离线通过 | actor:null、3 上海工作日、源变唤醒、理由与终态分计 | 通知联动另验 | review/Web：handed_off 不计 skipped，模糊回执不重开提交 |
-| F5-5 本次完整月份读取 | 真实通过 | 2026-09-13T05:01:33Z ready，35 格 8/30–10/3，4 公开帖/2 推荐时段区分，3 个 IG remote ID | 当前 9223 | planner_controls、最新截图和生产 inventory；仅限本次已观测月份形态 |
+| F5-5 本次完整月份读取 | 真实通过 | 2026-09-13T05:01:33Z ready，35 格 8/30–10/3，4 公开帖/2 推荐时段区分，3 个 IG remote ID | 当前 9223 | planner_controls、最新截图和实际 inventory；仅限本次已观测月份形态 |
 | F5-5 月历展示/公开观察代码 | 离线通过 | 截至时间/范围/完整性/stale/busy，公开以 remote ID 和明确观察为准，不按时钟推算 | 真实新 scheduled 形态另验 | runtime recovery/browser UI：未知不报公开，建议不计帖子；本次公开观察另有真实证据 |
 | F5-6 提交前实时复核 | 离线通过 | 缓存仅提示，持发布锁重读；未读完不能判空档 | 完整月历真实输入另验 | 缓存后新增人工项造成冲突，busy/不完整即拒绝 |
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |
 | F5-8 ZIP/人工结转 | 离线通过 | 包完整后 handed_off；缺德语图标原图；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |
 | F5-9 发布锁/不确定恢复 | 离线通过 | Web/CLI/Planner 同锁，中断只补证据充分投影，不重提 | 真实 Planner 核对另验 | publication recovery/lock：重复恢复、缺冻结版、ambiguous 阻塞 |
 | S2-1 单渠道控件录证 | 真实通过 | 仅证明当前渠道/目标控件，不证明提交验收 | 当前 9223 | channel_controls.json、被动 probe、FB/IG 显示名 |
-| S2-1 单渠道/全文/身份/时刻回读 | 离线通过 | 生产上层直接接 month_inventory/month_readback，精确全文/完整月份/唯一渠道 remote ID；资产 ID 和双时间冲突等 P1/P2 复审关闭 | 新受控排期真实验收另列 | root publish 最后 15 定点通过；不从旧双渠道 journal 推新 G8 |
+| S2-1 单渠道/全文/身份/时刻回读 | 离线通过 | 业务层直接接 month_inventory/month_readback，精确全文/完整月份/唯一渠道 remote ID；资产 ID 和双时间冲突等 P1/P2 复审关闭 | 新受控排期真实验收另列 | root publish 最后 15 定点通过；不从旧双渠道 journal 推新 G8 |
 | S2-1 远端 scheduled 图片读取 | 代码未完成 | 尚无真实排期详情图片控件证据，适配器未实现；须受控排期录证后补数量/顺序/来源图片绑定 | 有效样本、具体提交确认、真实详情控件 | 编辑器两图核验不能关闭；完成适配/失败闭合测试后再验远端图片 |
 | S2-1 G8 媒体验收闸 | 离线通过 | 同时要求全文相等、remote_images_verified、正整数媒体数及有序 source SHA 与冻结清单一致；严格结构拒绝伪通过 | 远端适配尚缺 | capabilities/相关回归：只有 scheduled/ID/编辑器图不足，历史 scheduled 继续防重 |
 | S2-1 本次编辑器媒体准备 | 真实通过 | 2026-09-13T06:01:17Z FB-only 技术草稿 2 张 1536×2048 原图，数量/顺序视觉核验通过；可能留下草稿 | 当前发布浏览器 | composer_media_verification_20260913.json：两图 dHash/RGB 误差均 0，宽高比比值 1；未提交，不替代远端排期图片证据 |
@@ -143,8 +144,10 @@
 |---|---|---|---|
 | 历史/恢复/风险采样/设置 API | 离线通过 | range/page/total、detail.meta 来源指纹/snapshot_id、批次与消息恢复、风险/采样元信息和设置说明已接 | 现有接口/版本错误与只读回归；完整最终媒体信息按快照契约另核 |
 | Web/CLI 五阶段只读状态 | 离线通过 | 共用 snapshot，含批次 operation_id/费用/版本、处理时效、Trends blocked 和独立投递状态 | runtime status 定向 + browser 明确 UI 夹具；只读 GET 零外部操作 |
-| 版本化离线浏览器回归入口 | 离线通过 | tests_browser_workflow.py/browser_fixture.py，实际 dist + 临时 ASGI，新增 inline link 后 7 场景通过 | 保存/历史/设置/链接计数真实临时后端，远端状态仅 UI 夹具；最终输出路径见集成记录 |
-| 最终 Python + build + 浏览器回归 | 离线通过 | 核心 565f17c 全量 65 脚本 64/65 后修测试编码并相关补跑，65 脚本均有通过记录；Vue 50 modules/new dist 7/7；b1a56bb 启动端口补丁再验 2/2 | final-verification.json 和 071023Z 明确完整批与补跑、Ruff 范围；不冒称首轮一次全绿 |
+| 2026-09-13 版本化浏览器历史 | 离线通过 | 当时 Vue dist + 临时 ASGI，inline link 加入后 7 场景通过 | 只覆盖旧版本；保存/历史/设置/链接计数用临时后端，远端状态仅界面替代响应 |
+| 当前 React 单元与构建 | 离线通过 | `npm.cmd --prefix web/ui ci`、`npm.cmd --prefix web/ui test`、`npm.cmd --prefix web/ui run build`；26 文件 505 测试、TypeScript + Vite 构建通过 | `state/ui-consolidation-20260914T063209Z`；1.39 MB chunk 警告不是失败，需继续观察 |
+| 当前 React 浏览器与网络契约 | 离线通过 | `tests_browser_workflow.py` 八场景、`browser_regression.py --stage ALL` 十二组、`network_compare.py` 十六契约、实际 FastAPI `cutover_rehearsal.py` 均通过；`review_probe.py` 七项探测无页面错误/外部动作；React-only thumbnail cost 本次夹具 50 请求在 4.78 秒达到 network idle | `state/offline-browser-20260914T065304Z-21788`、`state/ui-regression`、`state/ui-consolidation-20260914T063209Z/review-probe.json`；临时后端/替代响应不算外部验收，原归档成本仍以 `3718c0d` 的实际测量为准 |
+| 当前完整 Python 集成 | 离线通过 | 当前集成 worktree 单次执行 66 个脚本全部 exit 0，含八场景 browser workflow | `state/offline-validation-20260914T065258Z`；与 2026-09-12/13 的旧 65 脚本记录分开 |
 | 运营飞书到审校排期闭环 | 待真实联调 | 运营从真实卡片开帖、改审文图标签链接、选期确认、收到回执 | 两渠道排期证据 + 实际经过，两个独立 CLI 调用不算闭环 |
 
 八批均已接受。每批补代码并做对应离线验证；最后统一完整回归。凭据、登录、两组、同类账号名单、bio、具体发布确认是人工依赖，不妨碍继续做独立实现。
@@ -155,7 +158,7 @@
 
 | 项目 | 状态 | 决定 |
 |---|---|---|
-| 生产机迁移 | 明确延期 | 本轮开发机，迁移另验 |
+| 运行机器迁移 | 明确延期 | 本轮开发机，迁移另验 |
 | 登录/RBAC/真实 actor | 明确延期 | 单人，actor:null，不补造身份 |
 | 视频加工/发布 | 明确延期 | 本轮分类计数 |
 | FB/IG 内容复用 | 明确延期 | 独立车道与人工决定 |

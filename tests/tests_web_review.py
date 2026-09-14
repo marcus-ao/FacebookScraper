@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from core import config, review, translated  # noqa: E402
 from core.store import post_dirname  # noqa: E402
-from web.api import app as api_app, fake_writer  # noqa: E402
+from web.api import app as api_app  # noqa: E402
 import localize_images  # noqa: E402
 
 
@@ -59,8 +59,6 @@ class WebReviewTests(unittest.TestCase):
         }
         self.addCleanup(patch.stopall)
         patch.object(config, "_cfg", test_config).start()
-        self.fake_path = self.root / "_fake_state.json"
-        patch.object(fake_writer, "STATE_PATH", self.fake_path).start()
         self.client = TestClient(api_app.app)
         self.addCleanup(self.client.close)
 
@@ -166,7 +164,6 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(row["text_de"], "Von Hand verbessert. #Neakasa")
         self.assertIsNone(row["actor"])
         self.assertTrue(row["revision"])
-        self.assertFalse(self.fake_path.exists())
         detail = self.client.get(self.url).json()
         self.assertEqual(detail["text"]["de_human"], "Von Hand verbessert. #Neakasa")
         self.assertEqual(detail["text"]["de_machine"], "Ein sauberes Zuhause. #Neakasa")
@@ -210,17 +207,6 @@ class WebReviewTests(unittest.TestCase):
             response = self.save("Veralteter Entwurf")
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(self.human_rows()[-1]["text_de"], "Anderweitig gespeicherter Entwurf")
-
-    def test_old_demo_state_cannot_override_real_text_or_status(self):
-        self.fake_path.write_text(json.dumps({"schema_version": 1, "tasks": {
-            self.task_id: {"text_de_human": "Old demo", "status": "approved",
-                           "trail": [{"actor": "demo", "action": "approved"}]},
-        }}), encoding="utf-8")
-        self.assertEqual(self.save().status_code, 200)
-        detail = self.client.get(self.url).json()
-        self.assertEqual(detail["text"]["de_human"], "Von Hand verbessert. #Neakasa")
-        self.assertEqual(detail["status"], "edited")
-        self.assertEqual(detail["trail"][-1]["action"], "text_edited")
 
     def test_source_changes_require_review_but_preserve_human_work(self):
         old_hash = translated.source_text_sha256(self.source["text"])

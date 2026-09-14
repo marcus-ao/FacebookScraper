@@ -11,12 +11,6 @@ _deprecated/__pycache__/
 venv/
 .ruff_cache/
 .history/
-# 历史原型状态（生产接口已不使用）与前端构建产物/依赖。
-# dist/ 是开发机构建出来手工拷到生产机的，不进版本库。
-web/_fake_state.json
+# 前端依赖与构建产物由锁文件和源码生成，不进版本库。
 web/ui/node_modules/
 web/ui/dist/
-# 迁移期间 React 应用与 Vue 应用并存，两者各自构建到自己的 dist/。
-# 挂载点由 config.toml 的 [paths].web_dist 选择，默认仍是 web/ui/dist。
-web/ui-next/node_modules/
-web/ui-next/dist/

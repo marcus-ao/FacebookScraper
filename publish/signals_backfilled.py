@@ -4,7 +4,7 @@ r"""**生成文件** —— 由 `tools/probe_signals.py --emit` 从一份 v2 pro
 来源 dump：publish_probe_20260901_054226_378622.json
 生成时间：2026-09-01T06:12:49-07:00
 
-每一条都通过了 `publish.evidence` 的回查（和 `--submit` 上生产闸用的是
+每一条都通过了 `publish.evidence` 的回查（和 `--submit` 上发布校验用的是
 同一套代码），并且五条一起通过了 `verify_publish_chain` 的同页因果顺序检查。
 想知道它们是怎么推出来的，跑 `tools/probe_signals.py --check <dump>`。
 """

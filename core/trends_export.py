@@ -171,7 +171,7 @@ def state_revision(state: Mapping) -> str:
 
 def reset_block(c=None, *, reason: str, expected_revision: str, now: datetime | None = None) -> dict:
     if c is None:
-        from core.config import cfg  # 延迟导入：状态恢复允许注入临时目录而不初始化生产配置。
+        from core.config import cfg  # 延迟导入：状态恢复允许注入临时目录而不初始化运行配置。
         c = cfg()
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("人工恢复必须记录核对说明")
@@ -283,7 +283,7 @@ def export_public_csv(request: ExportRequest, *, proof: Mapping, c=None,
         c = cfg()
     verified_proof = validate_control_proof(request, proof)
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    from routes import delta  # 延迟导入：仅生产导出需要共享 detect 锁和硬停状态。
+    from routes import delta  # 延迟导入：仅浏览器导出需要共享 detect 锁和硬停状态。
     with delta.DeltaRunLock(Path(c.state_dir) / "delta.lock"):
         previous = load_state(c)
         if previous.get("status") == "blocked":

@@ -181,9 +181,9 @@ def account_semantics(*, facebook=TARGET_FB, instagram=TARGET_IG) -> list[dict]:
 # ==========================================================================
 # [1] 已删除（2026-09-03）：probe v2 白名单是 tools/probe_publish.py 的内部
 # 契约，且与 tests_publish.py 已删的 [6]-[9] 重叠。探针已移入
-# tools/_scaffolding/，不参与生产链路。
+# tools/_scaffolding/，不参与发布链路。
 #
-# 生产侧对 v2 dump 的要求由 publish/evidence.py::validate_v2_dump 表达，
+# 发布侧对 v2 dump 的要求由 publish/evidence.py::validate_v2_dump 表达，
 # 它的测试在 tests_publish.py [4]，保留。
 # ==========================================================================
 

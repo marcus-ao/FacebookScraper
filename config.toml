@@ -372,7 +372,7 @@ timezone = "Europe/Berlin"
 # Business Suite 真实发布放行。
 #
 # ✅ 2026-09-01：ui_probe_dump 已填。那份 dump 是首份完整通过 v2 契约的录制
-#    （56 交互 / 71 快照 / 117 截图），G6/G6c 的五件生产证据已由
+#    （56 交互 / 71 快照 / 117 截图），G6/G6c 的五件验收证据已由
 #    `tools/probe_signals.py --emit` 从它机械推导并逐条回查，
 #    落在 `publish/signals_backfilled.py`。判读见 docs/HANDOFF.md 第 5 节。
 #
@@ -568,13 +568,15 @@ daily_budget_usd = 5
 [paths]
 archive = "archive"
 state = "state"
+# 审校台静态构建目录，相对于项目根目录。
+web_dist = "web/ui/dist"
 
 [review]
 # 「挂起」默认到期几个上海工作日后回到待审列表（按周一至周五数，不猜调休）。
 # 3 是定下来的：比「明天」长，够她真的去把事情问清楚；比「一周」短，
 # 不至于忘了这回事 —— 带到期提醒的挂起不是死信箱，它会自己回来。
 # 这是 REQUIREMENTS 第 5.3 节二分里的「运营」类参数，可以改；
-# 代码三处默认值（web/api/reader.py、writer.py、ReviewActions.vue）只是兜底，
+# API 与界面中的默认值只是兜底，
 # 真正生效的是这里。
 snooze_default_days = 3
 

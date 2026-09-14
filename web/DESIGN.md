@@ -1,16 +1,16 @@
 # 审校台设计与接口契约
 
-**契约日期：2026-09-12。** 本文件描述当前界面和 API 的业务约束。功能决定以 [../docs/FUNCTIONALITY.md](../docs/FUNCTIONALITY.md) 为准。
+**契约日期：2026-09-12；前端路径同步至 2026-09-14。** 本文件描述当前界面和 API 的业务约束。功能决定以 [../docs/FUNCTIONALITY.md](../docs/FUNCTIONALITY.md) 为准。
 
 ## 1. 目的与模块边界
 
 审校台让一名上海运营查看当前待办、修改德语本地化内容、核对图片、挂起/不发/人工接管、查看月历并发起一次经确认的单渠道排期。
 
-`web/` 是模块图的叶子：它可以调用 `core/`、`pipeline/` 和 `publish/` 的入口；这些生产层不得 import `web/`。业务规则只实现一次，HTTP handler 只做请求校验、错误映射和响应组装。
+`web/` 是模块图的叶子：它可以调用 `core/`、`pipeline/` 和 `publish/` 的入口；这些业务层不得 import `web/`。业务规则只实现一次，HTTP handler 只做请求校验、错误映射和响应组装。
 
-当前写入是真实的：人工文案、标签、本地化和审校状态分别写入真相源。旧 `fake_writer.py` 与 `_fake_state.json` 不在请求路径。真实风险扫描已接入，夹具只供明确演示。本 worktree 已绑定原 archive/state/本机环境，打开页面不再等于查看空演示库。
+当前写入是真实的：人工文案、标签、本地化和审校状态分别写入真相源。风险扫描读取实际状态，不提供另一套演示数据路径。本 worktree 已绑定原 archive/state/本机环境；任何会写入的浏览器测试都必须改用临时 archive/state。
 
-本文记录截至 `b1a56bb`（核心集成 `565f17c`）的 API 与必须保持的业务契约，未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。最终实际 Vue dist + 临时 ASGI 的 7 场景及 65 脚本全量加相关补跑已有通过证据，启动脚本端口补丁另有相关复验；范围见 [实施清单](../docs/OPTIMIAZATION.md) 和 [集成记录](../docs/INTEGRATION_2026-09-12.md)。
+未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。2026-09-12/13 的 Vue 浏览器与 65 脚本记录是旧版本历史，范围见 [集成记录](../docs/INTEGRATION_2026-09-12.md)。当前 React 单目录版本已经完成锁定安装、26 个文件共 505 项单元测试、TypeScript + Vite 构建，以及当前集成 worktree 的完整 66 个 Python 脚本和浏览器/网络/静态演练；结果与隔离边界见 [实施清单](../docs/OPTIMIAZATION.md)。
 
 ## 2. 用户与布局
 
@@ -18,7 +18,9 @@
 
 Facebook 与 Instagram 任务始终分行、分详情、分状态。不能按相似文案或媒体合并。每行显示来源渠道和目标账号。
 
-常态信息保持简洁；下列异常应在列表可见：硬闸、风险、第三方作者、源文已变、缺图、投递/提交失败、Planner 缓存过期。
+常态信息保持简洁；下列异常应在相关工作区可见：硬闸、风险、第三方作者、源文已变、缺图、投递/提交失败、Planner 缓存过期。
+
+当前只有 `web/ui/` 一套 React + TypeScript 前端。它构建到 `web/ui/dist/`，由 `config.toml` 的 `[paths].web_dist` 显式选择。浏览器路由是 `/review`、`/history`、两类详情路径、`/calendar`、`/settings` 和 `/runtime`；旧查询链接由前端转换。Vite 开发端口为 5174，`/api` 代理到 FastAPI 8765；构建后两者同源。
 
 ## 3. 数据来源
 
@@ -34,7 +36,6 @@ Facebook 与 Instagram 任务始终分行、分详情、分状态。不能按相
 | 月历 | `planner_cache.json` | 派生；显示缓存时间、覆盖和 stale |
 | 确定性标记 | 本地规则 | 红色，事实性 |
 | 模糊风险 | 真实风险结果真相源 | 黄色，提示性；已接风险扫描，实际模型结果仍待联调 |
-| 风险演示 | `fixtures/risks.json` | 只能在明确演示模式出现 |
 
 SQLite 可用于查询加速，但不是业务真相。不可用或与来源版本不符时回到本地真相读取，不能用旧索引完成写入。
 
@@ -64,7 +65,7 @@ SQLite 可用于查询加速，但不是业务真相。不可用或与来源版�
 
 响应现有 `range: {scope, days, month, platform}`；历史 `days: null` 明确没有 90 天上限，待办返回实际 days。tag/status 仍按请求筛选，不能从本页长度推 total。页末/空结果/组合筛选/跨来源 ID/90 天外详情由历史回归覆盖，实际原归档按每页 20 读取第 1/2 页无重复。SQLite 与 1,067 篇源文件实际一致；查询没有翻译、付费或发布副作用，失配仍明确回退/重建。
 
-列表排序优先可行动性和业务时刻，不能因为风险夹具存在而把演示数据排在真实任务前。
+列表排序优先可行动性和业务时刻，不能因为非业务数据改变真实任务顺序。
 
 ## 6. 详情编辑
 
@@ -111,7 +112,7 @@ FB 链接区的插入动作把 `{{linkN}}` 放到正文当前光标处；后端 
 | `POST /api/tasks/{id}/export` | 生成 ZIP 并接管 | 离线通过 |
 | `POST /api/tasks/{id}/check` | 即时确定性检查与完整本地化草稿最终计数，只算不写 | 离线通过 |
 | `GET /api/calendar` | 读取 Planner 缓存 | 离线通过 |
-| `POST /api/calendar/refresh` | 持锁刷新、缓存/错误契约有离线验证；其生产读取器本次真实 ready 另记于集成报告 | 离线通过 |
+| `POST /api/calendar/refresh` | 持锁刷新、缓存/错误契约有离线验证；其正式读取器本次真实 ready 另记于集成报告 | 离线通过 |
 | `GET /api/tasks/{id}/approval-options`、`POST /api/tasks/{id}/approve` | 快照/范围与单渠道正文回读已有离线证据，远端 scheduled 图片适配仍缺，完整验收能力闸保持阻塞 | 代码未完成 |
 
 ### 新增与扩展的必需接口
@@ -134,7 +135,7 @@ FB 链接区的插入动作把 `{{linkN}}` 放到正文当前光标处；后端 
 
 不存在的字段不能以空对象冒充已支持。增加字段保持已有任务入口兼容；语义性破坏须版本化并同时更新前端与回归夹具。404 只表示真实不存在，409 表示版本/锁/许可/能力冲突，损坏真相源显式报错。响应不得暴露本机 `.env`、token、原始凭据或敏感运行路径。
 
-所有 `source_text_sha256` 写入/比较使用统一来源文字摘要，AST 守卫覆盖 web 与生产代码；它不是最终正文的字节摘要。风险另有 raw `scan_text_sha256` 确保高亮偏移不因首尾空白规范改变，source/prompt 任一证据变化仍过期。冻结最终文案、原始证据和媒体字节继续使用精确指纹。
+所有 `source_text_sha256` 写入/比较使用统一来源文字摘要，AST 守卫覆盖 web 与业务代码；它不是最终正文的字节摘要。风险另有 raw `scan_text_sha256` 确保高亮偏移不因首尾空白规范改变，source/prompt 任一证据变化仍过期。冻结最终文案、原始证据和媒体字节继续使用精确指纹。
 
 ### 设置白名单与运行状态
 
@@ -148,8 +149,6 @@ FB 链接区的插入动作把 `{{linkN}}` 放到正文当前光标处；后端 
 
 红色确定性检查和黄色风险提示不可合并。真实扫描在翻译前覆盖 pun/ambiguous/us_only；源文和提示词绑定。`not_scanned`、`failed`、`succeeded` 且零风险分别显示，失败不能渲染为“安全”。来源或提示词变化后过期，保留人工劳动。所有模型阶段使用统一来源许可与日/月付费账本。
 
-`fixtures/risks.json` 不满足上述契约，只能在明显的演示模式使用。真实页面不能默认加载夹具。
-
 hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英文标签候选组、`geo=DE`、同时间范围/同批相对比较；IG 全球累计 media_count；德语同类账号近 14 天用词频次、每周采集。Trends 跨组归一化分数不能横排，IG 量级不能称德国近期热度。空同类名单明确跳过，失败/过期/缺失分别降级并显示采样时间；没有有效信号可人工选择，不用假零值伪装，推荐不阻塞保存/发布。
 
 当前 IG 与 Trends 都有已持久记录的 429 停机。Trends 公开导出要求请求专属的被动 CSV 控件 proof，绑定候选组/DE/统一起止日；不能把登录按钮或任意链接当导出控件。真实 CSV 的 BOM/CRLF 字节与 context 哈希必须保持，未知结构降级。停止状态只读可查询，人工核对恢复还需版本 CAS 与共享锁，不能删除状态后重试。恢复/导出 CLI 见人工指南；目前无真实导出。
@@ -160,7 +159,7 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 同渠道前后 90 分钟内有任何卡片即冲突；另一个渠道不冲突。人工选择冲突时返回 409 和建议候选，不自动顺延。
 
-2026-09-01 曾观察日期选择器不能跨当时可见月份，不能永久写死“同月”。范围须跟可靠读取更新，日期选择器及新 scheduled 形态仍按单独证据验收。月历读完全部日期格/时刻条目、手工项和延迟加载，活跃时间建议不计帖子。本轮生产读取在 `2026-09-13T05:01:33Z` ready：35 格 8/30–10/3，4 条公开帖、2 个正向 tooltip 推荐时段，含 3 个 IG remote ID；当前观察完成不保证未来未知卡片形态也完整。范围/渠道不全或没有明确空态仍显示 unknown/incomplete。
+2026-09-01 曾观察日期选择器不能跨当时可见月份，不能永久写死“同月”。范围须跟可靠读取更新，日期选择器及新 scheduled 形态仍按单独证据验收。月历读完全部日期格/时刻条目、手工项和延迟加载，活跃时间建议不计帖子。本轮正式读取在 `2026-09-13T05:01:33Z` ready：35 格 8/30–10/3，4 条公开帖、2 个正向 tooltip 推荐时段，含 3 个 IG remote ID；当前观察完成不保证未来未知卡片形态也完整。范围/渠道不全或没有明确空态仍显示 unknown/incomplete。
 
 卡片日期/时刻/渠道/远端 ID、缓存截至时间、可见起止日、完整性、stale 和刷新 busy 需可核对。`scheduled` 是回读确认排期；实际公开状态另附观测时间/来源/公开链接，没有证据写 `unknown`，不从“已经到点”推定已发，也不点 Publish now 验证。
 
@@ -177,7 +176,7 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 用户确认的 fingerprint 必须与提交 receipt 一致，快照含全部图片实际字节、数量、顺序及来源版本。确认后当前文件变化不能改变这次提交。审校台、CLI、人工结转共享快照/状态投影；已有定向恢复测试，仍需在本轮真实案例里验证冻结与回读一致。批准中断/回执不确定只补有证据的本地状态、镜像和通知，不重提。
 
-2026-09-01 probe 未记录单渠道勾选。本轮已有单渠道控件/显示名和真实月份读取，生产上层由 month_inventory/month_readback 保留完整日期格、精确全文、唯一渠道/remote ID 因果和相同业务资产；双时间证据冲突则失败，相关 P1/P2 已复审关闭。远端 scheduled 详情图片适配器尚未实现，须受控排期后被动取得真实控件再补齐。`capabilities.acceptance` 同时要求 `full_caption_equal=true`、`remote_images_verified=true`、正整数图片数量和结构有效的有序 remote_media/source SHA 与冻结清单一致；只有正文/ID 或编辑器图片通过不能形成新 G8。原 scheduled 继续用于防重，批准/preflight/激活共用能力判据，缺证据失败闭合。
+2026-09-01 probe 未记录单渠道勾选。本轮已有单渠道控件/显示名和真实月份读取，正式业务层由 month_inventory/month_readback 保留完整日期格、精确全文、唯一渠道/remote ID 因果和相同业务资产；双时间证据冲突则失败，相关 P1/P2 已复审关闭。远端 scheduled 详情图片适配器尚未实现，须受控排期后被动取得真实控件再补齐。`capabilities.acceptance` 同时要求 `full_caption_equal=true`、`remote_images_verified=true`、正整数图片数量和结构有效的有序 remote_media/source SHA 与冻结清单一致；只有正文/ID 或编辑器图片通过不能形成新 G8。原 scheduled 继续用于防重，批准/preflight/激活共用能力判据，缺证据失败闭合。
 
 本轮 `composer_media_probe_20260913T054737Z_final.json/.png` 是 FB 编辑器中的技术长文案与 2 张历史原图探查；文案明确不可发布，未点发布、排期、稍后完成或取消，可能留下草稿。`composer_media_verification_20260913.json` 已确认两图在编辑器中的数量、顺序和视觉一致性；它与远端排期媒体回读是两个验收单元，不能用前者关闭后者或当成运营批准的样本。
 
@@ -189,17 +188,24 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 `keep_delivered_days` 默认 30。过期归档按完整关联事件/投递组件进行，SHA 地址的归档保留原卡片/UUID/回执，主状态保留 archived_events 去重引用，旧事件不重新排队；归档损坏显式失败。uncertain/retry/pending、离岗未发、仍缺接收回执的组件保留在线，不能按创建时间清掉。状态查询和恢复要保留这一事实边界，不把“退出热 outbox”显示成投递记录丢失。
 
-审校链接需在真实企业网络环境测试。生产机地址尚未决定，因为生产迁移明确延期；开发机地址不能提前写成生产契约。
+审校链接需在真实企业网络环境测试。正式运行机器的地址尚未决定，因为机器迁移明确延期；开发机地址不能提前写成部署契约。
 
 ## 12. 验收
 
 离线验收分别覆盖 API 冲突/锁/坏账本、七态/人工优先、历史服务端分页/total/组合筛选/90 天外详情、源图实际字节/数量/顺序、模型中断恢复/旧候选/不确定计费、消息 UUID/冻结内容、三来源降级、设置 CAS/注释、月界/DST/完整覆盖、快照与恢复幂等。
 
-版本化浏览器入口从 `42c8bc9` 开始入库：`tests/tests_browser_workflow.py` 与 `tests/browser_fixture.py`。构建实际 Vue 后运行脚本，临时 ASGI/真实保存、历史分页/老详情/冻结只读、设置注释/CAS/source 冲突均已验证；新增 FB 光标链接和准确最终计数后共 7 场景通过。运行恢复/消息未知及模拟排期/公开状态使用明确 API 夹具，仅验 UI；不会调用真实 approve。最终新 dist 报告在 worktree state/offline-browser-20260913T070144Z-3108/report.json，页面错误/外部请求/禁止写入错误为 0。65 脚本全量首轮 64/65，修测试编码并相关补跑后均有通过记录；构建哈希、补跑范围和 Ruff 范围见集成记录。
+版本化浏览器入口从 `42c8bc9` 开始入库。2026-09-13 的 Vue 构建加临时 ASGI 曾覆盖七个场景，报告位于 worktree `state/offline-browser-20260913T070144Z-3108/report.json`；它是旧版本证据。当前 React 单目录版本在 `state/ui-consolidation-20260914T063209Z` 记录了锁定安装、26 个文件共 505 项测试及 TypeScript + Vite 构建通过；现有 1.39 MB JavaScript chunk 警告不是构建失败，但应保留为性能观察。
+
+当前浏览器入口包括：`tests/tests_browser_workflow.py` 的七个迁移后临时真实后端场景加日期控件回归，`tests/browser_regression.py --stage ALL` 的综合行为检查，`tests/network_compare.py` 的 16 个 React 显式请求契约，默认使用 `web/ui/dist` 和实际 FastAPI 的 `tests/cutover_rehearsal.py`，以及 `tests/review_probe.py` 和 React-only 的 `tests/history_thumbnail_cost.py`。2026-09-14 当前集成 worktree 的完整 66 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和静态演练均通过；报告位于 `state/offline-validation-20260914T065258Z`、`state/offline-browser-20260914T065304Z-21788` 与 `state/ui-regression`，不从旧报告继承，也不代表真实外部系统通过。
 
 ```powershell
 npm.cmd --prefix web/ui run build
 scripts\run_python.bat tests/tests_browser_workflow.py -v
+scripts\run_python.bat tests/browser_regression.py --stage ALL
+scripts\run_python.bat tests/network_compare.py
+scripts\run_python.bat tests/cutover_rehearsal.py
+scripts\run_python.bat tests/review_probe.py
+scripts\run_python.bat tests/history_thumbnail_cost.py
 ```
 
 | 真实验收项 | 必须留下的证据 |
@@ -219,4 +225,4 @@ scripts\run_python.bat tests/tests_browser_workflow.py -v
 
 ## 13. 明确延期
 
-登录、RBAC、非空 actor、生产部署、视频、跨平台复用、`supervised`/无人审核发布和发布队列本轮不做。
+登录、RBAC、非空 actor、正式部署迁移、视频、跨平台复用、`supervised`/无人审核发布和发布队列本轮不做。

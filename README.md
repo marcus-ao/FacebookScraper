@@ -6,9 +6,11 @@
 
 ## 当前基线（2026-09-12）
 
-规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；本轮代码截至 `b1a56bb`，核心集成为 `565f17c`。最新全量执行 65 脚本，首轮 64/65，唯一测试文件默认编码问题修复后相关补跑通过，65 个脚本均有通过记录。最终 Vue 50 modules 构建及实际新 dist + 临时 ASGI 的 7 场景浏览器回归通过，页面错误与外部请求均为 0；启动脚本端口统一为 8765 后另有 2 项相关复验。这是全量加相关补跑，不是首次单次全绿。
+规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；核心集成为 `565f17c`。2026-09-12/13 的全量执行有 65 个脚本通过记录：首轮 64/65，修复唯一测试文件的默认编码问题后相关补跑通过；同期 Vue 50 modules 构建及临时 ASGI 的 7 场景浏览器回归通过，页面错误与外部请求均为 0。这是旧版本的全量加相关补跑，不是首次单次全绿，也不能作为当前 React 整理后的验收结果。
 
-这个 worktree 已通过忽略入库的 `config.local.toml` 接续原 archive/state/.env/解释器。核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，不能当作 `.global` 回填证据。
+当前前端已收敛为 `web/ui/` 下唯一一套 React + TypeScript 应用，构建输出为 `web/ui/dist/`。迁移期间记录的 496 项 React 测试早于本次目录整理；2026-09-14 的当前证据已更新为锁定安装通过、26 个文件共 505 项测试通过，以及 TypeScript + Vite 构建通过。锁文件中的 162 个依赖条目未升级，只调整根包标识；构建保留现有 1.39 MB JavaScript chunk 警告。当前集成 worktree 的完整 66 个 Python 脚本、8 个临时后端浏览器场景、12 组综合浏览器检查、16 个网络契约和 FastAPI 静态演练均已通过；这些仍是离线或隔离证据，不替代合并到原 `main` 后的启动检查或真实外部系统验收。命令、证据范围和历史缩略图成本见 [web/README.md](web/README.md)。
+
+这个 worktree 已通过忽略入库的 `config.local.toml` 接续原 archive/state。核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，当前 `.global` 为零，不能把旧归档当作 `.global` 回填证据。
 
 状态词统一为：
 
@@ -24,7 +26,7 @@
 
 本轮已修复采样 C7 持久停机与数值结构判定，补齐模型/标签/投递独立执行器、批次费用 CAS 恢复、飞书固定消息人工 resolve、多收件人漏发修复、配置与账本周期备份及大证据独立版本。历史交接的统一来源摘要/AST 守卫、兜底过期仍保留普通探测/告警、飞书 30 天终态归档、FB 正文链接占位符和最终计数也已补上。Trends 导出与单渠道全文/身份/时刻回读有离线和复审结论；远端 scheduled 图片读回适配器仍未实现，需要受控排期取证后补齐。代码项和真实依赖按实施清单分开。
 
-真实只读验证已经取得结果：原 1,067 条归档与 SQLite 实际一致；历史每页 20 条读取第 1/2 页无重复，冻结详情只读。月历生产读取在 `2026-09-13T05:01:33Z` 返回 ready，覆盖 35 格（8/30–10/3），识别 4 条公开帖及 2 个推荐时段，包含 3 个独立 IG remote ID。推荐时段经 tooltip 明确排除，旧双渠道排期记录不作为本轮新 G8。
+真实只读验证已经取得结果：原 1,067 条归档与 SQLite 实际一致；历史每页 20 条读取第 1/2 页无重复，冻结详情只读。实际月历读取在 `2026-09-13T05:01:33Z` 返回 ready，覆盖 35 格（8/30–10/3），识别 4 条公开帖及 2 个推荐时段，包含 3 个独立 IG remote ID。推荐时段经 tooltip 明确排除，旧双渠道排期记录不作为本轮新 G8。
 
 本轮没有真实模型、飞书调用或新发布/排期提交。9223 的 FB `Neakasa Deutschland`、IG `neakasa.de` 已确认；IG `.global` 与 Google Trends 公开页均遇 HTTP 429，已分别持久停机且未重试。`.global` 尚未首次回填；飞书 Secret/两接收组、云盘根目录及可达审校 URL 缺失，外部心跳未启用。FB 旧机器译文为提示词版本 5、当前为 6，当前没有可接受的德语图，原 FB 目录也未发现 media_de。冻结 `.tech` 保留的 3 张历史德语图不能作为 FB 或新 `.global` 素材。已有一份 FB 单图待制作包，仍缺最终德语图和具体确认，尚无两篇齐备的最终联调包。所有真实提交仍须先展示具体文图、账号、单渠道和柏林时刻给用户确认。
 
@@ -62,21 +64,21 @@ scripts\run_scheduler.bat --preview
 scripts\run_pipeline.bat preflight --json
 ```
 
-启动审校台：
+启动审校台。开发分支合并回原 `main` 后，日常服务从原主工作区运行这个入口：
 
 ```powershell
-scripts\run_python.bat -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
+scripts\run_web.bat
 ```
 
 若 `web/ui/dist/` 不存在，在开发机执行：
 
 ```powershell
-cd web\ui
-npm install
-npm run build
+npm.cmd --prefix web/ui ci
+npm.cmd --prefix web/ui test
+npm.cmd --prefix web/ui run build
 ```
 
-生产运行静态构建不需要 Node，生产迁移本轮明确延期。启动包装入口读取同一本机运行绑定；审校台现在连到真实数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。
+开发界面时先运行 `scripts\run_web.bat`，再运行 `npm.cmd --prefix web/ui run dev`；Vite 使用 5174 并把 `/api` 代理到 8765。部署静态构建不需要 Node。`config.toml` 的 `[paths].web_dist` 显式指向 `web/ui/dist`；`config.local.toml` 只负责本机 archive/state 接续，不选择前端。审校台连接真实数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。
 
 ## 运行入口
 
@@ -127,4 +129,4 @@ state/
 
 ## 本轮明确延期
 
-生产机迁移、登录与 RBAC、视频加工/发布、跨平台复用、`supervised`/无人审核发布、发布队列和云盘反向同步均不在本轮。它们与尚待修复或联调的缺口分开管理。
+运行机器迁移、登录与 RBAC、视频加工/发布、跨平台复用、`supervised`/无人审核发布、发布队列和云盘反向同步均不在本轮。它们与尚待修复或联调的缺口分开管理。

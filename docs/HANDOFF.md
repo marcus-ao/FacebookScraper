@@ -1,16 +1,18 @@
 # 项目交接
 
-**交接记录：2026-09-12，事实同步至 UTC 2026-09-13；规划基线 `c67c56a`，本轮代码截至 `b1a56bb`（核心集成 `565f17c`）。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准；本文件保存工作边界、日期明确的历史和新证据范围，详细运行证据见 [本轮集成记录](INTEGRATION_2026-09-12.md)。
+**交接记录：2026-09-12，事实同步至 2026-09-14；规划基线 `c67c56a`，核心集成 `565f17c`。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准；本文件保存工作边界、日期明确的历史和新证据范围，2026-09-12/13 的运行证据见 [本轮集成记录](INTEGRATION_2026-09-12.md)，当前进度见 [实施清单](OPTIMIAZATION.md)。
 
 ## 1. 当前工作区事实
 
 - 工作分支是 `codex/business-workflow`，在 `.worktrees/business-workflow` 开发。
 - 规划起点有 config/mirror/store/translated/hygiene/query_index 六处既有未提交修订；现在又有多批并行集成修改。先看 `git status`，只提交自己范围，不覆盖既有修改。
-- 本 worktree 已由忽略入库的 `config.local.toml` 绑定原 archive/state/.env/解释器。核验备份在 worktree `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；包含运行配置核验，凭据不进证据报告。
+- 本 worktree 由忽略入库的 `config.local.toml` 绑定原 archive/state；前端目录只由已提交的 `config.toml` 选择。核验备份在 worktree `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；包含当时运行配置核验，凭据不进证据报告。
 - 原激活 `2026-09-03T09:00:58.277710Z` 保留。当前原归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，SQLite 实际记录/字段一致，历史第 1/2 页各 20 条且无重复，冻结详情已真实只读访问；这些不是 `.global` 回填基线，不能重新 activate 或清空发布历史。
-- 规划阶段 47 脚本/build 与本轮各批定向测试是历史证据。核心 565f17c 全量执行 65 脚本，64/65 后修唯一测试编码问题并相关补跑，65 脚本均有通过记录；Vue 50 modules、新 dist + 临时 ASGI 浏览器 7/7，以及最新 12 个生产 Python 模块 Ruff/diff --check 通过。b1a56bb 把 run_web 默认端口统一为 8765，真实 --help 与 hygiene/runtime_config 2/2 通过。完整批与补跑分别记在集成记录，不称首次单次全绿。
+- 规划阶段 47 脚本/build 与后续各批定向测试是历史证据。核心 565f17c 全量执行 65 脚本，64/65 后修唯一测试编码问题并相关补跑，65 脚本均有当时通过记录；同期 Vue 50 modules、临时 ASGI 浏览器 7/7 和 12 个 Python 业务模块 Ruff/diff --check 通过。完整批与补跑分别记在集成记录，不称首次单次全绿，也不外推为当前 React 结果。
+- 2026-09-14 前端已收敛为 `web/ui/` 下唯一 React + TypeScript 应用，`config.toml` 显式使用 `web_dist = "web/ui/dist"`，开发 Vite 5174 代理 FastAPI 8765。`state/ui-consolidation-20260914T063209Z` 已记录锁定安装、26 个文件共 505 项单元测试及 TypeScript + Vite 构建通过；1.39 MB JavaScript chunk 警告继续观察。当前集成 worktree 的完整 66 个 Python 脚本、八个浏览器工作流场景、12 组综合浏览器检查、16 个网络契约和 FastAPI 静态演练通过；合并到原 `main` 后的日常启动与只读检查尚未执行。
+- 开发改动合并回原 `main` 后，日常服务从原主工作区运行 `scripts/run_web.bat`。`config.local.toml` 只接续 archive/state，不选择前端。
 - 三个 Chrome 均已启动。9224 访问 `.global` 真实 HTTP 429，原 `delta_state.json` 已记 `detect_hard_blocked` 与失败；Google Trends 公开页也实际 HTTP 429，原 `trends_export_state.json` blocked。两者均停止，先人工核对会话/出口，不清空状态或连续请求。
-- 9223 已登录并观察目标 FB `Neakasa Deutschland`、IG `neakasa.de`；2026-09-13T05:01:33Z 生产月历读到完整 35 格、4 条公开帖与 2 个明确推荐时段，含 3 个独立 IG remote ID。尚无本轮新发布/排期提交。
+- 9223 已登录并观察目标 FB `Neakasa Deutschland`、IG `neakasa.de`；2026-09-13T05:01:33Z 实际月历读到完整 35 格、4 条公开帖与 2 个明确推荐时段，含 3 个独立 IG remote ID。尚无本轮新发布/排期提交。
 - 发布浏览器当前曾放入明确写有“Technischer Entwurf…Nicht zur Veröffentlichung vorgesehen.”的技术长文案和 2 张历史原图，仅探查编辑器/缩略图数量顺序；未点 Schedule、Publish、Finish later 或 Cancel。可能有未保存或自动保存草稿，不把它当业务候选，也不声称没有远端写入。
 - 本轮未调用真实模型或发送飞书消息。飞书缺 AppSecret、两个接收组、云盘根目录与可达审校 URL，镜像/外部心跳未启用，运营从飞书到排期尚未验收。
 - 原 10 份账本/激活与备份 SHA 于 06:58:19Z 再核未变；2020-09-03 冻结 `.tech` 帖 2389976088430547749 的直接详情 read_only=true。只读 preflight exit 0 但阶段仍有 blocked/not_observed/disabled，两渠道 acceptance.verified=false。
@@ -63,12 +65,12 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 风险路径与三类采样已有离线验证。IG 采样遵守 C7 持久停机、仅接受明确同名 hashtag 容器的累计 count。Trends 新增 CSV 专属被动控件、完整摘要上下文、BOM/CRLF/周月解析；恢复共享锁并要求 `trends-status` 的 revision。新增 4 项审查修复的 11 项导出测试通过，T1–T4 复审已关闭；真实 CSV/模型/平台采样仍未验收。
 - 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了临时真实后端验证。旧 FB 机器译文 prompt 5、当前 prompt 6；当前无可接受德语图，原 FB 目录未发现 media_de。找到的 3 张历史德语图均属冻结 `.tech`，不作 FB 或新 `.global` 素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
 - 飞书按帖聚合/两组/晨报/有效首图与摘要、原卡冻结/人工 resolve、多收件人部分失效漏发和镜像周期包/大证据独立版本已有离线验证。有效原卡补送保留 UUID；部分失效保留旧 cancelled 卡，只给漏收者生成仍有效的新提醒。企业投递和恢复仍待权限。
-- 完整月历生产读取本次已真实通过，公开观察按 remote ID，不按时钟；生产上层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
-- 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。版本化浏览器已新增 FB 链接插入/准确计数，最终新 dist 的 7 场景通过，输出为 state/offline-browser-20260913T070144Z-3108/report.json。
+- 完整月历实际读取本次已真实通过，公开观察按 remote ID，不按时钟；业务层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
+- 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。`state/offline-browser-20260913T070144Z-3108/report.json` 的 FB 链接插入/准确计数与 7 个场景属于旧 Vue 版本；当前 React 用 `tests/tests_browser_workflow.py`、`browser_regression.py --stage ALL`、16 契约 `network_compare.py`、默认 `web/ui/dist` 的 `cutover_rehearsal.py`、`review_probe.py` 和 React-only `history_thumbnail_cost.py` 重新验收。
 - 历史交接六项已逐项补上：canonical source_text_sha256/AST 守卫，风险 raw scan_text_sha256 保留偏移；补扫中途过期仍跑普通探测并给技术/晨间告警；付费恢复；outbox 默认 30 天完整终态组件按 SHA 归档且主状态保留去重；FB 光标 {{linkN}} 与 /check 最终计数；消除重复 alias。`afb6784` 为调度过期修复，`923091f` 为飞书终态归档，最终整合在 `565f17c`；共同回归已单列。
 - `.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话/权限和具体发布确认。FB 待制作包在 worktree state/integration-candidates/facebook-122120460231379375，来源 2026-08-16“Cat or CCTV”单图、拟 2026-09-15 10:00 柏林但未占位，缺最终德语图/受控样本许可/整包确认；不覆盖短链或多图。IG 没有新素材，过期活动/美元促销不是可以直接提交的联调包。
 
-生产迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
+运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
 ## 5. 2026-08/09 抓取侧历史事实
 
@@ -154,7 +156,7 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 ### 2026-09-12/13 本轮新增观察
 
 - 单渠道控件：`state/channel_controls.json`；被动 v2 探查：`state/publish_probe_20260912_205317_056051.json`，22 条事件。已观察 FB `Neakasa Deutschland` 与 IG `neakasa.de`，尚无本轮新 Schedule 提交回读。
-- 月历控件：`state/planner_controls.json`；最新截图：`planner_month_20260913T044722903276.png`。早期 `043415712413` 截图仅证明 35 格控件可定位；随后 2026-09-13T05:01:33Z 生产 inventory 返回 ready，范围 8 月 30 日至 10 月 3 日、35 格、4 条公开帖，含 3 个独立 IG remote ID。
+- 月历控件：`state/planner_controls.json`；最新截图：`planner_month_20260913T044722903276.png`。早期 `043415712413` 截图仅证明 35 格控件可定位；随后 2026-09-13T05:01:33Z 实际 inventory 返回 ready，范围 8 月 30 日至 10 月 3 日、35 格、4 条公开帖，含 3 个独立 IG remote ID。
 - 真实详情页可由头部 Facebook/Instagram 图标、`Published on` 与合作作者信息区分渠道；未来两个仅显示时刻的项经 tooltip 确认为推荐时段，须排除于帖子/占用数。
 - 本次完整月历读取已通过，仍不能外推新的 scheduled 卡片、跨月/DST 或真实长文/多图回读。读取覆盖所有格子/时刻条目、手工任务和延迟加载，不能用 shell 就绪或已读一周声明空档；公开状态无充分依据仍显示 unknown。
 - 编辑器媒体探查：原 state 的 `composer_media_probe_20260913T054737Z_final.json/.png` 记录技术长文案和 2 张原图；后续 `composer_media_verification_20260913.json` 在 06:01:17Z 对两张 1536×2048 图片按顺序核验，dHash/RGB 误差 0、宽高比比值 1。未提交发布或排期，可能留下草稿；这不是有效业务联调内容，也不是远端 scheduled 图片证据。

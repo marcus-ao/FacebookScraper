@@ -35,16 +35,7 @@ Pillow>=11,<13
 # 侵入性最小的一个。
 tzdata>=2024.1
 
-# web/ 审校台。**只加这两个**，理由记在这里：
-#
-# 选 FastAPI 而不是 stdlib `http.server`，是为了**不用换第二次**
-# （docs/PROTOTYPE_DESIGN.md 第 3 节）：原型是只读的，`http.server` 够用，
-# 但 M2 要多用户并发 + 写入 + 登录，那时必须换掉 —— 等于把切换成本
-# 推到最需要稳定的时刻。现在选定，从原型到 M2 一次不用换。
-#
-# ⚠️ **前端不在这里。** Vue 的构建链只存在于开发机（web/ui/package.json），
-# 产出是静态文件 `web/ui/dist/`，由 FastAPI 直接伺服。于是那台常开的生产机
-# **不需要 Node 运行时、不需要 npm install、断网也能跑** —— 这是同时满足
-# 「用 Vue」和「不破坏极简依赖」的唯一方式。
+# 审校台 HTTP API 与静态页面服务。
+# React 依赖由 web/ui/package-lock.json 管理；构建到 web/ui/dist 后由 FastAPI 提供。
 fastapi>=0.115
 uvicorn>=0.30

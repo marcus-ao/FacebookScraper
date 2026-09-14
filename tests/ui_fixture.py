@@ -1,4 +1,4 @@
-"""Serve either built UI over BrowserFixture; all business data stays in its temporary tree."""
+"""Serve the built React UI over BrowserFixture; all business data stays temporary."""
 from __future__ import annotations
 
 import copy
@@ -10,8 +10,7 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: 回归产物落在 state/（已 gitignore）。以前写在 docs/ui-refactor/ 下，
-#: 那是一次性的取证目录，不该被每次跑回归重写。
+#: 回归产物落在 state/（已 gitignore），避免每次运行改动受版本控制的文件。
 EVIDENCE = ROOT / "state" / "ui-regression"
 EVIDENCE.mkdir(parents=True, exist_ok=True)
 if str(ROOT) not in sys.path:
@@ -22,9 +21,9 @@ from audit_fixture_host import AuditHost, SAMPLES
 
 
 class UIFixture:
-    def __init__(self, fx: BrowserFixture, engine="react"):
+    def __init__(self, fx: BrowserFixture):
         self.fx = fx
-        self.dist = ROOT / "web" / ("ui-next" if engine == "react" else "ui") / "dist"
+        self.dist = ROOT / "web" / "ui" / "dist"
         self.requests = []
         self.errors = []
         self.overrides = {}
@@ -67,11 +66,11 @@ class UIFixture:
 
     def synthetic_buckets(self):
         data = copy.deepcopy(self.list_data)
-        prototype = data["tasks"][0]
+        template = data["tasks"][0]
         statuses = ["pending_review", "edited", "not_ready", "snoozed", "approved", "scheduled", "skipped", "handed_off"]
         data["tasks"] = []
         for index, status in enumerate(statuses):
-            row = copy.deepcopy(prototype)
+            row = copy.deepcopy(template)
             row.update(id=f"fa_neakasaofficial/{7000000000 + index}", status=status,
                        text_de_excerpt=f"Queue fixture {status}", month="2026-09", platform="facebook", tags=["Riko"])
             row["review"]["status"] = status

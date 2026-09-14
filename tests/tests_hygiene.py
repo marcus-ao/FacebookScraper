@@ -44,7 +44,7 @@ def check(cond, msg):
         fails.append(msg)
 
 
-# 生产代码（不含测试、不含一次性脚手架）
+# 受检代码（不含测试、不含一次性脚手架）
 PROD_DIRS = ("core", "routes", "publish", "pipeline")
 PROD_ROOT_FILES = ("translate.py", "localize_images.py")
 
@@ -171,7 +171,7 @@ for path in python_files(include_tests=False, include_scaffolding=False):
             definitions.setdefault(node.name, []).append((rel(path), node.lineno))
 
 references = collections.Counter()
-# Web 是实际生产调用者。引用统计纳入叶子入口，定义扫描/依赖图边界不变。
+# Web 是实际调用者。引用统计纳入叶子入口，定义扫描/依赖图边界不变。
 for text in [*sources.values(), *(path.read_text(encoding='utf-8') for path in WEB_SOURCES)]:
     for match in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text):
         references[match.group()] += 1
@@ -184,7 +184,7 @@ for name, places in definitions.items():
         orphans.append("%s（%s）" % (name, places[0][0] + ":" + str(places[0][1])))
 
 check(not orphans,
-      "生产代码里没有零引用定义，实得 %d 个：%s"
+      "受检代码里没有零引用定义，实得 %d 个：%s"
       % (len(orphans), "、".join(sorted(orphans)) or "无"))
 
 
@@ -276,7 +276,7 @@ if clashes:
         print("       %d 处窗口重复：%s" % (len(samples), " ↔ ".join(sorted(files))))
         print("         例如 %s:%d-%d" % first)
 check(not clashes,
-      "生产代码里没有跨文件重复实现，实得 %d 组" % len(clashes))
+      "受检代码里没有跨文件重复实现，实得 %d 组" % len(clashes))
 
 
 # ==========================================================================

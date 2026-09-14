@@ -36,8 +36,8 @@ from publish.compose import (ComposeError, InstagramConstraints,  # noqa: E402
 from publish.evidence import verify_all  # noqa: E402
 from translate import PROMPT_VERSION, source_text_sha256  # noqa: E402
 import publish.business_suite as bs  # noqa: E402
-# 探针是一次性脚手架（tools/_scaffolding/），生产链路不 import 它。
-# 这里 import 它只为一件事：证明**真录制器产出的 dump 满足生产契约**。
+# 探针是一次性脚手架（tools/_scaffolding/），发布链路不 import 它。
+# 这里 import 它只为一件事：证明**真录制器产出的 dump 满足发布契约**。
 from tools._scaffolding.probe_publish import ProbeRecorder, install_script  # noqa: E402
 import tools._scaffolding.probe_publish as probe_module  # noqa: E402
 import publish.compose as compose_module  # noqa: E402
@@ -226,7 +226,7 @@ async def make_completed_probe(state_dir: Path, profile: Path):
     Image.new("RGB", (24, 16), (4, 5, 6)).save(final_shot, format="PNG")
     # ⚠️ 这条快照必须满足**完整的 v2 契约**（page_id / evidence_order /
     # recorded_at 都要有），因为 compose 现在委托 evidence.validate_v2_dump
-    # 判定，和生产走同一份校验。此前两边各有一份校验、这个夹具只满足较松的
+    # 判定，和实际调用走同一份校验。此前两边各有一份校验、这个夹具只满足较松的
     # 那份——正是双份实现漂移的典型现场。
     #
     # evidence_order 在真实 dump 里是全局单调的（interactions 与 snapshots
@@ -821,7 +821,7 @@ with tempfile.TemporaryDirectory() as d:
     check(len(post.image_paths) == 2,
           "审核过且数值一致的完整 probe 才能严格组装，空白可选 FB slug 不阻塞")
     check(len(auto_post.image_paths) == 2,
-          "生产 strict 会从 config 审核的 dump 自动构造窗口/IG 约束，不再要求 CLI 手工注入")
+          "strict 模式会从 config 审核的 dump 自动构造窗口/IG 约束，不再要求 CLI 手工注入")
     check(fb_target_ig_blocked,
           "FB canonical 仍会同时发到 IG，因此严格发布不能按来源平台绕过 IG 图片上限")
     check(not any("尚无 G1" in item or "只是 API 占位" in item
@@ -1112,10 +1112,10 @@ for key in ("composer_submit_button", "composer_success_signal",
 # [6]-[9] 已删除（2026-09-03）：它们测的是 tools/probe_publish.py 这个
 # **一次性脚手架**的内部实现——CDP 监听器安装、Enter 停止、sequence 空号
 # 修复，以及 7 个手写的 FakeCDPSession 假类。探针已移入 tools/_scaffolding/，
-# 不参与生产链路（publish/ 里零处 import 它），它的产物
+# 不参与发布链路（publish/ 里零处 import 它），它的产物
 # publish/signals_backfilled.py 已生成并提交。
 #
-# 生产侧真正依赖的是「dump 契约」与「选择器逐条回查」，那两项在上面的
+# 发布侧真正依赖的是「dump 契约」与「选择器逐条回查」，那两项在上面的
 # [4][5][5b] 里，保留。
 # ==========================================================================
 
@@ -1158,7 +1158,7 @@ class FakeKeyboard:
             target.text += "\n"
 
     async def type(self, text):
-        """逐字符按键。**生产代码不该再用它**（CR-71），这里保留是为了能测出
+        """逐字符按键。**实际调用不该再用它**（CR-71），这里保留是为了能测出
         "改回去就会坏"——见下面 `on_key_type` 那个只在按键路径上生效的钩子。"""
         target = self.page.focused
         if target is None:
@@ -1901,7 +1901,7 @@ async def strict_login(facebook_value):
 
 strict_context = asyncio.run(strict_login("Neakasa Deutschland"))
 check(strict_context.selection_verified,
-      "生产账号闸从 composer 预览抬头提取**完整值**后通过")
+      "发布账号闸从 composer 预览抬头提取**完整值**后通过")
 check(any("IG" in note and "回读" in note for note in strict_context.notes),
       "并且**明说** IG 在 composer 上不显示、由提交后回读证明，不是悄悄跳过")
 try:
@@ -1911,7 +1911,7 @@ except PublishStepError:
 else:
     strict_near_collision_blocked = False
 check(strict_near_collision_blocked,
-      "生产账号闸拒绝 FB 同名前缀 Page（完整值比较，多一个词就是另一个主页）")
+      "发布账号闸拒绝 FB 同名前缀 Page（完整值比较，多一个词就是另一个主页）")
 
 
 async def login_wrong_page():
@@ -1945,7 +1945,7 @@ chooser, notes = asyncio.run(upload(True, 5))
 check(chooser.files is not None and len(chooser.files) == 5,
       "G3 走 file chooser 通道交 5 张图，全程没有写死 input[type=file] 选择器")
 check(any("尚未核对缩略图数量" in note and "media.verify_upload" in note for note in notes),
-      "G3 上传入口说明尚未核验：生产 workflow 另行核对缩略图，旧调用方仍需人工复核")
+      "G3 上传入口说明尚未核验：发布 workflow 另行核对缩略图，旧调用方仍需人工复核")
 check(raises(PublishStepError, lambda: asyncio.run(upload(False, 5)),
              "只收 1 个文件"),
       "G3 控件只收单文件却要传 5 张时停下，不默默只传一张")

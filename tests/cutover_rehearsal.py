@@ -2,14 +2,14 @@
 
 为什么单独写一个：`tests/browser_fixture.py` 的 UIFixture 是在 Playwright 那一侧
 拦路由的，找不到文件就自己回落 index.html —— 也就是说它**自带 SPA 回落**。
-浏览器回归 12/12 全绿，证明的是「前端逻辑对」，不是「FastAPI 这样挂得起来」。
-新 UI 用的是真实路径（/review、/history、/review/<account>/<id>），旧 UI 只用
-`/?task=`、`/?view=`，这中间差的正好是服务端要不要管前端路由。
+浏览器回归全绿，证明的是「前端逻辑对」，不是「FastAPI 这样挂得起来」。
+React 使用真实路径（/review、/history、/review/<account>/<id>），所以服务端必须
+正确回落到 index.html；旧书签的查询参数路径仍须兼容。
 
-用法（两次是分开的进程，因为 web.api.app 在 import 时就把 DIST 定死了 ——
-这正是生产上「改 config + 重启」的语义）：
+用法（每次是独立进程，因为 web.api.app 在 import 时就把 DIST 定死了；
+修改 config 后须重启服务才能采用新目录）：
 
-    scripts\\run_python.bat tests/cutover_rehearsal.py --dist web/ui-next/dist
+    scripts\\run_python.bat tests/cutover_rehearsal.py
     scripts\\run_python.bat tests/cutover_rehearsal.py --dist web/ui/dist
 
 ⛔ 真实 config.toml 不碰：演练用的是临时目录里的一份副本，退出时校验原文件未变。
@@ -48,9 +48,12 @@ def isolated_config(root: Path, dist_rel: str):
     """把 [paths].web_dist 写进夹具自己的那份 config.toml 副本。"""
     text = (ROOT / "config.toml").read_text(encoding="utf-8")
     entry = f'web_dist = "{dist_rel}"'
-    if re.search(r"(?m)^\s*\[paths\]", text):
+    text, replaced = re.subn(r"(?m)^\s*web_dist\s*=.*$", entry, text)
+    if replaced > 1:
+        raise AssertionError("config.toml 里出现多个 [paths].web_dist")
+    if not replaced and re.search(r"(?m)^\s*\[paths\]", text):
         text = re.sub(r"(?m)^(\s*\[paths\][^\r\n]*\r?\n)", r"\1" + entry + "\n", text, count=1)
-    else:
+    elif not replaced:
         text = text.rstrip("\n") + "\n\n[paths]\n" + entry + "\n"
     path = root / "config.toml"
     path.write_text(text, encoding="utf-8")
@@ -69,12 +72,11 @@ def seed(root: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dist", required=True, help="web/ui-next/dist 或 web/ui/dist")
+    parser.add_argument("--dist", default="web/ui/dist", help="React 构建目录，默认 web/ui/dist")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
-    engine = "react" if "ui-next" in args.dist else "vue"
     original = (ROOT / "config.toml").read_bytes()
-    report: dict = {"engine": engine, "dist": args.dist, "http": {}, "legacy": {}, "external_writes": []}
+    report: dict = {"ui": "react", "dist": args.dist, "http": {}, "legacy": {}, "external_writes": []}
 
     with ExitStack() as stack:
         root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="cutover-rehearsal-")))
@@ -121,7 +123,7 @@ def main() -> int:
         try:
             client = httpx.Client(base_url=base, timeout=20, follow_redirects=False,
                                   headers={"Accept": "text/html,application/xhtml+xml"})
-            paths = REACT_PATHS + [f"/review/{task_id}", f"/history/{task_id}"] if engine == "react" else ["/"]
+            paths = REACT_PATHS + [f"/review/{task_id}", f"/history/{task_id}"]
             for path in paths + LEGACY + [f"/?task={task_id}"]:
                 response = client.get(path)
                 report["http"][path] = response.status_code
@@ -147,15 +149,14 @@ def main() -> int:
                     page.goto(base + path, wait_until="networkidle")
                     page.wait_for_timeout(400)
                     report["legacy"][path] = page.url[len(base):]
-                if engine == "react":
-                    for label, action in [("deep_link", lambda: page.goto(base + "/calendar", wait_until="domcontentloaded")),
-                                          ("deep_link_after_reload", lambda: page.reload(wait_until="domcontentloaded"))]:
-                        action()
-                        page.wait_for_timeout(600)
-                        report[label + "_url"] = page.url[len(base):]
-                        report[label + "_heading"] = (page.locator("h1").first.inner_text()
-                                                      if page.locator("h1").count() else
-                                                      "(没有 h1) " + page.locator("body").inner_text()[:120])
+                for label, action in [("deep_link", lambda: page.goto(base + "/calendar", wait_until="domcontentloaded")),
+                                      ("deep_link_after_reload", lambda: page.reload(wait_until="domcontentloaded"))]:
+                    action()
+                    page.wait_for_timeout(600)
+                    report[label + "_url"] = page.url[len(base):]
+                    report[label + "_heading"] = (page.locator("h1").first.inner_text()
+                                                  if page.locator("h1").count() else
+                                                  "(没有 h1) " + page.locator("body").inner_text()[:120])
                 report["page_errors"] = errors
                 browser.close()
         finally:

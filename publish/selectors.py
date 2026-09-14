@@ -342,7 +342,7 @@ _GAPS = (
         key="composer_submit_button",
         step="G6 提交",
         why_missing="那一轮在设定时刻时被 CR-66 的死锁打断，没走到提交。",
-        blocks="G6 的生产证据门：状态机与单击提交已经实现，但 SIGNALS 为空时"
+        blocks="G6 的验收证据门：状态机与单击提交已经实现，但 SIGNALS 为空时"
                "会在接触浏览器前失败闭合；绝不凭猜测解锁品牌主页提交。",
         how_to_close="重录一次探查并走到提交（可以排一个几天后的时刻，"
                      "验证完再去取消）。",
@@ -373,7 +373,7 @@ _GAPS = (
         step="G2 账号核对",
         why_missing="composer 界面上没录到主页切换器，也没录到任何"
                     "「当前发的是哪个 Page / 哪个 IG 帐号」的控件。",
-        blocks="G2 的生产账号安全闸：显式 `--submit` 必须在点击前证明当前上下文"
+        blocks="G2 的实际账号安全闸：显式 `--submit` 必须在点击前证明当前上下文"
                "同时对应配置中的 FB Page 与 IG 帐号；缺证据时在浏览器前失败闭合。",
         how_to_close="补录时在 composer 里点一下主页/帐号那一块，"
                      "让它的 role 与可访问名进 dump。",
@@ -409,7 +409,7 @@ def describe_gap(key: str) -> str:
 
 
 # =============================================================================
-# 四、生产证据的装载点
+# 四、验收证据的装载点
 # =============================================================================
 #
 # `tools/probe_signals.py --emit` 从一份 v2 dump **机械推导**出 G6/G6c 需要的
@@ -422,10 +422,10 @@ def describe_gap(key: str) -> str:
 # 程序不替人填。所以即使有人手工造一个 signals_backfilled.py 塞进来，
 # 只要它回查不过或来源对不上，`--submit` 依然会在碰浏览器之前失败闭合。
 #
-# 文件不存在 = 还没录到干净的 dump = 三张表保持现状 = 生产闸保持关闭。
+# 文件不存在 = 还没录到干净的 dump = 三张表保持现状 = 发布校验保持关闭。
 try:
     from publish import signals_backfilled as _backfilled
-except ImportError:                               # 正常状态：还没有生产证据
+except ImportError:                               # 正常状态：还没有验收证据
     pass
 else:
     REGISTRY.update(_backfilled.LOCATORS)

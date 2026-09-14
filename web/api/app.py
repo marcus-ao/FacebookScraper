@@ -1,7 +1,7 @@
 r"""审校台 HTTP 接口：归档读取、人工文案保存与即时检查。
 
 人工文案、本地化选择、审校状态与 ZIP 导出写入真实归档；排期需通过本机核验。
-历史原型 _fake_state.json 不参与任何请求。前端静态产物由本应用直接伺服。
+React 前端静态产物由本应用直接提供。
 """
 from __future__ import annotations
 
@@ -42,16 +42,12 @@ app.include_router(calendar.router)
 app.include_router(settings.router)
 app.include_router(runtime.router)
 
-#: 前端构建产物目录。默认仍是旧 Vue 应用；不配置时行为与迁移之前完全一致。
-#:
-#: 迁移期间 web/ui/（Vue）与 web/ui-next/（React）并存，两者构建到各自的
-#: dist/。切换与回滚都是改这一个值 + 重启进程，不碰接口、字段、账本或归档
-#: （web/ui-next/REACT_MIGRATION_PLAN.md §2.2）。
+#: React 前端构建产物目录，相对于项目根目录。
 DEFAULT_DIST_REL = "web/ui/dist"
 
 
 def _dist_dir() -> Path:
-    """解析 ``[paths].web_dist``；越界或不存在的配置回落默认值。
+    """解析 ``[paths].web_dist``；越界配置回落默认值，缺少构建时提示构建命令。
 
     只允许 ROOT 之内的目录：这个路径会被 ``StaticFiles`` 直接伺服，
     指到仓库外面就等于把任意目录挂上 HTTP。判据和归档那边同一条纪律。
@@ -130,7 +126,7 @@ def get_task(task_id: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# 文案、审校状态、分类与导出；排期由独立 approval 路由调用生产流程
+# 文案、审校状态、分类与导出；排期由独立 approval 路由调用业务流程
 # ---------------------------------------------------------------------------
 
 @app.post("/api/tasks/{task_id:path}/skip")
@@ -278,42 +274,23 @@ def index() -> Response:
             where = str(DIST)
         source = where[: -len("/dist")] if where.endswith("/dist") else where
         return Response(
-            "前端还没构建。在开发机上跑：\n"
-            "  cd %s && npm install && npm run build\n"
-            "然后把 %s/ 拷到生产机即可（生产机不需要 Node）。\n"
+            "前端尚未构建。请在项目根目录执行：\n"
+            "  npm.cmd --prefix %s ci\n"
+            "  npm.cmd --prefix %s run build\n"
+            "构建完成后重新启动审校台。\n"
             "当前挂载点由 config.toml 的 [paths].web_dist 决定，默认 %s。\n"
-            % (source, where, DEFAULT_DIST_REL),
+            % (source, source, DEFAULT_DIST_REL),
             media_type="text/plain; charset=utf-8", status_code=503)
     return FileResponse(DIST / "index.html")
 
 
 class SinglePageFiles(StaticFiles):
-    """找不到文件时把 index.html 交回去，让前端路由自己认领这个路径。
+    """为直接访问和刷新 React 路由提供 index.html。
 
-    ⚠️ 这条是新前端能不能切换的前提。旧 Vue 的 URL 全都长在 ``/`` 上
-    （``/?task=``、``/?view=``），服务端不需要管前端路由；新前端用的是真实路径
-    （``/review``、``/calendar``、``/review/<account>/<post_id>``），
-    ``StaticFiles`` 找不到同名文件就是 404。实测结果是：侧栏点着能走，
-    一按 F5、一个收藏、一条粘给同事的链接，就只剩一行 ``{"detail":"Not Found"}``。
-    而「刷新详情页仍知道第 n / N 篇」「返回列表恢复原筛选」正是这次重构的目标
-    （DECISION_LOG.md §2.2）。
-
-    浏览器回归没照出这一条：``tests/browser_fixture.py`` 的 UIFixture 在 Playwright
-    那一侧拦路由，找不到文件自己就回落 index.html —— 它自带 SPA 回落，
-    所以 12/12 全绿证明的是前端逻辑对，不是这个部署形状立得住。
-    复现在 ``tests/cutover_rehearsal.py``，契约钉在 ``tests/tests_spa_static.py``。
-
-    ⛔ 三种情况**不回落**，回落了反而会把真问题藏起来：
-       1. ``/api/...``：接口的 404 必须还是 JSON，不能变成一页 HTML；
-       2. 带扩展名的请求（``/assets/xxx.js``）：漏掉一个产物要当场报 404，
-          回落会让浏览器拿到 HTML 再报一个看不懂的 MIME 错；
-       3. 不收 HTML 的请求（``<script src>``、fetch）：同上。
-
-    写方法不用在这里挡：``StaticFiles.__call__`` 自己就只放 GET / HEAD 过来，
-    别的直接 405，所以 ``POST /review`` 永远走不到下面这段 —— 它不会被回落成
-    一页 HTML（那会让调用方以为请求成功了）。路径越界同理：能不能读到文件
-    仍然由 ``StaticFiles`` 自己的查找决定，这里只在它说「没有」之后接手。
-    契约全部钉在 ``tests/tests_spa_static.py``。
+    接口错误、带扩展名的资源及不接受 HTML 的请求不回落到页面。
+    HTTP 方法和文件边界继续由 StaticFiles 检查。
+    实际服务入口由 tests/cutover_rehearsal.py 验证；
+    路由和资源错误契约由 tests/tests_spa_static.py 验证。
     """
 
     async def get_response(self, path: str, scope):

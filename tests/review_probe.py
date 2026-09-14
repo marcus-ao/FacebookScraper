@@ -33,7 +33,7 @@ def image_requests(ui):
 def probe_images(page, ui, out):
     """R1：只看正文时不许先把整张原图/德语图拉下来。
 
-    图片响应带 `Cache-Control: no-cache`（web/DESIGN.md §7），每进一篇详情就是一次
+    图片响应带 `Cache-Control: no-cache`（见 web/DESIGN.md），每进一篇详情就是一次
     真实往返；原实现把图片工作区常驻在 hidden 容器里，于是运营根本没点开图片页
     也会先付这份带宽。
     """
@@ -80,7 +80,7 @@ def probe_localization_state(page, ui, out):
 
 
 def probe_density(page, ui, out):
-    """按 DESIGN.md §14 的口径自己量一遍，不抄 final-measurements.json。"""
+    """按 web/ui/DESIGN.md 的密度口径测量当前页面。"""
     result = {}
     for name, url in [("review", "/review"), ("history", "/history"),
                       ("detail", f"/review/{ui.fx.fb_id}"), ("calendar", "/calendar"),
@@ -289,7 +289,7 @@ def main() -> int:
 
     out: dict = {}
     with BrowserFixture() as fx:
-        ui = UIFixture(fx, "react")
+        ui = UIFixture(fx)
         with sync_playwright() as play:
             browser = play.chromium.launch()
             page = browser.new_page(viewport=SMALL)

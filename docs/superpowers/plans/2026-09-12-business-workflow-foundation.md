@@ -1,5 +1,7 @@
 # 业务流水线第一批实施计划
 
+本文件保存 2026-09-12 第一批实施时的范围、技术栈和结果，其中 Vue 仅描述当时版本。当前唯一前端与验收状态见 [五阶段实施清单](../../OPTIMIAZATION.md) 和 [审校台说明](../../../web/README.md)。
+
 > **For agentic workers:** 使用 superpowers:subagent-driven-development 分工实现；按下列可验证边界集成。
 
 **Goal:** 让运营在审校台保存的人工文案真正留档、被下游采用，并补上扩大自动化之前的内容保护。
@@ -48,7 +50,7 @@ effective_translation(source: dict, machine: dict | None, human: dict | None) ->
 - [x] 源变更只标记待复核。旧的手改 `text_de.txt` 不能被重建吞掉；无法确认依据的旧内容按过期人工版本保留。
 - [x] 报告与发布正文读取同一条优先级；图片仍按其生成依据校验，文案保存不自动触发图片付费。
 
-## 任务 2：真实保存接口及原型交互接入
+## 任务 2：真实保存接口及界面交互接入
 
 **Files:** `web/api/writer.py`、`reader.py`、`app.py`、Vue 文案与详情组件、`tests/tests_web_review.py`。
 

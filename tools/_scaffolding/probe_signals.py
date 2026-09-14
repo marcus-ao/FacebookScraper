@@ -1,6 +1,6 @@
-r"""从一份 v2 probe dump 里**机械推导** G6/G6c 生产证据，回查通过后才落盘。
+r"""从一份 v2 probe dump 里**机械推导** G6/G6c 验收证据，回查通过后才落盘。
 
-存在的理由只有一条：**把「录完 dump → 生产闸打开」这一段从"再开一次开发会话"
+存在的理由只有一条：**把「录完 dump → 发布校验打开」这一段从"再开一次开发会话"
 变成"跑一条命令"。**
 
 在此之前这条缝是这样的：用户录 20 分钟 dump → 交给一个 Agent 人工读 →
@@ -12,7 +12,7 @@ r"""从一份 v2 probe dump 里**机械推导** G6/G6c 生产证据，回查通�
 
 ``--check``
     只读体检。先跑 :func:`publish.evidence.validate_v2_dump` 的完整 v2 契约，
-    再逐项报告六件生产证据**能不能从这份 dump 推导出来**，
+    再逐项报告六件验收证据**能不能从这份 dump 推导出来**，
     推不出来时直接说"缺哪一块、补录时要做什么"。零写盘。
     **这是录完之后第一件该跑的命令**——30 秒就知道这次录制成不成立，
     不用等到 `--submit` 才发现。
@@ -23,13 +23,13 @@ r"""从一份 v2 probe dump 里**机械推导** G6/G6c 生产证据，回查通�
     任一条回查不过就整体拒绝落盘，退出码非 0。
 
 ``--status``
-    当前生产闸是开是关，关着的话差哪一条。
+    当前发布校验是开是关，关着的话差哪一条。
 
 ⛔ **这不是"让程序猜选择器"。** 每一个字段的值都是从 dump 里**抄**出来的：
 role、可访问名、容器归属、日期格式全部来自被动语义快照，
 regex 是拿一张候选表**逐个试到能解析为止**，试不出来就报缺口。
 推导完还要原路回查一遍——回查用的是 `evidence.py`，
-和 `--submit` 上生产闸用的是同一套代码。**编出来的值会当场被打回。**
+和 `--submit` 上发布校验用的是同一套代码。**编出来的值会当场被打回。**
 """
 from __future__ import annotations
 
@@ -807,7 +807,7 @@ def derive_all(data: dict, dump: str, *, facebook: str, instagram: str,
 
 def verify_derived(results: list[Derived], dumps_dir: Path
                    ) -> list[tuple[str, bool, str]]:
-    """把推导结果原路丢回 evidence 回查。用的就是生产闸那套代码。"""
+    """把推导结果原路丢回 evidence 回查。用的就是发布校验那套代码。"""
     out: list[tuple[str, bool, str]] = []
     specs = {item.key: item.spec for item in results if item.ok}
     for item in results:
@@ -842,7 +842,7 @@ r"""**生成文件** —— 由 `tools/probe_signals.py --emit` 从一份 v2 pro
 来源 dump：%s
 生成时间：%s
 
-每一条都通过了 `publish.evidence` 的回查（和 `--submit` 上生产闸用的是
+每一条都通过了 `publish.evidence` 的回查（和 `--submit` 上发布校验用的是
 同一套代码），并且五条一起通过了 `verify_publish_chain` 的同页因果顺序检查。
 想知道它们是怎么推出来的，跑 `tools/probe_signals.py --check <dump>`。
 """
@@ -1020,16 +1020,16 @@ def report(data: dict, facebook: str, instagram: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(
-        description="从 v2 probe dump 推导 G6/G6c 生产证据并回查后落盘")
+        description="从 v2 probe dump 推导 G6/G6c 验收证据并回查后落盘")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", metavar="DUMP",
-                       help="只读体检：这份 dump 能不能解锁生产提交")
+                       help="只读体检：这份 dump 能不能解锁发布提交")
     group.add_argument("--report", metavar="DUMP",
                        help="摊开这份 dump 里真实存在的语义（推不出来时看它）")
     group.add_argument("--emit", metavar="DUMP",
                        help="推导 → 回查 → 写 publish/signals_backfilled.py")
     group.add_argument("--status", action="store_true",
-                       help="当前生产闸是开是关，关着的话差什么")
+                       help="当前发布校验是开是关，关着的话差什么")
     parser.add_argument("--caption", default="",
                         help="测试帖正文里的一小段，用来在卡片上认出正文子元素")
     parser.add_argument("--success-name", default="",
@@ -1051,7 +1051,7 @@ def main(argv: list[str] | None = None) -> int:
     print("=== v2 契约校验 ===")
     if data is None:
         print("  [X] %s" % detail)
-        print("\n这份 dump 解锁不了生产提交。v2 契约要求：schema_version=2、"
+        print("\n这份 dump 解锁不了发布提交。v2 契约要求：schema_version=2、"
               "mode=record-and-passive-evidence、started_at/finished_at 都有效、"
               "interactions 与 snapshots 序号连续、evidence_order 全局连续、"
               "并且有一张位于本轮截图目录内的 final 遮罩截图。")
@@ -1072,11 +1072,11 @@ def main(argv: list[str] | None = None) -> int:
     ok = _print_results(results, checks)
 
     if not ok:
-        print("⛔ 至少一项推不出来或回查不过，生产闸保持关闭。")
+        print("⛔ 至少一项推不出来或回查不过，发布校验保持关闭。")
         print("   按上面每条的「补录」提示重录一次，再跑一次 --check。")
         return 1
     if args.check:
-        print("✅ 这份 dump 足以解锁生产提交。下一步：")
+        print("✅ 这份 dump 足以解锁发布提交。下一步：")
         print("   .venv\\Scripts\\python.exe tools\\probe_signals.py --emit %s"
               % source)
         return 0
@@ -1090,7 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _status() -> int:
     from publish import business_suite as bs
-    print("=== G6/G6c 生产闸 ===")
+    print("=== G6/G6c 发布校验 ===")
     ok = True
     for label, fn in (("账号上下文", bs.require_account_context_evidence),
                       ("提交按钮 + 成功信号", bs.require_submission_evidence),

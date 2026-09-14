@@ -42,7 +42,7 @@ def _parse_args(argv=None):
     trends.add_argument("--tag", action="append", required=True, help="同一次图表中的德语候选，可重复")
     trends.add_argument("--time-range", required=True)
     trends.add_argument("--geo", default="DE", choices=("DE",))
-    trends.add_argument("--context", help="可选：生产导出生成的 .json 元数据；否则列名必须明确 (Germany)")
+    trends.add_argument("--context", help="可选：浏览器导出生成的 .json 元数据；否则列名必须明确 (Germany)")
     trends.add_argument("--sampled-at")
     trends.add_argument("--output")
     public = sub.add_parser("trends-public", help="经已录证的唯一可访问控件下载并导入公开 CSV")

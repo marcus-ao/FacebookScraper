@@ -200,7 +200,7 @@ class RequestController:
     最顶层的三个（这正是本次重构要拆掉的那条边）。
 
     所以策略由**组装根**（各 CLI 的 ``main()``）注入：
-    ``pipeline_assisted.budget_preflight`` 是生产实现，测试传 ``lambda: None``。
+    ``pipeline_assisted.budget_preflight`` 是实际实现，测试传 ``lambda: None``。
     """
 
     def __init__(self, state_dir: Path, *,

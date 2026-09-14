@@ -766,7 +766,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
 def prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | None:
     """`_prepaid_issue` 的公开名字。
 
-    给 `pipeline preflight` 这类**只读预演**用：预检必须用生产同一套判据，
+    给 `pipeline preflight` 这类**只读预演**用：预检必须用实际同一套判据，
     否则"预检说能跑"和"真跑起来"会分叉 —— 那正是本项目一再吃亏的形状。
     """
     return _prepaid_issue(candidate, rules)
@@ -908,7 +908,7 @@ def assert_budget(account_dirs: Iterable[Path], settings: Mapping[str, Any], *,
 def budget_preflight() -> None:
     """在 paid lock 内按全账号真相源重算日/月预算。
 
-    这是 :class:`core.paid_requests.RequestController` 的生产 ``preflight``。
+    这是 :class:`core.paid_requests.RequestController` 的实际 ``preflight``。
     它住在这里而不是 core/，是因为它要同时知道 `[pipeline]` 预算、付费账本、
     以及翻译/调图两边的计价公式 —— 三样都在 core/ 之上。各 CLI 的 ``main()``
     负责把它注入进去。

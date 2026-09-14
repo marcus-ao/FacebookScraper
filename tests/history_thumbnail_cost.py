@@ -1,9 +1,8 @@
-"""历史列表首屏的缩略图成本：新旧两个前端各量一次。
+"""历史列表首屏的缩略图成本：量取 React 首屏的真实请求数与耗时。
 
-PRE_CUTOVER_REPORT §13「风险 1」的复现脚本。回答两个问题：
+这个只读诊断脚本回答两个问题：
 
-  1. 历史列表首屏要为每一行发一次缩略图 GET，新 React 默认每页 50 条
-     （DECISION_LOG D2），旧 Vue 是 30 条 —— 同一个接口，新 UI 首屏多付多少；
+  1. 历史列表首屏要为每一行发一次缩略图 GET，React 默认每页 50 条；
   2. 那个接口单次到底多慢，钱花在哪。
 
 只读：跑在隔离夹具的临时归档上，不碰真实 archive / state / config。
@@ -34,7 +33,7 @@ def main() -> int:
 
         # UIFixture 会再往归档里加一批帖子，必须先建好再统计 ——
         # 否则量到的行数和浏览器真正看到的不是同一批。
-        ui = UIFixture(fx, "react")
+        ui = UIFixture(fx)
 
         # 单次成本：进程内直接调，避开 HTTP 与浏览器的噪音。
         history = fx.client.get("/api/tasks?scope=history&limit=50").json()
@@ -57,25 +56,21 @@ def main() -> int:
         report["profile_top"] = [line.strip() for line in stream.getvalue().splitlines()
                                  if "store.py" in line or "_getfinalpathname" in line]
 
-        # 首屏成本：两个前端各走一次真实的历史列表。
-        # ⚠️ 每个引擎一个**独立 context** —— 共用一个的话第二个前端会命中
-        #    第一个留下的 HTTP 缓存，量出来的请求数直接塌成个位数。
+        # 首屏成本：React 走一次真实的历史列表。
         with sync_playwright() as play:
             browser = play.chromium.launch()
-            for engine, path in [("react", "/?view=history"), ("vue", "/?view=history")]:
-                ui.dist = ROOT / "web" / ("ui-next" if engine == "react" else "ui") / "dist"
-                ui.requests.clear()
-                context = browser.new_context(viewport={"width": 1366, "height": 768})
-                page = context.new_page()
-                ui.attach(page)
-                start = time.monotonic()
-                page.goto(fx.base_url + path, wait_until="domcontentloaded", timeout=120000)
-                page.wait_for_load_state("networkidle", timeout=120000)
-                report[engine] = {
-                    "thumbnail_requests": len([r for r in ui.requests if "/image/" in r["path"]]),
-                    "seconds_to_networkidle": round(time.monotonic() - start, 2),
-                }
-                context.close()
+            ui.requests.clear()
+            context = browser.new_context(viewport={"width": 1366, "height": 768})
+            page = context.new_page()
+            ui.attach(page)
+            start = time.monotonic()
+            page.goto(fx.base_url + "/history", wait_until="domcontentloaded", timeout=120000)
+            page.wait_for_load_state("networkidle", timeout=120000)
+            report["react"] = {
+                "thumbnail_requests": len([r for r in ui.requests if "/image/" in r["path"]]),
+                "seconds_to_networkidle": round(time.monotonic() - start, 2),
+            }
+            context.close()
             browser.close()
 
     print(json.dumps(report, ensure_ascii=False, indent=2))

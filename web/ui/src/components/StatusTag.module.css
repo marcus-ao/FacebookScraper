@@ -1,0 +1,33 @@
+/*
+ * 状态标记：12px、无边框、浅底 + 深前景、低视觉重量（DESIGN.md）。
+ * 三档配色，字面值全部来自 --rc-*。
+ */
+
+.tag {
+  margin-inline-end: 0;
+  font-size: var(--rc-font-meta);
+  line-height: var(--rc-line-height);
+  border-radius: var(--rc-radius);
+  padding-inline: var(--rc-space-2);
+}
+
+/* 她的待办。主色浅底上用 strong 前景 —— 12px 不适用大文本豁免，
+   base 只有 4.69:1，strong 是 6.96:1（断言在 app/theme.test.ts）。 */
+.todo {
+  background: var(--rc-primary-soft);
+  color: var(--rc-primary-on-soft);
+}
+
+/* 中性：未就绪、已挂起，以及两个终态。终态与 not_ready 的区分做在
+   **行**上（整行降饱和），不做在标记上。 */
+.neutral {
+  background: var(--rc-bg);
+  color: var(--rc-fg-muted);
+}
+
+/* 已通过 / 已排期。
+   ⚠️ 「已排期」只表示排期被回读确认，不表示已公开发布。 */
+.done {
+  background: var(--rc-success-soft);
+  color: var(--rc-success);
+}

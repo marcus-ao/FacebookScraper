@@ -1,4 +1,4 @@
-"""人工单篇优化与只读模板接口；实际费用由生产执行器统一受理。"""
+"""人工单篇优化与只读模板接口；实际费用由内容执行器统一受理。"""
 from __future__ import annotations
 import re
 from fastapi import APIRouter, HTTPException, Request

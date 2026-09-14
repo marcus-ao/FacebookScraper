@@ -1,4 +1,4 @@
-"""Isolated data and local HTTP host for the offline Vue browser regression.
+"""Isolated data and local HTTP host for the offline React browser regression.
 
 Nothing here opens an authenticated browser or calls a model. The temporary TOML
 is the settings writer's actual path, including after Config reloads it.
@@ -42,7 +42,7 @@ class BrowserFixture:
 
     def __enter__(self):
         try:
-            self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="offline-vue-")))
+            self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="offline-react-")))
             self.config_path = self.root / "config.toml"
             text = self.config_original.decode("utf-8")
             text, changed = re.subn(r"(?m)^(times\s*=)", "# " + SETTINGS_NOTE + "\n" + r"\1", text, count=1)

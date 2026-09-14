@@ -26,7 +26,7 @@
 分支 `0eeb099`）。审查期间你正在并行实施 `2026-09-12-workflow-completion.md`，
 所以**代码侧我只落地了第一项，其余六项写在这里交给你**，避免两边同时写同一批文件。
 
-先记公道的：47 份离线脚本全绿、hygiene 当时六条全绿、Ruff 在这批改过的生产文件上干净
+先记公道的：47 份离线脚本全绿、hygiene 当时六条全绿、Ruff 在这批改过的业务文件上干净
 （base 里 `translate.py` 10 条、`tools/layout.py` 5 条、`core/store.py` / `capture.py` / `pipeline/cli.py`
 各 2 条都清掉了），该停在证据闸前的地方也真的停住了（`publish/channels.py` 无条件抛
 `ProbeRequired`，没有靠改 `target_channels` 假装渠道已选）。
@@ -212,7 +212,7 @@ Web 进程中途重启会在 `state/refinements.jsonl` 里留下 `running`，
 ⛔ **不要再往 `SYMBOL_EXEMPT` 加一条。** 正确的修法和我已经对检查 [1] 做的那条一样：
 把 `references` 计数器的语料也扩到 `web/**/*.py`。检查 [1] 现在用的是
 `all_python = sources.values() + WEB_SOURCES`，检查 [2] 的 `references` 还只读 `sources.values()`。
-一行的事，而且能让这个盲点彻底关掉 —— 否则每次 web 独占调用一个生产函数都要加一条豁免，
+一行的事，而且能让这个盲点彻底关掉 —— 否则每次 web 独占调用一个业务函数都要加一条豁免，
 而豁免表越长，这条检查越接近失效。
 
 （另有 `ensure`（`publish/snapshots.py:79`）在一次早些的运行里也被报成零引用，

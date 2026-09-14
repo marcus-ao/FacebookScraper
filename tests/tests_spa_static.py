@@ -2,20 +2,20 @@
 
 这一份守的是一个**部署级**缺陷，不是某个组件。
 
-新前端用真实路径（``/review``、``/calendar``、``/review/<账号>/<帖子>``），
-旧 Vue 只用 ``/?task=``、``/?view=``。裸的 ``StaticFiles`` 找不到同名文件就是 404，
-于是切换之后：侧栏点着能走，**一按 F5、一个收藏、一条粘给同事的链接，
+React 使用真实路径（``/review``、``/calendar``、``/review/<账号>/<帖子>``）。
+裸的 ``StaticFiles`` 找不到同名文件就是 404，于是侧栏点着能走，
+**一按 F5、一个收藏、一条粘给同事的链接，
 页面就只剩一行** ``{"detail":"Not Found"}``。而「刷新详情页仍知道第 n / N 篇」
-「返回列表恢复原筛选」正是这次重构写在 DECISION_LOG.md §2.2 里的目标。
+「返回列表恢复原筛选」正是路由部署契约必须守住的行为。
 
 ⛔ 这一条浏览器回归照不出来：``tests/browser_fixture.py`` 配套的 UIFixture 在
    Playwright 那一侧拦路由，找不到文件自己就回落 index.html —— **它自带 SPA 回落**。
-   所以浏览器场景 12/12 全绿证明的是前端逻辑对，不是这个部署形状立得住。
+   所以浏览器场景全绿证明的是前端逻辑对，不是这个部署形状立得住。
    这就是为什么这份契约必须留在普通 Python 测试里：以后有人换掉 StaticFiles、
    改 mount 顺序、升级 Starlette、或者「简化」SinglePageFiles，
    只要把深链接刷新再弄坏，跑一次测试就当场红。
 
-用的是临时 dist + 临时 config，**不读 web/ui-next/dist 的当前内容** ——
+用的是临时 dist + 临时 config，**不读 web/ui/dist 的当前内容** ——
 否则这份测试会随着谁有没有构建过前端而飘。
 
 临时目录落在仓库之内（``state/``，已 gitignore）：``web/api/app.py`` 的 ``_dist_dir()``
@@ -65,9 +65,12 @@ def setUpModule():
 
     text = (ROOT / "config.toml").read_text(encoding="utf-8")
     entry = f'web_dist = "{dist.relative_to(ROOT).as_posix()}"'
-    if re.search(r"(?m)^\s*\[paths\]", text):
+    text, replaced = re.subn(r"(?m)^\s*web_dist\s*=.*$", entry, text)
+    if replaced > 1:
+        raise AssertionError("config.toml 里出现多个 [paths].web_dist")
+    if not replaced and re.search(r"(?m)^\s*\[paths\]", text):
         text = re.sub(r"(?m)^(\s*\[paths\][^\r\n]*\r?\n)", r"\1" + entry + "\n", text, count=1)
-    else:
+    elif not replaced:
         text = text.rstrip("\n") + "\n\n[paths]\n" + entry + "\n"
     cfg_path = _sandbox / "config.toml"
     cfg_path.write_text(text, encoding="utf-8")
@@ -78,7 +81,7 @@ def setUpModule():
     _patch = patch.object(config, "_cfg", config.Config(cfg_path, runtime_path=runtime))
     _patch.start()
     # ⚠️ 必须在打上 config 之后再 import：DIST 与 mount 都是 import 时就定死的
-    # （生产上换 web_dist 也正是「改配置 + 重启进程」）。
+    # （换 web_dist 后也需要「改配置 + 重启进程」）。
     from fastapi.testclient import TestClient
     from web.api.app import DIST, app
 
@@ -108,7 +111,7 @@ class SpaFallbackTests(unittest.TestCase):
                 self.assertEqual(response.text, INDEX_MARKER)
 
     def test_query_string_and_trailing_segments_do_not_change_it(self):
-        # 详情页带着来源列表的全套筛选（DECISION_LOG.md §2.2），刷新时这些都在 URL 上。
+        # 详情页带着来源列表的全套筛选，刷新时这些都在 URL 上。
         for path in ["/review?queue=review&platform=facebook&tag=Riko",
                      "/history/fa_account/123?page=2&limit=20&tab=images",
                      "/review/fa_account/123?tab=localization"]:

@@ -276,7 +276,7 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
     # 委托过去还顺带吃到那边的解析缓存——一次 --submit 原本要重复解析
     # 这份 1.97 MB 的 dump 约 38 次。
     #
-    # 同时去掉了 v1 (1, "record-only") 的受理：全仓没有任何生产者或测试用它，
+    # 同时去掉了 v1 (1, "record-only") 的受理：全仓没有任何实际者或测试用它，
     # 而 signals_backfilled 只认 v2，v1 dump 过了这道闸也会死在证据闸上。
     data, detail = evidence.validate_v2_dump(expected.name, state_dir)
     if data is None:

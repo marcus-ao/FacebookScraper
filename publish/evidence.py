@@ -85,7 +85,7 @@ def clear_dump_cache() -> None:
 
 def validate_v2_dump(source_dump: str, dumps_dir: Path
                      ) -> tuple[dict | None, str]:
-    """验证新版证据契约完整性；部分录制绝不能解锁生产提交。"""
+    """验证新版证据契约完整性；部分录制绝不能解锁发布提交。"""
     if not source_dump:
         return None, "没有来源 dump"
     path = Path(dumps_dir) / source_dump
@@ -110,7 +110,7 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
         return None, "dump 顶层不是对象"
     if (data.get("schema_version"), data.get("mode")) != (
             2, "record-and-passive-evidence"):
-        return None, "生产成功/回读证据只接受完整 v2 契约"
+        return None, "实际成功/回读证据只接受完整 v2 契约"
     if _parse_aware(data.get("started_at")) is None:
         return None, "v2 dump 缺少有效 started_at"
     if _parse_aware(data.get("finished_at")) is None:

@@ -98,7 +98,7 @@ class AccountContext:
     "登录了没有"和"选中的是不是对的 Page"是两件事，后者更严重：
     登录态在、但上下文是别的主页，会把德语内容发到错误的主页上。
     默认准备模式没有账号证据时 :attr:`selection_verified` 是 ``False``；
-    生产 ``--submit`` 只有在审核过的 v2 账号语义同时读到配置中的 FB Page 与
+    实际 ``--submit`` 只有在审核过的 v2 账号语义同时读到配置中的 FB Page 与
     IG 帐号后才会把它设为 ``True``。这个字段存在，就是为了不让调用方把
     "没查出问题"误当成"查过了没问题"。
     """
@@ -527,7 +527,7 @@ async def upload_images(page, paths: list[Path], *,
     3. ``chooser.is_multiple()`` 是一条真回读：只收单文件却要传 5 张时
        当场失败，而不是默默只传上去一张。
 
-    本函数只证明文件交给了上传控件。生产 workflow 随后调用 media.verify_upload
+    本函数只证明文件交给了上传控件。发布 workflow 随后调用 media.verify_upload
     核验已上传的缩略图数量、视觉顺序；旧调用方仍收到人工复核提示。
     """
     files = [Path(item) for item in paths]
@@ -1076,13 +1076,13 @@ def readback_evidence_ready() -> bool:
 def _require_reviewed_dump(*specs) -> None:
     configured = str(cfg().get("publish", "ui_probe_dump", "") or "").strip()
     if not configured:
-        raise ProbeRequired("[publish].ui_probe_dump 为空；生产证据没有审核边界")
+        raise ProbeRequired("[publish].ui_probe_dump 为空；验收证据没有审核边界")
     expected = Path(configured).name
     wrong = [spec.key for spec in specs
              if getattr(spec, "source_dump", "") != expected]
     if wrong:
         raise ProbeRequired(
-            "生产证据没有全部来自 config 审核的同一份 v2 dump（%s）：%s"
+            "验收证据没有全部来自 config 审核的同一份 v2 dump（%s）：%s"
             % (expected, "、".join(wrong)))
 
 
@@ -1142,7 +1142,7 @@ def require_submission_evidence() -> tuple[Locator, EvidenceSignal]:
         if passed is not True:
             raise ProbeRequired(
                 "%s不能从本机 v2 probe dump 回查：%s。"
-                "\n⛔ 生产提交保持关闭；不得把缺失证据当作通过。"
+                "\n⛔ 发布提交保持关闭；不得把缺失证据当作通过。"
                 % (label, detail))
     return button, success
 
@@ -1244,7 +1244,7 @@ async def submit(page, *, timeout: float = DEFAULT_UI_TIMEOUT,
                  success_spec: EvidenceSignal | None = None) -> SubmitResult:
     """只点击一次并等待 dump 证明的成功信号；超时绝不重试点击。
 
-    ``button_spec/success_spec`` 只用于离线测试。生产调用不传时必须从
+    ``button_spec/success_spec`` 只用于离线测试。实际调用不传时必须从
     :mod:`publish.selectors` 的证据注册表取得；注册表尚未回填就会在接触页面前
     抛 :class:`ProbeRequired`。
     """
@@ -1408,7 +1408,7 @@ async def _planner_cards(page, spec: EvidenceSignal, *, timeout: float,
         await _wait_for_signal(page, empty_spec, timeout)
         return []
     if loaded_spec is not None:
-        # 生产路径只会传入同一审核 dump 回填的“数据已就绪”信号；它必须是
+        # 实际执行路径只会传入同一审核 dump 回填的“数据已就绪”信号；它必须是
         # React 数据完成后的语义，不是页面标题/骨架。出现后零卡片才可读作零占用。
         return []
     raise PublishStepError(
@@ -1576,7 +1576,7 @@ async def snapshot_scheduled_matches(
         card_spec: EvidenceSignal | None = None) -> ScheduledBaseline:
     """在提交前读取同槽/同文案/同素材/同渠道卡片，失败一律抛出。
 
-    生产状态机只在 ``match_count == 0`` 时继续点击提交。这样提交后的旧卡片
+    实际状态机只在 ``match_count == 0`` 时继续点击提交。这样提交后的旧卡片
     不能冒充本次结果；若成功信号与卡片都带 remote_id，后续还必须相等。
     """
     spec = card_spec or require_readback_evidence()
@@ -1853,7 +1853,7 @@ async def read_remote_occupied_slots(
         page, *, ui_timezone: str, business_timezone: str,
         timeout: float = DEFAULT_UI_TIMEOUT,
         card_spec: EvidenceSignal | None = None) -> tuple[datetime, ...]:
-    """兼容入口；生产 approve 使用带可见范围的 inventory。"""
+    """兼容入口；实际 approve 使用带可见范围的 inventory。"""
     inventory = await read_remote_slot_inventory(
         page, ui_timezone=ui_timezone, business_timezone=business_timezone,
         timeout=timeout, card_spec=card_spec)

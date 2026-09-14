@@ -1,4 +1,4 @@
-"""月历只读展示与显式刷新；浏览器访问复用生产读取器与发布锁。"""
+"""月历只读展示与显式刷新；浏览器访问复用业务读取器与发布锁。"""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

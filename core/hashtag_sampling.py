@@ -266,7 +266,7 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
     from core.chrome import attach  # 延迟导入：CSV 离线导入不应加载 Playwright。
     from core.parse import extract, partition_by_owner  # 延迟导入：仅浏览器 peer 路径需要帖子解析器。
     from core.translated import extract_hashtags  # 延迟导入：仅 peer 帖子转换需要正文标签解析。
-    from routes import delta  # 延迟导入：仅生产浏览器路径依赖增量状态和节奏。
+    from routes import delta  # 延迟导入：仅实际浏览器路径依赖增量状态和节奏。
 
     c.assert_chrome_profiles_isolated()
     pw = browser = None

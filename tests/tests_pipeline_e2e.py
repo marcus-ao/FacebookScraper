@@ -77,7 +77,7 @@ def make_post(account_dir: Path, post_id: str, created: str, text: str,
     ⚠️ 图片必须直接放在帖子目录下（`posts/<dir>/01.jpg`），不是 `media/` 子目录 ——
     `compose._choose_images` 会断言 `original.parent == post_dir`。
     """
-    # ⚠️ **必须用生产的 post_dirname**，不要自己拼时间戳。
+    # ⚠️ **必须用实际的 post_dirname**，不要自己拼时间戳。
     # 第一版照抄了 tests_pipeline_assisted 的拼法（`20260901_1300_<id>`），
     # 而真实的是 `2026-09-01_1300_<id>` —— 那一套从来没走到 compose，
     # 所以那个偏差在那边永远不会暴露。这里一走到 compose 就是"帖子目录不存在"。
@@ -190,7 +190,7 @@ with tempfile.TemporaryDirectory() as folder:
 
     boundary = datetime(2026, 9, 1, 12, tzinfo=timezone.utc)
     fixture_activate(A, state, g8_verified=True, now=boundary)
-    # 配对窗口是 30 小时；两篇都要"成熟"才会进入付费阶段。
+    # 配对窗口是 30 小时；两篇都要"成熟"才会进入付费处理。
     now = datetime(2026, 9, 3, 20, tzinfo=timezone.utc)
     settings = {"autonomy": "assisted", "daily_budget_usd": 5,
                 "monthly_budget_usd": 60}
@@ -210,10 +210,10 @@ with tempfile.TemporaryDirectory() as folder:
     check(("delta", False) in runner.calls, "先跑增量抓取")
     translated = {call[1] for call in runner.calls if call[0] == "translate"}
     check(translated == {"facebook:e2e-fb", "instagram:e2e-ig"},
-          "两篇都真的走了翻译阶段（内容不同，不会被误当成跨平台重复）")
+          "两篇都真的走了翻译流程（内容不同，不会被误当成跨平台重复）")
     imaged = {call[1] for call in runner.calls if call[0] == "image"}
     check(imaged == {"facebook:e2e-fb", "instagram:e2e-ig"},
-          "两篇都真的走了调图阶段")
+          "两篇都真的走了调图流程")
 
     items = A.latest_human_items(state)
     ready = [item for item in items.values()

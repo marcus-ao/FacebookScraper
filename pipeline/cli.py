@@ -576,7 +576,7 @@ def _probe_observation_gaps() -> tuple[str, ...]:
 
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
-    """G6/G6c 三道生产闸。直接调 business_suite 的判据（导入不会启动浏览器）。"""
+    """G6/G6c 三道发布校验。直接调 business_suite 的判据（导入不会启动浏览器）。"""
     return [(item['name'], item['available'], item['reason'] or '证据已回查') for item in capability_checks()]
 
 
@@ -656,7 +656,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     **零网络、零费用、零写盘。** 回答两个问题：
 
     1. 现在离"能激活"还差哪几件，每件差什么；
-    2. **激活之后如何处理新内容** —— 用生产同一套判据，
+    2. **激活之后如何处理新内容** —— 用实际同一套判据，
        拿最近 ``days`` 天的真实归档当"假如那时就激活了"跑一遍。
 
     第 2 问是这条命令存在的理由。三道闸全开、G8 也过了，流水线照样可能
@@ -670,7 +670,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     print("=== 上线预检（只读：零网络、零费用、零写盘）===\n")
 
     ready = True
-    print("[1] G6/G6c 三道生产闸")
+    print("[1] G6/G6c 三道发布校验")
     for label, ok, detail in _publish_gate_states():
         ready = ready and ok
         print("    %s %-22s %s" % ("[开]" if ok else "[关]", label, detail))

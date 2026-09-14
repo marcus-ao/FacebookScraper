@@ -69,7 +69,7 @@ check(len(und) == 3, f"3 条无日期记录被挑出，实得 {len(und)}")
 check({r["post_id"] for r in und} == {"bad1", "bad2", "bad3"}, "挑出的正是那三条")
 check(check_continuity(dirty, gap_days=5) == [], "无日期记录不参与连续性比较，也不引发误报")
 
-print("\n[7] 媒体不全的帖子进待补清单（生产走 arc.needs_media()）")
+print("\n[7] 媒体不全的帖子进待补清单（实际调用走 arc.needs_media()）")
 with tempfile.TemporaryDirectory() as d:
     arc = Archive(d, "acct")
     arc.append(Post(post_id="full", platform="instagram", account="x", text="t",
