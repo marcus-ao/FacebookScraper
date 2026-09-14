@@ -16,3 +16,7 @@ venv/
 web/_fake_state.json
 web/ui/node_modules/
 web/ui/dist/
+# 迁移期间 React 应用与 Vue 应用并存，两者各自构建到自己的 dist/。
+# 挂载点由 config.toml 的 [paths].web_dist 选择，默认仍是 web/ui/dist。
+web/ui-next/node_modules/
+web/ui-next/dist/

@@ -1,0 +1,8 @@
+.grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--rc-space-4); }
+.section { min-width: 0; background: var(--rc-surface); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); padding: var(--rc-space-4); }
+.section h2 { margin-bottom: var(--rc-space-3); display: flex; justify-content: space-between; }
+.field { display: grid; gap: var(--rc-space-2); margin: var(--rc-space-3) 0; font-size: var(--rc-font-secondary); }
+.difference { margin: var(--rc-space-2) 0; }
+.help { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); overflow-wrap: anywhere; }
+.candidate { margin: var(--rc-space-3) 0; }
+.link { overflow-wrap: anywhere; padding-block: var(--rc-space-2); border-bottom: 1px solid var(--rc-border); }

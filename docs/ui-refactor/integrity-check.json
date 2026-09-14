@@ -1,0 +1,58 @@
+[
+  {
+    "file": ".gitignore",
+    "unchanged": true
+  },
+  {
+    "file": "core/index_db.py",
+    "unchanged": true
+  },
+  {
+    "file": "core/review.py",
+    "unchanged": true
+  },
+  {
+    "file": "tests/tests_history.py",
+    "unchanged": true
+  },
+  {
+    "file": "web/api/app.py",
+    "unchanged": true
+  },
+  {
+    "file": "web/api/query_index.py",
+    "unchanged": true
+  },
+  {
+    "file": "web/ui/src/components/TaskList.vue",
+    "unchanged": true
+  },
+  {
+    "file": "config.toml",
+    "unchanged": true
+  },
+  {
+    "file": "config.local.toml",
+    "unchanged": true
+  },
+  {
+    "file": "web/ui/package.json",
+    "unchanged": true
+  },
+  {
+    "file": "web/ui/package-lock.json",
+    "unchanged": true
+  },
+  {
+    "file": "web/ui-next/package.json",
+    "unchanged": true
+  },
+  {
+    "file": "web/ui-next/package-lock.json",
+    "unchanged": true
+  },
+  {
+    "file": "docs/ui-refactor/BASELINE_BEHAVIOR.md",
+    "unchanged": true
+  }
+]

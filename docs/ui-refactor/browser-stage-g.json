@@ -1,0 +1,238 @@
+{
+  "stage": "G",
+  "results": {
+    "B20": "PASS",
+    "B4_settings_three_paths": "PASS",
+    "two_editable_fields": true,
+    "CAS_keeps_draft": true,
+    "duplicate_time_rejected": true,
+    "exact_body_keys": true
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/969317469628/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/965396952600/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/905918671383/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/984230237016/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/952935007925/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/924708421107/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/939550717502/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/968424552068/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/964862526563/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/921960528443/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/952087203913/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/958558527611/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/940603557202/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/984345799795/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/904833070349/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/909634053670/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/969538801287/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/948554812344/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/976468624208/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/989019359826/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/938620960436/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/932758649103/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/913560703285/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/949910705613/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/994276842343/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/919393963503/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/1234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/2234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings",
+      "query": "",
+      "body": {
+        "values": {
+          "default_times": [
+            "11:00",
+            "18:30"
+          ],
+          "snooze_default_days": 5
+        },
+        "version": "b10107b580e8c6fdaa1713785d9eeab5fde0686128635a9d1941a4d502b74336"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings",
+      "query": "",
+      "body": {
+        "values": {
+          "default_times": [
+            "11:00",
+            "18:30"
+          ],
+          "snooze_default_days": 5
+        },
+        "version": "8a01b61e075967194a2e7746246e4444b11ff317095e88c662eb03edf8396cd2"
+      }
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

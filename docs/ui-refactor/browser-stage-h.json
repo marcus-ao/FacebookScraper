@@ -1,0 +1,83 @@
+{
+  "stage": "H",
+  "results": {
+    "H": "PASS",
+    "delivered_requires_message_id": true,
+    "resend_context_confirmation": true,
+    "paid_batch_confirmation_and_versions": true,
+    "count_only_maintenance": true,
+    "poll_does_not_replace_reading_page": true,
+    "exact_three_recovery_bodies": true
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/notifications/fixture-delivery/resolve",
+      "query": "",
+      "body": {
+        "action": "delivered",
+        "version": "delivery-v1",
+        "message_id": "om_fixture_verified"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/notifications/fixture-delivery/resolve",
+      "query": "",
+      "body": {
+        "action": "not_delivered",
+        "version": "delivery-v1",
+        "message_id": ""
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/runtime/processing/recover",
+      "query": "",
+      "body": {
+        "batch_id": "private-batch",
+        "version": "batch-v1",
+        "outputs_reviewed": true
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

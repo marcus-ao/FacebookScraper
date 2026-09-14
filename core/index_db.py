@@ -96,6 +96,8 @@ def _display_rows(archive_root: Path, state_dir: Path | None, *, include_frozen:
     for account_dir in display_account_dirs(archive_root, include_frozen=include_frozen):
         machine = translated.load_translated(account_dir / "translated.jsonl")
         human = translated.load_human_translated(account_dir / "translated_human.jsonl")
+        # 审校账本每个账号只读一次：同 machine/human 一样是这趟派生的快照。
+        events = review.latest(account_dir)
         for source in _account_rows(account_dir):
             pid = source["post_id"]
             effective = translated.effective_translation(source, machine.get(pid), human.get(pid))
@@ -104,7 +106,7 @@ def _display_rows(archive_root: Path, state_dir: Path | None, *, include_frozen:
                 default = "pending_review" if effective["stale"] else "edited"
             elif effective and not effective["stale"]:
                 default = "pending_review"
-            status = review.state_for(account_dir, source, default_status=default,
+            status = review.state_for(account_dir, source, default_status=default, events=events,
                                       scheduled=("%s:%s" % (source.get("platform"), pid)) in scheduled_refs)["status"]
             created = source.get("created_at") or ""
             row = dict(source, id=account_dir.name + "/" + pid, account_dir=account_dir.name,

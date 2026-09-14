@@ -1,0 +1,175 @@
+/*
+ * 全局样式。**极少** —— 只有三类东西配得上进这里（DESIGN.md §2 / REACT_MIGRATION_PLAN §7.1）：
+ *   1. 页面骨架与字体栈；
+ *   2. 焦点环与 prefers-reduced-motion；
+ *   3. 正文里的三档标记 mark.mk-*。
+ *
+ * 其余一律 CSS Modules。颜色/间距/字号的字面值只在 src/app/theme.ts 里，
+ * 这里只引用语义变量。
+ */
+
+:root {
+  /* 字体走系统栈：生产机要求断网也能跑，外链字体会挂住首屏。 */
+  --rc-font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  --rc-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--rc-bg);
+  color: var(--rc-fg);
+  font-family: var(--rc-font-sans);
+  font-size: var(--rc-font-body);
+  line-height: var(--rc-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 排版层级 ---------- */
+/* 七级，同级必须同字号（DESIGN.md §3.1）。旧 UI 里同为区段标题的 h3
+   有 12 / 13 / 14px 三种，这几条就是为了不再出现那种事。
+   正文对照的 15 / 1.7 是唯一例外，由 Stage D 的组件自己声明。 */
+h1 {
+  font-size: var(--rc-font-page-title);
+  font-weight: var(--rc-weight-strong);
+  line-height: 1.4;
+  margin: 0;
+}
+
+h2 {
+  font-size: var(--rc-font-section-title);
+  font-weight: var(--rc-weight-strong);
+  line-height: 1.4;
+  margin: 0;
+}
+
+h3 {
+  font-size: var(--rc-font-subsection-title);
+  font-weight: var(--rc-weight-strong);
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* 数字一律等宽数位：时刻列、计数、字符数、金额在列表里要上下对齐着扫。
+   错一个金额或一个柏林时刻是有真实业务后果的（DESIGN.md §3.3）。 */
+body,
+table,
+time,
+code,
+kbd {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 焦点环：全局统一，2px 主色 + 2px offset。
+   ⛔ 任何地方都不许把它去掉而不给替代 —— 这条从旧 UI 的 styles.css 继承下来，
+   是这个界面唯一的键盘可见性保障。
+   主色 #155EEF 对白底 5.41:1、对 #f1f5f9 4.94:1，都远高于非文本的 3:1 门槛
+   （断言在 src/app/theme.test.ts）。
+
+   为什么带 `!important`：antd 自己至少有八条组件级的 `:focus-visible` 规则，
+   特指度从 0,1,1（`a:focus-visible`）一路到 0,4,0
+   （`.ant-menu-light .ant-menu-item:not(.ant-menu-item-disabled):focus-visible`），
+   全都写死 `outline-offset: 1px`。实测过：裸选择器、`:root ` 前缀都压不住，
+   结果是同一屏上出现两种焦点环（链接 2px offset、按钮与菜单 1px offset）。
+
+   用选择器去追那八条，等于把 antd 的内部类名抄进我们的样式表，
+   每次升级都要重新对一遍。这里选择和 `prefers-reduced-motion` 同一个手法：
+   **这是无障碍底线，不接受任何组件覆盖**，所以用 `!important` 一次说清。
+   宽度那一侧不用抢 —— antdToken 里 `lineWidthFocus` 就是同一个 token。 */
+html:root :focus-visible {
+  outline: var(--rc-focus-w) solid var(--rc-primary) !important;
+  outline-offset: var(--rc-focus-offset) !important;
+}
+
+/* ---------- 正文里的三档标记 ---------- */
+/* 留在全局而不是 CSS Modules：它作用在动态生成的片段序列上，
+   而且要在只读层与编辑镜像层两处同样生效，走 module 会让两层类名对不上。
+
+   ⚠️ 视觉重量排序必须是 error > warn > risk（UI_AUDIT P0-7）。
+   旧 UI 里 warn 只有一条浅红下划线，比 risk 的黄底还轻，而它管的是金额与
+   尺码——发错一个价格是真实业务后果。这里把 warn 提到红底 + 虚线，
+   risk 降为只有黄下划线。最终画法 Stage D1 在真实正文上再核一次。 */
+mark.mk {
+  background: none;
+  color: inherit;
+  /* 1px / 2px 是行内标记的几何，跟着字形走，不是版面间距，所以不进 8px 刻度。
+     最终画法 Stage D1 在真实正文上再核一次（DESIGN.md §15）。 */
+  padding: 1px 0;
+  border-radius: 2px;
+  /* 跳转时不被吸顶条盖住。高度由 token 驱动，不写死（旧 UI 写死 96px，
+     动作条一折行就不够了）。 */
+  scroll-margin-block: var(--rc-review-header-h, 56px);
+  cursor: pointer;
+}
+
+mark.mk-error {
+  background: var(--rc-error-soft);
+  box-shadow: inset 0 -2px 0 var(--rc-error);
+}
+
+mark.mk-warn {
+  background: var(--rc-error-soft);
+  box-shadow: inset 0 -2px 0 var(--rc-error-line);
+}
+
+mark.mk-risk {
+  box-shadow: inset 0 -2px 0 var(--rc-risk);
+}
+
+/* 当前跳到的那一处 */
+mark.mk-active {
+  outline: 2px solid var(--rc-primary);
+  outline-offset: 1px;
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: var(--rc-space-3);
+  height: var(--rc-space-3);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--rc-border-strong);
+  border-radius: var(--rc-radius);
+  /* 3px 透明边把滑块收细。这是滑块几何，不是版面间距，所以不进刻度。 */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+/* ---------- 动效 ---------- */
+/* 2/10：只有状态过渡（hover / focus / active / 抽屉 / 折叠 / 弹层 / 加载），
+   没有入场编排。这是天天要用的工作台，每次打开都演一遍动画的界面，
+   第三天就开始烦人。
+   ⛔ 禁止：页面入场动画、列表 stagger、数字滚动、parallax、装饰动效、
+      渐变动画。 */
+
+/* ⛔ `scroll-behavior: smooth` 全局禁用 —— 这不是风格偏好。
+   web/ui/src/components/TextCompare.vue:36-38 记录了实测：内嵌 Chromium 里
+   平滑滚动静默不动，不报错也不滚。而「下一处」是详情页唯一不能失灵的东西，
+   它失灵时界面看起来完全正常（标记确实高亮了），只是跳不过去，
+   人会以为自己已经看完了。 */
+html {
+  scroll-behavior: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

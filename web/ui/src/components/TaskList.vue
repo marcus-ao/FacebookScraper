@@ -135,7 +135,13 @@ const isDone = (t) => ['approved', 'scheduled', 'skipped', 'handed_off'].include
             class="btn btn-sm"
             @click="emit('open', task.id)"
           >
-            <Icon name="eye" :size="13" /> {{ task.alerts?.some(item => item.code === 'unknown_collaborator') ? '查看并翻译' : '查看' }}
+            <!--
+              字段名是 hard_alerts，不是 alerts（GET /api/tasks 的列表项契约）。
+              原先写成 task.alerts 恒为 undefined，所以第三方作者那篇的
+              「查看并翻译」从未渲染过。批准的既有缺陷修复，见
+              docs/ui-refactor/DECISION_LOG.md D13a。
+            -->
+            <Icon name="eye" :size="13" /> {{ task.hard_alerts?.some(item => item.code === 'unknown_collaborator') ? '查看并翻译' : '查看' }}
           </button>
           <ReviewActions :detail="task" compact @changed="emit('changed', $event)" />
         </div>

@@ -1,0 +1,33 @@
+{
+  "stage": "F",
+  "results": {
+    "F": "PASS",
+    "published_scheduled_distinct": true,
+    "failure_payload_cards_retained": true,
+    "refresh_body": {},
+    "empty_day_min_height": 64
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/calendar",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/calendar/refresh",
+      "query": "",
+      "body": {}
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

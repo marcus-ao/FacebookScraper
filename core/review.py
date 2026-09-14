@@ -101,8 +101,15 @@ def latest(account_dir: Path) -> dict[str, dict]:
 
 
 def state_for(account_dir: Path, source: dict, *, default_status: str = "pending_review",
-               scheduled: bool = False) -> dict:
-    event = latest(account_dir).get(source["post_id"])
+               scheduled: bool = False, events: dict[str, dict] | None = None) -> dict:
+    """``events`` 传 ``latest(account_dir)`` 的结果可复用一次读取，必须是同一账号的快照。
+
+    展示索引要为一个账号连算上千篇的状态。每篇各读一次账本时，真正读文件只花
+    0.1 秒，而 ``_path()`` 的两次物理路径核对要 6.0 秒 —— Windows 上一次
+    ``Path.resolve()`` 就是四回 ``_getfinalpathname``，1,067 篇重复核对同一条路径。
+    不传就照旧自己读，单篇调用的语义不变。
+    """
+    event = (latest(account_dir) if events is None else events).get(source["post_id"])
     state = dict(event) if event else {
         "status": default_status, "revision": None, "wake_at": None,
         "reason": "", "handoff_url": "", "recorded_at": None,

@@ -1,0 +1,182 @@
+{
+ "id": "in_neakasa.tech/3975547640610092585",
+ "read_only": true,
+ "publication": {
+  "attempt_id": "7d562e37-684c-4962-a819-c6c389e4d70a",
+  "channels_verified": [],
+  "final_text_sha256": "f1caefaaf41c2ac73b6b2e669cd65df9e22fa56a470631f31dd9b4b2786279c7",
+  "image_sha256": [
+   "0dd0bca8199d9fe203865e3808c51bc5e6033d1490a11da5cbc09fc6cf087158"
+  ],
+  "image_sources": [
+   "media_de"
+  ],
+  "images": [
+   "01.jpg"
+  ],
+  "manual_evidence": true,
+  "note": "人工证据：未排期；关闭此前模糊/未回读状态",
+  "original_text_sha256": "f1caefaaf41c2ac73b6b2e669cd65df9e22fa56a470631f31dd9b4b2786279c7",
+  "platform": "instagram",
+  "post_id": "3975547640610092585",
+  "readback_signal": "",
+  "recorded_at": "2026-09-03T01:25:47.797456-07:00",
+  "remote_id": "",
+  "remote_ids": [],
+  "scheduled_at": "2026-09-10T10:00:00+02:00",
+  "schema_version": 2,
+  "screenshot": "『文本 117 字』",
+  "source_refs": [
+   "instagram:3975547640610092585"
+  ],
+  "source_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4",
+  "status": "failed_pre_submit",
+  "step": "人工结转",
+  "success_signal": "semantic:heading:Your post is scheduled",
+  "target_channels": [
+   "facebook",
+   "instagram"
+  ],
+  "text_de_sha256": "f1caefaaf41c2ac73b6b2e669cd65df9e22fa56a470631f31dd9b4b2786279c7",
+  "ui_readback": "『文本 100 字』",
+  "ui_scheduled_at": "2026-09-10T01:00:00-07:00",
+  "ui_timezone": "America/Los_Angeles",
+  "verification": "人工确认远端未排期，可重新开始一次新尝试",
+  "warnings": [
+   "合作帖原作者：Neakasa Global；提交排期前确认二次使用授权",
+   "『文本 110 字』",
+   "『文本 67 字』",
+   "已把 1 张图交给上传控件（01.jpg）。",
+   "『文本 88 字』",
+   "『文本 73 字』",
+   "✓ 已从 v2 录证的只读账号上下文核对目标 FB Page 与 IG 帐号。"
+  ],
+  "snapshot_id": "",
+  "source_fingerprint": ""
+ },
+ "delivery": {
+  "status": "unknown",
+  "observed_at": null,
+  "message": "尚无与本次排期匹配的远端公开发布观测"
+ },
+ "platform": "instagram",
+ "status": "not_ready",
+ "review": {
+  "status": "not_ready",
+  "revision": null,
+  "wake_at": null,
+  "reason": "",
+  "handoff_url": "",
+  "recorded_at": null,
+  "source_stale": false,
+  "snooze_default_days": 3
+ },
+ "tags": [],
+ "tags_revision": "622605015f3db96c196e5baab018e2c58a21350407f4ffcaddc9a349a3f3754b",
+ "localization": {
+  "platform": "instagram",
+  "body_de": "『文本 163 字』",
+  "source_body": "『文本 147 字』",
+  "source_tags": [
+   "#Neakasa",
+   "#NeakasaatIFA",
+   "#IFA2026",
+   "#Cats",
+   "#PetsHome"
+  ],
+  "protected_tags": [
+   "#Neakasa"
+  ],
+  "tags": [
+   "#Neakasa",
+   "#NeakasaatIFA",
+   "#IFA2026",
+   "#Cats",
+   "#PetsHome"
+  ],
+  "hashtags_confirmed": false,
+  "links": [],
+  "ig_cta": "",
+  "ig_bio_url": "",
+  "cta_presets": [
+   "Link in Bio 🔗",
+   "Mehr dazu im Profil 🔗",
+   "『文本 43 字』"
+  ],
+  "revision": null,
+  "source_stale": true,
+  "record_stale": false,
+  "has_record": false,
+  "source_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4"
+ },
+ "localization_validation": {
+  "issues": [
+   {
+    "code": "source_stale",
+    "message": "源帖已更新，请重新复核并保存"
+   },
+   {
+    "code": "hashtags_unconfirmed",
+    "message": "请确认本篇使用的话题标签"
+   }
+  ],
+  "warnings": [],
+  "ready": false,
+  "char_count": 212,
+  "body_char_count": 163,
+  "hashtag_count": 5
+ },
+ "body_highlights": [],
+ "body_risks": [],
+ "risk_scan": {
+  "status": "not_scanned",
+  "risks": [],
+  "source_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4",
+  "scan_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4",
+  "prompt_sha256": "4c16bcac0d6b52e03f6499ee45c7d2dd045f895560d6762ef328f64b5ca7ed11",
+  "prompt_version": 1,
+  "source": null,
+  "scanned_at": null,
+  "message": "尚未进行英文语义风险预扫；请人工检查双关、歧义和美国特定表达。"
+ },
+ "text": {
+  "en": "『文本 198 字』",
+  "de_machine": "『文本 214 字』",
+  "de_human": null,
+  "human_revision": null,
+  "source_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4",
+  "stale": false,
+  "machine_current": false,
+  "machine_prompt_version": 5,
+  "current_prompt_version": 6
+ },
+ "highlights": [],
+ "risks": [],
+ "images": [
+  {
+   "index": 0,
+   "original_url": "/api/tasks/in_neakasa.tech/3975547640610092585/image/0?variant=original&v=fd523750c1594a07dc8af358bd1b255612a64440af04be9f22272beaf47a77cd",
+   "de_url": "/api/tasks/in_neakasa.tech/3975547640610092585/image/0?variant=de&v=fd523750c1594a07dc8af358bd1b255612a64440af04be9f22272beaf47a77cd-none-manual",
+   "de_present": false,
+   "metrics": null
+  }
+ ],
+ "schedule": null,
+ "meta": {
+  "platform": "instagram",
+  "account": "neakasa.tech",
+  "source_text_sha256": "5c69790559dca656594f18763cc243eea8e4f02ad68d4cb65f66561c092970f4",
+  "source_fingerprint": "6749552156393ad43964bf3337abac99ecea0d54b20f71034bb24db4e0e9fb4f",
+  "fingerprint_error": null,
+  "snapshot_id": "",
+  "permalink": "https://example.invalid/15",
+  "created_at": "2026-08-31T02:10:58Z",
+  "owner": "neakasa.global",
+  "coauthors": [
+   "neakasa.tech"
+  ],
+  "author_kind": "collab",
+  "compose_warnings": []
+ },
+ "trail": []
+}

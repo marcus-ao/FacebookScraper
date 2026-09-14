@@ -1,0 +1,357 @@
+{
+  "stage": "D1",
+  "results": {
+    "D1": "PASS",
+    "check_full_localization": true,
+    "dirty_guard": true,
+    "save_conflict_preserves_draft": true,
+    "B23_GET_list_count": 1
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/983815224975/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/908128403244/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/920423174592/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/947932340516/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/949964167047/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/940724983261/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/981937112100/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/951612043909/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/999859102441/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/934118682647/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/970427622412/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/956766425659/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/940722501115/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/944805634200/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/954566889641/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/959658921924/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/917195822069/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/962087539985/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/950798040655/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/921933449326/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/955067218965/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/937205738446/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/981012375015/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/939720998498/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/962506795650/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/1234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/2234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/calendar",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/initial-translation/task/fa_neakasaofficial/982780644190",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/refinements/task/fa_neakasaofficial/982780644190",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/approval-options",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/image/0",
+      "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/image/0",
+      "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/check",
+      "query": "",
+      "body": {
+        "text_de": "Manuell geprüft 😀 $219.99",
+        "body_only": true,
+        "localization": {
+          "platform": "facebook",
+          "body_de": "Manuell geprüft 😀 $219.99",
+          "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+          "source_tags": [
+            "#Neakasa",
+            "#Riko",
+            "#CatFeeder",
+            "#CatLife",
+            "#SmartPet"
+          ],
+          "protected_tags": [
+            "#Neakasa",
+            "#Riko"
+          ],
+          "tags": [
+            "#Neakasa",
+            "#Riko",
+            "#CatFeeder",
+            "#CatLife",
+            "#SmartPet"
+          ],
+          "hashtags_confirmed": false,
+          "links": [
+            {
+              "source_url": "https://us.example.invalid/shop/riko",
+              "target_url": "",
+              "mapped_url": "",
+              "confirmed": false,
+              "origin": "missing"
+            }
+          ],
+          "ig_cta": "",
+          "ig_bio_url": "",
+          "cta_presets": [
+            "Link in Bio 🔗",
+            "Mehr dazu im Profil 🔗",
+            "Entdecke mehr über den Link in unserer Bio."
+          ],
+          "revision": null,
+          "source_stale": false,
+          "record_stale": false,
+          "has_record": false,
+          "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/localization",
+      "query": "",
+      "body": {
+        "body_de": "Manuell geprüft 😀 $219.99",
+        "tags": [
+          "#Neakasa",
+          "#Riko",
+          "#CatFeeder",
+          "#CatLife",
+          "#SmartPet"
+        ],
+        "hashtags_confirmed": false,
+        "links": [
+          {
+            "source_url": "https://us.example.invalid/shop/riko",
+            "target_url": "",
+            "mapped_url": "",
+            "confirmed": false,
+            "origin": "missing"
+          }
+        ],
+        "ig_cta": "",
+        "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+        "human_revision": null,
+        "review_revision": null,
+        "localization_revision": null
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "PUT",
+      "path": "/api/tasks/fa_neakasaofficial/982780644190/localization",
+      "query": "",
+      "body": {
+        "body_de": "Manuell geprüft 😀 $219.99",
+        "tags": [
+          "#Neakasa",
+          "#Riko",
+          "#CatFeeder",
+          "#CatLife",
+          "#SmartPet"
+        ],
+        "hashtags_confirmed": false,
+        "links": [
+          {
+            "source_url": "https://us.example.invalid/shop/riko",
+            "target_url": "",
+            "mapped_url": "",
+            "confirmed": false,
+            "origin": "missing"
+          }
+        ],
+        "ig_cta": "",
+        "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+        "human_revision": null,
+        "review_revision": null,
+        "localization_revision": null
+      }
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

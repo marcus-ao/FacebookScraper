@@ -1,0 +1,18 @@
+[1] started 在请求前 fsync，usage 与产出结转各自追加
+  OK   真实调用开始前已经能从磁盘读到 started
+  OK   usage 已记录但产出尚未 fsync 时全局失败闭合
+  OK   成功请求严格追加 started→usage_recorded→accepted
+  OK   独立账本按响应 usage 计费，不依赖业务产物是否可读
+  OK   被拒 1 次后仍可重试（预算 2 次）——偶发抖动不该逼用户改 PROMPT_VERSION
+  OK   被拒满 2 次后禁止继续自动重试
+
+[2] crash/未知 usage 最多留下一个在途请求，并阻断全部后续付费
+  OK   无 usage 异常记 uncertain；另一个任务也在 API 前立即停手
+
+[3] 新产物用 paid_request_id 去重，旧产物仍按 legacy usage 计
+  OK   新业务行不重复计费；金额只取独立 ledger 的一次 usage
+
+[4] 付费锁跨文本/图片共用
+  OK   同一时刻最多一个文本或图片请求在途
+
+全部通过

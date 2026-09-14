@@ -48,12 +48,25 @@ def _meta_guard(path, _role=None):
     return assert_physical_direct_path(path.parent, path, kind='file', label='展示索引重建记录')
 
 
-def refresh_display_index(*, now: datetime | None = None, force: bool = False, history: bool = False) -> dict:
+# 历史页的新鲜度检查要走遍全部账号的每篇 post.json。实测 1,067 篇一次 7.0 秒，其中
+# 6.0 秒花在 assert_physical_direct_path 的 resolve() 上（Windows 每次四回
+# _getfinalpathname），内容哈希只占 0.6 秒 —— 也就是说这笔钱买不到更快的写法。
+# 而 HistoryPanel 每换一次筛选、每翻一页都重新请求，不留窗口就是每点一下等七秒。
+# 历史页翻的是归档，半分钟的滞后看不出来；待审队列 candidates() 不用这个窗口，
+# 仍然每次请求都重新核对源文件。
+HISTORY_INDEX_MAX_AGE_SECONDS = 30.0
+
+
+def refresh_display_index(*, now: datetime | None = None, force: bool = False,
+                          history: bool = False, max_age_seconds: float = 0.0) -> dict:
     """Web/展示进程的重建入口；业务引擎不调用此函数做决策。"""
     archive, state, database = _paths(history=history)
     metadata_path = database.with_suffix('.meta.json')
     previous = {}
     try:
+        moment = now or datetime.now(timezone.utc)
+        if moment.tzinfo is None or moment.utcoffset() is None:
+            raise ValueError('展示索引时刻必须带时区')
         assert_physical_direct_path(state.parent, state, kind='directory', label='展示状态目录')
         state.mkdir(parents=True, exist_ok=True)
         with FileLock(_meta_guard(database.with_suffix('.refresh.lock')), busy_message='展示索引正在刷新'):
@@ -65,6 +78,20 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False, h
                         previous = {}
                 except (OSError, ValueError):
                     previous = {}
+            # 锚点是 verified_at（上一次真的走完源文件核对的时刻），不能用 rebuilt_at。
+            # rebuilt_at 记的是「索引反映到哪一刻的归档」，取的是请求开始的时间，
+            # 而 1,067 篇的重建要 36 秒 —— 写下去就已经超出窗口，窗口永远不会生效。
+            if (max_age_seconds > 0 and not force and database.exists()
+                    and previous.get('schema_version') == 1
+                    and isinstance(previous.get('verified_at'), str)):
+                try:
+                    age = (moment - datetime.fromisoformat(previous['verified_at'])).total_seconds()
+                except ValueError:
+                    age = None
+                if (age is not None and 0 <= age < max_age_seconds
+                        and previous.get('database_stamp') == _file_stamp(database)):
+                    return {'available': True, 'stale': False,
+                            'rebuilt_at': previous['rebuilt_at'], 'error': None}
             signature = _source_signature(archive, state, history=history)
             dirty = (force or not database.exists() or previous.get('schema_version') != 1
                      or previous.get('source_signature') != signature
@@ -74,12 +101,14 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False, h
                 consistency = index_db.check_consistency(archive, database, state_dir=state, include_frozen=history)
                 if not consistency['consistent']:
                     raise ValueError('展示索引与源文件不一致')
-                moment = now or datetime.now(timezone.utc)
-                if moment.tzinfo is None or moment.utcoffset() is None:
-                    raise ValueError('展示索引时刻必须带时区')
                 previous = {'schema_version': 1, 'source_signature': signature,
                             'database_stamp': _file_stamp(database),
-                            'rebuilt_at': moment.astimezone(timezone.utc).isoformat()}
+                            'rebuilt_at': moment.astimezone(timezone.utc).isoformat(),
+                            'verified_at': moment.astimezone(timezone.utc).isoformat()}
+                atomic_write_json(metadata_path, previous, guard=_meta_guard)
+            elif max_age_seconds > 0:
+                # 刚走完一趟核对且结论是干净的；记下来，窗口内的后续请求不必重走。
+                previous = dict(previous, verified_at=moment.astimezone(timezone.utc).isoformat())
                 atomic_write_json(metadata_path, previous, guard=_meta_guard)
             # 第二趟指纹只回答一个问题：**重建期间**源文件变了吗。没重建就没有那个
             # 窗口，而这一趟要走遍所有账号的每篇 post.json —— 实测 1,067 篇约 1.7 秒，
@@ -94,7 +123,8 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False, h
 
 
 def history_page(*, platform=None, month=None, tag=None, status=None, page=1, limit=50, now=None):
-    metadata = refresh_display_index(history=True, now=now)
+    metadata = refresh_display_index(history=True, now=now,
+                                     max_age_seconds=HISTORY_INDEX_MAX_AGE_SECONDS)
     archive, state, database = _paths(history=True)
     if not metadata['stale']:
         try:

@@ -1,0 +1,11 @@
+.heading { display: flex; align-items: center; justify-content: space-between; }
+.help { font-size: var(--rc-font-secondary); color: var(--rc-fg-muted); }
+.grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); margin-top: var(--rc-space-3); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; background: var(--rc-surface); }
+.weekday { padding: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); background: var(--rc-surface-sunken); }
+.day { min-height: var(--rc-calendar-day-h); padding: var(--rc-space-2); border-top: 1px solid var(--rc-border); border-right: 1px solid var(--rc-border); }
+.day:nth-child(7n) { border-right: 0; }
+.date { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.card { width: 100%; border: 0; background: var(--rc-surface-sunken); border-radius: var(--rc-radius); color: var(--rc-fg); text-align: left; cursor: pointer; padding: var(--rc-space-2); display: flex; flex-wrap: wrap; gap: var(--rc-space-1); margin-top: var(--rc-space-2); font: inherit; font-size: var(--rc-font-meta); }
+.card :global(.ant-tag) { white-space: normal; margin: 0; }
+.caption { max-width: var(--rc-calendar-popover-w); max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }

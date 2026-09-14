@@ -1,0 +1,876 @@
+{
+  "stage": "E",
+  "results": {
+    "B19_list": "PASS",
+    "B19_old_detail_api": "PASS",
+    "B19_full_detail": "PASS",
+    "B24": "PASS",
+    "density": {
+      "1366": {
+        "rowsAboveFold": 12,
+        "rowHeights": [
+          48
+        ],
+        "paginationVisible": true
+      },
+      "1920": {
+        "rowsAboveFold": 19,
+        "rowHeights": [
+          48
+        ],
+        "paginationVisible": true
+      }
+    }
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&page=1&limit=50",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/2234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/1234567890/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/964983859123/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/933423752976/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/920335563651/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/957727015423/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/927919150056/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/975327103020/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/940835014054/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/997617766033/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/935083336595/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/964131880865/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/928801745647/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/943022102530/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/927642501653/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/985044187481/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/913792597713/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/992786650960/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/900880263509/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/901639529161/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/992889317232/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/931530112197/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/913005309786/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/922795177145/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/912966418883/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/917216319003/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/961521142943/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/917710748169/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/941096707048/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/913392544547/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/916814115056/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/941132892889/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000030/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000029/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000028/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000027/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000026/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000025/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000024/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000023/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000022/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000021/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000020/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000019/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000018/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000017/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000016/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000015/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&page=1&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&page=1&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/922795177145/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/961521142943/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/941096707048/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.global/916814115056/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000030/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000029/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000028/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000027/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000026/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000025/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000024/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000023/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000022/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000021/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000020/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&month=2021-01&page=1&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000030/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000029/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000028/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000027/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000026/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000025/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000019/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000018/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000017/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000016/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000015/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000014/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000013/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000012/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000011/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&month=2021-01&tag=OfflineFixture&page=1&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000030/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000028/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000027/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000026/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000025/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000024/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000023/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000022/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000021/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000020/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000018/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000017/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000016/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000014/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000013/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000012/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000011/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&month=2021-01&tag=OfflineFixture&page=2&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000010/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000009/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000008/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000007/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000006/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000005/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000004/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000003/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000002/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000001/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000000/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000010",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000010",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&month=2021-01&tag=OfflineFixture&page=2&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000010/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000009/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000008/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000007/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000006/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000005/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000004/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000003/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000002/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000001/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000000/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "scope=history&platform=instagram&month=2021-01&tag=OfflineFixture&page=2&limit=20",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000010/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000009/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000008/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000007/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000006/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000005/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000004/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000003/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000002/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000001/image/0",
+      "query": "variant=de",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/in_neakasa.tech/9000000000/image/0",
+      "query": "variant=de",
+      "body": null
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

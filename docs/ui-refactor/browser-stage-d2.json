@@ -1,0 +1,189 @@
+{
+  "stage": "D2",
+  "results": {
+    "D2": "PASS",
+    "cursor_insertion_and_storage_token": true,
+    "protected_deduplicated_tags": true,
+    "independent_category_CAS": true
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/runtime",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/calendar",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/initial-translation/task/fa_neakasaofficial/949769196790",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/refinements/task/fa_neakasaofficial/949769196790",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/approval-options",
+      "query": "",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/image/0",
+      "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/image/0",
+      "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/check",
+      "query": "",
+      "body": {
+        "text_de": "Anfang Ende",
+        "body_only": true,
+        "localization": {
+          "platform": "facebook",
+          "body_de": "Anfang Ende",
+          "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+          "source_tags": [
+            "#Neakasa",
+            "#Riko",
+            "#CatFeeder",
+            "#CatLife",
+            "#SmartPet"
+          ],
+          "protected_tags": [
+            "#Neakasa",
+            "#Riko"
+          ],
+          "tags": [
+            "#Neakasa",
+            "#Riko",
+            "#CatFeeder",
+            "#CatLife",
+            "#SmartPet"
+          ],
+          "hashtags_confirmed": false,
+          "links": [
+            {
+              "source_url": "https://us.example.invalid/shop/riko",
+              "target_url": "",
+              "mapped_url": "",
+              "confirmed": false,
+              "origin": "missing"
+            }
+          ],
+          "ig_cta": "",
+          "ig_bio_url": "",
+          "cta_presets": [
+            "Link in Bio 🔗",
+            "Mehr dazu im Profil 🔗",
+            "Entdecke mehr über den Link in unserer Bio."
+          ],
+          "revision": null,
+          "source_stale": false,
+          "record_stale": false,
+          "has_record": false,
+          "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/check",
+      "query": "",
+      "body": {
+        "text_de": "Anfang {{link1}}Ende",
+        "body_only": true,
+        "localization": {
+          "platform": "facebook",
+          "body_de": "Anfang {{link1}}Ende",
+          "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+          "source_tags": [
+            "#Neakasa",
+            "#Riko",
+            "#CatFeeder",
+            "#CatLife",
+            "#SmartPet"
+          ],
+          "protected_tags": [
+            "#Neakasa",
+            "#Riko"
+          ],
+          "tags": [
+            "#Neakasa",
+            "#Riko",
+            "#Katzen",
+            "#Haustiere",
+            "#Tierpflege"
+          ],
+          "hashtags_confirmed": false,
+          "links": [
+            {
+              "source_url": "https://us.example.invalid/shop/riko",
+              "target_url": "",
+              "mapped_url": "",
+              "confirmed": false,
+              "origin": "missing"
+            }
+          ],
+          "ig_cta": "",
+          "ig_bio_url": "",
+          "cta_presets": [
+            "Link in Bio 🔗",
+            "Mehr dazu im Profil 🔗",
+            "Entdecke mehr über den Link in unserer Bio."
+          ],
+          "revision": null,
+          "source_stale": false,
+          "record_stale": false,
+          "has_record": false,
+          "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/tasks/fa_neakasaofficial/949769196790/tags",
+      "query": "",
+      "body": {
+        "tags": [
+          "Riko",
+          "促销"
+        ],
+        "tags_revision": "0f3f1791eee9c8fe2321cd0cb7387e670ddb1c703470664e09dc66ef6cbf0517",
+        "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+      }
+    }
+  ],
+  "page_errors": [],
+  "real_external_actions": false,
+  "server_denials": []
+}

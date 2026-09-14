@@ -1,0 +1,12 @@
+.controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--rc-space-2); }
+.compare { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); background: var(--rc-surface); overflow: hidden; }
+.pane { min-width: 0; }
+.pane + .pane { border-left: 1px solid var(--rc-border); }
+.pane h2 { padding: var(--rc-space-2) var(--rc-space-4); background: var(--rc-surface-sunken); }
+.meta { font-size: var(--rc-font-meta); font-weight: var(--rc-weight-normal); color: var(--rc-fg-muted); margin-left: var(--rc-space-2); }
+.prose, .textarea { height: calc(100vh - var(--rc-prose-reserved-h) - var(--rc-initial-space)); overflow: auto; margin: 0; padding: var(--rc-space-4); font-family: var(--rc-font-sans); font-size: var(--rc-font-prose); line-height: var(--rc-line-height-prose); white-space: pre-wrap; overflow-wrap: anywhere; letter-spacing: 0; tab-size: 4; }
+.editor { position: relative; height: calc(100vh - var(--rc-prose-reserved-h) - var(--rc-initial-space)); }
+.mirror { position: absolute; inset: 0; color: transparent; pointer-events: none; }
+.mirror :global(mark) { color: transparent; }
+.textarea { position: relative; width: 100%; display: block; color: var(--rc-fg); background: transparent; border: 0; resize: none; }
+.explanation { margin: var(--rc-space-2) 0; font-size: var(--rc-font-secondary); color: var(--rc-fg-muted); }

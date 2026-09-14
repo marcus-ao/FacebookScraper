@@ -1,0 +1,8 @@
+.panel { margin-top: var(--rc-space-3); padding: var(--rc-space-3) var(--rc-space-4); background: var(--rc-surface); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); }
+.heading { display: flex; align-items: center; justify-content: space-between; }
+.row { display: flex; align-items: center; gap: var(--rc-space-5); margin: var(--rc-space-2) 0; }
+.row label { font-size: var(--rc-font-meta); }
+.facts { display: flex; flex-wrap: wrap; gap: var(--rc-space-3); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.help { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); margin: var(--rc-space-2) 0; }
+.diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
+.preview { white-space: pre-wrap; max-height: 35vh; overflow: auto; padding: var(--rc-space-3); background: var(--rc-surface-sunken); }

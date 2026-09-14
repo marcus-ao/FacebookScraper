@@ -1,0 +1,219 @@
+[K0/K1] Settings 与配置双向审计
+  OK   provider=inferera
+  OK   base_url=https://api.inferera.com/v1
+  OK   api_key_env=IMAGE_API_KEY
+  OK   model=gpt-image-2
+  OK   用户拍板的正式 quality=high 被显式读到
+  OK   output_format=jpeg
+  OK   图片超时固定为 720 秒，重试与调用间隔全部进入 Settings
+  OK   默认增量起点进入 Settings，不会误跑 818 张历史
+  OK   dHash 阈值仍为 -1，未擅自拍板
+  OK   形变告警阈值进入 Settings
+  OK   三项图像费率全部进入 Settings
+  OK   五类逐字保留清单全部进入 Settings
+  OK   复用 [translate.glossary]，没有另写一份
+  OK   代码读取但配置缺少的键会在联网前失败
+  OK   配置里有、代码不读的死旋钮会被审计拦下
+  OK   quality=auto 在联网前被拒绝
+  OK   缺 Key 给出完整 .env 复制命令且无需创建客户端
+
+[K1] Images edits 请求契约
+  OK   multipart edits 只发送任务书允许的 7 个字段
+  OK   绝不发送 input_fidelity
+  OK   正式请求显式发送 quality=high
+  OK   请求显式发送合法 size
+  OK   响应实际模型与最低 usage 契约可验证
+  OK   响应含 model 时记录 response 验证
+  OK   同一客户端多次 edits 只执行一次 /models 精确预检
+  OK   响应裸 base64 可解码为合法图片
+  OK   目录无精确 gpt-image-2 时在付费 edits 前停止
+  OK   目录请求失败也只尝试一次并缓存失败，永不进入付费 edits
+  OK   响应缺 model 时由请求模型 + 已通过目录预检完成验证
+  OK   output_tokens_details 可缺省，图片输出费直接使用顶层 output_tokens
+  OK   实际 model=gpt-image-2-free 会立即失败，不接受静默降级
+  OK   正式响应 usage 不完整时拒绝污染 K7 真实样本
+  OK   usage 中的布尔值/负数不能冒充真实 token 数
+
+[K1] --check 离线替身验证
+=== GPT-Image-2 API 自检 ===
+  ⚠ 这会发送 1 个真实 low 质量图片 edits 请求并产生少量费用。
+  provider    : inferera
+  base_url    : https://api.inferera.com/v1
+  API 格式    : OpenAI Images edits / multipart/form-data
+  鉴权        : Authorization: Bearer（由 SDK 设置）
+  密钥        : IMAGE_API_KEY (未设置)
+  请求 model  : gpt-image-2
+  自检 quality: low（正式处理仍使用 config.toml 的显式 quality）
+[ok] API 连通；model=gpt-image-2 (verification=response)；图片 816x816 可解码。
+usage：{"input_tokens": 12, "input_tokens_details": {"image_tokens": 9, "text_tokens": 3}, "output_tokens": 7, "output_tokens_details": {"image_tokens": 7}}
+  OK   完整自检契约在假响应下通过
+  OK   --check 只发一张最小合法图，并显式用 low 控制自检成本
+
+[K2] legal_size 实测分布与四条硬约束
+  OK   1080x1080 -> 1088x1088
+  OK   1080x1350 -> 1088x1360
+  OK   1440x1440 -> 1440x1440
+  OK   1440x1920 -> 1440x1920
+  OK   1350x1687 -> 1344x1680
+  OK   1440x1080 -> 1440x1088
+  OK   960x1200 -> 960x1200
+  OK   720x720 -> 816x816
+  OK   2000 组模糊输入均返回满足四约束的尺寸或显式失败（合法输出 1329 组）
+  OK   原图超过 3:1 时显式失败，不偷偷裁剪/填充
+  OK   1080x1350 -> 1088x1360 的宽高比形变为 0%
+
+[K4] 图片提示词渲染
+  OK   三个占位符全部被替换
+  OK   K3 已取消，提示词没有扫描占位符
+  OK   提示词承担自己找出应翻译英文的职责
+  OK   逐字保留配置与最新真实语料补项实际渲染进提示词
+  OK   复用正文术语表的固定德语译法
+  OK   无法穷举的金额/单位/署名规则进入提示词
+  OK   未知的新优惠码也按类别逐字符保留，不把配置例表误当穷举
+  OK   产品外观与画面不变是最高优先级硬规则
+  OK   text_de 被标成不可信参照数据
+  OK   外部 text_de 无法闭合不可信数据标签
+  OK   外部数据里的占位符字面量不会被二次替换或误报
+  OK   模板拼错占位符会在 API 调用前失败
+
+[K5] 写盘前图片硬闸
+  OK   合法 JPEG、尺寸与非占位内容通过
+  OK   dHash 距离被计算并记录
+  OK   非法 base64 被拦在写盘前
+  OK   返回尺寸与 size_requested 不一致时拒绝
+  OK   纯色占位图被拒绝
+  OK   阈值 -1 时只记录真实距离、不擅自拦截
+  OK   构造的整张重画产出能被已启用的 dHash 闸拦下
+
+[K6] images_de.jsonl、人工优先与幂等
+
+=== in_acme ===
+  选中 1 篇 / 待处理 2 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/2] p100[0] 失败：ResponseContractError: 图片 edits 响应 usage 契约不完整，缺少：input_tokens、output_tokens、input_tokens_details
+  OK   网关系统性缺 usage 时首张熔断，不对剩余图片逐张付费丢弃
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] OK  dHash=0 / 0.0s
+  OK   第一遍恰好调用一次并成功一张
+  OK   产出与 images_de.jsonl 分开落盘
+  OK   manifest 与原图一个字节都没改
+  OK   真相行记录版本、模型验证方式、显式质量与相对产出路径
+  OK   尺寸、真实 usage 与 dHash 距离都进入真相源
+  OK   旧 images_de.jsonl 缺 model_verification 时仍可读取
+
+=== in_acme ===
+  选中 1 篇 / 待处理 0 张 / 当前跳过 1 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  OK   第二遍全部命中指纹幂等，零 API 调用
+  OK   第二遍零图片写盘、零 JSONL 追加
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] OK  dHash=0 / 0.1s
+  OK   原图字节变化会让旧记录过期，并只重做这一张
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] OK  dHash=0 / 0.1s
+  OK   当前 text_de 变化会让旧记录过期，并只重做这一张
+  OK   K7 只按当前版本真实 usage 中位数外推
+  OK   第一批后打印完整 dHash 距离分布，不自动设置阈值
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] OK  dHash=0 / 0.0s
+
+=== in_acme ===
+  选中 1 篇 / 待处理 0 张 / 当前跳过 1 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  OK   --media-index 0 首次只处理 01.jpg
+  OK   精确媒体命令复跑只检查 media 0，不会滑到下一张付费
+  OK   精确媒体复跑零图片写盘、零 JSONL 追加，02.jpg 保持不存在
+  OK   未加精确过滤时第二张确实仍待处理，回归夹具能复现原风险
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] 失败：OSError: 模拟记录已 fsync、原子替换前硬失败
+  OK   记录已 fsync、replace 失败时不会留下半张目标图
+  OK   崩溃窗口留下的所有权记录不会把缺失输出误判成人工图/已完成
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] OK  dHash=0 / 0.1s
+  OK   崩溃后普通重跑会自动补齐，无需 --force
+
+=== in_acme ===
+  选中 1 篇 / 待处理 1 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 0 / 素材问题 0
+  [1/1] p100[0] 失败：RuntimeError: 所有权记录落盘后发现人工德语图，已放弃覆盖：01.jpg
+  ! p100[0] 跳过：发现人工德语图 01.jpg
+
+=== in_acme ===
+  选中 1 篇 / 待处理 0 张 / 当前跳过 0 / 人工优先 1 / 缺当前译文 0 / 素材问题 0
+  OK   JSONL fsync 期间出现的同名人工图会在 replace 前被最后检查拦下
+  OK   竞争窗口留下的人工图后续仍优先，普通重跑不覆盖也不调用 API
+  ! p100[0] 跳过：发现人工德语图 01.jpg
+
+=== in_acme ===
+  选中 1 篇 / 待处理 0 张 / 当前跳过 0 / 人工优先 1 / 缺当前译文 0 / 素材问题 0
+  OK   media_de 有人工同序号文件时在 API 前跳过
+  OK   人工文件未覆盖，且没有伪造程序所有权记录
+
+=== in_acme ===
+  选中 1 篇 / 待处理 0 张 / 当前跳过 0 / 人工优先 0 / 缺当前译文 1 / 素材问题 0
+  OK   精确媒体没有当前版本 text_de 时只统计目标图并硬跳过，不做付费调用
+  OK   坏尾先补换行，新付费结果仍可独立读回
+  OK   out_path 未绑定本 post_id 时整行拒绝，不能伪造程序所有权
+  OK   第二个付费批次被单实例锁拒绝
+
+[K6/K7 CLI] 增量作用域、全量安全闸与锁接线
+  OK   无作用域参数时只选 incremental_since 之后的新帖
+  OK   --latest-posts 是跨账号全局最新 N 篇，不是每账号各 N 篇
+  OK   --latest-posts 最大只能为 3，不能用大数绕过历史费用闸
+  OK   --all-history 只有显式传入才选到历史帖
+  OK   --check 与三个零 API 模式互斥，--dry-run 不会反而触发付费
+  OK   CLI 同样在读取密钥/获取锁前拒绝 --latest-posts 4+
+  OK   --media-index 必须绑定恰好一个 --post-id，不能形成跨帖歧义
+  OK   完整 CLI 的精确媒体 dry-run 只选中 0（即 01.jpg）
+  OK   指定帖子不存在该媒体序号时在联网/写盘前清晰失败
+  OK   完整 CLI 的 --dry-run/--latest-posts 路径可执行且不联网
+  OK   真实 --all-history 缺第二重费用确认时在锁/API 前拒绝
+  OK   完整付费 CLI 在任何编辑调用前获取 images.lock
+
+[CR-50 ~ CR-57] 第三轮审查修复项（这些断言防的是“顺手优化掉”）
+  OK   不缩放时 scale_factor 恰好是 1.0
+  OK   真实归档里最极端的 278x430 合法化成 656x1008，记为放大 2.35 倍
+  OK   同一张图形变 <1% 但放大 >2 倍 —— 正是形变告警抓不到、必须靠 scale_factor 的那种情况（CR-54）
+  OK   超过像素上限被缩小的图 scale_factor < 1，不会误报放大
+  OK   两个新配置键进入 Settings（配置项双向审计已覆盖它们）
+  OK   scale_warn_factor < 1.0 在联网前被拒绝（它是放大线，不是缩小线）
+  OK   failure_budget < 1 被拒绝（0 会让第一张失败就停）
+  OK   按 76 列折行的 base64 能解码 —— 否则钱已花掉、整批产出被判非法（CR-55）
+  OK   带 data:image/png;base64, 前缀的响应也能解码
+  OK   剥空白没有放松校验：非 base64 字母表的字符仍然被拒绝
+  OK   超时/连接错误不再算致命 —— 一次网络抖动不该断掉剩余全部付费图片（CR-53）
+  OK   单张硬闸失败不算致命
+  OK   模型被静默降级仍然立刻停批
+  OK   目录预检缺精确模型仍然立刻停批
+  OK   目录请求本身失败也立刻停批，不在下一张重复预检
+  OK   响应契约破裂仍然立刻停批
+  OK   API 错误日志只保留类型、HTTP 状态和 request ID，不回显原始消息
+  OK   SDK 对 2xx 付费响应解析失败时立刻停批，不继续丢后续付费产出
+  OK   429 与 400 确实都是 openai.APIError 的子类 —— 所以不能再用 APIError 当致命判据（这条断言是给下一个人看的）
+  OK   收窄后依赖的四个 SDK 异常类都存在，不会因改名而静默变成“永不致命”
+  OK   夹具展开出一张待处理图片
+  OK   五项指纹加正确路径 = 已完成
+  OK   换 output_format 后旧 01.jpg 记录不再算当前 —— 否则新格式永不生成、--force 又会留下两个文件撞上 compose 的多候选闸（CR-57）
+  OK   缺文件与坏字节各跳过一张，同账号里好的那张仍然入队（CR-52）
+  OK   每张被跳过的图都点名报出，不静默
+  OK   入队的仍然是能用的那一张
+  OK   posts/ 不存在时 readonly_archive 明确失败
+  OK   失败之后 posts/ 仍然不存在 —— 离线命令那句“零写盘”是真的（CR-50）
+  OK   型号清单含 'S1 Pro'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+  OK   型号清单含 'S1Pro'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+  OK   型号清单含 'P1 Pro'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+  OK   型号清单含 'P1Pro'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+  OK   型号清单含 'Riko'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+  OK   型号清单含 'RIKO'（语料实测存在；CR-51 就是这么丢掉 'S1 Pro' 的）
+
+全部通过
+
+真实 low 自检与两张 high 技术验收已完成；重跑 --check 仍会产生费用。

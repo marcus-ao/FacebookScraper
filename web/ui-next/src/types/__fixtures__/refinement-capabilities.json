@@ -1,0 +1,8 @@
+{
+ "max_refine_per_media": 3,
+ "image_attempts": {},
+ "estimated_image_usd": 0.2369,
+ "estimate_basis": "本地 usage 样本中位数",
+ "estimate_samples": 3,
+ "jobs": []
+}

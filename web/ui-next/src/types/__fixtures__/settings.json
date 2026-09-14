@@ -1,0 +1,546 @@
+{
+ "version": "c4a1961d243de1f735994a1bb27e5e0950596122a1f2cdbcb475a254f3323ddf",
+ "editable": {
+  "default_times": [
+   "10:00",
+   "17:00"
+  ],
+  "snooze_default_days": 3
+ },
+ "business_timezone": "Europe/Berlin",
+ "workday_timezone": "Asia/Shanghai",
+ "controlled": {
+  "targets": {
+   "facebook": "neakasaofficial",
+   "instagram": "neakasa.global"
+  },
+  "delta": {
+   "on_duty_window": [
+    "08:00",
+    "19:00"
+   ],
+   "on_duty_interval_min": 60,
+   "off_duty_interval_min": 180,
+   "jitter_ratio": 0.25,
+   "max_scrolls": 0,
+   "reconcile_at": "07:00",
+   "reconcile_jitter_min": 30,
+   "reconcile_scrolls": 3,
+   "reconcile_max_session_seconds": 90,
+   "processing_budget_min": 25,
+   "request_gap_seconds": 8,
+   "first_screen_seconds": 6,
+   "max_session_seconds": 300,
+   "failure_budget": 3,
+   "quiet_days_before_slowdown": {
+    "facebook": 10,
+    "instagram": 10
+   },
+   "autostart_chrome": true,
+   "keep_captures_days": 7,
+   "min_own_posts": 3
+  },
+  "pipeline": {
+   "autonomy": "assisted",
+   "dead_man_days": 3,
+   "monthly_budget_usd": 60,
+   "daily_budget_usd": 5
+  },
+  "network_evidence": {
+   "enabled": false,
+   "tier": "lite",
+   "interval_minutes": 60,
+   "history_size": 20,
+   "timeout_seconds": 3
+  },
+  "publish_identity": {
+   "facebook_page_name": "Neakasa Deutschland",
+   "instagram_account": "neakasa.de"
+  },
+  "price_map": {
+   "$100": "$100",
+   "$5": "$5",
+   "$20": "$20",
+   "$10": "$10",
+   "$1": "$1",
+   "$50": "$50",
+   "$179": "$179",
+   "$200,000": "$200,000",
+   "$219": "$219",
+   "$219.99": "$219.99",
+   "$299": "$299",
+   "$30": "$30",
+   "$369": "$369",
+   "$399": "$399",
+   "$49": "$49",
+   "$799": "$799",
+   "$120": "$120",
+   "$79": "$79",
+   "$80": "$80",
+   "$129.99": "$129.99",
+   "$200": "$200",
+   "$250,000": "$250,000",
+   "$29": "$29",
+   "$379.99": "$379.99",
+   "$399.99": "$399.99",
+   "$59.99": "$59.99",
+   "$75": "$75",
+   "$89.99": "$89.99",
+   "$1,000,000": "$1,000,000",
+   "$119": "$119",
+   "$149.99": "$149.99",
+   "$180": "$180",
+   "$199": "$199",
+   "$199.99": "$199.99",
+   "$250": "$250",
+   "$26.99": "$26.99",
+   "$38.36": "$38.36",
+   "$39": "$39",
+   "$479.99": "$479.99",
+   "$499.99": "$499.99",
+   "$500": "$500",
+   "$599.99": "$599.99",
+   "$69.99": "$69.99",
+   "$79.99": "$79.99",
+   "$90": "$90",
+   "5$": "5$"
+  },
+  "trusted_owners": {
+   "facebook": [
+    "neakasaofficial"
+   ],
+   "instagram": [
+    "neakasa.tech",
+    "neakasa.global"
+   ]
+  }
+ },
+ "controlled_fields": {
+  "targets": [
+   {
+    "key": "targets.facebook",
+    "value": "neakasaofficial",
+    "help": "『文本 51 字』"
+   },
+   {
+    "key": "targets.instagram",
+    "value": "neakasa.global",
+    "help": "instagram.com/<这里>"
+   }
+  ],
+  "delta": [
+   {
+    "key": "delta.on_duty_window",
+    "value": [
+     "08:00",
+     "19:00"
+    ],
+    "help": "上海时区的运营作息；消息静默时段也引用这个窗口。"
+   },
+   {
+    "key": "delta.on_duty_interval_min",
+    "value": 60,
+    "help": ""
+   },
+   {
+    "key": "delta.off_duty_interval_min",
+    "value": 180,
+    "help": ""
+   },
+   {
+    "key": "delta.jitter_ratio",
+    "value": 0.25,
+    "help": ""
+   },
+   {
+    "key": "delta.max_scrolls",
+    "value": 0,
+    "help": "常规只取首屏；深扫每天独立一次，在 ±30 分钟、±1 屏内随机。"
+   },
+   {
+    "key": "delta.reconcile_at",
+    "value": "07:00",
+    "help": ""
+   },
+   {
+    "key": "delta.reconcile_jitter_min",
+    "value": 30,
+    "help": ""
+   },
+   {
+    "key": "delta.reconcile_scrolls",
+    "value": 3,
+    "help": ""
+   },
+   {
+    "key": "delta.reconcile_max_session_seconds",
+    "value": 90,
+    "help": "『文本 82 字』"
+   },
+   {
+    "key": "delta.processing_budget_min",
+    "value": 25,
+    "help": ""
+   },
+   {
+    "key": "delta.request_gap_seconds",
+    "value": 8,
+    "help": ""
+   },
+   {
+    "key": "delta.first_screen_seconds",
+    "value": 6,
+    "help": ""
+   },
+   {
+    "key": "delta.max_session_seconds",
+    "value": 300,
+    "help": ""
+   },
+   {
+    "key": "delta.failure_budget",
+    "value": 3,
+    "help": ""
+   },
+   {
+    "key": "『文本 41 字』",
+    "value": 10,
+    "help": ""
+   },
+   {
+    "key": "『文本 42 字』",
+    "value": 10,
+    "help": ""
+   },
+   {
+    "key": "delta.autostart_chrome",
+    "value": true,
+    "help": ""
+   },
+   {
+    "key": "delta.keep_captures_days",
+    "value": 7,
+    "help": "只清理超过保留期的增量响应；回填转储永久保留。"
+   },
+   {
+    "key": "delta.min_own_posts",
+    "value": 3,
+    "help": ""
+   }
+  ],
+  "pipeline": [
+   {
+    "key": "pipeline.autonomy",
+    "value": "assisted",
+    "help": "『文本 368 字』"
+   },
+   {
+    "key": "pipeline.dead_man_days",
+    "value": 3,
+    "help": "『文本 200 字』"
+   },
+   {
+    "key": "pipeline.monthly_budget_usd",
+    "value": 60,
+    "help": "『文本 328 字』"
+   },
+   {
+    "key": "pipeline.daily_budget_usd",
+    "value": 5,
+    "help": ""
+   }
+  ],
+  "network_evidence": [
+   {
+    "key": "network_evidence.enabled",
+    "value": false,
+    "help": "『文本 55 字』"
+   },
+   {
+    "key": "network_evidence.tier",
+    "value": "lite",
+    "help": ""
+   },
+   {
+    "key": "network_evidence.interval_minutes",
+    "value": 60,
+    "help": ""
+   },
+   {
+    "key": "network_evidence.history_size",
+    "value": 20,
+    "help": ""
+   },
+   {
+    "key": "network_evidence.timeout_seconds",
+    "value": 3,
+    "help": ""
+   }
+  ],
+  "publish_identity": [
+   {
+    "key": "publish.facebook_page_name",
+    "value": "Neakasa Deutschland",
+    "help": "『文本 304 字』"
+   },
+   {
+    "key": "publish.instagram_account",
+    "value": "neakasa.de",
+    "help": "『文本 49 字』"
+   }
+  ],
+  "price_map": [
+   {
+    "key": "publish.price_map.$100",
+    "value": "$100",
+    "help": "『文本 543 字』"
+   },
+   {
+    "key": "publish.price_map.$5",
+    "value": "$5",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$20",
+    "value": "$20",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$10",
+    "value": "$10",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$1",
+    "value": "$1",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$50",
+    "value": "$50",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$179",
+    "value": "$179",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$200,000",
+    "value": "$200,000",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$219",
+    "value": "$219",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$219.99",
+    "value": "$219.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$299",
+    "value": "$299",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$30",
+    "value": "$30",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$369",
+    "value": "$369",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$399",
+    "value": "$399",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$49",
+    "value": "$49",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$799",
+    "value": "$799",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$120",
+    "value": "$120",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$79",
+    "value": "$79",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$80",
+    "value": "$80",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$129.99",
+    "value": "$129.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$200",
+    "value": "$200",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$250,000",
+    "value": "$250,000",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$29",
+    "value": "$29",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$379.99",
+    "value": "$379.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$399.99",
+    "value": "$399.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$59.99",
+    "value": "$59.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$75",
+    "value": "$75",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$89.99",
+    "value": "$89.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$1,000,000",
+    "value": "$1,000,000",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$119",
+    "value": "$119",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$149.99",
+    "value": "$149.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$180",
+    "value": "$180",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$199",
+    "value": "$199",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$199.99",
+    "value": "$199.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$250",
+    "value": "$250",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$26.99",
+    "value": "$26.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$38.36",
+    "value": "$38.36",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$39",
+    "value": "$39",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$479.99",
+    "value": "$479.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$499.99",
+    "value": "$499.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$500",
+    "value": "$500",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$599.99",
+    "value": "$599.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$69.99",
+    "value": "$69.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$79.99",
+    "value": "$79.99",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.$90",
+    "value": "$90",
+    "help": ""
+   },
+   {
+    "key": "publish.price_map.5$",
+    "value": "5$",
+    "help": ""
+   }
+  ],
+  "trusted_owners": [
+   {
+    "key": "publish.trusted_owners.facebook",
+    "value": [
+     "neakasaofficial"
+    ],
+    "help": "『文本 274 字』"
+   },
+   {
+    "key": "publish.trusted_owners.instagram",
+    "value": [
+     "neakasa.tech",
+     "neakasa.global"
+    ],
+    "help": ""
+   }
+  ]
+ },
+ "editable_help": {
+  "default_times": "『文本 69 字』",
+  "snooze_default_days": "『文本 216 字』"
+ }
+}

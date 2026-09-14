@@ -1,0 +1,23 @@
+.page { margin: calc(-1 * var(--rc-space-5)); }
+.head { position: sticky; top: var(--rc-topbar-h); z-index: 5; background: var(--rc-bg); padding: var(--rc-space-2) var(--rc-space-4) 0; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: var(--rc-space-3); height: var(--rc-control-h); }
+.heading h1 { margin: 0; }
+.meta { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); white-space: nowrap; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--rc-space-3); min-height: var(--rc-table-header-h); }
+.toolbar :global(.ant-tabs-nav) { margin: 0; }
+.toolbar :global(.ant-tabs-content-holder) { display: none; }
+.toolbar :global(.ant-tabs-tab) { padding-block: var(--rc-space-2); }
+.toolbar :global(.ant-tabs-tab + .ant-tabs-tab) { margin-left: var(--rc-space-4); }
+.filters { display: flex; gap: var(--rc-space-2); align-items: center; }
+.filters :global(.ant-select) { width: var(--rc-filter-w); }
+.filters :global(.ant-select:first-child) { width: var(--rc-platform-filter-w); }
+.table :global(.ant-table.ant-table-small .ant-table-tbody > tr > td.ant-table-cell) { height: var(--rc-row-h); padding-block: 0; }
+.table :global(.ant-table.ant-table-small .ant-table-thead > tr > th.ant-table-cell) { height: var(--rc-table-header-h); padding-block: 0; }
+.table :global(.ant-table-row) { cursor: pointer; }
+.table :global(.ant-table-cell) { white-space: nowrap; }
+.table :global(.ant-table-sticky-holder) { top: calc(var(--rc-topbar-h) + var(--rc-list-tools-h)) !important; }
+.error { padding: var(--rc-space-2) var(--rc-space-4); }
+.pagination { display: flex; justify-content: flex-end; padding: var(--rc-space-1) 0; }
+.account { display: inline-flex; align-items: center; gap: var(--rc-space-1); max-width: 100%; overflow: hidden; text-overflow: ellipsis; color: var(--rc-fg-muted); font-size: var(--rc-font-meta); }
+.thirdParty { margin-inline-start: var(--rc-space-2); color: var(--rc-fg-muted); font-size: var(--rc-font-meta); }
+@media (max-width: 1023px) { .toolbar { flex-wrap: wrap; } .filters { flex-wrap: wrap; } }

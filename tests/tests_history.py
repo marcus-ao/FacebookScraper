@@ -3,13 +3,14 @@ import json
 import sqlite3
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
 from core import index_db, store
-from web.api import reader
+from web.api import query_index, reader
 
 
 class HistoryTests(unittest.TestCase):
@@ -50,6 +51,30 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(payload['pagination']['total'], 1)
         self.assertEqual(payload['tasks'][0]['id'], 'in_neakasa.tech/11')
         self.assertTrue(payload['index']['stale'])
+
+    def test_history_window_absorbs_paging_while_review_queue_stays_per_request(self):
+        """历史页的源文件核对要走遍全部账号：实测 1,067 篇一次 5.6 秒，而换筛选、
+        翻页都会重新请求。窗口内复用上一次核对结论（0.06 秒），过期后立刻重新核对。
+        待审队列不吃这个窗口 —— 她改完一篇要马上在列表里看到。
+        """
+        base = datetime(2026, 9, 13, 8, 0, tzinfo=timezone.utc)
+        self.assertEqual(query_index.history_page(tag='M1', limit=50, now=base)['total'], 3)
+
+        self.archive.append(store.Post('13', 'instagram', 'neakasa.tech', 'Archived 3',
+                                       '2021-04-01T12:00:00Z', tags=['M1']))
+        inside = query_index.history_page(tag='M1', limit=50, now=base + timedelta(seconds=10))
+        self.assertEqual(inside['total'], 3)
+        self.assertFalse(inside['index']['stale'])
+
+        expired = base + timedelta(seconds=query_index.HISTORY_INDEX_MAX_AGE_SECONDS + 1)
+        self.assertEqual(query_index.history_page(tag='M1', limit=50, now=expired)['total'], 4)
+
+        active = store.Archive(self.f.root / 'archive', self.f.account.name)
+        before = query_index.candidates(now=base)['task_ids']
+        active.append(store.Post('777', 'facebook', 'neakasaofficial', 'Neu',
+                                 '2026-09-12T10:00:00Z'))
+        after = query_index.candidates(now=base)['task_ids']
+        self.assertEqual(len(after), len(before) + 1)
 
     def test_consistency_compares_database_values_with_local_files(self):
         database = self.f.root / 'state' / 'history.sqlite'

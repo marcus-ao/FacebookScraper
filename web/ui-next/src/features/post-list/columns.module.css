@@ -1,0 +1,99 @@
+/*
+ * 帖子行。
+ *
+ * ⛔ 行**不是卡片**（DESIGN.md §6.1）：1px 底分隔线，不要边框 + 圆角 + 阴影 +
+ *    8px 间隙。旧 UI 给每行两层阴影，17 行就是 34 个阴影在一屏里。
+ * ⛔ 行里**不能有第二行文字**：48px 高度是按"单行摘要 + 40px 缩略图"算出来的，
+ *    多一行就回到旧 UI 首屏只有 4 条的老路。
+ */
+
+.thumbWrap {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+  height: var(--rc-thumb-size);
+}
+
+.thumb {
+  width: var(--rc-thumb-size);
+  height: var(--rc-thumb-size);
+  object-fit: cover;
+  border-radius: var(--rc-radius);
+  background: var(--rc-surface-sunken);
+}
+
+/* 张数角标。压在缩略图右下角，不再单独占一列。
+   字号是 12px 的 meta —— 12px 是中文在 Windows ClearType 下仍清晰的下限，
+   旧 UI 在 11px 上用过，那是不该越的线（DESIGN.md §3.1）。 */
+.count {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: var(--rc-space-4);
+  padding: 0 var(--rc-space-1);
+  border-radius: var(--rc-radius) 0 var(--rc-radius) 0;
+  background: var(--rc-scrim);
+  color: var(--rc-surface);
+  font-size: var(--rc-font-meta);
+  line-height: var(--rc-space-4);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 摘要单行截断，全文进 Tooltip（渐进披露 L2）。 */
+.summary {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--rc-fg);
+}
+
+.summaryCell { display: flex; align-items: center; min-width: 0; }
+.summaryLink { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: inherit; }
+.summaryLink:hover { text-decoration: underline; }
+.platform { white-space: nowrap; }
+
+/* 没有缩略图时的空位。是"这一篇没有图"，不是加载失败。 */
+.thumbEmpty {
+  display: inline-block;
+  border: 1px solid var(--rc-border);
+}
+
+.noText {
+  color: var(--rc-fg-muted);
+}
+
+.tags {
+  display: inline-flex;
+  gap: var(--rc-space-1);
+  overflow: hidden;
+}
+
+/* max-width 用 em 而不是 px：它是"最多几个字"，跟着字号走，
+   换字号时不会变成一个需要人工重算的魔法数。 */
+.tag {
+  margin-inline-end: 0;
+  max-width: 5em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--rc-font-meta);
+}
+
+/*
+ * 终态行整行降饱和。
+ * 「这篇不发」「已交人工处理」是她已经做完的决定，不需要再参与扫视；
+ * 但也**不是错误**，所以是降饱和，不是红色。
+ */
+.terminal td {
+  color: var(--rc-fg-muted);
+}
+
+.terminal .summary {
+  color: var(--rc-fg-muted);
+}
+
+.terminal .thumb {
+  opacity: 0.7;
+}

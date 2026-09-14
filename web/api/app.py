@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from web.api import reader, writer, jobs, approval, calendar, settings, runtime                     # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
@@ -38,7 +39,30 @@ app.include_router(calendar.router)
 app.include_router(settings.router)
 app.include_router(runtime.router)
 
-DIST = ROOT / "web" / "ui" / "dist"
+#: 前端构建产物目录。默认仍是旧 Vue 应用；不配置时行为与迁移之前完全一致。
+#:
+#: 迁移期间 web/ui/（Vue）与 web/ui-next/（React）并存，两者构建到各自的
+#: dist/。切换与回滚都是改这一个值 + 重启进程，不碰接口、字段、账本或归档
+#: （docs/ui-refactor/REACT_MIGRATION_PLAN.md §2.2）。
+DEFAULT_DIST_REL = "web/ui/dist"
+
+
+def _dist_dir() -> Path:
+    """解析 ``[paths].web_dist``；越界或不存在的配置回落默认值。
+
+    只允许 ROOT 之内的目录：这个路径会被 ``StaticFiles`` 直接伺服，
+    指到仓库外面就等于把任意目录挂上 HTTP。判据和归档那边同一条纪律。
+    """
+    raw = str(cfg().get("paths", "web_dist", DEFAULT_DIST_REL) or DEFAULT_DIST_REL).strip()
+    candidate = Path(raw)
+    resolved = (candidate if candidate.is_absolute() else ROOT / candidate).resolve()
+    if resolved == ROOT.resolve() or not resolved.is_relative_to(ROOT.resolve()):
+        print("⚠ [paths].web_dist 指向仓库之外或仓库根，已回落 %s" % DEFAULT_DIST_REL)
+        return (ROOT / DEFAULT_DIST_REL).resolve()
+    return resolved
+
+
+DIST = _dist_dir()
 
 
 @app.exception_handler(ComposeError)
@@ -245,10 +269,17 @@ def _review_input(body: dict) -> dict:
 @app.get("/")
 def index() -> Response:
     if not (DIST / "index.html").is_file():
+        try:
+            where = DIST.relative_to(ROOT).as_posix()
+        except ValueError:                             # 理论上进不来：_dist_dir 已经挡住越界
+            where = str(DIST)
+        source = where[: -len("/dist")] if where.endswith("/dist") else where
         return Response(
             "前端还没构建。在开发机上跑：\n"
-            "  cd web/ui && npm install && npm run build\n"
-            "然后把 web/ui/dist/ 拷到生产机即可（生产机不需要 Node）。\n",
+            "  cd %s && npm install && npm run build\n"
+            "然后把 %s/ 拷到生产机即可（生产机不需要 Node）。\n"
+            "当前挂载点由 config.toml 的 [paths].web_dist 决定，默认 %s。\n"
+            % (source, where, DEFAULT_DIST_REL),
             media_type="text/plain; charset=utf-8", status_code=503)
     return FileResponse(DIST / "index.html")
 

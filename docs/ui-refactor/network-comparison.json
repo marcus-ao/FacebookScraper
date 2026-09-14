@@ -1,0 +1,2347 @@
+{
+  "workflows": {
+    "vue": {
+      "save": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/localization",
+          "query": "",
+          "body": {
+            "body_de": "Manuell geprüft 😀 $219.99",
+            "tags": [
+              "#Neakasa",
+              "#Riko",
+              "#CatFeeder",
+              "#CatLife",
+              "#SmartPet"
+            ],
+            "hashtags_confirmed": false,
+            "links": [
+              {
+                "source_url": "https://us.example.invalid/shop/riko",
+                "target_url": "",
+                "mapped_url": "",
+                "confirmed": false,
+                "origin": "missing"
+              }
+            ],
+            "ig_cta": "",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null,
+            "localization_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/check",
+            "query": ""
+          },
+          {
+            "method": "PUT",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/localization",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": [
+          {
+            "text_de": "Manuell geprüft 😀 $219.99",
+            "body_only": true,
+            "localization": {
+              "platform": "facebook",
+              "body_de": "Manuell geprüft 😀 $219.99",
+              "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+              "source_tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "protected_tags": [
+                "#Neakasa",
+                "#Riko"
+              ],
+              "tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "hashtags_confirmed": false,
+              "links": [
+                {
+                  "source_url": "https://us.example.invalid/shop/riko",
+                  "target_url": "",
+                  "mapped_url": "",
+                  "confirmed": false,
+                  "origin": "missing"
+                }
+              ],
+              "ig_cta": "",
+              "ig_bio_url": "",
+              "cta_presets": [
+                "Link in Bio 🔗",
+                "Mehr dazu im Profil 🔗",
+                "Entdecke mehr über den Link in unserer Bio."
+              ],
+              "revision": null,
+              "source_stale": false,
+              "record_stale": false,
+              "has_record": false,
+              "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+            }
+          }
+        ]
+      },
+      "snooze": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "snoozed",
+            "reason": "同一份运营理由",
+            "handoff_url": "",
+            "wake_at": "2026-09-16T09:00:00+08:00"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "wake": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "woke",
+            "reason": "",
+            "handoff_url": ""
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "skip": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "skipped",
+            "reason": "同一份运营理由",
+            "handoff_url": ""
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "handoff": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "handed_off",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "handoff_link": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "handoff_link",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "tags": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/tags",
+          "query": "",
+          "body": {
+            "tags": [
+              "Riko",
+              "促销"
+            ],
+            "tags_revision": "0f3f1791eee9c8fe2321cd0cb7387e670ddb1c703470664e09dc66ef6cbf0517",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/tags",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "export": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/export",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "export",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/export",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "approve": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/approve",
+          "query": "",
+          "body": {
+            "scheduled_at": "2026-09-15T10:30",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null,
+            "content_fingerprint": "same-fingerprint"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approve",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "calendar_failure": {
+        "write": {
+          "method": "POST",
+          "path": "/api/calendar/refresh",
+          "query": "",
+          "body": {}
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "POST",
+            "path": "/api/calendar/refresh",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "settings": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/settings",
+          "query": "",
+          "body": {
+            "values": {
+              "default_times": [
+                "11:00",
+                "18:30"
+              ],
+              "snooze_default_days": 5
+            },
+            "version": "b10107b580e8c6fdaa1713785d9eeab5fde0686128635a9d1941a4d502b74336"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/settings",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "PUT",
+            "path": "/api/settings",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "initial": {
+        "write": {
+          "method": "POST",
+          "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "consent": true,
+            "source_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "refine_text": {
+        "write": {
+          "method": "POST",
+          "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "kind": "text",
+            "instruction": "保持事实，缩短开头",
+            "media_index": null,
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "refine_image": {
+        "write": {
+          "method": "POST",
+          "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "kind": "image",
+            "instruction": "保持事实，缩短开头",
+            "media_index": 0,
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "recover_job": {
+        "write": {
+          "method": "POST",
+          "path": "/api/content-jobs/compare-job/recover",
+          "query": "",
+          "body": {
+            "expected_updated_at": "2026-09-13T00:00:00Z"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/content-jobs/compare-job/recover",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "hashtags": {
+        "write": {
+          "method": "POST",
+          "path": "/api/hashtags/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/hashtags/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/check",
+            "query": ""
+          }
+        ],
+        "checks": [
+          {
+            "text_de": "📢 Wasserwechsel richtig gemacht\n\nHallo Katzeneltern! 😸 Ein kurzes Update aus dem Studio.\n\nHol dir den Neakasa Riko diese Woche für $219.99 — das sind $30 weniger als sonst. Lieferung in 2-3 Tagen.",
+            "body_only": true,
+            "localization": {
+              "platform": "facebook",
+              "body_de": "📢 Wasserwechsel richtig gemacht\n\nHallo Katzeneltern! 😸 Ein kurzes Update aus dem Studio.\n\nHol dir den Neakasa Riko diese Woche für $219.99 — das sind $30 weniger als sonst. Lieferung in 2-3 Tagen.",
+              "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+              "source_tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "protected_tags": [
+                "#Neakasa",
+                "#Riko"
+              ],
+              "tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "hashtags_confirmed": false,
+              "links": [
+                {
+                  "source_url": "https://us.example.invalid/shop/riko",
+                  "target_url": "",
+                  "mapped_url": "",
+                  "confirmed": false,
+                  "origin": "missing"
+                }
+              ],
+              "ig_cta": "",
+              "ig_bio_url": "",
+              "cta_presets": [
+                "Link in Bio 🔗",
+                "Mehr dazu im Profil 🔗",
+                "Entdecke mehr über den Link in unserer Bio."
+              ],
+              "revision": null,
+              "source_stale": false,
+              "record_stale": false,
+              "has_record": false,
+              "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+            }
+          }
+        ]
+      }
+    },
+    "react": {
+      "save": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/localization",
+          "query": "",
+          "body": {
+            "body_de": "Manuell geprüft 😀 $219.99",
+            "tags": [
+              "#Neakasa",
+              "#Riko",
+              "#CatFeeder",
+              "#CatLife",
+              "#SmartPet"
+            ],
+            "hashtags_confirmed": false,
+            "links": [
+              {
+                "source_url": "https://us.example.invalid/shop/riko",
+                "target_url": "",
+                "mapped_url": "",
+                "confirmed": false,
+                "origin": "missing"
+              }
+            ],
+            "ig_cta": "",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null,
+            "localization_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/check",
+            "query": ""
+          },
+          {
+            "method": "PUT",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/localization",
+            "query": ""
+          }
+        ],
+        "checks": [
+          {
+            "text_de": "Manuell geprüft 😀 $219.99",
+            "body_only": true,
+            "localization": {
+              "platform": "facebook",
+              "body_de": "Manuell geprüft 😀 $219.99",
+              "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+              "source_tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "protected_tags": [
+                "#Neakasa",
+                "#Riko"
+              ],
+              "tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "hashtags_confirmed": false,
+              "links": [
+                {
+                  "source_url": "https://us.example.invalid/shop/riko",
+                  "target_url": "",
+                  "mapped_url": "",
+                  "confirmed": false,
+                  "origin": "missing"
+                }
+              ],
+              "ig_cta": "",
+              "ig_bio_url": "",
+              "cta_presets": [
+                "Link in Bio 🔗",
+                "Mehr dazu im Profil 🔗",
+                "Entdecke mehr über den Link in unserer Bio."
+              ],
+              "revision": null,
+              "source_stale": false,
+              "record_stale": false,
+              "has_record": false,
+              "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+            }
+          }
+        ]
+      },
+      "snooze": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "snoozed",
+            "reason": "同一份运营理由",
+            "handoff_url": "",
+            "wake_at": "2026-09-16T09:00:00+08:00"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "wake": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "woke",
+            "reason": "",
+            "handoff_url": ""
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "skip": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "skipped",
+            "reason": "同一份运营理由",
+            "handoff_url": ""
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "handoff": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "handed_off",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "handoff_link": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "handoff_link",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/review",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "tags": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/tags",
+          "query": "",
+          "body": {
+            "tags": [
+              "Riko",
+              "促销"
+            ],
+            "tags_revision": "0f3f1791eee9c8fe2321cd0cb7387e670ddb1c703470664e09dc66ef6cbf0517",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "PUT",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/tags",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "export": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/export",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "review_revision": null,
+            "action": "export",
+            "reason": "",
+            "handoff_url": "https://example.invalid/handled"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/export",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "approve": {
+        "write": {
+          "method": "POST",
+          "path": "/api/tasks/fa_neakasaofficial/952082990615/approve",
+          "query": "",
+          "body": {
+            "scheduled_at": "2026-09-15T10:30",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null,
+            "content_fingerprint": "same-fingerprint"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approve",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "calendar_failure": {
+        "write": {
+          "method": "POST",
+          "path": "/api/calendar/refresh",
+          "query": "",
+          "body": {}
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "POST",
+            "path": "/api/calendar/refresh",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "settings": {
+        "write": {
+          "method": "PUT",
+          "path": "/api/settings",
+          "query": "",
+          "body": {
+            "values": {
+              "default_times": [
+                "11:00",
+                "18:30"
+              ],
+              "snooze_default_days": 5
+            },
+            "version": "b10107b580e8c6fdaa1713785d9eeab5fde0686128635a9d1941a4d502b74336"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/settings",
+            "query": ""
+          },
+          {
+            "method": "PUT",
+            "path": "/api/settings",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "initial": {
+        "write": {
+          "method": "POST",
+          "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "consent": true,
+            "source_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/jobs/compare-job",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "refine_text": {
+        "write": {
+          "method": "POST",
+          "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "kind": "text",
+            "instruction": "保持事实，缩短开头",
+            "media_index": null,
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/jobs/compare-job",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "refine_image": {
+        "write": {
+          "method": "POST",
+          "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "kind": "image",
+            "instruction": "保持事实，缩短开头",
+            "media_index": 0,
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/jobs/compare-job",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "recover_job": {
+        "write": {
+          "method": "POST",
+          "path": "/api/content-jobs/compare-job/recover",
+          "query": "",
+          "body": {
+            "expected_updated_at": "2026-09-13T00:00:00Z"
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/jobs/compare-job",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "POST",
+            "path": "/api/content-jobs/compare-job/recover",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": []
+      },
+      "hashtags": {
+        "write": {
+          "method": "POST",
+          "path": "/api/hashtags/task/fa_neakasaofficial/952082990615",
+          "query": "",
+          "body": {
+            "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220",
+            "human_revision": null,
+            "review_revision": null
+          }
+        },
+        "sequence": [
+          {
+            "method": "GET",
+            "path": "/api/runtime",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/calendar",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/initial-translation/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/refinements/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/approval-options",
+            "query": ""
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=original&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+          },
+          {
+            "method": "GET",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/image/0",
+            "query": "variant=de&v=c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220-d2aaf94dd542799cc90bf59e5eadef4b275a852d2623957d940fb2f60d577e06-manual"
+          },
+          {
+            "method": "POST",
+            "path": "/api/tasks/fa_neakasaofficial/952082990615/check",
+            "query": ""
+          },
+          {
+            "method": "POST",
+            "path": "/api/hashtags/task/fa_neakasaofficial/952082990615",
+            "query": ""
+          }
+        ],
+        "checks": [
+          {
+            "text_de": "📢 Wasserwechsel richtig gemacht\n\nHallo Katzeneltern! 😸 Ein kurzes Update aus dem Studio.\n\nHol dir den Neakasa Riko diese Woche für $219.99 — das sind $30 weniger als sonst. Lieferung in 2-3 Tagen.",
+            "body_only": true,
+            "localization": {
+              "platform": "facebook",
+              "body_de": "📢 Wasserwechsel richtig gemacht\n\nHallo Katzeneltern! 😸 Ein kurzes Update aus dem Studio.\n\nHol dir den Neakasa Riko diese Woche für $219.99 — das sind $30 weniger als sonst. Lieferung in 2-3 Tagen.",
+              "source_body": "📢 Wasserwechsel richtig gemacht\n\nHi pet parents! 😸 A quick update from the studio.\n\nGrab the Neakasa Riko for $219.99 this week only — that is $30 off the usual price. Ships in 2-3 days, 12 in wide, fits size M litter mats.\n🔗 Official store link:",
+              "source_tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "protected_tags": [
+                "#Neakasa",
+                "#Riko"
+              ],
+              "tags": [
+                "#Neakasa",
+                "#Riko",
+                "#CatFeeder",
+                "#CatLife",
+                "#SmartPet"
+              ],
+              "hashtags_confirmed": false,
+              "links": [
+                {
+                  "source_url": "https://us.example.invalid/shop/riko",
+                  "target_url": "",
+                  "mapped_url": "",
+                  "confirmed": false,
+                  "origin": "missing"
+                }
+              ],
+              "ig_cta": "",
+              "ig_bio_url": "",
+              "cta_presets": [
+                "Link in Bio 🔗",
+                "Mehr dazu im Profil 🔗",
+                "Entdecke mehr über den Link in unserer Bio."
+              ],
+              "revision": null,
+              "source_stale": false,
+              "record_stale": false,
+              "has_record": false,
+              "source_text_sha256": "c1b57ec23356e11a9e0fb4e3e7a895d99bdd8d917bb1c997711c7d3d85dbe220"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "identical_write_contracts": [
+    "save",
+    "snooze",
+    "wake",
+    "skip",
+    "handoff",
+    "handoff_link",
+    "tags",
+    "export",
+    "approve",
+    "calendar_failure",
+    "settings",
+    "initial",
+    "refine_text",
+    "refine_image",
+    "recover_job",
+    "hashtags"
+  ],
+  "read_sequence_differences": [
+    "save",
+    "snooze",
+    "wake",
+    "skip",
+    "handoff",
+    "handoff_link",
+    "tags",
+    "export",
+    "approve",
+    "calendar_failure",
+    "settings",
+    "initial",
+    "refine_text",
+    "refine_image",
+    "recover_job",
+    "hashtags"
+  ],
+  "explanation": "React adds shared Header runtime GET, detail calendar GET, eagerly mounted image reads and query cache reuse; UI confirmation and tab layout change read timing. Mutation endpoints and complete bodies are identical. /check retains full localization and is debounced.",
+  "external_calls": 0,
+  "server_denials": []
+}

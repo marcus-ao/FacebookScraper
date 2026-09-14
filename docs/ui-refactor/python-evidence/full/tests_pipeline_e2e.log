@@ -1,0 +1,35 @@
+[1] 造一份真实形态的临时归档，整条链在它上面跑
+  OK   assisted 全链路一次跑完，退出码 0
+  OK   先跑增量抓取
+  OK   两篇都真的走了翻译阶段（内容不同，不会被误当成跨平台重复）
+  OK   两篇都真的走了调图阶段
+  OK   **翻译+调图 → 离线硬闸 → ready_to_publish 这一段真的通了**（此前从没有断言覆盖过；实得 ready=2 其它=[]）
+  OK   每条 ready 都绑定了正文+逐张图片的指纹，排期槽变化不使内容审批失效
+  OK   needs_human.html 直接给出把这两条一起批准的命令
+  OK   清单上直接看得到德语正文与 post_id —— 稳态里人每天只看这一眼，只列 item_id 等于逼人盲批
+  OK   ready 的 details 带正文预览与图片张数，供 HTML 与以后的通知复用
+
+[2] 原样再跑一次：不重复付费、不重复排队
+  ! e2e-fb[0] 跳过：发现人工德语图 01.png
+  ! e2e-ig[0] 跳过：发现人工德语图 01.png
+  OK   第二次跑同样成功
+  OK   译文已当前 → 第二次零翻译请求（内容寻址幂等，不靠状态文件记账）
+  OK   德语图已存在 → 第二次零调图请求（这一段最贵，重复付费最要命）
+  OK   ready 项的 item_id 是内容哈希，重跑不产生第二批重复项
+
+[2b] 批量审批两次组装均沿用注入时钟；确认前不提交
+  OK   批准前和远端占位后都通过真实时间闸，顺延槽位使用同一注入时钟
+
+[3] 硬闸仍然拦得住：正文被改脏之后 ready 立刻消失
+  ! e2e-fb[0] 跳过：发现人工德语图 01.png
+  ! e2e-ig[0] 跳过：发现人工德语图 01.png
+  OK   人工改坏译文（标签被抹掉）后转人工 —— 写盘侧的闸挡不住手工修改，发布侧这道复查才是最后一层
+
+[4] 跨进程 argv 契约：这几段是靠命令行拼起来的，拼错了只在真跑时才炸
+  OK   RealStageRunner.delta 拼的 --platform all / --if-stale 能被 routes.delta 接受
+  OK   RealStageRunner.translate 拼的 --account/--post-id 能被 translate.py 接受
+  OK   RealStageRunner.image 拼的 --account/--post-id/--media-index 能被 localize_images.py 接受
+  OK   approve 的 submit_one 拼的全部参数（含被 SUPPRESS 隐藏的 --apply-price-map/--source-ref）能被 publish_post.py 接受
+  OK   submit_one 仍然传 --apply-price-map（否则德语帖会带着美元价发出去）
+
+全部通过

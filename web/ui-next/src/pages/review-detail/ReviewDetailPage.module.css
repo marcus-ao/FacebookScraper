@@ -1,0 +1,13 @@
+.page { margin: calc(-1 * var(--rc-space-5)); }
+.bar { position: sticky; top: var(--rc-topbar-h); z-index: 10; height: var(--rc-review-header-h); padding: 0 var(--rc-space-4); display: flex; align-items: center; gap: var(--rc-space-3); background: var(--rc-surface); border-bottom: 1px solid var(--rc-border); white-space: nowrap; }
+.position { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); }
+.center { flex: 1; justify-content: center; min-width: 0; }
+.markCount { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.actions { margin-left: auto; }
+.body { padding: var(--rc-space-4); }
+.title { display: flex; align-items: center; gap: var(--rc-space-4); }
+.title :global(h1) { margin: 0; }
+.body:has([data-initial-translation]) { --rc-initial-space: var(--rc-initial-panel-h); }
+.source { display: flex; gap: var(--rc-space-4); margin-block: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.counter { text-align: right; color: var(--rc-fg-muted); font-size: var(--rc-font-meta); margin: var(--rc-space-2) 0; }
+@media (max-width: 1279px) { .markCount { display: none; } }

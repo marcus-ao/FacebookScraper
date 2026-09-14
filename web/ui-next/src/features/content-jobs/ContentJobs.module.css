@@ -1,0 +1,8 @@
+.wrap { margin-top: var(--rc-space-3); }
+.initial { margin-top: var(--rc-space-2); }
+.initial p { font-size: var(--rc-font-secondary); }
+.field { display: grid; gap: var(--rc-space-2); margin: var(--rc-space-3) 0; }
+.job { margin-top: var(--rc-space-3); }
+.candidate { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28vh; overflow: auto; font-family: var(--rc-font-sans); font-size: var(--rc-font-prose); line-height: var(--rc-line-height-prose); padding: var(--rc-space-3); background: var(--rc-surface-sunken); }
+.diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
+.help { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }

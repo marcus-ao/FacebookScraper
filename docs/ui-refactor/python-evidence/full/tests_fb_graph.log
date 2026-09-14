@@ -1,0 +1,22 @@
+[1] 只读 Graph 路线严格保持‘视频只记元数据’边界
+    ! 媒体类型或文件签名异常 g1[4]: image/jpeg
+    ! 媒体类型或文件签名异常 g1[5]: image/svg+xml
+    ! 媒体类型或文件签名异常 g1[6]: image/jpeg
+    ! 媒体类型或文件签名异常 g1[7]: text/html
+    ! 媒体为空 g1[8]
+    ! 媒体失败 g1[9]: Client error '403 Forbidden' for url 'https://cdn/forbidden.jpg'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403
+  OK   视频 URL 没有发起下载请求
+  OK   视频只保留 URL 与 kind 元数据
+  OK   成功图片记录本地相对路径
+  OK   成功图片非空落盘
+  OK   JPEG/PNG/WebP/GIF 四种允许的静态图片均可落盘
+  OK   伪造 JPEG 的 HTML 不写入归档
+  OK   SVG 主动格式不进入人工审校链路
+  OK   MIME 与文件签名不一致时拒绝
+  OK   HTTP 200 登录页不写成图片
+  OK   空响应不写 0 字节文件
+  OK   HTTP 失败不伪装成已下载
+  OK   任一图片失败会留下可重试的不完整状态
+
+全部通过

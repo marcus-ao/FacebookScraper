@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"],
+
+    /* 三个开关由 DECISION_LOG.md §5.1 指定，不许放宽。
+       noUncheckedIndexedAccess 尤其重要：旧代码里
+       capabilities.image_attempts?.[index] || 0、shownMarks[active]、
+       props.images[current] 这类索引访问是最容易出 undefined 的地方。 */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    /* TS 7 移除了 baseUrl；paths 的相对路径直接相对 tsconfig 所在目录解析。 */
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src", "vite.config.ts", "vitest.config.ts"]
+}

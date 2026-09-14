@@ -1,0 +1,636 @@
+{
+  "captured_at": "2026-09-13T12:37:01.973328+00:00",
+  "source": "offline audit fixture (isolated archive/state)",
+  "screens": {
+    "review-list@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 2268,
+      "screensOfScroll": 2.1,
+      "chromeBeforeContent": 215,
+      "rowCount": 17,
+      "rowHeights": [
+        97,
+        121
+      ],
+      "rowsAboveFold": 7,
+      "primaryButtons": [],
+      "dangerButtons": [
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发"
+      ],
+      "dangerButtonCount": 17,
+      "statusChips": 28,
+      "borderedRegions": 17,
+      "sectionHeadingSizes": [],
+      "stickyBarButtons": [],
+      "nativeSelects": 2
+    },
+    "review-detail-risk@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 2168,
+      "screensOfScroll": 2.01,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 16,
+      "borderedRegions": 12,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "review-detail-money@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 2033,
+      "screensOfScroll": 1.88,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 15,
+      "borderedRegions": 12,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "review-detail-carousel@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 2171,
+      "screensOfScroll": 2.01,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 14,
+      "borderedRegions": 13,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "history@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 3649,
+      "screensOfScroll": 3.38,
+      "chromeBeforeContent": 269,
+      "rowCount": 30,
+      "rowHeights": [
+        102
+      ],
+      "rowsAboveFold": 7,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 30,
+      "sectionHeadingSizes": [
+        "H2 18px — 历史归档"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 3
+    },
+    "calendar@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 1080,
+      "screensOfScroll": 1,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 1,
+      "sectionHeadingSizes": [
+        "H2 20px — 2026-09 发布月历",
+        "H3 16px — 还没有读取过发布日历"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "settings@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 1284,
+      "screensOfScroll": 1.19,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "保存设置"
+      ],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 1,
+      "sectionHeadingSizes": [
+        "H2 19px — 运营设置",
+        "H3 15px — 系统配置"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "runtime@1920x1080": {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "documentHeight": 1487,
+      "screensOfScroll": 1.38,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 5,
+      "sectionHeadingSizes": [
+        "H2 21px — 运行状态",
+        "H3 15px — 1. 监测与调度",
+        "H3 15px — 2. 源内容与归档",
+        "H3 15px — 3. 德语本地化",
+        "H3 15px — 4. 飞书提醒",
+        "H3 15px — 5. 审校与单渠道排期"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "review-list@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 2268,
+      "screensOfScroll": 2.95,
+      "chromeBeforeContent": 215,
+      "rowCount": 17,
+      "rowHeights": [
+        97,
+        121
+      ],
+      "rowsAboveFold": 4,
+      "primaryButtons": [],
+      "dangerButtons": [
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发",
+        "这篇不发"
+      ],
+      "dangerButtonCount": 17,
+      "statusChips": 28,
+      "borderedRegions": 17,
+      "sectionHeadingSizes": [],
+      "stickyBarButtons": [],
+      "nativeSelects": 2
+    },
+    "review-detail-risk@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 2024,
+      "screensOfScroll": 2.64,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 16,
+      "borderedRegions": 12,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "review-detail-money@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 1915,
+      "screensOfScroll": 2.49,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 15,
+      "borderedRegions": 12,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "review-detail-carousel@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 2053,
+      "screensOfScroll": 2.67,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [
+        "这篇不发"
+      ],
+      "dangerButtonCount": 1,
+      "statusChips": 14,
+      "borderedRegions": 13,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "编辑德语",
+        "稍后再审",
+        "这篇不发",
+        "下载并由我处理",
+        "我已自行处理",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "history@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 3649,
+      "screensOfScroll": 4.75,
+      "chromeBeforeContent": 269,
+      "rowCount": 30,
+      "rowHeights": [
+        102
+      ],
+      "rowsAboveFold": 4,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 30,
+      "sectionHeadingSizes": [
+        "H2 18px — 历史归档"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 3
+    },
+    "calendar@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 768,
+      "screensOfScroll": 1,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 1,
+      "sectionHeadingSizes": [
+        "H2 20px — 2026-09 发布月历",
+        "H3 16px — 还没有读取过发布日历"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "settings@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 1284,
+      "screensOfScroll": 1.67,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "保存设置"
+      ],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 1,
+      "sectionHeadingSizes": [
+        "H2 19px — 运营设置",
+        "H3 15px — 系统配置"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "runtime@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 1487,
+      "screensOfScroll": 1.94,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 0,
+      "borderedRegions": 5,
+      "sectionHeadingSizes": [
+        "H2 21px — 运行状态",
+        "H3 15px — 1. 监测与调度",
+        "H3 15px — 2. 源内容与归档",
+        "H3 15px — 3. 德语本地化",
+        "H3 15px — 4. 飞书提醒",
+        "H3 15px — 5. 审校与单渠道排期"
+      ],
+      "stickyBarButtons": [],
+      "nativeSelects": 0
+    },
+    "review-detail-editing@1366x768": {
+      "viewport": [
+        1366,
+        768
+      ],
+      "documentHeight": 2338,
+      "screensOfScroll": 3.04,
+      "chromeBeforeContent": null,
+      "rowCount": 0,
+      "rowHeights": [],
+      "rowsAboveFold": 0,
+      "primaryButtons": [
+        "保存",
+        "通过并创建排期",
+        "生成文案候选"
+      ],
+      "dangerButtons": [],
+      "dangerButtonCount": 0,
+      "statusChips": 12,
+      "borderedRegions": 12,
+      "sectionHeadingSizes": [
+        "H3 14px — 英文语义风险预扫",
+        "H3 12px — 英文原文",
+        "H3 12px — 德语译文",
+        "H3 13px — 话题标签",
+        "H3 13px — 链接",
+        "H3 12px — 图片对比",
+        "H3 12px — 元信息",
+        "H4 12px — 产品分类",
+        "H4 12px — 操作记录 · 上海时间",
+        "H3 13px — 审核与排期",
+        "H3 13px — 单篇优化"
+      ],
+      "stickyBarButtons": [
+        "返回列表",
+        "上一处",
+        "下一处",
+        "放弃修改",
+        "保存",
+        "上一张",
+        "下一张",
+        "放大"
+      ],
+      "nativeSelects": 1
+    },
+    "decision-dialog@1366x768": {
+      "dialogSize": [
+        470,
+        281
+      ],
+      "activeElementAfterOpen": "BUTTON",
+      "confirmButtonClass": [
+        "取消:btn",
+        "确认:btn btn-primary"
+      ]
+    }
+  }
+}

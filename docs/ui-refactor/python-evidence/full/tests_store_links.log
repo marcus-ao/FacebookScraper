@@ -1,0 +1,34 @@
+[1] expected post dir 链到 posts/ 内另一帖时不得覆写
+  OK   测试前置确实建立了 symlink/junction
+  OK   链接帖子目录 明确说明链接/reparse 风险
+  OK   另一帖的 post.json/text.txt 字节完全不变
+  OK   目录链接攻击失败后 manifest 也不变
+  OK   reindex 跳过链接目录，只保留真实直属帖子目录
+  OK   reindex 对链接目录给出明确跳过告警
+
+[2] post.json / text.txt 叶子链接不得改写账号外 sentinel
+  OK   测试前置确实建立了 post.json hardlink
+  OK   post.json 叶子链接 明确说明链接/reparse 风险
+  OK   账号外 post.json sentinel 字节不变
+  OK   reindex 显式告警并跳过链接 post.json
+  OK   text.txt 叶子链接 明确说明链接/reparse 风险
+  OK   账号外 text.txt sentinel 字节不变
+  OK   叶子预检先全部完成，text.txt 不安全时 post.json 也未部分写入
+  OK   text.txt 不安全不妨碍普通 post.json 重建索引
+  OK   reindex 没有跟随 text.txt hardlink 写账号外
+  OK   reindex 明确告警且不写链接 text.txt
+
+[3] 01.jpg 叶子链接不得把媒体下载导向账号外
+  OK   01.jpg 叶子链接 明确说明链接/reparse 风险
+  OK   账号外媒体 sentinel 字节不变
+
+[4] archive 根与账号 base 自身也必须是真实直属目录
+  OK   archive 根目录链接 明确说明链接/reparse 风险
+  OK   archive 根链接被拒后外部目录未改写
+  OK   账号归档目录链接 明确说明链接/reparse 风险
+  OK   账号 base 链接被拒后外部目录未改写
+
+[5] 五种允许的静态图片 MIME 使用显式、稳定后缀
+  OK   JPEG/PNG/WebP/GIF/AVIF 后缀不依赖系统 mimetypes 注册表
+
+全部通过

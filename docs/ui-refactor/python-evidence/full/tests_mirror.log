@@ -1,0 +1,15 @@
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 3.645s
+
+OK
+{
+  "enabled": false,
+  "mode": "preview",
+  "accounts": [
+    "in_neakasa.global"
+  ],
+  "source_directories": 1,
+  "queued_snapshots": 0,
+  "mirror_state": true
+}

@@ -1,0 +1,198 @@
+{
+ "id": "fa_neakasaofficial/122100548013379375",
+ "read_only": false,
+ "publication": null,
+ "delivery": {
+  "status": "unknown",
+  "observed_at": null,
+  "message": "尚无与本次排期匹配的远端公开发布观测"
+ },
+ "platform": "facebook",
+ "status": "not_ready",
+ "review": {
+  "status": "not_ready",
+  "revision": null,
+  "wake_at": null,
+  "reason": "",
+  "handoff_url": "",
+  "recorded_at": null,
+  "source_stale": false,
+  "snooze_default_days": 3
+ },
+ "tags": [],
+ "tags_revision": "622605015f3db96c196e5baab018e2c58a21350407f4ffcaddc9a349a3f3754b",
+ "localization": {
+  "platform": "facebook",
+  "body_de": "",
+  "source_body": "『文本 1257 字』",
+  "source_tags": [
+   "#Neakasa",
+   "#NeakasaRiko",
+   "#CatFeeder",
+   "#Giveaway",
+   "#Kickstarter",
+   "#CatParents",
+   "#PetTech",
+   "#CatLife",
+   "#SmartPet",
+   "#CatLovers"
+  ],
+  "protected_tags": [
+   "#Neakasa"
+  ],
+  "tags": [
+   "#Neakasa",
+   "#NeakasaRiko",
+   "#CatFeeder",
+   "#Giveaway",
+   "#Kickstarter",
+   "#CatParents",
+   "#PetTech",
+   "#CatLife",
+   "#SmartPet",
+   "#CatLovers"
+  ],
+  "hashtags_confirmed": false,
+  "links": [
+   {
+    "source_url": "https://example.invalid/7",
+    "target_url": "",
+    "mapped_url": "",
+    "confirmed": false,
+    "origin": "missing"
+   },
+   {
+    "source_url": "https://example.invalid/61",
+    "target_url": "",
+    "mapped_url": "",
+    "confirmed": false,
+    "origin": "missing"
+   }
+  ],
+  "ig_cta": "",
+  "ig_bio_url": "",
+  "cta_presets": [
+   "Link in Bio 🔗",
+   "Mehr dazu im Profil 🔗",
+   "『文本 43 字』"
+  ],
+  "revision": null,
+  "source_stale": false,
+  "record_stale": false,
+  "has_record": false,
+  "source_text_sha256": "a25d6ecb5377ce9cb301612382c1b559b80bd42bd5629d4880aa48d203e417c4"
+ },
+ "localization_validation": {
+  "issues": [
+   {
+    "code": "body_missing",
+    "message": "请补充德语正文"
+   },
+   {
+    "code": "hashtags_unconfirmed",
+    "message": "请确认本篇使用的话题标签"
+   },
+   {
+    "code": "links_unconfirmed",
+    "message": "部分德语落地页尚未填写或确认"
+   }
+  ],
+  "warnings": [],
+  "ready": false,
+  "char_count": 106,
+  "body_char_count": 0,
+  "hashtag_count": 10
+ },
+ "body_highlights": [
+  {
+   "kind": "money",
+   "en_span": [
+    46,
+    49
+   ],
+   "de_span": null,
+   "severity": "error",
+   "label": "『文本 45 字』"
+  },
+  {
+   "kind": "money",
+   "en_span": [
+    361,
+    364
+   ],
+   "de_span": null,
+   "severity": "error",
+   "label": "『文本 45 字』"
+  },
+  {
+   "kind": "money_review",
+   "en_span": [
+    46,
+    49
+   ],
+   "de_span": null,
+   "severity": "warn",
+   "label": "含货币金额 —— 需替换成德国站定价（提示词刻意不换算）"
+  },
+  {
+   "kind": "money_review",
+   "en_span": [
+    361,
+    364
+   ],
+   "de_span": null,
+   "severity": "warn",
+   "label": "含货币金额 —— 需替换成德国站定价（提示词刻意不换算）"
+  }
+ ],
+ "body_risks": [],
+ "risk_scan": {
+  "status": "not_scanned",
+  "risks": [],
+  "source_text_sha256": "a25d6ecb5377ce9cb301612382c1b559b80bd42bd5629d4880aa48d203e417c4",
+  "scan_text_sha256": "a25d6ecb5377ce9cb301612382c1b559b80bd42bd5629d4880aa48d203e417c4",
+  "prompt_sha256": "4c16bcac0d6b52e03f6499ee45c7d2dd045f895560d6762ef328f64b5ca7ed11",
+  "prompt_version": 1,
+  "source": null,
+  "scanned_at": null,
+  "message": "尚未进行英文语义风险预扫；请人工检查双关、歧义和美国特定表达。"
+ },
+ "text": {
+  "en": "『文本 1488 字』",
+  "de_machine": null,
+  "de_human": null,
+  "human_revision": null,
+  "source_text_sha256": "a25d6ecb5377ce9cb301612382c1b559b80bd42bd5629d4880aa48d203e417c4",
+  "stale": false,
+  "machine_current": false,
+  "machine_prompt_version": null,
+  "current_prompt_version": 6
+ },
+ "highlights": [],
+ "risks": [],
+ "images": [
+  {
+   "index": 0,
+   "original_url": "/api/tasks/fa_neakasaofficial/122100548013379375/image/0?variant=original&v=07f4b78e6f1c59041bb0b276481d37ee1ceb4a4a351d7ab48affa7882c9bf672",
+   "de_url": "/api/tasks/fa_neakasaofficial/122100548013379375/image/0?variant=de&v=07f4b78e6f1c59041bb0b276481d37ee1ceb4a4a351d7ab48affa7882c9bf672-none-manual",
+   "de_present": false,
+   "metrics": null
+  }
+ ],
+ "schedule": null,
+ "meta": {
+  "platform": "facebook",
+  "account": "neakasaofficial",
+  "source_text_sha256": "a25d6ecb5377ce9cb301612382c1b559b80bd42bd5629d4880aa48d203e417c4",
+  "source_fingerprint": "7339a7af2e29d80afc56c56e77014494f1e175639daeea5c909e5b9f7280ab9d",
+  "fingerprint_error": null,
+  "snapshot_id": null,
+  "permalink": "https://example.invalid/94",
+  "created_at": "2026-07-01T14:00:34Z",
+  "owner": "neakasaofficial",
+  "coauthors": [],
+  "author_kind": "own",
+  "compose_warnings": []
+ },
+ "trail": []
+}

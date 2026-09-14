@@ -1,0 +1,13 @@
+[1] manifest 读取只接受非空字符串 post_id 与字符串 text
+  OK   null/数字/不可哈希 ID 与缺失/null/非字符串 text 全部跳过
+  OK   每类无效 schema 都有明确告警，不静默吞掉
+
+[2] post.json 原子替换异常时旧真相源与派生文件均不截断
+  OK   原子 replace 失败明确上抛，调用方不会误报升级成功
+  OK   replace 失败后旧 post.json 字节完全不变
+  OK   post.json 未提交时 text.txt 也不提前改写
+  OK   真相源提交失败时 manifest 不追加升级记录
+  OK   失败后同目录临时文件已清理
+  OK   旧 post.json 仍是可解析的完整 JSON
+
+全部通过
