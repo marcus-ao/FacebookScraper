@@ -32,6 +32,8 @@
 
 已有本机绑定时编辑绑定指向的环境文件，保留已存在值；首次独立安装才从 `.env.example` 建本机 `.env`。模型/飞书凭据、收件配置、云盘目录和令牌不写入可提交配置、终端截图、probe dump 或日志。
 
+飞书凭据写本机 `.env` 的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（名称见 `.env.example`），消息与云盘共用同一套。收件人和云盘目录写 `config.toml` 的 `[feishu]` / `[mirror]`：置 `enabled = true` 前 `base_url` 与两个接收组必须都有值且两组不得有交集，缺一项加载即失败。
+
 企业管理员需提供应用 AppSecret 并完成应用授权、机器人可接收范围、德国运营/开发者两个接收组与云盘根目录权限。两个组是独立接收配置，可各为一人，不必都是群聊。还需运营机器能打开的开发机审校地址；当前均缺实际联调条件。拿到后按第 7 节验证，离线测试不代替权限。
 
 ## 3. 登录三个专用 Chrome
@@ -53,9 +55,12 @@
 Facebook 目标是 `neakasaofficial`，Instagram 目标是 `neakasa.global`。确认配置后，回填由人在 9222 浏览器里打开目标主页并手工滚动；程序只拦截响应和保存内容。
 
 ```powershell
-scripts\run_backfill.bat facebook
-scripts\run_backfill.bat instagram
+scripts\run_backfill.bat facebook --days 30
+scripts\run_backfill.bat instagram --days 30
 ```
+
+`--days N` 只归档最近 N 天，并打印窗口外跳过数；算不出日期的仍保留。不带该参数是全量。
+它收紧的是归档范围，不改人工滚动——仍要自己滚到看见窗口边界为止。
 
 不要自动滚到底，不绕过 C7 会话/深度限制。完成后检查目标目录名、帖子数量、合作帖、拒绝记录和媒体完整性。`.global` 合作帖无论合作方是谁都应归档；`owner` 仍保存真实作者。
 
