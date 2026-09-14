@@ -2,13 +2,15 @@
 
 本项目把美国站 Facebook / Instagram 的公开图文帖归档到本地，生成德语文案和德语图片，交给上海运营在中文审校台修改并选择柏林发布时间，最后通过 Meta Business Suite 创建单渠道排期。
 
-业务规则以 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md) 为准；实施差距看 [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md)；本轮代码/真实证据看 [集成记录](docs/INTEGRATION_2026-09-12.md)；人工操作顺序看 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
+四份文档分工：业务规则看 [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md)（术语表是它的附录 A）；每个验收单元现在什么状态看 [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)；红线与证据边界看 [docs/HANDOFF.md](docs/HANDOFF.md)；要人亲自动手的步骤看 [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)。
 
-## 当前基线（2026-09-12）
+## 当前基线（2026-09-14）
 
-规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；本轮代码截至 `b1a56bb`，核心集成为 `565f17c`。最新全量执行 65 脚本，首轮 64/65，唯一测试文件默认编码问题修复后相关补跑通过，65 个脚本均有通过记录。最终 Vue 50 modules 构建及实际新 dist + 临时 ASGI 的 7 场景浏览器回归通过，页面错误与外部请求均为 0；启动脚本端口统一为 8765 后另有 2 项相关复验。这是全量加相关补跑，不是首次单次全绿。
+规划基线是 `c67c56a`，当时 47 个离线脚本和一次前端构建通过；核心集成 `565f17c` 全量执行 65 脚本，首轮 64/65，唯一测试文件默认编码问题修复后相关补跑通过，65 个脚本均有通过记录——这是全量加相关补跑，不是首次单次全绿。
 
-这个 worktree 已通过忽略入库的 `config.local.toml` 接续原 archive/state/.env/解释器。核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，不能当作 `.global` 回填证据。
+当前主干 `3718c0d`：审校台前端已从 Vue 换成 React（`web/ui-next/`），挂载点由 `config.toml` 的 `[paths].web_dist` 选择。切换后最新一轮是 Python 66/66、React 498/498、typecheck 干净。
+
+主干直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`，**里面是真实生产数据**。已有核验备份（5,246 文件、465,064,677 字节），保留激活 `2026-09-03T09:00:58.277710Z`。归档 1,067 篇是 FB 47 + 冻结 `.tech` 1,020，不能当作 `.global` 回填证据。
 
 状态词统一为：
 
@@ -20,7 +22,7 @@
 | **真实通过** | 有注明日期和来源的真实证据 |
 | **明确延期** | 业务已决定本轮不做，不应与缺陷混为一谈 |
 
-已存在的离线能力包括响应拦截与回放、本地归档、德语翻译和图片本地化、付费账本、人工审校写入、七态审校流、Planner 缓存、调度器、飞书与云盘适配层、Business Suite 证据闸。它们仍需按 [docs/OPTIMIAZATION.md](docs/OPTIMIAZATION.md) 的清单完成缺口并逐项真实联调。
+已存在的离线能力包括响应拦截与回放、本地归档、德语翻译和图片本地化、付费账本、人工审校写入、七态审校流、Planner 缓存、调度器、飞书与云盘适配层、Business Suite 证据闸。它们仍需按 [docs/REQUIREMENTS.md 第 10 节](docs/REQUIREMENTS.md#10-五阶段验收状态) 的清单完成缺口并逐项真实联调。
 
 本轮已修复采样 C7 持久停机与数值结构判定，补齐模型/标签/投递独立执行器、批次费用 CAS 恢复、飞书固定消息人工 resolve、多收件人漏发修复、配置与账本周期备份及大证据独立版本。历史交接的统一来源摘要/AST 守卫、兜底过期仍保留普通探测/告警、飞书 30 天终态归档、FB 正文链接占位符和最终计数也已补上。Trends 导出与单渠道全文/身份/时刻回读有离线和复审结论；远端 scheduled 图片读回适配器仍未实现，需要受控排期取证后补齐。代码项和真实依赖按实施清单分开。
 
@@ -68,12 +70,11 @@ scripts\run_pipeline.bat preflight --json
 scripts\run_python.bat -m uvicorn web.api.app:app --host 127.0.0.1 --port 8765
 ```
 
-若 `web/ui/dist/` 不存在，在开发机执行：
+若挂载点指向的 `dist/` 不存在，在开发机执行（当前挂的是 React）：
 
 ```powershell
-cd web\ui
-npm install
-npm run build
+npm --prefix web/ui-next install
+npm --prefix web/ui-next run build
 ```
 
 生产运行静态构建不需要 Node，生产迁移本轮明确延期。启动包装入口读取同一本机运行绑定；审校台现在连到真实数据，保存和审校动作会写真实账本。只读 `preflight --json` 和 `/api/runtime` 使用相同五阶段状态，不触发外部调用。

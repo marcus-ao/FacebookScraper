@@ -103,7 +103,7 @@ TARGET_IG = "neakasa.de"
 # `state/publish_probe_20260901_054226_378622.json` 逐条推翻：
 # 真实 Planner 上没有"一张卡片带时刻/正文/两个渠道/图片数"这种东西，
 # 有的是一条同时带正文与时刻的 link，加上**每个渠道各一个**详情弹窗。
-# 详见 `docs/HANDOFF.md` 第 5 节。
+# 详见 `docs/HANDOFF.md` 第 6 节。
 DATETIME_REGEX = (r"(?P<date>[A-Z][a-z]{2,8} \d{1,2}, \d{4})"
                   r"\D{0,10}?(?P<time>\d{1,2}:\d{2} [AaPp][Mm])")
 PLANNER_ATTRIBUTES = {

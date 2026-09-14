@@ -166,7 +166,7 @@ except Exception as e:
 # 上面那些样本全绿的同时，真实响应里混进了 267 条别人的帖子、478 条轮播子项
 # 被当成独立帖子、20 篇视频帖被当成抓取失败 —— 测试覆盖的是我们想到的形态，
 # 不是真实的形态。这一段就是为了把真实形态钉住。
-# 详见 docs/HANDOFF.md 第 9 节 CR-12 ~ CR-15（复盘全文在 git 历史）。
+# 复盘全文（CR-12 ~ CR-15）只在 git 历史里：`git show 0eeb099:docs/HANDOFF.md`。
 # ==========================================================================
 from core.parse import _fb_slug, on_timeline_of, partition_by_owner   # noqa: E402
 

@@ -525,7 +525,7 @@ instagram = ["neakasa.tech", "neakasa.global"]
 times = ["10:00", "17:00"]
 
 [pipeline]
-# ---- 流水线编排与自治级别。五阶段现状见 docs/OPTIMIAZATION.md ----
+# ---- 流水线编排与自治级别。五阶段现状见 docs/REQUIREMENTS.md 第 10 节 ----
 # 2026-09-01 起由 pipeline run 全量消费。manual 只对账；assisted 会在每个
 # 付费请求前后按真实 usage 检查预算，并生成待确认项，但不会自行打开发布浏览器。
 
@@ -568,6 +568,9 @@ daily_budget_usd = 5
 [paths]
 archive = "archive"
 state = "state"
+# 审校台挂哪一份前端构建。2026-09-14 从旧 Vue 切到 React。
+# 回滚：删掉这一行（缺省即 web/ui/dist），然后重启 Web 进程。步骤见 docs/MANUAL_STEPS.md 第 13 节。
+web_dist = "web/ui-next/dist"
 
 [review]
 # 「挂起」默认到期几个上海工作日后回到待审列表（按周一至周五数，不猜调休）。

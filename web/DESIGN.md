@@ -8,9 +8,9 @@
 
 `web/` 是模块图的叶子：它可以调用 `core/`、`pipeline/` 和 `publish/` 的入口；这些生产层不得 import `web/`。业务规则只实现一次，HTTP handler 只做请求校验、错误映射和响应组装。
 
-当前写入是真实的：人工文案、标签、本地化和审校状态分别写入真相源。旧 `fake_writer.py` 与 `_fake_state.json` 不在请求路径。真实风险扫描已接入，夹具只供明确演示。本 worktree 已绑定原 archive/state/本机环境，打开页面不再等于查看空演示库。
+当前写入是真实的：人工文案、标签、本地化和审校状态分别写入真相源。旧 `fake_writer.py` 与 `_fake_state.json` 不在请求路径。真实风险扫描已接入，夹具只供明确演示。主干绑定的是真实 archive/state，打开页面不再等于查看空演示库。
 
-本文记录截至 `b1a56bb`（核心集成 `565f17c`）的 API 与必须保持的业务契约，未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。最终实际 Vue dist + 临时 ASGI 的 7 场景及 65 脚本全量加相关补跑已有通过证据，启动脚本端口补丁另有相关复验；范围见 [实施清单](../docs/OPTIMIAZATION.md) 和 [集成记录](../docs/INTEGRATION_2026-09-12.md)。
+本文记录 API 与必须保持的业务契约，未提供的字段不会冒称存在。实现状态使用五种固定值；业务七态和运行码是另一层含义。逐项验收状态见 [REQUIREMENTS §10](../docs/REQUIREMENTS.md#10-五阶段验收状态)，证据边界见 [HANDOFF](../docs/HANDOFF.md)。
 
 ## 2. 用户与布局
 
@@ -195,11 +195,13 @@ hashtag 建议须分别显示三类来源：Google Trends 公开 CSV 的同英�
 
 离线验收分别覆盖 API 冲突/锁/坏账本、七态/人工优先、历史服务端分页/total/组合筛选/90 天外详情、源图实际字节/数量/顺序、模型中断恢复/旧候选/不确定计费、消息 UUID/冻结内容、三来源降级、设置 CAS/注释、月界/DST/完整覆盖、快照与恢复幂等。
 
-版本化浏览器入口从 `42c8bc9` 开始入库：`tests/tests_browser_workflow.py` 与 `tests/browser_fixture.py`。构建实际 Vue 后运行脚本，临时 ASGI/真实保存、历史分页/老详情/冻结只读、设置注释/CAS/source 冲突均已验证；新增 FB 光标链接和准确最终计数后共 7 场景通过。运行恢复/消息未知及模拟排期/公开状态使用明确 API 夹具，仅验 UI；不会调用真实 approve。最终新 dist 报告在 worktree state/offline-browser-20260913T070144Z-3108/report.json，页面错误/外部请求/禁止写入错误为 0。65 脚本全量首轮 64/65，修测试编码并相关补跑后均有通过记录；构建哈希、补跑范围和 Ruff 范围见集成记录。
+版本化浏览器入口是 `tests/browser_regression.py`，夹具是 `tests/browser_fixture.py` 与 `tests/ui_fixture.py`。构建实际 dist 后运行：临时 ASGI/真实保存、历史分页/老详情/冻结只读、设置注释/CAS/source 冲突均已验证。运行恢复/消息未知及模拟排期/公开状态使用明确 API 夹具，仅验 UI；不会调用真实 approve。报告落在已 gitignore 的 `state/ui-regression/`，页面错误/外部请求/禁止写入错误均要求为 0。
+
+⛔ 它照不出部署形状——UIFixture 自带 SPA 回落。深链接刷新由 `tests/tests_spa_static.py` 单独钉住。
 
 ```powershell
-npm.cmd --prefix web/ui run build
-scripts\run_python.bat tests/tests_browser_workflow.py -v
+npm --prefix web/ui-next run build
+scripts\run_python.bat tests/browser_regression.py
 ```
 
 | 真实验收项 | 必须留下的证据 |

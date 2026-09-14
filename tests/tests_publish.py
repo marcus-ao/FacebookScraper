@@ -1877,7 +1877,7 @@ check(any("默认全勾选" in note and "提交后" in note for note in context.
 
 
 # ⚠️ **2026-09-01 按真实 composer 重写：提交前只核对 Facebook。**
-# 实测（`docs/HANDOFF.md` 第 5 节）composer 上从头到尾没有 IG 帐号名，
+# 实测（`docs/HANDOFF.md` 第 6 节）composer 上从头到尾没有 IG 帐号名，
 # 只有 `img 'Instagram'` 一个图标。FB 主页名出现在预览抬头那条 `heading h2`。
 # IG 改由提交后从 Planner 详情弹窗回读证明，少了会转人工。
 async def strict_login(facebook_value):

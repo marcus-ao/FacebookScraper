@@ -1,20 +1,30 @@
 # 项目交接
 
-**交接记录：2026-09-12，事实同步至 UTC 2026-09-13；规划基线 `c67c56a`，本轮代码截至 `b1a56bb`（核心集成 `565f17c`）。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准；本文件保存工作边界、日期明确的历史和新证据范围，详细运行证据见 [本轮集成记录](INTEGRATION_2026-09-12.md)。
+**交接记录：2026-09-12 成文，事实同步至 2026-09-14；规划基线 `c67c56a`，当前主干 `3718c0d`。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
-- 工作分支是 `codex/business-workflow`，在 `.worktrees/business-workflow` 开发。
-- 规划起点有 config/mirror/store/translated/hygiene/query_index 六处既有未提交修订；现在又有多批并行集成修改。先看 `git status`，只提交自己范围，不覆盖既有修改。
-- 本 worktree 已由忽略入库的 `config.local.toml` 绑定原 archive/state/.env/解释器。核验备份在 worktree `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；包含运行配置核验，凭据不进证据报告。
-- 原激活 `2026-09-03T09:00:58.277710Z` 保留。当前原归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，SQLite 实际记录/字段一致，历史第 1/2 页各 20 条且无重复，冻结详情已真实只读访问；这些不是 `.global` 回填基线，不能重新 activate 或清空发布历史。
-- 规划阶段 47 脚本/build 与本轮各批定向测试是历史证据。核心 565f17c 全量执行 65 脚本，64/65 后修唯一测试编码问题并相关补跑，65 脚本均有通过记录；Vue 50 modules、新 dist + 临时 ASGI 浏览器 7/7，以及最新 12 个生产 Python 模块 Ruff/diff --check 通过。b1a56bb 把 run_web 默认端口统一为 8765，真实 --help 与 hygiene/runtime_config 2/2 通过。完整批与补跑分别记在集成记录，不称首次单次全绿。
-- 三个 Chrome 均已启动。9224 访问 `.global` 真实 HTTP 429，原 `delta_state.json` 已记 `detect_hard_blocked` 与失败；Google Trends 公开页也实际 HTTP 429，原 `trends_export_state.json` blocked。两者均停止，先人工核对会话/出口，不清空状态或连续请求。
-- 9223 已登录并观察目标 FB `Neakasa Deutschland`、IG `neakasa.de`；2026-09-13T05:01:33Z 生产月历读到完整 35 格、4 条公开帖与 2 个明确推荐时段，含 3 个独立 IG remote ID。尚无本轮新发布/排期提交。
-- 发布浏览器当前曾放入明确写有“Technischer Entwurf…Nicht zur Veröffentlichung vorgesehen.”的技术长文案和 2 张历史原图，仅探查编辑器/缩略图数量顺序；未点 Schedule、Publish、Finish later 或 Cancel。可能有未保存或自动保存草稿，不把它当业务候选，也不声称没有远端写入。
-- 本轮未调用真实模型或发送飞书消息。飞书缺 AppSecret、两个接收组、云盘根目录与可达审校 URL，镜像/外部心跳未启用，运营从飞书到排期尚未验收。
-- 原 10 份账本/激活与备份 SHA 于 06:58:19Z 再核未变；2020-09-03 冻结 `.tech` 帖 2389976088430547749 的直接详情 read_only=true。只读 preflight exit 0 但阶段仍有 blocked/not_observed/disabled，两渠道 acceptance.verified=false。
-- 旧不确定提交仍保留：attempt d9853906-57d9-437c-9f71-4ed72d103a81、post 3965025107383038890，2026-09-09 10:00 +02:00 双渠道、无 remote ID/快照。当前月历没卡不能判成未提交，需人工核对，不能重试或计入新 G8。
+主干 `main` 就是日常工作的地方，代码截至 `3718c0d`。
+
+**数据绑定。** 主干没有 `config.local.toml`，它直接按 `config.toml` 的 `[paths]` 读同目录下的 `archive/` 与 `state/`——**这两个目录里就是真实生产数据**，打开审校台、点保存都会落到真实账本。副本工作区（如 `.worktrees/business-workflow`）通过忽略入库的 `config.local.toml` 指回这同一份数据，所以「在副本里跑」不等于「跑在空数据上」。
+
+**归档现状。** 原激活 `2026-09-03T09:00:58.277710Z` 保留。归档 1,067 篇为 FB 47 + 冻结 `.tech` 1,020，SQLite 实际记录/字段一致，历史第 1/2 页各 20 条且无重复，冻结详情已真实只读访问。核验备份 `runtime.zip` 共 5,246 文件、465,064,677 字节，含运行配置核验，凭据不进证据报告；原 10 份账本/激活与备份 SHA 于 06:58:19Z 再核未变。**这些不是 `.global` 回填基线**，不能重新 activate 或清空发布历史。
+
+**审校台。** 2026-09-14 生产已从旧 Vue 切到 React（`web/ui-next/`），挂载点是 `config.toml` 的 `[paths].web_dist`。
+
+> ⚠️ **这一行改动目前还没提交。** `git checkout -- config.toml` 会让审校台悄悄退回旧 Vue（缺省值是 `web/ui/dist`），而页面不会报错。切换语义、回滚步骤和冒烟清单在 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-审校台前端的切换与回滚)。
+
+**浏览器会话。** 三个 Chrome 均已启动，但「启动」只证明进程和角色存在，不证明会话可抓取：
+
+- 9224 访问 `.global` 真实 HTTP 429，`delta_state.json` 已记 `detect_hard_blocked` 与失败；Google Trends 公开页同样实际 HTTP 429，`trends_export_state.json` 为 blocked。两者均已停止，**先人工核对会话与出口**，不清空状态、不连续请求。
+- 9223 已登录并观察到目标 FB `Neakasa Deutschland`、IG `neakasa.de`。2026-09-13T05:01:33Z 生产月历读到完整 35 格、4 条公开帖与 2 个明确推荐时段，含 3 个独立 IG remote ID。尚无本轮新发布/排期提交。
+- 发布浏览器里曾放入明确写有 "Technischer Entwurf…Nicht zur Veröffentlichung vorgesehen." 的技术长文案和 2 张历史原图，仅探查编辑器/缩略图数量顺序；未点 Schedule、Publish、Finish later 或 Cancel。**可能留有未保存或自动保存草稿**——不把它当业务候选，也不声称没有远端写入。
+
+**外部依赖缺口。** 未调用真实模型或发送飞书消息。飞书缺 AppSecret、两个接收组、云盘根目录与运营可达的审校 URL；镜像与外部心跳未启用，运营从飞书到排期尚未验收。只读 preflight exit 0，但阶段仍有 blocked/not_observed/disabled，两渠道 `acceptance.verified=false`。
+
+**一条挂着的旧账。** attempt `d9853906-57d9-437c-9f71-4ed72d103a81`、post `3965025107383038890`，2026-09-09 10:00 +02:00 双渠道，无 remote ID 与快照。当前月历没卡**不能**判成未提交，需人工核对；不能重试，也不计入新 G8。
+
+**接手前先看 `git status`。** 主干与副本工作区都可能有未提交修订，只提交自己范围，不覆盖别人的改动。
 
 ## 2. 红线
 
@@ -55,7 +65,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 ## 4. 当前关键缺口
 
-按 [OPTIMIAZATION.md](OPTIMIAZATION.md) 分代码与真实验收，不沿用旧缺口快照：
+逐项状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，代码与真实验收分开列。下面是摘要，不沿用旧缺口快照：
 
 - 已补严格审校账本读取、模型恢复、源图内容指纹、冻结快照/恢复投影、历史分页/旧详情、SQLite 实际一致性和 runtime binding；原历史/索引读取另有真实证据，最终全量加相关补跑已通过。
 - scheduler 已有 install/status/disable/enable；月度样本/覆盖不足保留、双平台整批截止预算、模型/标签周采样/远端 I/O 独立执行器已有定向证据。批次 operation_id 与付费成本关联，CAS 恢复不重发付费请求。实际安装/停用/恢复未验收。
@@ -66,7 +76,8 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 完整月历生产读取本次已真实通过，公开观察按 remote ID，不按时钟；生产上层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
 - 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。版本化浏览器已新增 FB 链接插入/准确计数，最终新 dist 的 7 场景通过，输出为 state/offline-browser-20260913T070144Z-3108/report.json。
 - 历史交接六项已逐项补上：canonical source_text_sha256/AST 守卫，风险 raw scan_text_sha256 保留偏移；补扫中途过期仍跑普通探测并给技术/晨间告警；付费恢复；outbox 默认 30 天完整终态组件按 SHA 归档且主状态保留去重；FB 光标 {{linkN}} 与 /check 最终计数；消除重复 alias。`afb6784` 为调度过期修复，`923091f` 为飞书终态归档，最终整合在 `565f17c`；共同回归已单列。
-- `.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话/权限和具体发布确认。FB 待制作包在 worktree state/integration-candidates/facebook-122120460231379375，来源 2026-08-16“Cat or CCTV”单图、拟 2026-09-15 10:00 柏林但未占位，缺最终德语图/受控样本许可/整包确认；不覆盖短链或多图。IG 没有新素材，过期活动/美元促销不是可以直接提交的联调包。
+- `.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话/权限和具体发布确认。FB 待制作包 `integration-candidates/facebook-122120460231379375`（在当时开发副本的 `state/` 下），来源 2026-08-16“Cat or CCTV”单图、拟 2026-09-15 10:00 柏林但未占位，缺最终德语图/受控样本许可/整包确认；不覆盖短链或多图。IG 没有新素材，过期活动/美元促销不是可以直接提交的联调包。
+- 审校台前端已整体换成 React。深链接刷新由 `web/api/app.py::SinglePageFiles` 保住，契约钉在 `tests/tests_spa_static.py`；历史页首屏缩略图成本是已知待观察项，不是回滚触发条件（数字见 §7）。
 
 生产迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
@@ -161,7 +172,33 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 
 探查与提交是不同证据。最终两篇具体内容经用户确认后，分别完成 FB-only/IG-only 排期及回读；还要覆盖长文、多图、FB 链接、IG CTA 和运营从飞书开卡片到收到排期回执的完整流程。
 
-## 7. 内容安全规则
+### 每份证据能证明到哪
+
+**最容易犯的错是把左边一列读成右边一列。** 下表原在 `docs/INTEGRATION_2026-09-12.md`，2026-09-14 并到这里。
+
+| 证据 | 能证明什么 | **不能**证明什么 |
+|---|---|---|
+| `state/channel_controls.json` | 当前 FB `Neakasa Deutschland`、IG `neakasa.de` 的单渠道控件与账号观察 | 新 Schedule 已提交或已回读 |
+| `state/publish_probe_20260912_205317_056051.json` | 本轮 22 条事件记录 | 自动等同 G8 真实排期验收 |
+| `state/planner_controls.json` | 月历日期格与条目控件来源 | 未加载内容可以被当成空档 |
+| `planner_month_20260913T044722903276.png` | 当前月历观察；结合生产读取证明本次 35 格内容已读取 | 未来 scheduled 卡片的完整正文/图片回读 |
+| `channel_facebook_*.png`、`channel_instagram_*.png` | 对应渠道当前可见状态 | 替代结构化资产 ID / remote ID 核验 |
+| 2026-09-13T05:01:33Z 生产 inventory | 4 条公开帖；2 个仅时刻项经正向 tooltip 确认为推荐时段并排除；3 个 IG remote ID 独立 | 把公开帖或推荐时段当成本次新建排期成功的证明 |
+| `state/composer_media_probe_20260913T054737Z_final.json/.png` | FB 单渠道编辑器技术长文案与 2 张历史原图的上传控件/缩略图数量顺序观察 | 业务候选就绪、长文完整远端回读或排期图片验证 |
+| `state/composer_media_verification_20260913.json` | 2026-09-13T06:01:17Z，两张 1536×2048 原图按顺序与编辑器图比较：dHash 距离 0、RGB 平均误差 0、宽高比比值 1 | 远端发布/排期详情的图片数量、顺序或字节已确认 |
+
+公开状态按 remote ID 和明确远端观察记录，**不由当前时钟超过 `scheduled_at` 推算**。旧 journal 里的双渠道排期是旧历史，不能充当本轮独立 FB/IG 的新 G8 验收。当前远端图片数与顺序仍未证实——本地快照保存了多少张，不能替代平台回读看到多少张。
+
+媒体核验器以真实 DOM 中最近的 `Remove photo` 祖先确定每张缩略图，修复了嵌套容器重复计数后才与冻结原图作视觉比较。这是编辑器侧的准备证据，不是远端排期详情读取。
+
+## 7. 审校台切换后实测到的两个数
+
+2026-09-14 从 Vue 切到 React 之后测的，都留在这里免得下次再测一遍：
+
+- **历史页首屏缩略图成本。** 隔离夹具（63 篇）上是每张 0.03–0.11 秒、50 行首屏约 3.9 秒；换到生产归档（1,067 篇）直接向运行中的宿主取 8 张，中位 1.57 秒、最大 2.0 秒——按每源六连接算，首屏约 12–13 秒。成本随账号目录规模走（`assert_physical_direct_path` 要遍历它），所以夹具数字注定偏乐观。文字行仍然立刻出来，页面可用，**不是回滚触发条件**；但"每页 20 条"这个缓解手段比夹具数字显示的更值得做。
+- **一个量不准的陷阱。** 缩略图是 `loading="lazy"`，没有被绘制的标签页发出的图片请求数为零。`document.visibilityState === "hidden"` 时 38 秒内什么都没加载——看起来像卡死，其实不是。**要量就从前台窗口量，或者直接取 URL。**
+
+## 8. 内容安全规则
 
 - 优惠码、品牌、型号、@提及、合作方水印/署名和配置中的保留词不改。
 - 图片中的数值和单位不自动换算；不确定时保持原样。
@@ -169,8 +206,20 @@ scripts\run_probe_signals.bat --report state\publish_probe_20260901_054226_37862
 - 没有当前版正文译文时，不开始图片本地化。
 - 确定性错误与模型风险提示分开展示。风险夹具不得混入真实任务。
 
-## 8. 工作协议
+## 9. 工作协议
 
 动手前读取本文件、[FUNCTIONALITY.md](FUNCTIONALITY.md) 和相关模块测试。先用离线输入复现，再决定是否需要真实浏览器。任何真实发布前都准备具体内容给用户确认。
 
 验证报告必须写清：运行了什么、使用的是离线夹具还是真实账号、通过日期、哪些外部依赖仍未联调。不得用测试名称或 mock 回执替代真实证据。
+
+## 10. 被移走的材料在哪
+
+主干只留承重的文档。下面这些被删过，但**都还能取回来**——用 `git show <提交>:<路径>` 即可，不需要恢复分支。
+
+| 材料 | 删于 | 怎么取回 | 里面有什么值得回头看的 |
+|---|---|---|---|
+| 权威长版文档（`FUNCTIONALITY.md` 1513 行、`HANDOFF.md` 518 行、`CONTEXT.md` 145 行、`REQUIREMENTS.md` 496 行、`OPTIMIAZATION.md` 453 行、`MANUAL_STEPS.md` 469 行、`web/DESIGN.md` 462 行、`README.md` 342 行） | 2026-09-12 `2ec1fae` 精简 | `git show 0eeb099:docs/FUNCTIONALITY.md` | 业务访谈原话、13 条被推翻的旧决定、配置键的「安全 / 运营 / 业务决策」三分、47 篇发帖时刻直方图（83% 落在离岗窗，这是「在岗窗 / 离岗窗」命名的全部依据）、S0 三条硬前置与依赖图、刻意接受的代价 |
+| UI 重构全过程材料：`docs/ui-refactor/` 187 个文件 5.5 MB（其中 4 MB 截图）——审计、阶段报告、浏览器与网络取证 dump、审计期的抓取/脱敏脚本 | 2026-09-14 `4b5e68e` | `git show 227ddba:docs/ui-refactor/<文件>` | 从审计到切换的完整纸面轨迹 |
+| `docs/CONTEXT.md`（术语表）、`docs/OPTIMIAZATION.md`（五阶段清单）、`docs/INTEGRATION_2026-09-12.md`（集成记录）、`docs/superpowers/plans/` 四份执行计划 | 2026-09-14 本次合并 | `git show 3718c0d:docs/<文件>` | 术语表已并入 [FUNCTIONALITY 附录 A](FUNCTIONALITY.md#附录-a-术语表)，五阶段清单已并入 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，集成记录的结论已并入本文件 §4 与 §6；被丢下的是逐个证据目录的文件清单和已完成计划的任务勾选 |
+
+**UI 重构的承重部分没有跟着删**，它们被搬到了引用它们的地方：测试工具进 `tests/`（`browser_regression.py`、`network_compare.py`、`cutover_rehearsal.py`、`review_probe.py`、`history_thumbnail_cost.py` 及配套 `ui_fixture.py`、`audit_fixture_host.py`，产物改写到已 gitignore 的 `state/ui-regression/`），参考文档进 `web/ui-next/`（`web/ui-next/src` 里有 107 处注释引用它们），操作性知识进 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-审校台前端的切换与回滚) 和 `web/README.md`。

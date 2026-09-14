@@ -1,12 +1,12 @@
 # 人工操作指南
 
-本文件列人工依赖与开发机操作顺序。2026-09-12 本 worktree 已在核验备份后绑定原 archive/state/.env/解释器，审校写入会落到真实账本；事实同步至 UTC 2026-09-13。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，代码和真实验收分别看 [OPTIMIAZATION.md](OPTIMIAZATION.md)，已取得证据看 [本轮集成记录](INTEGRATION_2026-09-12.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
+本文件列人工依赖与开发机操作顺序，事实同步至 2026-09-14。**主干的 `archive/` 与 `state/` 就是真实生产数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
 当前先保留现场：9224 访问 `.global`、Google Trends 公开页均实际 HTTP 429，分别保存在 `delta_state.json` 和 `trends_export_state.json`，均已停止；需要人工核对探测会话与出口。9223 已登录并录到目标 FB `Neakasa Deutschland`、IG `neakasa.de`，本次完整月份生产读取已经通过，尚无本轮新发布/排期提交。编辑器中曾放入不可发布的技术长文案与 2 张历史原图作控件观察，可能留下草稿；接手时不要直接点击提交。飞书缺凭据、镜像/外部心跳未启用，完整运营流程尚未通过。
 
 ## 1. 接续运行数据前先备份和核验
 
-本次已完成的核验备份在本 worktree 的 `state/runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；原激活时间 `2026-09-03T09:00:58.277710Z` 保留。当前绑定由忽略入库的 `config.local.toml` 读取，不能把原目录的配置文件或账本重置成 worktree 空样例。
+2026-09-12 已完成一次核验备份 `runtime-backups/20260912T100016Z/runtime.zip`，5,246 文件、465,064,677 字节；原激活时间 `2026-09-03T09:00:58.277710Z` 保留。主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本工作区用忽略入库的 `config.local.toml` 指回同一份数据。**不能把真实目录的配置文件或账本重置成空样例。**
 
 以后再次接续或恢复时，先停止旧调度器与写入进程，备份完整 archive/state，另包含运行 `config.toml`、存在时的 `config.local.toml`、本机 `.env` 的受控副本和解释器位置/版本记录。备份凭据单独控制访问，不放公共云盘或证据报告；不要只复制 manifest/SQLite。
 
@@ -91,15 +91,13 @@ scripts\run_python.bat -m tools.hashtag_sampling trends-reset --reason "已人�
 
 ## 6. 审校台人工检查
 
-当前开发机 API 已在 [127.0.0.1:8765](http://127.0.0.1:8765) 运行，绑定原数据，2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态 GET 均为 200，冻结详情/运行状态只读。可直接打开本机页面；这不证明运营机器能访问。服务证据在 worktree state/integration-20260913/real-web-smoke.json 与 web-process.json。下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。
+开发机 API 跑在 [127.0.0.1:8765](http://127.0.0.1:8765)，绑定真实数据。2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态四个 GET 均为 200，冻结详情与运行状态只读。可直接打开本机页面；**这不证明运营机器能访问。** 下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。
 
-开发机构建前端：
+开发机构建前端（当前生产挂的是 React，见第 13 节）：
 
 ```powershell
-Set-Location web\ui
-npm install
-npm run build
-Set-Location ..\..
+npm --prefix web/ui-next install
+npm --prefix web/ui-next run build
 ```
 
 启动 API：
@@ -177,7 +175,7 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 - Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
-当前这两个联调包尚未齐备。FB 已有来源为 2026-08-16“Cat or CCTV”的单图待制作包，位于 worktree `state/integration-candidates/facebook-122120460231379375/`：德语正文提案、图片德语替换指令、原图与 manifest 已准备，最终德语图仍缺。拟定目标为 Neakasa Deutschland、2026-09-15 10:00 柏林，未占位、未批准；先确认这篇历史内容可作受控样本及图片付费许可，完成图片后再确认整包提交。该包不覆盖 FB 短链、IG bio 或真实多图。过期 8 月活动/美元促销需要业务重新判断；IG 尚无 `.global` 新素材。技术草稿和冻结 `.tech` 不能替代当前来源。
+当前这两个联调包尚未齐备。FB 已有来源为 2026-08-16“Cat or CCTV”的单图待制作包 `integration-candidates/facebook-122120460231379375/`（在当时开发副本的 `state/` 下）：德语正文提案、图片德语替换指令、原图与 manifest 已准备，最终德语图仍缺。拟定目标为 Neakasa Deutschland、2026-09-15 10:00 柏林，未占位、未批准；先确认这篇历史内容可作受控样本及图片付费许可，完成图片后再确认整包提交。该包不覆盖 FB 短链、IG bio 或真实多图。过期 8 月活动/美元促销需要业务重新判断；IG 尚无 `.global` 新素材。技术草稿和冻结 `.tech` 不能替代当前来源。
 
 用户确认后才执行一次提交。提交前后都不要编辑冻结目录。只有 Planner 回读确认目标渠道、时刻和 remote ID 后才能写 `scheduled`。`scheduled` 不代表到时已经公开。
 
@@ -220,14 +218,32 @@ scripts\run_pipeline.bat preflight
 
 只有真实依赖验收完成才用 `scheduler-install` 安装并允许 `--run`。管理入口 `scheduler-disable` 会停用定义并结束常驻实例；`scheduler-enable` 检查旧任务冲突后恢复并启动。它们会改变实际计划任务，按维护窗口执行，不为演示而运行。安装后验证查询、停用、恢复、重启单实例、不补跑睡眠全部轮次与三 profile 隔离；进程中断付费任务仍先核账，不自动重放。
 
-提交最终验收报告前，在全部修改集成后构建 Vue，再运行隔离全部测试入口；保存命令、版本与结果。该入口包括版本化浏览器测试：
+提交最终验收报告前，在全部修改集成后构建前端，再运行隔离全部测试入口；保存命令、版本与结果。
 
 ```powershell
-npm.cmd --prefix web/ui run build
+npm --prefix web/ui-next run build
+npm --prefix web/ui-next test
 scripts\run_python.bat -m tools.test_offline
 ```
 
-仅复验浏览器时可运行 `scripts\run_python.bat tests/tests_browser_workflow.py -v`。它使用实际 Vue dist、临时真实 ASGI 和隔离 archive/state；保存/历史/设置/链接最终计数走临时真实后端，远端状态夹具只验证 UI。初版 6 条之后已增加 FB 光标链接场景，共 7 场景通过；全部当前修改的最终全量结果见集成记录，规划时 47 脚本或本轮定向测试不能替代最终报告。不要对绑定原数据直接运行会写入的测试脚本。
+`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——**它不会让测试结果自动变成真实集成结果。** 切换到 React 之后的最新一轮是 Python 66/66、React 498/498、typecheck 干净。
+
+仅复验浏览器时：
+
+```powershell
+scripts\run_python.bat tests/browser_regression.py
+```
+
+它用实际 dist、临时真实 ASGI 和隔离 archive/state：保存、历史、设置、链接最终计数走临时真实后端，远端状态用显式夹具，只验证 UI 行为。每次回归记录构建 JS 哈希、截图、断言、页面错误、阻断请求和允许的临时写请求，产物落在已 gitignore 的 `state/ui-regression/`。
+
+⛔ **不要对绑定真实数据的目录直接运行会写入的测试脚本。**
+
+部署形状另有两个入口，浏览器回归照不出来（`tests/browser_fixture.py` 的 UIFixture 自带 SPA 回落，全绿只证明前端逻辑对）：
+
+```powershell
+scripts\run_python.bat tests/tests_spa_static.py
+scripts\run_python.bat tests/cutover_rehearsal.py --dist web/ui-next/dist
+```
 
 ## 12. 卡住时保留什么
 
@@ -243,11 +259,16 @@ scripts\run_python.bat -m tools.test_offline
 
 不要提供 cookie、token、`.env`、完整用户数据截图或未遮罩的浏览器 dump。
 
-## 13. 把审校台切换到 React 前端
+## 13. 审校台前端的切换与回滚
+
+**2026-09-14 已经切到 React。** 这一节留着有两个用途：出问题时照着回滚，以及下次再动挂载点时照着走一遍。
 
 旧 Vue（`web/ui/`）与新 React（`web/ui-next/`）两份构建并存，生产挂哪一份由
 `config.toml` 的 `[paths].web_dist` 决定。切换和回滚都只改这一个值 + 重启 Web 进程，
 不碰接口、字段、账本或归档。
+
+> ⚠️ 当前 `web_dist = "web/ui-next/dist"` 这一行**尚未提交**。缺省值是 `web/ui/dist`，
+> 所以一次 `git checkout -- config.toml` 就会让审校台静悄悄退回旧 Vue，页面不会报错。
 
 从上到下勾。任何一步失败就停，先判断要不要回滚（见最后两节）。
 
@@ -262,7 +283,7 @@ scripts\run_python.bat -m tools.test_offline
 - [ ] Vue 回滚构建 PASS — `npm --prefix web/ui run build`
 - [ ] Python 全量 PASS — `scripts\run_python.bat tools/test_offline.py`
 - [ ] React 单测 PASS — `npm --prefix web/ui-next test`
-- [ ] 演练 React PASS — `scripts\run_python.bat docs/ui-refactor/tools/cutover_rehearsal.py --dist web/ui-next/dist`
+- [ ] 演练 React PASS — `scripts\run_python.bat tests/cutover_rehearsal.py --dist web/ui-next/dist`
 - [ ] 演练 Vue 回滚 PASS — 同上，`--dist web/ui/dist`
 - [ ] 记下当前 `config.toml` 里 `[paths].web_dist` 的值：`________________`（没有这个键就写"没有"）
 - [ ] `web/ui/dist/index.html` 存在
@@ -337,7 +358,7 @@ scripts\run_python.bat -m tools.test_offline
 
 ## OBSERVE（第一个工作日）
 
-- [ ] 历史归档页缩略图补齐速度（已知风险，见 [web/README.md](../web/README.md)；太慢先改成 20 条/页）
+- [ ] 历史归档页缩略图补齐速度（已知项，生产实测首屏约 12–13 秒，数字与量法见 [HANDOFF §7](HANDOFF.md)；太慢先改成 20 条/页）
 - [ ] `/runtime` 状态
 - [ ] 队列计数与列表局部更新是否对得上
 - [ ] 记录出现过的每一次 409 恢复
