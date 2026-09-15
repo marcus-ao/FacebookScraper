@@ -210,6 +210,9 @@ keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 
 [mirror]
 # 本地到云盘的单向版本镜像。
+# ⛔ enabled = false 是 2026-09-15 的延期决定（REQUIREMENTS §9），不是没做完：
+# 云盘要企业自建应用的 AppSecret，本轮先跑本地与 SQLite。开启步骤见 MANUAL_STEPS 7.1。
+# 代价是本轮没有异地备份，而 state/published.jsonl 不可重建，须由人定期外拷。
 enabled = false
 root_folder_token = "TsQef8msClS2i6dlzpfcpfn6nAc"
 mirror_state = true

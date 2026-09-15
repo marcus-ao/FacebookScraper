@@ -38,8 +38,8 @@ class StorageLayoutTests(unittest.TestCase):
         row = self.arc.rows()[0]
         directory = self.arc.post_dir(post)
         self.assertEqual(directory.parent.parent, self.arc.posts_dir / "2026-09")
-        self.assertEqual(row["folder_name"],
-                         "2026-09-10_2223_m1-pro-anniversary-sale_3973012230169803390")
+        # 时间戳 · 平台 · 产品 · 摘要，四段都是业务读得懂的；名字里不再有 post_id。
+        self.assertEqual(row["folder_name"], "2026-09-10_2223_IG_M1-Pro_m1-pro-anniversary-sale")
         self.assertEqual(directory.name, row["folder_name"])
         self.assertEqual(row["tags"], ["M1 Pro"])
         self.assertLess(len(str(directory / "media_de" / "01.jpeg")), 240)
@@ -146,9 +146,16 @@ class StorageLayoutTests(unittest.TestCase):
         post.post_id = "long" + "9" * 80
         self.arc.append(post)
         directory = self.arc.post_dir(post)
-        self.assertTrue(store.post_folder_matches_id(directory.name, post.post_id))
-        self.assertTrue(store.post_folder_matches_id(store.post_dirname(post.post_id, post.created_at), post.post_id))
-        self.assertFalse(store.post_folder_matches_id(directory.name, "unrelated"))
+        row = post.to_row()
+        # 新目录按建档时固定的 folder_name 判归属；旧目录仍按 ID 后缀，两条都要认。
+        self.assertTrue(store.post_folder_matches(directory.name, row))
+        self.assertFalse(store.post_folder_matches(directory.name, dict(row, folder_name=None)))
+        self.assertFalse(store.post_folder_matches("2026-09-10_1423_IG_other", row))
+        legacy = store.post_dirname(post.post_id, post.created_at)
+        self.assertTrue(store.post_folder_matches_id(legacy, post.post_id))
+        self.assertTrue(store.post_folder_matches(legacy, dict(row, folder_name=None)))
+        self.assertFalse(store.post_folder_matches_id(legacy, "unrelated"))
+        # folder_name 丢失时仍要找回目录：名字里没有 ID，就打开 post.json 认身份。
         stale = post.to_row()
         stale.pop("folder_name")
         self.assertEqual(store.read_post_truth(self.arc.base, stale)[1], directory)

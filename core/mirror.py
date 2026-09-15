@@ -655,9 +655,14 @@ class MirrorService:
     @staticmethod
     def _placement(account_dir, source, directory):
         month = store.archive_month(dict(source, folder_name=directory.name))
+        # 目录名自己带平台段（F2-2），云盘不再另加前缀，否则会变成 IG_..._IG_...。
+        # 2026-09-15 之前建的旧目录名没有平台，补一个前缀让云盘上仍能区分两个平台。
+        name = directory.name
+        prefix = 'IG' if source['platform'] == 'instagram' else 'FB'
+        if prefix not in name.split('_'):
+            name = prefix + '_' + name
         return Path(account_dir).name + '/' + source['post_id'], {
-            'name': ('IG_' if source['platform'] == 'instagram' else 'FB_') + directory.name,
-            'month': month, 'tag': store.primary_tag_folder(source)}
+            'name': name, 'month': month, 'tag': store.primary_tag_folder(source)}
 
     def queue_stage(self, account_dir: Path, source: dict, stage: str, files: dict,
                     *, evidence: dict, now: datetime) -> bool:
