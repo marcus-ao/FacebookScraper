@@ -306,7 +306,7 @@ def _stable_post_id_component(post_id: str) -> str:
 
 
 def post_folder_matches_id(folder_name: str, post_id: str) -> bool:
-    """目录 ID 后缀归属检查；兼容旧完整 ID 与新布局缩短的长 ID。"""
+    """目录 ID 后缀归属检查；只有 2026-09-15 之前建的目录才把 ID 写进名字。"""
     try:
         name = _safe_folder_name(folder_name)
     except ArchivePathError:
@@ -315,13 +315,69 @@ def post_folder_matches_id(folder_name: str, post_id: str) -> bool:
         _safe_post_id_component(post_id), _stable_post_id_component(post_id)})
 
 
-def _new_folder_name(post: Post) -> str:
-    safe_id = _stable_post_id_component(post.post_id)
-    text = unicodedata.normalize("NFKD", post.text).encode("ascii", "ignore").decode("ascii")
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:30].rstrip("-")
+def post_folder_matches(folder_name: str, row: object) -> bool:
+    """目录归属检查。新名字不含 post_id，按建档时固定的 `folder_name` 比；
+    旧目录没有这个字段，回退到 ID 后缀，迁移中断时两种都要认。"""
+    recorded = row.get("folder_name") if isinstance(row, dict) else None
+    if isinstance(recorded, str) and recorded and folder_name == recorded:
+        return True
+    return post_folder_matches_id(
+        folder_name, str((row.get("post_id") if isinstance(row, dict) else "") or ""))
+
+
+_PLATFORM_COMPONENT = {"instagram": "IG", "facebook": "FB"}
+SLUG_MAX = 30
+# 文件夹名里的产品段上限。父目录已经是完整主 tag，这里只求业务一眼认得出是哪个产品。
+PRODUCT_COMPONENT_MAX = 12
+
+
+def _name_component(value: object, limit: int, *, lower: bool = False) -> str:
+    """转成文件夹名可用的 ASCII 段。中文 tag 和纯 emoji 正文转不出东西，返回空串由调用方省略。"""
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Za-z0-9]+", "-", text.lower() if lower else text).strip("-")[:limit].rstrip("-")
+
+
+def _directory_post_id(directory: Path) -> str:
+    """只读出身份用于恢复定位；坏的或读不出的目录跳过，由调用方按找不到处理。"""
+    try:
+        row = json.loads((directory / "post.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(row.get("post_id") or "") if isinstance(row, dict) else ""
+
+
+def _folder_name_taken(account_dir: Path, name: str) -> bool:
+    posts = Path(account_dir) / "posts"
+    month = posts / _folder_month(name)
+    return ((posts / name).exists() or (month / name).exists()
+            or bool(_existing_tagged_dirs(Path(account_dir), month, name)))
+
+
+def _new_folder_name(post: Post, account_dir: Path | None = None) -> str:
+    """业务可读的四段名：时间戳 · 平台 · 产品 · 摘要。
+
+    ⚠️ 日期必须留在最前面。`_folder_month()`、`tools/layout.py` 和 `localize/images.py`
+    都从名字开头反推月份，把平台提到最前会同时打断这三处，而且不报错。
+
+    产品段记的是**建档时**的主 tag。人工改 tag 只移动目录、不改名字——重命名会让
+    每个媒体的 `local_path` 和已发出的引用一起失效（F2-2）。所以改过分类的帖子，
+    名字里的产品会和父目录不一致，以父目录为准。
+    """
     moment = _archive_time(post.created_at)
-    prefix = moment.strftime('%Y-%m-%d_%H%M') if moment else 'undated'
-    return _safe_folder_name("_".join(part for part in (prefix, slug, safe_id) if part))
+    tags = post.tags if isinstance(post.tags, list) else []
+    parts = (moment.strftime('%Y-%m-%d_%H%M') if moment else 'undated',
+             _PLATFORM_COMPONENT.get(post.platform, ''),
+             _name_component(tags[0] if tags else '', PRODUCT_COMPONENT_MAX),
+             _name_component(post.text, SLUG_MAX, lower=True))
+    base = _safe_folder_name("_".join(part for part in parts if part))
+    if account_dir is None:
+        return base
+    # 名字里不再有 post_id，无正文帖和 undated 帖可能真的重名；只在撞上时加序号。
+    name, ordinal = base, 1
+    while _folder_name_taken(account_dir, name):
+        ordinal += 1
+        name = _safe_folder_name("%s-%d" % (base, ordinal))
+    return name
 
 
 def infer_tags(text: str, models: list[str] | None = None) -> list[str]:
@@ -455,9 +511,15 @@ def post_directory(account_dir: Path, indexed: dict) -> Path:
     legacy = assert_post_directory(account_dir, posts / name)
     if legacy.exists():
         return legacy
-    # 迁移中断或索引落后时，按稳定 ID 后缀寻找真实目录，不能重算正文摘要。
+    # 迁移中断或索引落后时寻找真实目录，不能重算正文摘要——摘要变了就找不回原目录。
+    # 2026-09-15 起名字里不再有 post_id，先按旧后缀找，找不到再打开 post.json 认。
+    # 这一趟是慢的，但它只在 folder_name 丢失时走；认不出来的后果是把已归档的帖子报成不存在。
+    post_id = str(indexed.get("post_id") or "")
     matches = [directory for directory in iter_post_dirs(account_dir)
-               if post_folder_matches_id(directory.name, str(indexed.get("post_id") or ""))]
+               if post_folder_matches_id(directory.name, post_id)]
+    if not matches and post_id:
+        matches = [directory for directory in iter_post_dirs(account_dir)
+                   if _directory_post_id(directory) == post_id]
     if len(matches) > 1:
         raise ArchivePathError("同一 post_id 有多个帖子目录，请先重建并核对索引")
     return matches[0] if matches else legacy
@@ -467,19 +529,21 @@ def planned_post_directory(account_dir: Path, post: Path | Post) -> Path:
     """新帖/重放的无写盘路径规划；固定对象元信息后执行阶段使用同一路径。"""
     if post.folder_name is None:
         existing = post_directory(account_dir, post.to_row())
-        post.folder_name = existing.name if existing.exists() else _new_folder_name(post)
-        truth = existing / "post.json"
-        if truth.exists():
+        if existing.exists():
+            post.folder_name = existing.name
+        if (existing / "post.json").exists():
             row, _directory = read_post_truth(account_dir, post.to_row())
             if isinstance(row.get("tags"), list):
                 post.tags = list(row["tags"])
     if post.tags is None:
-        # 必须在算落点之前定下来：媒体下载先于 append 发生，
-        # 晚一步会让图片落进 未分类/ 而 post.json 落进 <tag>/。
+        # 必须在算落点和文件夹名之前定下来：媒体下载先于 append 发生，晚一步会让
+        # 图片落进 未分类/ 而 post.json 落进 <tag>/，名字里的产品段也会跟着丢。
         post.tags = infer_tags(post.text)
         post.tags_origin = 'auto'
     elif post.tags_origin is None:
         post.tags_origin = 'manual'
+    if post.folder_name is None:
+        post.folder_name = _new_folder_name(post, account_dir)
     return post_directory(account_dir, post.to_row())
 
 
@@ -520,8 +584,8 @@ def resolve_media_path(account_dir: Path, source: dict, media: dict) -> Path | N
     previous_parent = account_dir.joinpath(*relative.parts[:-1])
     assert_post_directory(account_dir, previous_parent)
     if (previous_parent != directory and
-            (not post_folder_matches_id(previous_parent.name, source['post_id'])
-             or not post_folder_matches_id(directory.name, source['post_id']))):
+            (not post_folder_matches(previous_parent.name, source)
+             or not post_folder_matches(directory.name, source))):
         raise ArchivePathError('媒体路径不属于同一稳定帖子目录')
     if (directory / 'post.json').exists():
         read_post_truth(account_dir, dict(source, folder_name=directory.name))
@@ -592,7 +656,7 @@ def _append_archive_record(account_dir: Path, name: str, row: dict) -> None:
 def _complete_tag_move(account_dir: Path, event: dict) -> None:
     before = assert_post_directory(account_dir, account_dir / event['source'])
     target = assert_post_directory(account_dir, account_dir / event['target'])
-    if (before.name != target.name or not post_folder_matches_id(target.name, event['post_id'])
+    if (before.name != target.name or not post_folder_matches(target.name, event['row'])
             or _tag_destination(account_dir, before, event['row']) != target):
         raise ArchivePathError('分类移动记录的帖子或月份不一致')
     if before != target and before.exists():

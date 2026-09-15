@@ -887,8 +887,20 @@ def _valid_sha256(value: Any) -> bool:
     return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
 
 
-def _record_path_matches_key(post_id: str, media_index: int, out_rel: str) -> bool:
-    """所有权记录必须绑定到自己的帖子目录、media_de 与两位媒体序号。"""
+def _folder_of(out_rel: str) -> str:
+    """产物路径里的帖子目录段：posts/<月份>/<tag>/<帖子>/media_de/NN.jpg。"""
+    parts = PurePosixPath(str(out_rel)).parts
+    return parts[-3] if len(parts) >= 3 else ""
+
+
+def _record_path_matches_key(post_id: str, media_index: int, out_rel: str,
+                             folder_name: str | None = None) -> bool:
+    """所有权记录必须绑定到自己的帖子目录、media_de 与两位媒体序号。
+
+    ⛔ 判错的后果是静默的：程序产出的德语图会被当成人工图，从此永不重做，而且不报错。
+    2026-09-15 起新目录名不含 post_id，所以按 `folder_name` 比；旧记录没有这个字段，
+    继续按 ID 后缀判，两条都不能去掉。
+    """
     pure = PurePosixPath(out_rel)
     # 4=旧平铺，5=posts/<月份>/，6=posts/<月份>/<tag>/。少认一种层级会让程序产出的
     # 德语图被当成人工图，从此永不重做，而且没有任何报错。
@@ -901,8 +913,10 @@ def _record_path_matches_key(post_id: str, media_index: int, out_rel: str) -> bo
         return False
     folder = pure.parts[-3]
     if (len(pure.parts) > 4 and pure.parts[1]
-            != (folder[:7] if not folder.startswith("undated_") else "undated")):
+            != (folder[:7] if not folder.startswith("undated") else "undated")):
         return False
+    if isinstance(folder_name, str) and folder_name:
+        return folder == folder_name
     return post_folder_matches_id(folder, post_id)
 
 
@@ -948,7 +962,11 @@ def load_image_state(path: Path) -> ImageState:
                     or (output_sha is not None and not _valid_sha256(output_sha))):
                 continue
             post_id = post_id.strip()
-            if not _record_path_matches_key(post_id, media_index, out_rel):
+            if not _record_path_matches_key(post_id, media_index, out_rel, row.get("folder_name")):
+                # 这一行被丢掉之后那张德语图就算人工图，从此不再重做。上面几类格式错误
+                # 还能从别处看出来，归属对不上不会——所以只有这一条要出声。
+                print("    ! %s[%d] 的德语图所有权记录与目录对不上，已按人工图处理：%s"
+                      % (post_id, media_index, out_rel))
                 continue
             row["out_path"] = out_rel
             key = (post_id, media_index)
@@ -997,7 +1015,9 @@ def image_record_is_current(job: ImageJob, record: Mapping[str, Any] | None) -> 
             and record.get("prompt_version") == IMAGE_PROMPT_VERSION
             and isinstance(record.get("out_path"), str)
             and PurePosixPath(record["out_path"]).suffix == job.out_path.suffix
-            and _record_path_matches_key(job.post_id, job.media_index, record["out_path"]))
+            # 目录归属以本次 job 规划的产物路径为准，不采信记录自报的 folder_name。
+            and _record_path_matches_key(job.post_id, job.media_index, record["out_path"],
+                                         _folder_of(job.out_rel)))
 
 
 def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
@@ -1358,6 +1378,8 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 "quality": settings.quality,
                 "output_format": settings.output_format,
                 "out_path": job.out_rel,
+                # 新目录名不含 post_id，所有权判定改用它；旧记录缺这个字段走 ID 后缀兼容。
+                "folder_name": _folder_of(job.out_rel),
                 "output_sha256": hashlib.sha256(validated.data).hexdigest(),
                 "aspect_drift_percent": round(job.aspect_drift_percent, 6),
                 "scale_factor": round(job.scale_factor, 6),

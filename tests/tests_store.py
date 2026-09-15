@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory() as d:
     # 下载发生在 append 之前：media_path 必须能在此时就建好文件夹
     m0 = arc.media_path(p, 0, "image/jpeg")
     check(m0.name == "01.jpg", "帖内第 1 张图叫 01.jpg（1 起、补零）")
-    check(m0.parent.name == "2026-08-25_2223_sommer-sale_900", "图片落在该帖自己的北京时间文件夹里")
+    check(m0.parent.name == "2026-08-25_2223_IG_sommer-sale", "图片落在该帖自己的北京时间文件夹里")
     check(m0.parent.exists(), "media_path 顺手把文件夹建好了（下载先于 append）")
     check(arc.media_path(p, 1, "video/mp4").name == "02.mp4",
           "编号跟的是帖内位置，不是「第几张图」—— 顺序信息比连号更值钱")
@@ -210,8 +210,14 @@ with tempfile.TemporaryDirectory() as d:
     p = Post(post_id="901", platform="facebook", account="acct", text="",
              created_at="不是时间", owner="acct")
     arc.append(p)
-    check(arc.post_dir(p).name == "undated_901", "无法解析时间的帖子进 undated_ 文件夹")
-    check(Archive(d, "acct").reindex() == 1, "undated 的帖子照样进索引")
+    check(arc.post_dir(p).name == "undated_FB", "无法解析时间的帖子进 undated 文件夹")
+    # 名字里没有 post_id 了：没时间又没正文的第二篇会撞上第一篇，必须自己让开。
+    second = Post(post_id="902", platform="facebook", account="acct", text="",
+                  created_at="也不是时间", owner="acct")
+    arc.append(second)
+    check(arc.post_dir(second).name == "undated_FB-2", "重名时加序号，不覆盖已有帖子目录")
+    check(arc.post_dir(p).name == "undated_FB", "让开的是新帖，已归档的目录名不动")
+    check(Archive(d, "acct").reindex() == 2, "undated 的帖子照样进索引，重名的两篇各算一条")
 
 print("\n[J2] created_at 改变时只留一个 truth dir，旧目录可恢复隔离")
 with tempfile.TemporaryDirectory() as d:

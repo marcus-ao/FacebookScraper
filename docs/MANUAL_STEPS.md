@@ -28,7 +28,9 @@
 
 原工作区的 FB 47 / `.tech` 1020 是历史基线，不是 `.global` 的验收样本。本轮原 1,067 条与 SQLite 实际记录/字段已核对一致，第 1/2 页各 20 条无重复，冻结详情已真实只读访问；后续恢复仍须重新核对恢复出的副本。
 
-一次 ZIP 不替代周期备份。周期保存不可重建账本及主配置，记录时间/文件数/哈希，并在副本恢复验证；大型 probe、截图、冻结媒体按独立 hash 版本留存，在账本中保存引用。该组合已有离线验证，企业云盘连续周期和实际恢复仍待联调。本机密钥/运行覆盖配置另作受控备份，不因云盘镜像启用而公开。云盘只单向接收，本地恢复不能自动用远端覆盖本地事实。
+一次 ZIP 不替代周期备份。周期保存不可重建账本及主配置，记录时间/文件数/哈希，并在副本恢复验证；大型 probe、截图、冻结媒体按独立 hash 版本留存，在账本中保存引用。该组合已有离线验证。本机密钥/运行覆盖配置另作受控备份，不因云盘镜像启用而公开。云盘只单向接收，本地恢复不能自动用远端覆盖本地事实。
+
+⛔ **云盘本轮延期（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)），所以这一节是本轮唯一的备份手段，不是可选项。** `state/published.jsonl` 不可重建——丢了会让已发过的帖子被再发一遍，而 2026-09-14 那次清库就是没有备份的。上线后按固定节奏把整个 `archive/` 与 `state/` 拷到本机之外的另一块盘，每次记下时间、文件数、字节数和哈希。**没有任何代码会替你做这件事。**
 
 ## 2. 配置本机凭据
 
@@ -47,7 +49,7 @@
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
 
-**仍然需要企业管理员的只剩云盘**：应用 AppSecret、应用授权与云盘根目录权限（F2-4）。还需运营机器能打开的审校地址——当前审校台在 `127.0.0.1:8765`，卡片里的「去审校」她点不开，这条与消息通道无关。拿到后按第 7 节验证，离线测试不代替权限。
+**本轮还差的是运营机器能打开的审校地址**——当前审校台在 `127.0.0.1:8765`，卡片里的「去审校」她点不开，这条与消息通道无关。企业管理员那条路（应用 AppSecret、应用授权、云盘根目录权限）随云盘一起延期，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
 
 ### 2.1 配置同群四个机器人
 
@@ -186,6 +188,8 @@ Facebook 在链接区确定德国落地页后，可把对应 `{{linkN}}` 插入�
 outbox 的终态在线保留期默认 30 天，过期完整关联组件归档后原卡片、UUID 与回执仍可读，事件去重索引留在主状态。未决、待重试、待发和离岗待发不归档；不要为缩小文件手工删除这些记录。归档异常时保留原文件与 hash 记录核对。
 
 ### 7.1 原帖云盘接入与恢复
+
+⛔ **本节本轮不执行（2026-09-15 业务决定，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）。** 下面的步骤留着，拿到应用凭据后照做；在那之前不要因为 `mirror_status` 显示 `disabled` 就来补实现或改配置。
 
 **目标已确定为[原帖归档文件夹](https://genhigh.feishu.cn/drive/folder/TsQef8msClS2i6dlzpfcpfn6nAc)。** 代码配置保留该 folder token，`mirror.enabled=false`。目标内容、权限、容量与运营账号可见性均未实测；本轮 worktree 环境文件没有应用凭据。
 
@@ -478,11 +482,15 @@ npm --prefix web/ui run build
 
 ### A. 准备与访问初始化
 
+⛔ **全程不要加 `--process`。** 它需要先过激活边界，而激活边界要阶段五的 G8 真机验收证据。阶段一的范围止于监测与抓取，翻译与图片是后面几轮的事。
+
+### A. 准备与访问初始化
+
 1. 人工登录 9222（回填）、9224（探测）、9223（发布）三个独立 profile，核对身份。阶段一只让 9222/9224 访问源站。
 2. 配置同群 detect、capture、publish、alert 四个机器人及运营要使用的 `[feishu].base_url`。base_url 只校验 URL 格式。
-3. 离线执行 `scripts\run_pipeline.bat preflight --json`、`scripts\run_python.bat -m routes.delta --status`、`scripts\run_scheduler.bat --preview`。`preflight --json` 与 `GET /api/runtime` 应显示 monitoring state/status/pause/quota/next_due/capture_revision/items/baselines；读取不访问平台或发消息。
+   → 2026-09-15 用户已在群里收到四个机器人的响应。**这只证明通道可达**，不证明真实探测往返或运营能打开审校链接。换机器、换绑定或换群之后要重做。
+3. 离线执行 `scriptsun_pipeline.bat preflight --json`、`scriptsun_python.bat -m routes.delta --status`、`scriptsun_scheduler.bat --preview`。`preflight --json` 与 `GET /api/runtime` 应显示 monitoring state/status/pause/quota/next_due/capture_revision/items/baselines；读取不访问平台或发消息。
 4. 人工核对 9224 身份后初始化：
-
 ```powershell
 scripts\run_python.bat -m routes.delta --initialize-access --reason "人工核对 profile 身份，允许阶段一受控探测"
 ```
@@ -490,7 +498,6 @@ scripts\run_python.bat -m routes.delta --initialize-access --reason "人工核�
 缺初始化或坏状态时真实导航必须失败闭合。
 
 ### B. 人工回填与独立基线
-
 人在 9222 分别打开 FB `neakasaofficial`、IG `neakasa.global`，手工滚到 30 天前：
 
 ```powershell
@@ -498,8 +505,11 @@ scripts\run_backfill.bat facebook --days 30
 scripts\run_backfill.bat instagram --days 30
 ```
 
-核对独立数量、最早/最新时间、实际 owner/coauthors、媒体顺序与完整性。视频、混合、无媒体、无正文也归档计数。historical 只汇总，不逐帖推群。确认覆盖后另行执行：
+核对独立数量、最早/最新时间、实际 owner/coauthors、媒体顺序与完整性。视频、混合、无媒体、无正文也归档计数。historical 只汇总，不逐帖推群。
 
+⚠️ **IG 的合作帖判据是 `parse.on_timeline_of()`，不是 `owner == account`。** 只比 owner 会把 `.global` 的帖子整批漏掉——这是 2026-09-11 真实发生过的，263 篇合作帖静默丢失。
+
+确认覆盖后另行执行：
 ```powershell
 scripts\run_python.bat -m routes.delta --initialize-baseline --reason "人工核对 FB/IG 最近 30 天回填完整"
 ```
@@ -536,10 +546,29 @@ detect 每平台/扫描至多一张摘要，零新增不发。capture 对每个�
 先读取 revision，人工核对后执行：
 
 ```powershell
-scripts\run_python.bat -m routes.delta --recover-access --expected-revision <N> --reason "具体核对原因"
-scripts\run_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --expected-revision <N> --reason "具体失败原因"
+scriptsun_python.bat -m routes.delta --recover-access --expected-revision <N> --reason "具体核对原因"
+scriptsun_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --expected-revision <N> --reason "具体失败原因"
 ```
 
 访问恢复不清配额/历史；单帖恢复只尝试一次并服从同一护栏。Web `POST /api/runtime/capture/recover` 含 key/version/reason。`monitor/recover` 含 version/reason 与可选 platform，且不访问平台。版本冲突先重读。
 
+本地落点也要核（云盘本轮不做，没有可比对的远端）：
+
+- [ ] `archive/` 下出现对应帖子文件夹，落在正确的月份和 tag 下
+- [ ] 文件夹名是四段：`<北京日期_时分>_<IG|FB>_<产品>_<摘要>`，没有看不懂的数字尾巴。
+      没匹配上型号表的帖子没有产品段，落在 `未分类/` 下；没正文的帖子没有摘要段
+- [ ] 名字里的日期时分是**原帖发布的北京时间**，和卡片上那一行对得上
+
 报告保存命令、版本、真实/夹具来源、平台/账号、访问与基线 revision、计划/实际时刻、配额、类别、三个时间、owner/coauthors、两层 completeness、图片 SHA/顺序、delivery 状态和未联调项。离线夹具、无自然新帖、HTTP 接受或已删除的旧 429 记录不能写成真实通过。
+
+### 这一轮能证明什么、不能证明什么
+
+| 做完之后成立 | **仍然不成立** |
+|---|---|
+| 监测能发现真实新帖并在同一轮抓取归档 | 翻译、图片德语化、审校、排期任何一段 |
+| 本地三层布局与业务可读的文件夹名 | 云盘镜像——本轮明确延期，没有任何远端证据 |
+| 共享访问预算、硬停机与配额在真实往返里成立 | 长期稳定性——封号风险的反馈是延迟的，且只反馈一次 |
+| 同群四个机器人分工正确、逐帖卡链接可点达 | 运营完整流程（她从卡片进去审完再排期） |
+| 详情补齐与媒体校验在真实响应上成立 | 晨间轮次真的补到过漏帖（要等一次真实漏帖） |
+
+验收报告里写清楚：跑了什么、哪几条是真实账号的结果、哪些外部依赖仍未联调。离线测试通过不能替代上面任何一项。
