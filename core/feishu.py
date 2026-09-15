@@ -1,7 +1,9 @@
-"""飞书私聊卡片与耐久发件箱；凭据从环境变量读取。"""
+"""飞书群卡片与耐久发件箱；凭据从环境变量读取。"""
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
 import time
 from dataclasses import dataclass
@@ -15,9 +17,18 @@ import httpx
 from core.config import MonitorSchedule, cfg
 from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 
-KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning'}
+# ⚠️ dispatch 先按 sorted(KINDS) 建投递，再按建立顺序逐条发送——**kind 名字的字典序就是群里
+# 消息的先后顺序**。monitor_found < monitor_saved 才让"监测到"排在"抓取完成"前面；改名会静默换序。
+MONITOR_KINDS = frozenset({'monitor_found', 'monitor_saved'})
+KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning', *MONITOR_KINDS}
+# 这两件事绑在一起：不受在岗窗静默限制，且路由到技术组。监测播报属于运行信息而不是运营的
+# 行动项——按 F4-2 混进业务组的结果是两边一起被静音；而压到次日 08:00 又让"接近实时"失去意义。
+URGENT_KINDS = frozenset({'system'}) | MONITOR_KINDS
+# selftest 故意只在 TITLES 里、不在 KINDS 里：它能渲染成卡片，但 enqueue 会拒绝它，
+# 所以人工自检不会在发件箱里留下假事件。
 TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
-          'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况'}
+          'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况',
+          'monitor_found': '监测到新帖', 'monitor_saved': '原帖抓取完成', 'selftest': '通道自检'}
 
 
 class FeishuError(RuntimeError):
@@ -32,8 +43,10 @@ class FeishuAuthError(FeishuError):
 class FeishuSettings:
     enabled: bool
     base_url: str
-    recipients: tuple[str, ...]
-    technical_recipients: tuple[str, ...]
+    # 接收方是角色标签，不是群地址。发件箱会把它原样写进投递记录，而群机器人地址带
+    # token——落盘就等于把凭据写进了状态文件（红线 10）。URL 由 WebhookBot 按标签解析。
+    recipients: tuple[str, ...] = ('ops',)
+    technical_recipients: tuple[str, ...] = ('tech',)
     keep_delivered_days: int = 30
 
     def __post_init__(self):
@@ -47,9 +60,7 @@ class FeishuSettings:
         if not isinstance(enabled, bool):
             raise ValueError('[feishu].enabled 必须是布尔值')
         result = cls(enabled, c.get('feishu', 'base_url', ''),
-                     tuple(c.get('feishu', 'recipients', [])),
-                     tuple(c.get('feishu', 'technical_recipients', [])),
-                     c.get('feishu', 'keep_delivered_days', 30))
+                     keep_delivered_days=c.get('feishu', 'keep_delivered_days', 30))
         if enabled:
             result.validate()
         return result
@@ -60,10 +71,10 @@ class FeishuSettings:
                 or parsed.username or parsed.password or parsed.query or parsed.fragment):
             raise ValueError('请配置可访问的审校台 base_url，不要包含凭据、查询参数或锚点')
         if not self.recipients or not self.technical_recipients:
-            raise ValueError('请分别配置运营与开发者的飞书 open_id')
+            raise ValueError('业务组与技术组各需要一个接收角色')
         if any(not isinstance(item, str) or not item.strip()
                for item in (*self.recipients, *self.technical_recipients)):
-            raise ValueError('飞书收件人必须是非空 open_id 字符串')
+            raise ValueError('飞书接收角色必须是非空标签')
         if set(self.recipients) & set(self.technical_recipients):
             raise ValueError('运营和开发者接收组应分别配置')
 
@@ -111,26 +122,72 @@ class FeishuClient:
             self.expires = time.monotonic() + max(0, int(data.get('expire', 0)) - 60)
         return {'Authorization': 'Bearer ' + self.token}
 
-    def upload_image(self, content: bytes) -> str:
-        """im/v1/images 官方 multipart 契约；只上传已读取的本地图片。"""
-        if not content or len(content) >= 10 * 1024 * 1024:
-            raise FeishuError('通知图片须小于 10 MB 且非空')
-        result = self._post('im/v1/images', headers=self._headers(),
-            data={'image_type': 'message'}, files={'image': ('preview.jpg', content)})
-        key = (result.get('data') or {}).get('image_key')
-        if not isinstance(key, str) or not key:
-            raise FeishuError('通知图片未获得上传回执')
-        return key
 
-    def send_card(self, recipient: str, card: dict, delivery_id: str) -> str:
-        result = self._post('im/v1/messages', params={'receive_id_type': 'open_id'},
-                            headers=self._headers(),
-                            json={'receive_id': recipient, 'msg_type': 'interactive',
-                                  'content': json.dumps(card, ensure_ascii=False), 'uuid': delivery_id})
-        message_id = str((result.get('data') or {}).get('message_id') or '')
-        if not message_id:
-            raise FeishuError('飞书响应缺少 message_id，投递结果尚不明确')
-        return message_id
+WEBHOOK_ROLES = {'ops': 'FEISHU_WEBHOOK_OPS', 'tech': 'FEISHU_WEBHOOK_TECH'}
+WEBHOOK_PREFIX = 'https://open.feishu.cn/open-apis/bot/v2/hook/'
+
+
+def webhook_signature(timestamp: str, secret: str) -> str:
+    """官方算法：拿 ``timestamp\\n密钥`` 当 HMAC 的**密钥**，消息体为空。"""
+    digest = hmac.new((timestamp + '\n' + secret).encode(), b'', hashlib.sha256).digest()
+    return base64.b64encode(digest).decode()
+
+
+class WebhookBot:
+    """群自建机器人。地址按角色标签解析，响应里没有 message_id，也没有远端去重。"""
+
+    def __init__(self, targets: dict, secrets: dict | None = None, *, http=None):
+        missing = [name for role, name in WEBHOOK_ROLES.items() if not targets.get(role)]
+        if missing:
+            raise FeishuError('未配置群机器人地址（%s）；业务组与技术组都必须填'
+                              % '、'.join(missing))
+        for url in targets.values():
+            if not str(url).startswith(WEBHOOK_PREFIX) or len(str(url)) <= len(WEBHOOK_PREFIX):
+                raise FeishuError('群机器人地址必须是 %s 开头的完整链接' % WEBHOOK_PREFIX)
+        self.targets, self.secrets = dict(targets), dict(secrets or {})
+        self.http = http or httpx.Client(timeout=15, follow_redirects=False)
+
+    @classmethod
+    def from_environment(cls):
+        return cls({role: ModelCredentials(name).optional_value()
+                    for role, name in WEBHOOK_ROLES.items()},
+                   {role: ModelCredentials(name + '_SECRET').optional_value()
+                    for role, name in WEBHOOK_ROLES.items()})
+
+    def close(self):
+        self.http.close()
+
+    def envelope(self, role: str, card: dict, now: float) -> dict:
+        # ⚠️ card 是 JSON **对象**。im/v1/messages 的 content 必须先 json.dumps，机器人相反，
+        # 照着那边抄会被拒。签名每次尝试重算——冻结的是卡片，不是请求信封（超 1 小时即失效）。
+        body = {'msg_type': 'interactive', 'card': card}
+        secret = self.secrets.get(role)
+        if secret:
+            stamp = str(int(now))
+            body.update(timestamp=stamp, sign=webhook_signature(stamp, secret))
+        return body
+
+    def send(self, recipient: str, card: dict, delivery_id: str) -> str:
+        if recipient not in self.targets:
+            raise FeishuError('未知的飞书接收角色，不猜测投递目标')
+        try:
+            response = self.http.post(self.targets[recipient],
+                                      json=self.envelope(recipient, card, time.time()))
+            if not response.is_success:
+                raise FeishuError('群机器人 HTTP 请求失败（状态 %d）' % response.status_code)
+            data = response.json()
+            if not isinstance(data, dict):
+                raise FeishuError('群机器人响应不是对象，投递结果尚不明确')
+            # 成功响应同时带 code 与旧版 StatusCode；错误只带 code。
+            code = data.get('code', data.get('StatusCode'))
+            if code != 0:
+                raise FeishuError('群机器人未接受卡片（code=%s）：19021 为签名或时间戳不符，'
+                                  '19022 为 IP 限制，19024 为群关键词限制' % code)
+        except (httpx.HTTPError, ValueError) as exc:
+            # 不记录响应体或异常原文，连接错误的文案里可能带地址。
+            raise FeishuError('群机器人请求未能确认成功，请检查网络或机器人配置') from exc
+        # 机器人不返回 message_id，这个回执只是本地凭证，不能当平台消息 ID 用。
+        return 'bot-accepted:' + delivery_id
 
 
 def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings) -> dict:
@@ -143,20 +200,23 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings)
         parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'text', 'image_note', 'risk', 'next_step')
                  if payload.get(key)]
         elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': '\n'.join(parts)[:1600]}})
+        actions = []
         if payload.get('task_id'):
             url = settings.base_url.rstrip('/') + '/?task=' + quote(str(payload['task_id']), safe='')
-            actions = [{'tag': 'button', 'type': 'primary',
-                        'text': {'tag': 'plain_text', 'content': '去审校'}, 'url': url}]
-            original = urlsplit(str(payload.get('permalink') or ''))
-            if original.scheme == 'https' and original.hostname and not original.username and not original.password:
-                actions.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': '查看原帖'},
-                                'url': payload['permalink']})
-            elements.append({'tag': 'action', 'actions': [
-                *actions]})
+            actions.append({'tag': 'button', 'type': 'primary',
+                            'text': {'tag': 'plain_text', 'content': '去审校'}, 'url': url})
+        # 原帖按钮不依赖 task_id：监测与抓取卡片发生在有审校任务之前。
+        original = urlsplit(str(payload.get('permalink') or ''))
+        if original.scheme == 'https' and original.hostname and not original.username and not original.password:
+            actions.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': '查看原帖'},
+                            'url': payload['permalink']})
+        if actions:
+            elements.append({'tag': 'action', 'actions': actions})
     title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
     return {'config': {'wide_screen_mode': True},
             'header': {'title': {'tag': 'plain_text', 'content': 'Neakasa 德国站 · ' + title},
-                       'template': 'red' if kind in {'system', 'schedule_failed'} else 'blue'},
+                       'template': 'red' if kind in {'system', 'schedule_failed'}
+                       else 'turquoise' if kind in MONITOR_KINDS else 'blue'},
             'elements': elements}
 
 
@@ -304,7 +364,7 @@ class Outbox:
                 else:
                     # Unassigned off-duty work and missing recipient receipts remain live.
                     assigned = [data['deliveries'][key] for key in linked.get(event_id, ())]
-                    recipients = (self.settings.technical_recipients if event['kind'] == 'system'
+                    recipients = (self.settings.technical_recipients if event['kind'] in URGENT_KINDS
                                   else self.settings.recipients)
                     required = set(recipients) | {item['recipient'] for item in assigned}
                     received = {item['recipient'] for item in assigned if item['status'] == 'sent'}
@@ -392,9 +452,9 @@ class Outbox:
         with self._lock():
             data = self._load()
             for kind in sorted(KINDS):
-                if kind != 'system' and not self.schedule.is_on_duty(now):
+                if kind not in URGENT_KINDS and not self.schedule.is_on_duty(now):
                     continue
-                recipients = (self.settings.technical_recipients if kind == 'system' else self.settings.recipients)
+                recipients = (self.settings.technical_recipients if kind in URGENT_KINDS else self.settings.recipients)
                 for recipient in dict.fromkeys(recipients):
                     assigned = {event_id for item in data['deliveries'].values()
                                 if item['status'] != 'cancelled' and item['recipient'] == recipient for event_id in item['events']}
@@ -411,9 +471,10 @@ class Outbox:
                             if kind == 'ready' and prepare_payload is not None:
                                 try:
                                     prepare_payload(payload)
-                                except Exception as exc:
-                                    payload['next_step'] = '预览图暂未加载，请进入审校台查看完整素材。'
-                                    payload['preview_error'] = 'authentication' if isinstance(exc, FeishuAuthError) else 'image_upload_failed'
+                                except Exception:
+                                    # 卡片不带图，所以这里只剩"当前稿没读出来"一种失败。
+                                    payload['next_step'] = '当前德语稿未能重新读取，卡片内容可能不是最新，请进入审校台核对。'
+                                    payload['preview_error'] = 'content_refresh_failed'
                         card = notification_card(kind, payloads, self.settings)
                         seed = recipient + '\0' + '\0'.join(group)
                         delivery_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
@@ -431,7 +492,7 @@ class Outbox:
             for delivery_id, item in data['deliveries'].items():
                 if item['status'] in {'sent', 'uncertain', 'cancelled'} or item['next_at'] > stamp:
                     continue
-                if item['kind'] != 'system' and not self.schedule.is_on_duty(now):
+                if item['kind'] not in URGENT_KINDS and not self.schedule.is_on_duty(now):
                     continue
                 if item['attempts'] and now - datetime.fromisoformat(item.get('retry_authorized_at', item['created_at'])) >= timedelta(minutes=50):
                     # 不无限依赖远端去重时间窗；旧不确定请求交由人核对，避免重复催促。

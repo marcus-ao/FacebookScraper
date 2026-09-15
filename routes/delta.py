@@ -19,6 +19,7 @@ from core.chrome import attach, cdp_ready, launch
 from core.config import MonitorSchedule, cfg, per_platform
 from core import integrity
 from core.integrity import parse_ts
+from core.monitoring import MonitoringJournal
 from core.notify import notify
 from core.parse import extract, partition_by_owner
 from core.store import Archive
@@ -355,8 +356,12 @@ def scope_skip_counts(posts) -> dict[str, int]:
 
 
 async def delta_once(ctx, platform: str, account: str, arc: Archive,
-                     dcfg: DeltaConfig, *, dry_run: bool = False) -> ScanResult:
-    """扫描单个平台；使用 should_append 保留残缺补齐机会，被拦时抛 DeltaBlocked。"""
+                     dcfg: DeltaConfig, *, dry_run: bool = False, facts=None) -> ScanResult:
+    """扫描单个平台；使用 should_append 保留残缺补齐机会，被拦时抛 DeltaBlocked。
+
+    ``facts`` 是 MonitoringJournal，用来逐篇记下"发现"与"落档"。只追加 JSONL，不改会话、
+    请求节奏或滚动行为；``None`` 或 dry-run 时一个字也不写。
+    """
     url = profile_url(platform, account)
     try:
         col, final_url = await asyncio.wait_for(
@@ -430,13 +435,25 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
             else:
                 res.new += 1
             continue
+        if facts is not None:
+            # 先记"发现"再下载媒体：漏帖和抓不下来在群播报里必须分得开。
+            facts.fact("post_discovered", utcnow(), platform=platform, post_id=post.post_id,
+                       created_at=post.created_at, permalink=post.permalink, head=head,
+                       images=sum(1 for m in post.media if m.kind == "image"),
+                       videos=sum(1 for m in post.media if m.kind == "video"), known=was_known)
         await download_media(ctx, arc, post, url)
         if not arc.append(post):
             print("    ! %s 媒体仍未补全，保留原归档并留待下次重试" % post.post_id)
+            if facts is not None:
+                facts.fact("post_capture_incomplete", utcnow(), platform=platform,
+                           post_id=post.post_id)
             continue
         imgs = sum(1 for m in post.media if m.kind == "image")
         vids = sum(1 for m in post.media if m.kind == "video")
         print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
+        if facts is not None:
+            facts.fact("post_captured", utcnow(), platform=platform, post_id=post.post_id,
+                       images=imgs, videos=vids, folder=arc.post_dir(post).name)
         if was_known:
             res.upgraded += 1
         else:
@@ -502,8 +519,11 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 arc = Archive(c.archive_dir,
                               "%s_%s" % (platform[:2], account))
                 print("\n=== %s / %s ===" % (platform, account))
+                # inspect_running=False：只追加事实，不去动内容处理批次的状态。
+                facts = None if dry_run else MonitoringJournal(
+                    c.state_dir, now=utcnow(), inspect_running=False)
                 res = await asyncio.wait_for(
-                    delta_once(ctx, platform, account, arc, dcfg, dry_run=dry_run),
+                    delta_once(ctx, platform, account, arc, dcfg, dry_run=dry_run, facts=facts),
                     timeout=dcfg.max_session_seconds)
             except DeltaBlocked as e:
                 # 访问受阻立即停止，不重试或更换身份。

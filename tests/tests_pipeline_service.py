@@ -135,7 +135,7 @@ class ServiceTests(unittest.TestCase):
         runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
         runtime.outbox = Outbox(self.state / 'feishu_outbox.json', runtime.settings)
         runtime.client = Mock()
-        runtime.client.send_card.return_value = 'message'
+        runtime.client.send.return_value = 'bot-accepted:fixture'
         return runtime
 
     def test_overnight_skipped_ready_is_cancelled_before_delivery(self):
@@ -149,8 +149,8 @@ class ServiceTests(unittest.TestCase):
                           expected_revision=None, expected_source_sha256=journal.text_sha256(source['text']))
         morning = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
         runtime.collect([self.fixture.account], morning)
-        runtime.outbox.dispatch(morning, runtime.client.send_card)
-        runtime.client.send_card.assert_not_called()
+        runtime.outbox.dispatch(morning, runtime.client.send)
+        runtime.client.send.assert_not_called()
 
     def test_broken_source_does_not_block_system_alert_dispatch(self):
         runtime = self.enabled_runtime()
@@ -158,7 +158,7 @@ class ServiceTests(unittest.TestCase):
         with patch('pipeline.service.read_post_truth', side_effect=ValueError('invalid')):
             runtime.maintenance(self.now)
             runtime.delivery_future.result(timeout=5)
-        self.assertGreater(runtime.client.send_card.call_count, 0)
+        self.assertGreater(runtime.client.send.call_count, 0)
 
     def test_stale_human_translation_gets_review_notification(self):
         runtime = self.enabled_runtime()
@@ -183,17 +183,124 @@ class ServiceTests(unittest.TestCase):
         events = json.loads(runtime.outbox.path.read_text(encoding='utf-8'))['events']
         self.assertFalse(events)
 
-    def test_notification_image_keys_cache_identical_source_bytes(self):
+    def scanned(self, runtime, rows, *, code=0, platform='instagram', kind='delta'):
+        """让探测子进程"记下"逐篇事实，再跑一次 scan，返回入队的事件。"""
+        started = self.now
+        runtime.clock = lambda: started
+
+        def detect(_kind, _platform):
+            for event, fields in rows:
+                runtime.processing.fact(event, started, platform=platform, **fields)
+            return code
+
+        runtime.detector = detect
+        runtime.scan(kind, platform)
+        if not runtime.outbox.path.exists():
+            return {}      # 没有可播报的事就连发件箱文件都不建
+        return json.loads(runtime.outbox.path.read_text(encoding='utf-8'))['events']
+
+    def test_one_scan_pushes_a_found_card_then_a_saved_card(self):
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        events = self.scanned(runtime, [
+            ('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:00:00Z',
+                                 'permalink': 'https://www.instagram.com/p/p1/',
+                                 'head': 'Entdecke den Neakasa M1', 'images': 4, 'videos': 0,
+                                 'known': False}),
+            ('post_captured', {'post_id': 'p1', 'images': 4, 'videos': 0, 'folder': '2026/09/p1'}),
+        ])
+        kinds = {item['kind'] for item in events.values()}
+        self.assertEqual(kinds, {'monitor_found', 'monitor_saved'})
+        found = next(item for item in events.values() if item['kind'] == 'monitor_found')
+        saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
+        self.assertIn('发现 1 篇新帖', found['payload']['text'])
+        self.assertIn('Entdecke den Neakasa M1', found['payload']['text'])
+        self.assertEqual(found['payload']['permalink'], 'https://www.instagram.com/p/p1/')
+        self.assertIn('落档 1 篇', saved['payload']['text'])
+        self.assertIn('2026/09/p1', saved['payload']['text'])
+        self.assertFalse(saved['payload']['risk'])
+
+    def test_every_clock_on_a_scan_card_is_shanghai(self):
+        from pipeline.notifications import shanghai_clock
+        # 扫描时刻是 datetime，归档 created_at 是字符串。只认一种会让另一种落到 str() 兜底，
+        # 结果是 UTC 时刻挂着"上海"标签——读出来差 8 小时，而卡片上看不出错。
+        self.assertEqual(shanghai_clock(datetime(2026, 9, 14, 13, 7, tzinfo=timezone.utc)), '09-14 21:07')
+        self.assertEqual(shanghai_clock('2026-09-14T12:52:00Z'), '09-14 20:52')
+        self.assertEqual(shanghai_clock('not-a-date'), 'not-a-date')
+        self.assertEqual(shanghai_clock(None), '时间未知')
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        self.now = datetime(2026, 9, 14, 13, 7, tzinfo=timezone.utc)
+        events = self.scanned(runtime, [
+            ('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:52:00Z',
+                                 'head': 'abend', 'images': 1, 'known': False})])
+        found = next(item for item in events.values() if item['kind'] == 'monitor_found')
+        self.assertIn('上海 09-14 21:07', found['payload']['created_at'])
+        self.assertIn('原帖 09-14 20:52', found['payload']['text'])
+        self.assertNotIn('+00:00', json.dumps(found['payload'], ensure_ascii=False))
+
+    def test_a_scan_with_no_discovery_pushes_nothing(self):
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        self.assertEqual(self.scanned(runtime, []), {})
+
+    def test_discovered_but_not_archived_is_stated_instead_of_counted_as_saved(self):
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        events = self.scanned(runtime, [
+            ('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:00:00Z',
+                                 'head': 'erste', 'images': 2, 'known': False}),
+            ('post_discovered', {'post_id': 'p2', 'created_at': '2026-09-14T11:00:00Z',
+                                 'head': 'zweite', 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'p1', 'images': 2, 'videos': 0, 'folder': '2026/09/p1'}),
+            ('post_capture_incomplete', {'post_id': 'p2'}),
+        ], code=1)
+        saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
+        self.assertIn('发现 2 篇，落档 1 篇，1 篇媒体未补全', saved['payload']['text'])
+        self.assertIn('p2 · 媒体未补全', saved['payload']['text'])
+        self.assertIn('原图链接有时效', saved['payload']['risk'])
+        # 退出码非零也要报，而不是让整段播报消失。
+        self.assertIn('退出码 1', saved['payload']['risk'])
+
+    def test_scan_cards_reach_the_technical_group_at_night_and_only_once(self):
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        self.now = datetime(2026, 9, 12, 15, 0, tzinfo=timezone.utc)   # 上海 23:00，离岗
+        rows = [('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:00:00Z',
+                                     'head': 'nachts', 'images': 1, 'known': False}),
+                ('post_captured', {'post_id': 'p1', 'images': 1, 'videos': 0, 'folder': 'f'})]
+        self.scanned(runtime, rows)
+        sent = []
+        self.assertEqual(runtime.outbox.dispatch(
+            self.now, lambda *args: sent.append(args) or 'bot-accepted'), 2)
+        # 监测播报不受在岗窗静默限制，且走技术组；顺序是"监测到"在前。
+        self.assertEqual([call[0] for call in sent], ['developer', 'developer'])
+        self.assertIn('监测到新帖', json.dumps(sent[0][1], ensure_ascii=False))
+        self.assertIn('原帖抓取完成', json.dumps(sent[1][1], ensure_ascii=False))
+        # 同一轮再跑一次不会重复入队（event_id 绑扫描开始时刻）。
+        self.scanned(runtime, rows)
+        self.assertEqual(runtime.outbox.dispatch(
+            self.now, lambda *_args: self.fail('duplicate scan card')), 0)
+
+    def test_scan_reports_can_be_switched_off_without_touching_review_reminders(self):
+        runtime = self.enabled_runtime()
+        self.addCleanup(runtime.close)
+        runtime.scan_reports = False
+        self.assertEqual(self.scanned(runtime, [
+            ('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:00:00Z',
+                                 'head': 'aus', 'images': 1, 'known': False})]), {})
+
+    def test_preview_refreshes_current_draft_and_states_the_image_is_not_attached(self):
         runtime = self.enabled_runtime()
         source = self.fixture.source
         task_id = self.fixture.account.name + '/' + source['post_id']
         runtime.thumbnail_sources[task_id] = (self.fixture.account, source)
-        runtime.client.upload_image.return_value = 'fixture-image-key'
         payload = {'task_id': task_id, 'source_text_sha256': journal.text_sha256(source['text'])}
         runtime.prepare_preview(payload)
-        runtime.prepare_preview(payload)
-        runtime.client.upload_image.assert_called_once()
-        self.assertEqual(payload['image_key'], 'fixture-image-key')
+        # 群机器人没有图片接口：不取 image_key，但首图状态仍要报出来。
+        self.assertNotIn('image_key', payload)
+        self.assertIn('未随卡片投递', payload['image_note'])
+        self.assertIn('text', payload)
 
 
 if __name__ == '__main__':

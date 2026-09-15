@@ -21,6 +21,11 @@ from core.process_identity import current_worker, worker_alive
 MIN_POSTING_SAMPLES = 10
 TARGET_POSTING_COVERAGE = 0.90
 SKIP_REASONS = ("video", "mixed_media", "no_media", "no_text")
+# ⚠️ 中文标签只维护这一份。晨报曾另抄一套键（mixed / text_only / …），和 SKIP_REASONS 对不上，
+# 结果四类里三类在卡片上显示成英文键名，而 get(key, key) 的兜底让它一直没报错。
+SKIP_LABELS = {"video": "视频", "mixed_media": "图文混合", "no_media": "无媒体", "no_text": "无正文"}
+# 抓取路径逐篇记下的三件事。"发现"与"落档"必须分开，否则"发现了但没抓下来"看不出来。
+SCAN_POST_EVENTS = ("post_discovered", "post_captured", "post_capture_incomplete")
 
 
 def _month_bounds(schedule: MonitorSchedule, now: datetime) -> tuple[datetime, datetime, str]:
@@ -385,6 +390,32 @@ class MonitoringJournal:
                            recovery_reason='中断批次已关闭；保留已生成内容，新请求另行受理')
             atomic_write_json(self.processing_path, current)
             return current
+
+    def scan_posts(self, since: datetime, platform: str) -> list[dict]:
+        """读回某一轮扫描的逐篇发现/落档事实，供群播报组卡。
+
+        坏行跳过而不抛：这个文件是观测记录，不是真相源，读不出来只该少一条播报，
+        不该让抓取退出码跟着变。
+        """
+        rows = []
+        try:
+            lines = self.facts_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return rows
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if (not isinstance(row, dict) or row.get("event") not in SCAN_POST_EVENTS
+                    or row.get("platform") != platform):
+                continue
+            recorded = parse_ts(row.get("recorded_at"))
+            if recorded is not None and recorded >= since:
+                rows.append(row)
+        return rows
 
     def activity_summary(self, now: datetime) -> dict | None:
         target = MonitorSchedule.local(now).date()

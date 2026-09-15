@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.config import Config, MonitorSchedule  # noqa: E402
 from core.capture import prune_captures_days  # noqa: E402
 from core.integrity import parse_ts  # noqa: E402
+from core.monitoring import SKIP_LABELS, SKIP_REASONS, MonitoringJournal  # noqa: E402
 from pipeline.scheduler import Scheduler, SchedulerAlreadyRunning  # noqa: E402
 from routes import delta, reconcile  # noqa: E402
 from core.console import force_utf8  # noqa: E402
@@ -25,6 +26,42 @@ force_utf8()
 
 def utc(hour, minute=0):
     return datetime(2026, 9, 12, hour, minute, tzinfo=timezone.utc)
+
+
+class ScanFactTests(unittest.TestCase):
+    def journal(self, directory):
+        return MonitoringJournal(Path(directory), now=utc(9), inspect_running=False)
+
+    def test_scan_posts_returns_only_this_round_and_this_platform(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = self.journal(td)
+            journal.fact("post_discovered", utc(8), platform="instagram", post_id="old")
+            journal.fact("post_discovered", utc(9), platform="facebook", post_id="other")
+            journal.fact("post_discovered", utc(9), platform="instagram", post_id="new")
+            journal.fact("post_captured", utc(9, 1), platform="instagram", post_id="new")
+            # 同一文件里还有别的扫描事实，不能被当成逐篇记录。
+            journal.fact("scan_finished", utc(9, 2), platform="instagram", exit_code=0)
+            rows = journal.scan_posts(utc(9), "instagram")
+            self.assertEqual([(row["event"], row["post_id"]) for row in rows],
+                             [("post_discovered", "new"), ("post_captured", "new")])
+
+    def test_a_corrupt_line_costs_one_card_not_the_scan(self):
+        with tempfile.TemporaryDirectory() as td:
+            journal = self.journal(td)
+            journal.fact("post_discovered", utc(9), platform="instagram", post_id="first")
+            with journal.facts_path.open("a", encoding="utf-8") as handle:
+                handle.write("{not json\n")
+            journal.fact("post_captured", utc(9), platform="instagram", post_id="first")
+            self.assertEqual(len(journal.scan_posts(utc(9), "instagram")), 2)
+
+    def test_missing_journal_reads_as_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(self.journal(td).scan_posts(utc(9), "instagram"), [])
+
+    def test_every_skip_reason_has_a_chinese_label(self):
+        # get(key, key) 的兜底让缺标签不报错，只是在卡片上显示英文键名。
+        self.assertEqual(sorted(SKIP_LABELS), sorted(SKIP_REASONS))
+        self.assertFalse([key for key, label in SKIP_LABELS.items() if label == key])
 
 
 class MonitoringTests(unittest.TestCase):

@@ -59,7 +59,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/initial-translation/jobs/{job_id}`、`GET /api/refinements/jobs/{job_id}` | 新任务返回 202 与唯一 job ID，刷新继续轮询同一任务 |
 | `POST /api/content-jobs/{job_id}/recover` | expected_updated_at 校验，先核对费用与产物，不隐含再次调用模型 |
 | `POST /api/runtime/processing/recover` | batch_id、version、outputs_reviewed；version 来自 processing.state_revision，未决付费阻止恢复 |
-| `POST /api/runtime/notifications/{delivery_id}/resolve` | action=delivered/not_delivered、version；已送达需 message_id |
+| `POST /api/runtime/notifications/{delivery_id}/resolve` | action=delivered/not_delivered、version；已送达需 message_id，但群机器人不返回平台 ID，这里收的是人写的核对说明 |
 | `POST /api/hashtags/task/{id}` | 语义候选和三类来源的状态、原值、统计口径与时间 |
 | `PUT /api/settings` | 严格接收 values、version，未知字段或过期版本拒绝 |
 

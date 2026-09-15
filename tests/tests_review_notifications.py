@@ -28,7 +28,7 @@ class NotificationTests(unittest.TestCase):
         self.runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
         self.runtime.outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', self.runtime.settings)
         self.runtime.client = Mock()
-        self.runtime.client.upload_image.return_value = 'image-key'
+        self.runtime.client.send.return_value = 'bot-accepted:fixture'
 
     def event(self, identifier, kind='ready_to_publish'):
         engine.append_human_item(cfg().state_dir, engine.HumanItem(identifier, kind,
@@ -51,14 +51,16 @@ class NotificationTests(unittest.TestCase):
     def test_effective_caption_and_german_preview_replace_old_event_snapshot(self):
         self.event('one')
         self.f.save('Aktueller deutscher Text. #Neakasa')
-        generated = self.f.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        self.f.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         self.runtime.collect([self.f.account], self.now)
         payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
         self.assertIn('Aktueller deutscher Text', payload['text'])
         self.assertNotIn('obsolete', payload['text'])
         self.runtime.prepare_preview(payload)
-        self.runtime.client.upload_image.assert_called_once_with(generated)
+        # 图不再随卡片走，但"当前有效首图是德语图"这个判断依据要留在卡片上。
         self.assertEqual(payload['image_variant'], 'de')
+        self.assertIn('德语首图', payload['image_note'])
+        self.assertIn('未随卡片投递', payload['image_note'])
 
     def test_original_fallback_is_explicit(self):
         self.event('one')

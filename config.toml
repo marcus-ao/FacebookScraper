@@ -200,10 +200,11 @@ web_dist = "web/ui/dist"  # 相对于项目根目录。
 snooze_default_days = 3  # 上海工作日，按周一至周五计。
 
 [feishu]
+# 消息走群自建机器人。两个群的地址与签名密钥只在本机 .env（见 MANUAL_STEPS 第 2 节），
+# 因为地址本身带 token；接收角色固定为 ops / tech，不在此配置。
 enabled = false
 base_url = ""  # 运营可访问的审校台地址。
-recipients = []  # 业务接收组。
-technical_recipients = []  # 技术告警接收组。
+scan_reports = true  # 每轮监测推"发现"与"落档"两张卡到技术群；无新帖不推。
 keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 
 [mirror]
