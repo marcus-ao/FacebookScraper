@@ -38,8 +38,7 @@ def test_cfg(**kw):
     """把所有等待时间清零：真睡的话这套测试要跑几分钟。"""
     base = dict(request_gap_seconds=0.0, first_screen_seconds=0.0,
                 max_scrolls=2, max_session_seconds=30.0, keep_captures_days=3,
-                failure_budget=3,
-                _quiet_slowdown={"facebook": 14, "instagram": 7})
+                failure_budget=3)
     base.update(kw)
     return DeltaConfig(**base)
 
@@ -796,16 +795,12 @@ dcfg = test_cfg()
 quiet = blank_entry()
 quiet["consecutive_quiet_days"] = 10
 check(effective_stale_hours(quiet, dcfg, "instagram", now=NOW) == 0.75,
-      "IG 连续零新增也保持在岗最小45分钟")
-check(effective_stale_hours(quiet, dcfg, "facebook", now=NOW) == 0.75,
-      "同样 10 天，FB 阈值是 14 天 → 在岗频率，最小45分钟")
-check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9,
-      "阈值写成一个数时两个平台通用（向后兼容，不强制写成表）")
-# 平台阈值允许相同，只检查按平台解析。
-loaded = DeltaConfig.load()
-check(all(isinstance(loaded.quiet_days_before_slowdown(p), int) and
-          loaded.quiet_days_before_slowdown(p) == 0 for p in delta.PLATFORMS),
-      "加载配置不启用自动降频")
+      "连续零新增不再降频，仍按在岗最小 45 分钟")
+check(effective_stale_hours(quiet, dcfg, "facebook", now=NOW)
+      == effective_stale_hours(blank_entry(), dcfg, "facebook", now=NOW),
+      "零新增天数不再影响间隔，安静账号与新账号取同一个值")
+check(not hasattr(DeltaConfig(), "quiet_days_before_slowdown"),
+      "降频旋钮已拆除，不留一个永远返回 0 的空壳让人误以为它还在工作")
 
 run, why = stale_enough({"last_success": "2026-08-30T08:00:00Z"}, NOW, 26)
 check(not run and "不足" in why, "距上次成功 1 小时 → 跳过，且说清楚为什么")

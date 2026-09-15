@@ -83,7 +83,7 @@ class Scheduler:
     def _next_delta(self, now, platform):
         return next_homepage_due(now, self.schedule, self.rng)
 
-    def _monitor_interval(self, now, *, quiet=False):
+    def _monitor_interval(self, now):
         return self.schedule.interval_minutes(now)
 
     def _next_reconcile_plan(self, now):

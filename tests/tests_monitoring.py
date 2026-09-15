@@ -78,13 +78,12 @@ class MonitoringTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             c.assert_chrome_profiles_isolated()
 
-    def test_shanghai_windows_ignore_quiet_slowdown(self):
+    def test_shanghai_windows_are_the_only_interval_input(self):
         s = MonitorSchedule.load()
         self.assertEqual(s.interval_minutes(utc(0)), 60)
         self.assertEqual(s.interval_minutes(utc(10, 59)), 60)
         self.assertEqual(s.interval_minutes(utc(11)), 180)
         self.assertEqual(s.interval_minutes(utc(23, 59)), 180)
-        self.assertEqual(s.interval_minutes(utc(1), quiet=True), 60)
         self.assertEqual(s.minimum_interval_minutes(utc(1)), 45)
         self.assertEqual(s.minimum_interval_minutes(utc(11)), 135)
         with self.assertRaises(ValueError):

@@ -55,7 +55,6 @@ class DeltaConfig:
     autostart_chrome: bool = True
     keep_captures_days: int = 7
     min_own_posts: int = 3
-    _quiet_slowdown: object = None
     schedule: MonitorSchedule = field(default_factory=MonitorSchedule)
     run_kind: str = "delta"
     access: object = None
@@ -79,12 +78,8 @@ class DeltaConfig:
             autostart_chrome=bool(g("autostart_chrome", True)),
             keep_captures_days=int(g("keep_captures_days", 7)),
             min_own_posts=int(g("min_own_posts", 3)),
-            _quiet_slowdown=0,
             schedule=MonitorSchedule.load(c),
         )
-
-    def quiet_days_before_slowdown(self, platform: str) -> int:
-        return int(per_platform(self._quiet_slowdown, platform, 7))
 
     def scroll_pause(self) -> tuple[float, float]:
         """滚动之间的停顿区间。配置给下界，上界取两倍——随机化本身比倍数重要。"""
@@ -226,10 +221,13 @@ def budget_exhausted(entry: dict, budget: int) -> bool:
 
 def effective_stale_hours(entry: dict, dcfg: DeltaConfig, platform: str,
                           *, now: datetime | None = None) -> float:
-    """按当前上海窗口的最短随机间隔去重；安静账号白天也按离岗频率。"""
-    threshold = dcfg.quiet_days_before_slowdown(platform)
-    quiet = threshold > 0 and int(entry.get("consecutive_quiet_days") or 0) >= threshold
-    return dcfg.schedule.minimum_interval_minutes(now or utcnow(), quiet=quiet) / 60
+    """按当前上海窗口的最短随机间隔去重。
+
+    连续零新增不再降频（2026-09-15 决定）：访问预算已经把主页封在 24 次/天，
+    再叠一层降频只会让"今天真没帖"和"探测坏了"更难分。`consecutive_quiet_days`
+    仍然记录，但只喂 `integrity.alert_after_quiet_days` 的零新增告警。
+    """
+    return dcfg.schedule.minimum_interval_minutes(now or utcnow()) / 60
 
 
 def stale_enough(entry: dict, now: datetime, hours: float) -> tuple[bool, str]:

@@ -222,12 +222,12 @@ class MonitorSchedule:
         start, end = (self.parse_time(v) for v in self.on_duty_window)
         return start <= self.local(now).time() < end
 
-    def interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:
+    def interval_minutes(self, now: datetime) -> float:
         return (self.on_duty_interval_min if self.is_on_duty(now)
                 else self.off_duty_interval_min)
 
-    def minimum_interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:
-        return self.interval_minutes(now, quiet=quiet) * (1 - self.jitter_ratio)
+    def minimum_interval_minutes(self, now: datetime) -> float:
+        return self.interval_minutes(now) * (1 - self.jitter_ratio)
 
     def reconcile_deadline_margin_minutes(self, platform_count: int = 2) -> float:
         def minute(value):

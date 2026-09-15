@@ -195,7 +195,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 
 ### 10.1 阶段一：监测与原帖抓取
 
-本轮代码与隔离回归为 **离线通过**。最终同一生产代码版本完成 **74/74 个 Python 脚本、独立 hygiene、26 个前端测试文件共 511 项、TypeScript/Vite 构建和 9 个隔离浏览器场景**；[最终 Python 结果](../state/offline-validation-20260915T121317Z/results.json)、[汇总证据](../state/stage1-validation-20260915.json)。这些本机证据保存在 `tweet-monitor-capture-design` worktree，不随 Git 提交。真实平台和群消息验收单独列出。
+本轮代码与隔离回归为 **离线通过**。最终同一生产代码版本完成 **74/74 个 Python 脚本、独立 hygiene、26 个前端测试文件共 511 项、TypeScript/Vite 构建和 9 个隔离浏览器场景**；[最终 Python 结果](../state/offline-validation-20260915T121317Z/results.json)、[汇总证据](../state/stage1-validation-20260915.json)。这些本机证据不随 Git 提交，已随该 worktree 清理迁到主检出的 `state/`，本文的相对链接从主检出解析。真实平台和群消息验收单独列出。
 
 | 验收单元 | 状态 | 当前证据与下一步 |
 |---|---|---|
