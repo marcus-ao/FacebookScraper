@@ -228,7 +228,9 @@ enabled = false
 refresh_minutes = 60
 
 [network_evidence]
-enabled = true  # F1-8 预检要求出口 ASN 与稳定性；只访问 ipinfo，不增加 FB/IG 请求。
+# F1-8 预检要求出口 ASN 与稳定性；只访问 ipinfo，不增加 FB/IG 请求。
+# 需要环境变量 IPINFO_TOKEN；缺它每轮维护都记 missing_token 并按天发一条技术告警。
+enabled = true
 tier = "lite"  # lite 提供 IP/ASN；类型未知。
 # ⚠️ 观测的是本 Python 进程的出口，抓取用的 Chrome 若走另一条线路，两者可能不是同一个出口。
 interval_minutes = 60
