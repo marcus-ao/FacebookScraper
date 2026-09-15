@@ -2,12 +2,12 @@
 
 面向在这个仓库里干活的 Agent。动手前先读 [docs/HANDOFF.md](docs/HANDOFF.md) 的第 1 节（当前现场）和第 2 节（红线）。
 
-| 要查什么 | 去哪 |
-|---|---|
-| 业务流程、功能编号、术语表 | [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md) |
-| 做到什么算够、每个验收单元现在什么状态 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) |
-| 红线、架构、证据能证明到哪 | [docs/HANDOFF.md](docs/HANDOFF.md) |
-| 要人亲自动手的步骤 | [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md) |
+| 要查什么                               | 去哪                                           |
+| -------------------------------------- | ---------------------------------------------- |
+| 业务流程、功能编号、术语表             | [docs/FUNCTIONALITY.md](docs/FUNCTIONALITY.md) |
+| 做到什么算够、每个验收单元现在什么状态 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)   |
+| 红线、架构、证据能证明到哪             | [docs/HANDOFF.md](docs/HANDOFF.md)             |
+| 要人亲自动手的步骤                     | [docs/MANUAL_STEPS.md](docs/MANUAL_STEPS.md)   |
 
 ## 一、不可逆的事要先问
 
@@ -22,6 +22,8 @@
 ## 二、简洁，但不要删掉护栏
 
 `docs/` 之外的文件不是工作日志：注释、`config.toml`、`README.md`、`.bat` 只写读代码的人当场需要知道的东西。进度、证据、验收状态属于 `docs/` 的四份文件，写到别处必然过期且没人更新。
+
+**边做边同步。** 每完成一个可验证的小步，就同步更新受影响的说明文档、配置项及示例；进度、证据和验收状态更新到上述文档的对应位置。实现、配置、文档一致，才算这一步完成，不能攒到整个大功能结束再补。
 
 **该删**：实施过程叙事、变更日志（git 记得）、状态播报（"本轮已通过 N/M"）、指向已删文件或评审编号的引用、把一句话拉成一段的铺陈。
 
@@ -43,10 +45,17 @@
 - 离线测试通过 ≠ 真实服务验收。夹具、mock 回执、隔离浏览器场景都不能升级成模型账单、飞书权限或 Business Suite 提交的结论。
 - 报告写清楚：跑了什么、用的是夹具还是真实账号、哪些外部依赖仍未联调。
 
-## 四、改完要验
+## 四、按影响选测试，默认不跑全量
+
+- **小改动，快验证。** 单点修复、简单功能只跑直接相关的测试；纯文案或文档改动检查内容、引用和 diff 即可。
+- **复杂改动，按需扩大。** 跨模块改造、共享契约变更、主流程重构或影响范围不清时，按实际影响选择子系统或全量回归。跑全量前简述必要性，不把全量测试当作每次改动的固定流程。
+- **验证通过就收尾。** 只有新增改动、测试失败或明确的覆盖缺口，才扩大或重复测试。
+
+以下命令按需选用：
 
 ```powershell
-scripts\run_python.bat -m tools.test_offline      # 全量离线，66 个脚本
+scripts\run_python.bat tests\tests_parse.py      # 定向示例，按改动选择相关脚本
+scripts\run_python.bat -m tools.test_offline      # 全量离线，确认必要时再运行
 scripts\run_python.bat tests\tests_hygiene.py     # 配置键、零引用、重复实现、模块图
 npm.cmd --prefix web/ui test                      # 前端单测
 npm.cmd --prefix web/ui run build                 # 浏览器回归需要 dist
@@ -71,3 +80,12 @@ web/        审校台：FastAPI + React，只调上面的入口，反向不依�
 ```
 
 `archive/` 与 `state/` 是业务数据，不是构建产物，不随清理删除。派生物（manifest、SQLite、HTML、Planner 缓存、云盘镜像）可以重建，且不得反向覆盖真相源。
+
+## 七、只做当前主线，达到验收就收尾
+
+- 实现和测试以本轮已确认的设计与验收要求为边界，优先打通主流程、修复阻塞项。不阻塞主线的边角优化、泛化和额外抽象，确有价值的简记到现有文档待办，不持续扩展实现和测试。
+- **安全工作同样受范围约束。** 已明确的红线照办；新增防护必须对应当前主线的具体问题或明确验收要求，不能为假想风险加功能、加测试、加审批，拖延开发和交付速度。
+
+## 八、提交统一使用英文 Conventional Commits
+
+提交标题和正文一律使用英文。标题格式为 `type(scope): summary`，`scope` 可省略；使用 `feat`、`fix`、`docs`、`refactor`、`test`、`chore` 等标准类型，摘要用简洁的英文祈使句。示例：`docs(agents): clarify testing and delivery rules`。
