@@ -408,7 +408,7 @@ def stage_h(page, ui):
     assert 'private-paid-id' not in page.locator('main').inner_text()
     page.get_by_role('button',name='登记已送达',exact=True).click()
     modal=page.get_by_role('dialog');expect(modal.get_by_role('button',name='登记已送达',exact=True)).to_be_disabled()
-    page.get_by_role('textbox',name='飞书消息 ID',exact=True).fill('om_fixture_verified')
+    page.get_by_role('textbox',name='送达核对说明',exact=True).fill('业务群 21:07 已收到')
     modal.get_by_role('button',name='登记已送达',exact=True).click();expect(modal).to_have_count(0)
     page.get_by_role('button',name='核对未送达后恢复',exact=True).click()
     modal=page.get_by_role('dialog');expect(modal.get_by_role('button',name='确认未送达并恢复投递')).to_be_disabled()
@@ -420,7 +420,8 @@ def stage_h(page, ui):
     expect(page.get_by_role('dialog')).to_contain_text('费用、已保存文案和图片')
     page.get_by_role('button',name='已核对，关闭批次').click();expect(page.get_by_role('dialog')).to_have_count(0)
     bodies=[r for r in ui.requests if r['method']=='POST']
-    assert [r['body'] for r in bodies]==[{'action':'delivered','version':'delivery-v1','message_id':'om_fixture_verified'},{'action':'not_delivered','version':'delivery-v1','message_id':''},{'batch_id':'private-batch','version':'batch-v1','outputs_reviewed':True}]
+    # message_id 仍是接口字段名，但群机器人没有平台消息 ID，填的是人写的核对说明。
+    assert [r['body'] for r in bodies]==[{'action':'delivered','version':'delivery-v1','message_id':'业务群 21:07 已收到'},{'action':'not_delivered','version':'delivery-v1','message_id':''},{'batch_id':'private-batch','version':'batch-v1','outputs_reviewed':True}]
     page.get_by_role('button',name='查看维护说明').click();expect(page.get_by_role('dialog')).to_contain_text('当前接口未提供帖子列表');page.keyboard.press('Escape')
     data['process']['alive']=False
     page.clock.fast_forward(31000)

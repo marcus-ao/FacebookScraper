@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from core.config import ROOT, cfg
-from core.feishu import FeishuSettings, Outbox
+from core.feishu import FeishuSettings, Outbox, WEBHOOK_ROLES
 from core.heartbeat import HeartbeatSettings, heartbeat_status
 from core.mirror import MirrorService, MirrorSettings
 from core.network_evidence import NetworkEvidenceSettings, network_evidence_status
@@ -75,7 +75,10 @@ def snapshot(now=None):
         feishu = Outbox(state / 'feishu_outbox.json', FeishuSettings.load()).status()
     except ValueError as exc:
         feishu = {'status': 'configuration_invalid', 'message': str(exc)}
-    feishu['credentials_present'] = all(ModelCredentials(key).optional_value() for key in ('FEISHU_APP_ID', 'FEISHU_APP_SECRET'))
+    hooks = {role: ModelCredentials(name).optional_value() for role, name in WEBHOOK_ROLES.items()}
+    feishu['credentials_present'] = all(hooks.values())
+    # 两个群填成同一个地址要说出来。F4-2 的"两组不串"靠人配对，静默合并会让那条红线失效。
+    feishu['groups_merged'] = feishu['credentials_present'] and len(set(hooks.values())) == 1
     mirror = _mirror_status(state)
     detection = read_json(state / 'delta_state.json')
     return {'observed_at': now.isoformat(), 'read_only': True,

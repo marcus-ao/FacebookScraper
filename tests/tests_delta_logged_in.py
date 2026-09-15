@@ -13,6 +13,7 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.capture import Collector, download_media, prune_captures  # noqa: E402
+from core.monitoring import MonitoringJournal                       # noqa: E402
 from core.store import Archive, Media, Post, iter_post_dirs         # noqa: E402
 import routes.delta as delta                                        # noqa: E402
 from routes.delta import (                                          # noqa: E402
@@ -975,6 +976,85 @@ with tempfile.TemporaryDirectory() as d:
           == ["_capture_delta_1788000002.json", "_capture_delta_1788000003.json",
               "_capture_delta_1788000004.json"],
           "留下的是最近的三份，不是随便三份")
+
+
+# ==========================================================================
+print("\n[8.5] 逐篇记下『发现』与『落档』，两者必须能分开")
+
+
+class FailingRequest(FakeRequest):
+    """CDN 取不到图：源响应解析成功，但这一篇落不了档。"""
+
+    async def get(self, url, headers=None):
+        self.gets.append(url)
+
+        class R:
+            ok = False
+            status = 404
+            headers = {}
+
+            async def body(self):
+                return b""
+        return R()
+
+
+def facts_of(state_dir):
+    path = Path(state_dir) / "monitoring_facts.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    journal = MonitoringJournal(Path(d) / "state", now=NOW, inspect_running=False)
+    asyncio.run(delta_once(FakeCtx(FakePage([resp(ig_payload())])), "instagram",
+                           "acme_us", arc, test_cfg(), facts=journal))
+    rows = facts_of(Path(d) / "state")
+    check([row["event"] for row in rows] == ["post_discovered", "post_captured"],
+          "发现先记、落档后记 —— 顺序反了就无法表达『发现了但没抓下来』")
+    check(rows[0]["known"] is False and rows[0]["images"] == 1
+          and rows[0]["platform"] == "instagram" and rows[0]["post_id"] == "111",
+          "发现事实带平台、post_id、图片数和『是不是已有帖』")
+    check(bool(rows[0]["permalink"]) and bool(rows[0]["created_at"]),
+          "发现事实带原帖链接与原帖时间，卡片才能给出『查看原帖』")
+    check(rows[1]["images"] == 1 and bool(rows[1]["folder"]),
+          "落档事实带实际落档的图片数与落点目录名")
+
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    asyncio.run(delta_once(FakeCtx(FakePage([resp(ig_payload())])), "instagram",
+                           "acme_us", arc, test_cfg()))
+    check(not (Path(d) / "state").exists(),
+          "不传 facts 时一个字也不写，旧调用方行为不变")
+
+with tempfile.TemporaryDirectory() as d:
+    arc = Archive(Path(d), "in_acme_us")
+    journal = MonitoringJournal(Path(d) / "state", now=NOW, inspect_running=False)
+    asyncio.run(delta_once(FakeCtx(FakePage([resp(ig_payload())])), "instagram",
+                           "acme_us", arc, test_cfg(), dry_run=True, facts=journal))
+    check(facts_of(Path(d) / "state") == [], "--dry-run 不写观测事实")
+
+with tempfile.TemporaryDirectory() as d:
+    # 已有残缺帖同样三张图、同样 URL，新响应声称完整：should_append 放行（新的 media_complete
+    # 为 True），但 CDN 全部取不到之后落盘成果没增加，append 拒绝写入。
+    arc = Archive(Path(d), "in_acme_us")
+    arc.append(Post(post_id="111", platform="instagram", account="acme_us",
+                    text="hello world", created_at="2025-08-12T12:00:00Z", owner="acme_us",
+                    permalink="https://www.instagram.com/p/abc/",
+                    media=[Media(url="https://cdn.example.com/111_%d.jpg" % i, kind="image")
+                           for i in range(3)],
+                    media_complete=False))
+    journal = MonitoringJournal(Path(d) / "state", now=NOW, inspect_running=False)
+    ctx = FakeCtx(FakePage([resp(ig_payload("111", n_media=3))]))
+    ctx.request = FailingRequest()
+    asyncio.run(delta_once(ctx, "instagram", "acme_us", arc, test_cfg(), facts=journal))
+    rows = facts_of(Path(d) / "state")
+    check([row["event"] for row in rows] == ["post_discovered", "post_capture_incomplete"],
+          "媒体补不全时记 post_capture_incomplete，不冒充已落档")
+    check(rows[0]["known"] is True,
+          "补齐已有帖标 known=True，不和社媒新增混在一个计数里")
 
 
 # ==========================================================================

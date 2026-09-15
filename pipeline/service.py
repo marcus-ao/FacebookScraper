@@ -4,17 +4,15 @@ from __future__ import annotations
 from pipeline.runtime_status import record_process_tick
 from pipeline import hashtag_suggestions
 import asyncio
-import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.config import MonitorSchedule, cfg
-from core.feishu import FeishuClient, FeishuSettings, Outbox
+from core.feishu import FeishuSettings, Outbox, WebhookBot
 from core.heartbeat import Heartbeat, HeartbeatSettings
 from core.mirror import DriveClient, MirrorService, MirrorSettings
-from core.monitoring import MonitoringJournal, SKIP_REASONS
-from core.paid_model import atomic_write_json
+from core.monitoring import MonitoringJournal, SKIP_LABELS, SKIP_REASONS
 from core.network_evidence import NetworkEvidence, NetworkEvidenceSettings, network_evidence_status
 from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
@@ -39,6 +37,9 @@ class Runtime:
         self.delivery_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='workflow-delivery')
         self.delivery_future = None
         self.settings = FeishuSettings.load()
+        self.scan_reports = self.c.get('feishu', 'scan_reports', True)
+        if not isinstance(self.scan_reports, bool):
+            raise ValueError('[feishu].scan_reports 必须是布尔值')
         self.outbox = Outbox(self.c.state_dir / 'feishu_outbox.json', self.settings)
         self.client = None
         self.heartbeat = Heartbeat(self.c.state_dir / 'heartbeat.json', HeartbeatSettings.load(self.c))
@@ -92,6 +93,9 @@ class Runtime:
         self.processing.fact('scan_started', started, kind=kind, platform=platform)
         code = self.detector(kind, platform)
         now = self.clock()
+        # 先读观测再分支：抓取中途失败也可能已经落了几篇，播报不能因为退出码非零就整段消失。
+        observation = self._scan_observation(kind, platform, before, before_archive)
+        self._scan_cards(kind, platform, started, now, int(code or 0), observation['skipped'])
         if code:
             self.processing.fact('scan_finished', now, kind=kind, platform=platform,
                                  exit_code=int(code), discovered=0,
@@ -99,7 +103,6 @@ class Runtime:
             self._system(f'capture:{platform}:{now.date()}:{code}',
                          f'{platform} 监测未完成（退出码 {code}），请检查抓取日志和手动登录状态。', now)
             return code
-        observation = self._scan_observation(kind, platform, before, before_archive)
         if observation['discovered']:
             self.processing.fact('content_discovered', now, kind=kind, platform=platform,
                                  count=observation['discovered'])
@@ -109,6 +112,26 @@ class Runtime:
             self.processing.request(now, platform, kind, observation['discovered'],
                                     observation['skipped'], image_count=observation['image_count'])
         return code
+
+    def _scan_cards(self, kind, platform, started, now, code, skipped):
+        """监测一张、落档一张。播报出问题只写本地日志，绝不改抓取的退出码。"""
+        if not self.settings.enabled or not self.scan_reports:
+            return
+        try:
+            cards = notifications.scan_cards(kind, platform, self.c['targets'][platform],
+                                             self.processing.scan_posts(started, platform),
+                                             skipped, now)
+            if cards is None:
+                return
+            found, saved = cards
+            if code:
+                saved['risk'] = ('%s\n本轮抓取退出码 %d，可能还有没落档的内容。'
+                                 % (saved.get('risk', ''), code)).strip()
+            stamp = started.isoformat()
+            self.outbox.enqueue(f'monitor_found:{platform}:{stamp}', 'monitor_found', found, now)
+            self.outbox.enqueue(f'monitor_saved:{platform}:{stamp}', 'monitor_saved', saved, now)
+        except Exception as exc:
+            notify.notify('监测播报未入队', type(exc).__name__ + '；抓取结果不受影响。', popup=False)
 
     def _delta_entry(self, platform: str) -> dict:
         path = self.c.state_dir / 'delta_state.json'
@@ -271,46 +294,23 @@ class Runtime:
         # 汇总失败不能让队列里的故障告警永久失声。
         try:
             if self.client is None:
-                self.client = FeishuClient.from_environment()
-            self.outbox.dispatch(now, self.client.send_card, prepare_payload=self.prepare_preview)
+                self.client = WebhookBot.from_environment()
+            self.outbox.dispatch(now, self.client.send, prepare_payload=self.prepare_preview)
         except Exception as exc:
             notify.notify('审校提醒暂未投递', type(exc).__name__ + '；请检查飞书配置与发件箱。', popup=False)
 
-    def prepare_preview(self, kind, payload):
+    def prepare_preview(self, payload):
+        """发送前重新读当前有效稿（REQUIREMENTS §6）；群机器人没有图片接口，只补文字。"""
         origin = self.thumbnail_sources.get(payload.get('task_id'))
         if origin is None:
             return
         directory, indexed = origin
         source, _ = read_post_truth(directory, indexed)
-        if kind == 'discovered':
-            # 发现阶段没有译文和德语图；走 material() 只会把英文原文换成"德语稿尚未就绪"。
-            current, path = notifications.discovered_material(directory, source)
-            payload.update(current)
-        else:
-            current, path = notifications.material(directory, source)
-            payload.update(current)
-            payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
-        if path is None:
-            return
-        if path.stat().st_size >= 10 * 1024 * 1024:
-            raise ValueError('通知图片过大')
-        content = path.read_bytes()
-        digest = hashlib.sha256(content).hexdigest()
-        cache_path = self.c.state_dir / 'feishu_images.json'
-        try:
-            cache = json.loads(cache_path.read_text(encoding='utf-8'))
-            if not isinstance(cache, dict):
-                cache = {}
-        except (OSError, ValueError):
-            cache = {}
-        key = cache.get(digest)
-        if not isinstance(key, str) or not key:
-            key = self.client.upload_image(content)
-            if not isinstance(key, str) or not key:
-                raise ValueError('通知图片未获得回执')
-            cache[digest] = key
-            atomic_write_json(cache_path, cache)
-        payload['image_key'] = key
+        current, _path = notifications.material(directory, source)
+        payload.update(current)
+        payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
+        # 首图是不是德语图仍然影响"现在开还是等会儿开"，所以状态照报，只说明图不在卡片里。
+        payload['image_note'] = current['image_note'] + '（未随卡片投递，请在审校台查看）'
 
     def refresh_hashtags(self, now):
         if self.sampling_future is not None:
@@ -364,28 +364,6 @@ class Runtime:
         if result['pending']:
             self._system(f'mirror-pending:{now.date()}', '云盘镜像还有未完成条目，系统会重试；本地留档不受影响。', now)
 
-    def _announce_discoveries(self, sources, now: datetime):
-        """监测发现的帖子逐篇报出来。回填是人主动滚的历史，不在这里推。"""
-        for ref, (directory, source) in sources.items():
-            if source.get('source_route') != 'delta':
-                continue
-            try:
-                material, _ = notifications.discovered_material(directory, source)
-            except (OSError, ValueError) as exc:
-                # 一篇坏归档只丢它自己的卡片，不能连累本轮其余通知；失败要留痕。
-                self._system(f'discovered:{ref}:{now.date()}',
-                             f'{ref} 已抓取，但发现卡素材读不出（{type(exc).__name__}），请检查归档。', now)
-                continue
-            if material['image_variant'] == 'unreadable':
-                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
-                self._system(f'lead-image:{ref}:{now.date()}',
-                             f'{ref} 的首图读不出，发现卡已降级为纯文字，请检查归档原图。', now)
-            self.outbox.enqueue('discovered:' + ref, 'discovered', {
-                'task_id': directory.name + '/' + source['post_id'],
-                'platform': source['platform'], 'account': source['account'],
-                'created_at': source['created_at'], 'permalink': source.get('permalink'),
-                **material}, now)
-
     def collect(self, directories, now: datetime):
         started_at = self.outbox.started_at(now)
         sources = {}
@@ -401,7 +379,6 @@ class Runtime:
                 sources[ref] = (directory, source)
         self.thumbnail_sources = {directory.name + '/' + source['post_id']: (directory, source)
                                   for directory, source in sources.values()}
-        self._announce_discoveries(sources, now)
         scheduled = journal.scheduled_source_refs(self.c.state_dir)
         pending = {}
         valid_ready = set()
@@ -473,9 +450,8 @@ class Runtime:
                     if activity.get('reconcile_skipped'):
                         text.append('未执行兜底 %s 次（%s），请核对覆盖。' % (activity['reconcile_skipped'],
                                     '、'.join(activity.get('reconcile_skipped_platforms', []))))
-                    labels = {'video': '视频', 'mixed': '混合媒体', 'text_only': '无静态图片',
-                              'media_incomplete': '图片未齐', 'unknown': '范围待确认'}
-                    text.extend(f"分类跳过 {labels.get(key, key)}：{count}" for key, count in activity['skipped'].items() if count)
+                    text.extend(f"分类跳过 {SKIP_LABELS.get(key, key)}：{count}"
+                                for key, count in activity['skipped'].items() if count)
                 if pending:
                     text.append(f'当前 {len(pending)} 篇待审。')
                 duration = processing.get('last_success_duration_minutes')

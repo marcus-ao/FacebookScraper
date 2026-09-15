@@ -769,6 +769,15 @@ def main(argv=None) -> int:
         "--days", type=int, default=90,
         help="拿最近 N 天归档当「假如那时就激活了」预演（默认 90）")
 
+    notify_parser = sub.add_parser('notifications', help='群机器人投递状态、人工核对与一次性自检')
+    notify_parser.add_argument('--resolve', metavar='DELIVERY_ID', help='核对一条不确定或待重试的投递')
+    notify_parser.add_argument('--version', help='状态输出里同一条投递的 version')
+    notify_parser.add_argument('--delivered', metavar='NOTE',
+                               help='已在群里看到；机器人不返回 message ID，这里填人写的核对说明')
+    notify_parser.add_argument('--not-delivered', action='store_true', help='已核对确实没有送到')
+    notify_parser.add_argument('--self-test', action='store_true',
+                               help='真的往两个群各发一张自检卡片（外发动作，只能人工敲）')
+
     recovery_parser = sub.add_parser('recover-processing', help='核账后关闭中断批次；不会重新调用模型')
     recovery_parser.add_argument('--batch-id', required=True)
     recovery_parser.add_argument('--version', required=True, help='preflight --json 中的 state_revision')
@@ -799,6 +808,39 @@ def main(argv=None) -> int:
                                 help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
+
+    if args.command == 'notifications':
+        from core.feishu import FeishuSettings, Outbox, WebhookBot, notification_card
+        try:
+            settings = FeishuSettings.load()
+            outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', settings)
+            if args.self_test:
+                bot = WebhookBot.from_environment()
+                try:
+                    for role, group in ((settings.recipients[0], '业务组'),
+                                        (settings.technical_recipients[0], '技术组')):
+                        card = notification_card('selftest', [{'text':
+                            '通道自检，没有业务含义。\n本条发往：%s（%s）\n'
+                            '两个群看到的角色应当不同；相同说明两个地址配成了同一个群。'
+                            % (group, role)}], settings)
+                        print('%s（%s）：%s' % (group, role, bot.send(role, card, 'selftest')))
+                finally:
+                    bot.close()
+                return 0
+            if args.resolve:
+                if not args.version or bool(args.delivered) == args.not_delivered:
+                    print('请给出 --version，并在 --delivered "说明" 与 --not-delivered 中选一个')
+                    return 2
+                print(json.dumps(outbox.resolve(
+                    args.resolve, action='delivered' if args.delivered else 'not_delivered',
+                    expected_version=args.version, message_id=args.delivered or '',
+                    now=datetime.now(timezone.utc)), ensure_ascii=False, indent=2))
+                return 0
+            print(json.dumps(outbox.status(), ensure_ascii=False, indent=2))
+            return 0
+        except (ValueError, RuntimeError) as exc:
+            print(str(exc))
+            return 2
 
     if args.command == 'recover-processing':
         from core.monitoring import MonitoringJournal

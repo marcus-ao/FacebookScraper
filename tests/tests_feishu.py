@@ -1,4 +1,4 @@
-"""飞书用假 HTTP 和注入时钟验证；不会联系真实收件人。"""
+"""发件箱用注入时钟验证；不会联系真实收件人。传输层另见 tests_feishu_webhook。"""
 import json
 import sys
 import tempfile
@@ -8,10 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-import httpx
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.feishu import FeishuClient, FeishuSettings, Outbox, notification_card
+from core.feishu import FeishuSettings, Outbox, notification_card
 
 
 def at(value):
@@ -60,28 +58,28 @@ class FeishuTests(unittest.TestCase):
         outbox.dispatch(at('2026-09-12T08:00:00+08:00'), lambda *args: calls.append(args) or 'ok')
         self.assertEqual(calls[-1][0], 'operator')
 
-    def test_discovered_alert_reaches_operator_during_quiet_hours(self):
-        # 发现提醒是监测链路唯一的存活信号，静默窗不能吞掉它。
+    def test_monitor_cards_reach_the_operator_during_quiet_hours(self):
+        # 监测播报是这条链路唯一的存活信号，静默窗不能吞掉它；但它仍然进业务组。
         outbox = Outbox(self.path, self.settings)
         night = at('2026-09-11T23:00:00+08:00')
-        outbox.enqueue('discovered:instagram:42', 'discovered',
-                       {'task_id': 'in_neakasa.global/42', 'text': 'A clean home.'}, night)
+        for kind in ('monitor_found', 'monitor_saved'):
+            outbox.enqueue(kind + ':instagram:42', kind, {'text': 'A clean home.'}, night)
         calls = []
-        self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args) or 'message'), 1)
-        self.assertEqual(calls[0][0], 'operator')
+        self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args) or 'message'), 2)
+        self.assertEqual([call[0] for call in calls], ['operator', 'operator'])
 
-    def test_discovered_card_carries_counts_tags_and_both_source_links(self):
-        card = notification_card('discovered', [{
-            'platform': 'instagram', 'account': 'neakasa.global', 'created_at': '2026-09-10T14:23:00Z',
-            'text': 'Meet the new M1 Pro.', 'meta': '4 张图 · 产品 M1 Pro\n归档 posts/2026-09/M1-Pro/abc',
-            'image_note': '原帖预览，德语稿尚未开始', 'task_id': 'in_neakasa.global/42',
+    def test_monitor_cards_carry_counts_folders_and_the_source_link(self):
+        card = notification_card('monitor_saved', [{
+            'platform': 'Instagram', 'account': 'neakasa.global',
+            'created_at': '普通探测 · 上海 09-10 22:23（以下时刻均为上海）',
+            'text': '发现 1 篇，成功落档 1 篇，没有失败\n· 42  已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc',
             'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
         rendered = json.dumps(card, ensure_ascii=False)
-        self.assertIn('监测到新帖', rendered)
-        self.assertIn('4 张图 · 产品 M1 Pro', rendered)
-        self.assertIn('归档 posts/2026-09/M1-Pro/abc', rendered)
-        self.assertIn('原帖预览，德语稿尚未开始', rendered)
+        self.assertIn('原帖抓取完成', rendered)
+        self.assertIn('已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc', rendered)
         self.assertIn('查看原帖', rendered)
+        # 没有 task_id 也要给原帖按钮：监测卡发生在有审校任务之前。
+        self.assertNotIn('去审校', rendered)
 
     def test_daytime_ready_items_are_individual_reminders(self):
         outbox = Outbox(self.path, self.settings)
@@ -105,24 +103,6 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(ids[0], ids[1])
         self.assertNotIn('untrusted detail', self.path.read_text(encoding='utf-8'))
 
-    def test_http_contract_uses_tenant_token_and_card_json_string(self):
-        requests = []
-        def handle(request):
-            requests.append(request)
-            if request.url.path.endswith('/internal'):
-                return httpx.Response(200, json={'code': 0, 'tenant_access_token': 'token', 'expire': 7200})
-            self.assertEqual(request.headers['authorization'], 'Bearer token')
-            body = json.loads(request.content)
-            self.assertEqual(body['msg_type'], 'interactive')
-            self.assertIsInstance(body['content'], str)
-            self.assertEqual(body['uuid'], 'stable-uuid')
-            self.assertEqual(request.url.params['receive_id_type'], 'open_id')
-            return httpx.Response(200, json={'code': 0, 'data': {'message_id': 'message'}})
-        with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-            client = FeishuClient('test-id', 'test-secret', http=http)
-            self.assertEqual(client.send_card('operator', {'header': {}}, 'stable-uuid'), 'message')
-        self.assertEqual(len(requests), 2)
-
     def test_cancelled_review_is_not_retried_with_an_outdated_group(self):
         outbox = Outbox(self.path, self.settings)
         now = at('2026-09-12T09:00:00+08:00')
@@ -137,30 +117,12 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(delivery['status'], 'uncertain')
         self.assertEqual(delivery['attempts'], 1)
 
-    def test_upload_uses_message_image_multipart_and_reuses_authentication(self):
-        requests = []
-        def handle(request):
-            requests.append(request)
-            if request.url.path.endswith('/internal'):
-                return httpx.Response(200, json={'code': 0, 'tenant_access_token': 'token', 'expire': 7200})
-            self.assertEqual(request.url.path, '/open-apis/im/v1/images')
-            self.assertIn('multipart/form-data', request.headers['content-type'])
-            self.assertIn(b'name="image_type"', request.content)
-            self.assertIn(b'message', request.content)
-            self.assertIn(b'image-fixture', request.content)
-            return httpx.Response(200, json={'code': 0, 'data': {'image_key': 'image-key'}})
-        with httpx.Client(transport=httpx.MockTransport(handle)) as http:
-            client = FeishuClient('id', 'secret', http=http)
-            self.assertEqual(client.upload_image(b'image-fixture'), 'image-key')
-            client.upload_image(b'image-fixture')
-        self.assertEqual(len(requests), 3)
-
     def test_preview_is_prepared_only_when_sending_and_frozen_across_retries(self):
         outbox = Outbox(self.path, self.settings)
         night = at('2026-09-11T23:00:00+08:00')
         outbox.enqueue('a', 'ready', {'task_id': 'account/a'}, night)
         prepared, sent = [], []
-        def prepare(kind, payload):
+        def prepare(payload):
             prepared.append(payload['task_id'])
             payload['image_key'] = 'uploaded-key'
         def fails(recipient, card, delivery_id):

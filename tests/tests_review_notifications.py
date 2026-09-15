@@ -28,7 +28,7 @@ class NotificationTests(unittest.TestCase):
         self.runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
         self.runtime.outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', self.runtime.settings)
         self.runtime.client = Mock()
-        self.runtime.client.upload_image.return_value = 'image-key'
+        self.runtime.client.send.return_value = 'bot-accepted:fixture'
 
     def event(self, identifier, kind='ready_to_publish'):
         engine.append_human_item(cfg().state_dir, engine.HumanItem(identifier, kind,
@@ -51,20 +51,22 @@ class NotificationTests(unittest.TestCase):
     def test_effective_caption_and_german_preview_replace_old_event_snapshot(self):
         self.event('one')
         self.f.save('Aktueller deutscher Text. #Neakasa')
-        generated = self.f.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        self.f.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         self.runtime.collect([self.f.account], self.now)
         payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
         self.assertIn('Aktueller deutscher Text', payload['text'])
         self.assertNotIn('obsolete', payload['text'])
-        self.runtime.prepare_preview('ready', payload)
-        self.runtime.client.upload_image.assert_called_once_with(generated)
+        self.runtime.prepare_preview(payload)
+        # 图不再随卡片走，但"当前有效首图是德语图"这个判断依据要留在卡片上。
         self.assertEqual(payload['image_variant'], 'de')
+        self.assertIn('德语首图', payload['image_note'])
+        self.assertIn('未随卡片投递', payload['image_note'])
 
     def test_original_fallback_is_explicit(self):
         self.event('one')
         self.runtime.collect([self.f.account], self.now)
         payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
-        self.runtime.prepare_preview('ready', payload)
+        self.runtime.prepare_preview(payload)
         self.assertEqual(payload['image_variant'], 'original')
         self.assertIn('原图', payload['image_note'])
 
@@ -77,8 +79,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(payload['image_variant'], 'unreadable')
         self.assertIn('审校台', payload['image_note'])
         self.assertIn('Ein sauberes Zuhause', payload['text'])
-        self.runtime.prepare_preview('ready', payload)
-        self.runtime.client.upload_image.assert_not_called()
+        self.runtime.prepare_preview(payload)
         self.assertNotIn('image_key', payload)
         alerts = [e for e in self.events().values() if e['kind'] == 'system']
         self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
@@ -109,78 +110,102 @@ class NotificationTests(unittest.TestCase):
         self.assertIn('图片', changes[0]['payload']['text'])
         self.assertEqual((cfg().state_dir / 'published.jsonl').read_bytes(), before)
 
-    def route(self, value):
-        self.f.source['source_route'] = value
-        self.f.write_source()
+    def scanned(self, rows):
+        """让探测子进程"记下"逐篇事实，再跑一次 scan。两张监测卡由抓取事实产生，
+        不再由 collect() 遍历归档推导——所以回填**结构上**就进不来（它不走 delta_once）。"""
+        started = self.now
+        self.runtime.clock = lambda: started
+        self.runtime.detector = lambda _kind, _platform: [
+            self.runtime.processing.fact(event, started, platform='facebook', **fields)
+            for event, fields in rows] and 0
+        self.runtime.scan('delta', 'facebook')
+        if not self.runtime.outbox.path.exists():
+            return []      # 没有可播报的事就连发件箱文件都不建
+        return [e for e in self.events().values() if e['kind'] in {'monitor_found', 'monitor_saved'}]
 
-    def discovered(self):
-        return [e for e in self.events().values() if e['kind'] == 'discovered']
+    def test_the_found_card_shows_the_english_source_even_with_a_german_draft_ready(self):
+        # 发现卡的正文来自抓取时记下的英文原文，不读 translated.jsonl——否则在发现阶段
+        # 只会显示"德语稿尚未就绪"，而那句话对判断"要不要现在开"毫无帮助。
+        self.f.save('Ein sauberes Zuhause. #Neakasa')
+        cards = self.scanned([('post_discovered', {
+            'post_id': self.f.post_id, 'created_at': self.f.source['created_at'],
+            'head': 'A clean home starts here', 'images': 1, 'known': False})])
+        found = next(card for card in cards if card['kind'] == 'monitor_found')
+        self.assertIn('A clean home', found['payload']['text'])
+        self.assertNotIn('sauberes Zuhause', found['payload']['text'])
 
-    def test_monitored_post_is_announced_once_with_its_english_source(self):
-        self.route('delta')
-        self.runtime.collect([self.f.account], self.now)
-        self.assertEqual(len(self.discovered()), 1)
-        self.assertIn('A clean home', self.discovered()[0]['payload']['text'])
+    def test_a_collaboration_post_is_labelled_instead_of_passing_as_our_own(self):
+        cards = self.scanned([('post_discovered', {
+            'post_id': self.f.post_id, 'created_at': self.f.source['created_at'],
+            'head': 'Gemeinsam', 'images': 2, 'known': False,
+            'account': 'neakasaofficial', 'owner': 'partner_us', 'coauthors': ['neakasaofficial']})])
+        text = next(c['payload']['text'] for c in cards if c['kind'] == 'monitor_found')
+        self.assertIn('合作帖，原作者 partner_us', text)
+        self.assertIn('合作方 neakasaofficial', text)
 
-    def test_backfilled_history_is_not_announced(self):
-        # 回填是人主动滚出来的历史，逐篇推送等于上线第一天刷屏。
-        self.route('backfill')
-        self.runtime.collect([self.f.account], self.now)
-        self.assertEqual(self.discovered(), [])
+    def test_the_saved_card_states_success_or_failure_for_every_post(self):
+        cards = self.scanned([
+            ('post_discovered', {'post_id': 'p1', 'created_at': self.f.source['created_at'],
+                                 'head': 'erste', 'images': 2, 'known': False}),
+            ('post_discovered', {'post_id': 'p2', 'created_at': self.f.source['created_at'],
+                                 'head': 'zweite', 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'p1', 'images': 2, 'videos': 0,
+                               'folder': 'posts/2026-09/Riko/2026-09-10_1200_p1'}),
+            ('post_capture_incomplete', {'post_id': 'p2'})])
+        saved = next(c['payload'] for c in cards if c['kind'] == 'monitor_saved')
+        self.assertIn('发现 2 篇，成功落档 1 篇，失败 1 篇', saved['text'])
+        self.assertIn('p1  已落档 · 2 图 0 视频 · posts/2026-09/Riko/', saved['text'])
+        self.assertIn('p2  未落档 · 媒体未补全', saved['text'])
+        self.assertIn('原图链接有时效', saved['risk'])
 
-    def test_repeated_scans_do_not_re_announce_the_same_post(self):
-        self.route('delta')
-        self.runtime.collect([self.f.account], self.now)
-        self.runtime.collect([self.f.account], self.now)
-        self.assertEqual(len(self.discovered()), 1)
+    def test_a_fully_successful_round_says_so_instead_of_staying_silent(self):
+        cards = self.scanned([
+            ('post_discovered', {'post_id': 'p1', 'created_at': self.f.source['created_at'],
+                                 'head': 'alles gut', 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'p1', 'images': 1, 'videos': 0, 'folder': 'posts/2026-09/未分类/p1'})])
+        saved = next(c['payload'] for c in cards if c['kind'] == 'monitor_saved')
+        self.assertIn('成功落档 1 篇，没有失败', saved['text'])
+        self.assertFalse(saved['risk'])
 
-    def test_discovered_card_carries_the_original_lead_image(self):
-        self.route('delta')
-        self.runtime.collect([self.f.account], self.now)
-        cards = []
-        self.runtime.outbox.dispatch(
-            self.now, lambda recipient, card, delivery: cards.append(card) or 'message',
-            prepare_payload=self.runtime.prepare_preview)
-        self.assertTrue(any(element.get('tag') == 'img' for element in cards[0]['elements']))
-        self.runtime.client.upload_image.assert_called_once_with((self.f.post_dir / '01.jpg').read_bytes())
+    def test_both_monitor_cards_go_to_the_business_group_even_off_duty(self):
+        self.scanned([
+            ('post_discovered', {'post_id': 'p1', 'created_at': self.f.source['created_at'],
+                                 'head': 'nachts', 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'p1', 'images': 1, 'videos': 0, 'folder': 'f'})])
+        self.runtime.outbox.enqueue('alert', 'system', {'text': '请检查探测会话'}, self.now)
+        sent = []
+        night = datetime(2026, 9, 12, 15, 0, tzinfo=timezone.utc)   # 上海 23:00，离岗
+        self.runtime.outbox.dispatch(night, lambda *args: sent.append(args) or 'bot-accepted')
+        by_group = {}
+        for recipient, card, _delivery in sent:
+            by_group.setdefault(recipient, []).append(card['header']['title']['content'])
+        self.assertEqual(sorted(by_group['operator']), ['Neakasa 德国站 · 原帖抓取完成',
+                                                        'Neakasa 德国站 · 监测到新帖'])
+        self.assertEqual(by_group['developer'], ['Neakasa 德国站 · 系统需要处理'])
+
+    def test_a_broken_card_costs_the_broadcast_not_the_scan_exit_code(self):
+        # 播报是旁路。它抛异常不能改抓取的退出码，否则会被当成"抓取失败"去查浏览器。
+        self.runtime.detector = lambda _kind, _platform: 0
+        with patch.object(notifications, 'scan_cards', side_effect=ValueError('读不出')):
+            code = self.runtime.scan('delta', 'facebook')
+        self.assertEqual(code, 0)
+
+    def test_posts_already_in_the_archive_are_not_announced_again(self):
+        # 卡片来自抓取事实，不来自遍历归档——这正是与"逐篇扫归档"方案的分水岭。
+        # 归档里躺着夹具那一篇，但本轮没有任何抓取事实，所以一张卡都不该有。
+        # 回填因此结构上就进不来：它不走 delta_once，一条事实都不会留。
+        self.assertTrue((self.f.post_dir / 'post.json').exists())
+        self.assertEqual(self.scanned([]), [])
 
     def test_a_single_cycle_finishes_its_delivery_before_shutting_down(self):
         # --once 提交投递后立刻 close()，cancel_futures 会把还没启动的那个取消掉：
         # 一条消息都发不出去，而且不报错——正好会被误判成"飞书配置有问题"。
-        self.route('delta')
+        self.runtime.outbox.enqueue('alert', 'system', {'text': '请检查探测会话'}, self.now)
         with patch.object(self.runtime, 'refresh_hashtags'), patch.object(self.runtime, 'refresh_calendar'):
             self.runtime.maintenance(self.now, [])
         self.runtime.await_delivery()
         self.runtime.close()
-        self.assertEqual(len(self.discovered()), 1)
-
-    def test_unreadable_lead_image_degrades_the_discovery_card_instead_of_dropping_it(self):
-        # 发现卡是监测链路唯一的存活信号。少一张图就整条不推，运营侧看起来和"今天没有新帖"一样。
-        self.route('delta')
-        (self.f.post_dir / '01.jpg').unlink()
-        self.runtime.collect([self.f.account], self.now)
-        self.assertEqual(len(self.discovered()), 1)
-        payload = self.discovered()[0]['payload']
-        self.assertIn('A clean home', payload['text'])
-        self.assertIn('审校台', payload['image_note'])
-        alerts = [e for e in self.events().values() if e['kind'] == 'system']
-        self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
-
-    def test_unreadable_discovery_material_costs_only_its_own_card(self):
-        # 首图之外还要读 post.json 与型号表；读不出的那一篇不能连累本轮其余发现。
-        self.route('delta')
-        with patch.object(notifications, 'discovered_material', side_effect=ValueError('读不出')):
-            self.runtime.collect([self.f.account], self.now)
-        self.assertEqual(self.discovered(), [])
-        alerts = [e for e in self.events().values() if e['kind'] == 'system']
-        self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
-
-    def test_discovered_material_shows_english_source_even_when_a_german_draft_exists(self):
-        material, path = notifications.discovered_material(self.f.account, self.f.source)
-        self.assertIn('A clean home', material['text'])
-        self.assertNotIn('sauberes Zuhause', material['text'])
-        self.assertEqual(material['image_count'], 1)
-        self.assertEqual(path, self.f.post_dir / '01.jpg')
+        self.assertGreater(self.runtime.client.send.call_count, 0)
 
     def test_event_updates_stop_after_any_delivery_attempt(self):
         box = self.runtime.outbox

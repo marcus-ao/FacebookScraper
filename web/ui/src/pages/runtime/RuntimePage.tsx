@@ -43,7 +43,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
       {interrupted && <p>一批内容处理已中断。 <Button disabled={busy || !batch.batch_id || !batch.state_revision} onClick={closeBatch}>核对后关闭中断批次</Button></p>}
       {deliveries.map((item, index) => <div key={item.delivery_id} className={styles.delivery}><Space wrap><span>提醒 {index + 1} · {item.status === 'uncertain' ? '送达结果待核对' : '等待重试'}</span><ShanghaiTime at={item.created_at} />
         <Button disabled={busy} onClick={() => { setMessageId(''); setDelivery(item) }}>登记已送达</Button><Button disabled={busy} onClick={() => resend(item)}>核对未送达后恢复</Button></Space>
-        {item.preview_error && <p>卡片首图未能上传，请进入审校页查看完整素材。</p>}
+        {item.preview_error && <p>这张卡片发出时未能重新读取当前德语稿，内容可能不是最新，请进入审校页核对。</p>}
         <Space wrap>{item.task_ids?.filter((id): id is NonNullable<typeof id> => !!id).map((id, i) => <Link key={id} to={`/review/${idPath(id)}`}>查看相关帖子 {i + 1}</Link>)}</Space>
       </div>)}
       {!!unconfirmed && <p>{unconfirmed} 次提交结果需要核对。当前记录只有计数，暂时无法直接定位帖子。 <Button type="link" onClick={() => setMaintenance(true)}>查看维护说明</Button></p>}
@@ -53,14 +53,15 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
     <section aria-label="五阶段概览">{data.stages.map(stage => { const summary = stageSummary(stage); return <article key={stage.number} className={styles.stage}>
       <div className={styles.stageHeading}><h2>{stage.number}. {stage.name}</h2><Badge status={summary.tone} text={summary.label} /></div><p>{summary.conclusion}</p>
       {stage.number === 3 && <p className={styles.help}>本轮开始 <ShanghaiTime at={batch.started_at} /> · 完成 <ShanghaiTime at={batch.finished_at} />{stage.trends_export?.status === 'blocked' && ' · 趋势采样已暂停，仍可使用语义候选。'}</p>}
-      {stage.number === 4 && stage.outbox?.enabled && stage.outbox.credentials_present === false && <p>飞书应用凭据尚未配置完整，请联系维护人员。</p>}
+      {stage.number === 4 && stage.outbox?.enabled && stage.outbox.credentials_present === false && <p>两个飞书群的机器人地址尚未配置完整，请联系维护人员。</p>}
+      {stage.number === 4 && stage.outbox?.groups_merged && <p className={styles.help}>业务组与技术组当前指向同一个群，系统告警会和待审提醒混在一起。</p>}
       {stage.number === 2 && stage.mirror && <MirrorFact mirror={stage.mirror} />}
       {stage.number === 5 && <p className={styles.help}>Facebook 单渠道验收：{stage.acceptance?.facebook?.verified ? '真实通过' : '尚未完成'} · Instagram 单渠道验收：{stage.acceptance?.instagram?.verified ? '真实通过' : '尚未完成'}</p>}
       <Collapse ghost items={[{ key: 'details', label: '查看技术细节', children: <pre className={styles.diagnostic}>{JSON.stringify({ ...stage, ...(stage.mirror ? { mirror: mirrorDiagnostics(stage.mirror) } : {}), ...(stage.number === 3 ? { processing: batch, timings: data.business.timings } : {}) }, null, 2)}</pre> }]} />
     </article> })}</section>
     <Collapse ghost items={[{ key: 'runtime', label: '进程、网络与外部心跳记录', children: <pre className={styles.diagnostic}>{JSON.stringify({ process: data.process, activation: data.activation, heartbeat: data.heartbeat, network: data.network }, null, 2)}</pre> }]} />
     <Modal title="登记已送达" open={!!delivery} okText="登记已送达" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: !messageId.trim() }} onCancel={() => { if (!busy) setDelivery(null) }} onOk={() => { if (delivery) void action(() => resolveNotification(delivery, 'delivered', messageId)).then(() => setDelivery(null)).catch(() => {}) }}>
-      <label>请填写已核对到的飞书消息 ID<Input autoFocus aria-label="飞书消息 ID" value={messageId} maxLength={200} onChange={event => setMessageId(event.target.value)} /></label>
+      <label>群机器人不返回消息 ID，请填写你在群里核对到的情况<Input autoFocus aria-label="送达核对说明" placeholder="例如：业务群 21:07 已收到监测卡" value={messageId} maxLength={200} onChange={event => setMessageId(event.target.value)} /></label>
     </Modal>
     <Drawer title="未确认发布的维护说明" open={maintenance} onClose={() => setMaintenance(false)} size="large"><p>请由维护人员核对发布尝试记录，找出未确认的帖子，再打开该篇审核页的“核对并补齐本地回执”。当前接口未提供帖子列表，请勿根据数量推断具体帖子。</p><p>核对本地发布记录和对应的远端排期回读结果后再处理，避免重复提交。</p><pre className={styles.diagnostic}>publish/journal.py · pipeline/runtime_status.py</pre></Drawer>
   </>
