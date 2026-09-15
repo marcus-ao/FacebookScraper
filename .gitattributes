@@ -4,3 +4,4 @@
 *.py   text eol=lf
 *.md   text eol=lf
 *.toml text eol=lf
+.env.example text eol=lf

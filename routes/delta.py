@@ -440,7 +440,8 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
             facts.fact("post_discovered", utcnow(), platform=platform, post_id=post.post_id,
                        created_at=post.created_at, permalink=post.permalink, head=head,
                        images=sum(1 for m in post.media if m.kind == "image"),
-                       videos=sum(1 for m in post.media if m.kind == "video"), known=was_known)
+                       videos=sum(1 for m in post.media if m.kind == "video"), known=was_known,
+                       account=post.account, owner=post.owner, coauthors=list(post.coauthors))
         await download_media(ctx, arc, post, url)
         if not arc.append(post):
             print("    ! %s 媒体仍未补全，保留原归档并留待下次重试" % post.post_id)
@@ -452,8 +453,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         vids = sum(1 for m in post.media if m.kind == "video")
         print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
         if facts is not None:
+            # 落点用相对归档根的路径：月份 + 产品 tag 都在里面，是"落到哪了"的完整答案。
             facts.fact("post_captured", utcnow(), platform=platform, post_id=post.post_id,
-                       images=imgs, videos=vids, folder=arc.post_dir(post).name)
+                       images=imgs, videos=vids,
+                       folder=arc.post_dir(post).relative_to(arc.base).as_posix())
         if was_known:
             res.upgraded += 1
         else:

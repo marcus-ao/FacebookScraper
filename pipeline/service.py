@@ -54,6 +54,21 @@ class Runtime:
         self.thumbnail_sources = {}
         self.network = NetworkEvidence(self.c.state_dir / 'network_evidence.json', NetworkEvidenceSettings.load(self.c))
 
+    def await_delivery(self, timeout: float = 120) -> None:
+        """等本轮消息与镜像投递跑完。
+
+        ⛔ 单轮执行（`--once`）必须调它再退出：`close()` 用 `cancel_futures=True` 关投递
+        执行器，刚提交、尚未启动的 `_deliver` 会被直接取消——实测 8/8 轮一条消息都没发出，
+        而且不报错，看起来和"飞书配置有问题"一模一样。连续 `--run` 靠下一轮重投，不受影响。
+        """
+        future = self.delivery_future
+        if future is None:
+            return
+        try:
+            future.result(timeout=timeout)
+        except Exception as exc:
+            notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
+
     def close(self):
         self.processing_executor.shutdown(wait=False, cancel_futures=False)
         self.sampling_executor.shutdown(wait=False, cancel_futures=True)
@@ -394,7 +409,17 @@ class Runtime:
 
         for ref, item in pending.items():
             source, directory, state = item['source'], item['directory'], item['state']
-            current, _ = notifications.material(directory, source)
+            try:
+                current, _ = notifications.material(directory, source)
+            except (OSError, ValueError) as exc:
+                # 一篇读不出的稿子只丢它自己的卡片，不能连累本轮其余提醒；失败要留痕。
+                self._system(f'review-material:{ref}:{now.date()}',
+                             f'{ref} 的审校素材读不出（{type(exc).__name__}），请检查归档与译文。', now)
+                continue
+            if current['image_variant'] == 'unreadable':
+                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
+                self._system(f'lead-image:{ref}:{now.date()}',
+                             f'{ref} 的首图读不出，卡片已降级为纯文字，请检查归档原图。', now)
             payload = {'task_id': directory.name + '/' + source['post_id'],
                        'platform': source['platform'], 'account': source['account'],
                        'created_at': source['created_at'], 'permalink': source.get('permalink'),

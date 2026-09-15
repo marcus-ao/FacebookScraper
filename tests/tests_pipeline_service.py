@@ -256,28 +256,23 @@ class ServiceTests(unittest.TestCase):
             ('post_capture_incomplete', {'post_id': 'p2'}),
         ], code=1)
         saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
-        self.assertIn('发现 2 篇，落档 1 篇，1 篇媒体未补全', saved['payload']['text'])
-        self.assertIn('p2 · 媒体未补全', saved['payload']['text'])
+        self.assertIn('发现 2 篇，成功落档 1 篇，失败 1 篇', saved['payload']['text'])
+        self.assertIn('p2  未落档 · 媒体未补全', saved['payload']['text'])
         self.assertIn('原图链接有时效', saved['payload']['risk'])
         # 退出码非零也要报，而不是让整段播报消失。
         self.assertIn('退出码 1', saved['payload']['risk'])
 
-    def test_scan_cards_reach_the_technical_group_at_night_and_only_once(self):
+    def test_the_same_scan_round_never_enqueues_its_cards_twice(self):
+        # event_id 绑扫描开始时刻：重启或重跑同一轮不会在群里多出两张卡。
+        # 收件人与离岗行为另见 tests_review_notifications。
         runtime = self.enabled_runtime()
         self.addCleanup(runtime.close)
-        self.now = datetime(2026, 9, 12, 15, 0, tzinfo=timezone.utc)   # 上海 23:00，离岗
         rows = [('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:00:00Z',
-                                     'head': 'nachts', 'images': 1, 'known': False}),
+                                     'head': 'nochmal', 'images': 1, 'known': False}),
                 ('post_captured', {'post_id': 'p1', 'images': 1, 'videos': 0, 'folder': 'f'})]
         self.scanned(runtime, rows)
-        sent = []
         self.assertEqual(runtime.outbox.dispatch(
-            self.now, lambda *args: sent.append(args) or 'bot-accepted'), 2)
-        # 监测播报不受在岗窗静默限制，且走技术组；顺序是"监测到"在前。
-        self.assertEqual([call[0] for call in sent], ['developer', 'developer'])
-        self.assertIn('监测到新帖', json.dumps(sent[0][1], ensure_ascii=False))
-        self.assertIn('原帖抓取完成', json.dumps(sent[1][1], ensure_ascii=False))
-        # 同一轮再跑一次不会重复入队（event_id 绑扫描开始时刻）。
+            self.now, lambda *_args: 'bot-accepted'), 2)
         self.scanned(runtime, rows)
         self.assertEqual(runtime.outbox.dispatch(
             self.now, lambda *_args: self.fail('duplicate scan card')), 0)

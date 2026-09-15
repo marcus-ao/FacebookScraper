@@ -220,12 +220,15 @@ class CardTests(unittest.TestCase):
                                at('2026-09-12T09:00:00+08:00'))
 
     def test_the_two_monitor_kinds_sort_in_the_order_they_should_arrive(self):
-        from core.feishu import MONITOR_KINDS, URGENT_KINDS
+        from core.feishu import ALWAYS_DELIVERED, MONITOR_KINDS, PREVIEWED
         # dispatch 按 sorted(KINDS) 建投递、按建立顺序发送，所以字典序就是群里的先后顺序。
         self.assertEqual(sorted(MONITOR_KINDS), ['monitor_found', 'monitor_saved'])
-        self.assertTrue(MONITOR_KINDS <= URGENT_KINDS)
-        self.assertIn('system', URGENT_KINDS)
-        self.assertFalse({'ready', 'backlog', 'morning'} & URGENT_KINDS)
+        # 静默豁免与收件人是两件事：监测卡豁免静默，但和待审卡一样进业务组。
+        self.assertTrue(MONITOR_KINDS <= ALWAYS_DELIVERED)
+        self.assertIn('system', ALWAYS_DELIVERED)
+        self.assertFalse({'ready', 'backlog', 'morning'} & ALWAYS_DELIVERED)
+        # 监测卡的内容在入队时已由抓取事实定稿，不参与发送前重取。
+        self.assertEqual(PREVIEWED, {'ready'})
 
 
 if __name__ == '__main__':

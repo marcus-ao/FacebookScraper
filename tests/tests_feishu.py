@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.feishu import FeishuSettings, Outbox
+from core.feishu import FeishuSettings, Outbox, notification_card
 
 
 def at(value):
@@ -57,6 +57,29 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], ['developer'])
         outbox.dispatch(at('2026-09-12T08:00:00+08:00'), lambda *args: calls.append(args) or 'ok')
         self.assertEqual(calls[-1][0], 'operator')
+
+    def test_monitor_cards_reach_the_operator_during_quiet_hours(self):
+        # 监测播报是这条链路唯一的存活信号，静默窗不能吞掉它；但它仍然进业务组。
+        outbox = Outbox(self.path, self.settings)
+        night = at('2026-09-11T23:00:00+08:00')
+        for kind in ('monitor_found', 'monitor_saved'):
+            outbox.enqueue(kind + ':instagram:42', kind, {'text': 'A clean home.'}, night)
+        calls = []
+        self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args) or 'message'), 2)
+        self.assertEqual([call[0] for call in calls], ['operator', 'operator'])
+
+    def test_monitor_cards_carry_counts_folders_and_the_source_link(self):
+        card = notification_card('monitor_saved', [{
+            'platform': 'Instagram', 'account': 'neakasa.global',
+            'created_at': '普通探测 · 上海 09-10 22:23（以下时刻均为上海）',
+            'text': '发现 1 篇，成功落档 1 篇，没有失败\n· 42  已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc',
+            'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn('原帖抓取完成', rendered)
+        self.assertIn('已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc', rendered)
+        self.assertIn('查看原帖', rendered)
+        # 没有 task_id 也要给原帖按钮：监测卡发生在有审校任务之前。
+        self.assertNotIn('去审校', rendered)
 
     def test_daytime_ready_items_are_individual_reminders(self):
         outbox = Outbox(self.path, self.settings)

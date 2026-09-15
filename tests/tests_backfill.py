@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -350,6 +351,25 @@ broken = ScrollProgress("instagram", "acme_us")
 broken.update([{"pk": "1", "code": "A", "taken_at": "not-a-number",
                 "user": "这里本该是个对象"}])
 check(True, "脏响应不会让进度显示把整场抓取带崩")
+
+print("\n[9] --days 只收紧回填窗口，不改人工滚动")
+
+_now = datetime(2026, 9, 14, tzinfo=timezone.utc)
+
+
+def _post(pid, created):
+    return Post(pid, "instagram", "acme", "text", created, owner="acme")
+
+
+_recent, _old, _undated = _post("p1", "2026-09-10T12:00:00Z"), _post("p2", "2026-07-01T12:00:00Z"), _post("p3", None)
+_kept, _skipped = backfill.within_window([_recent, _old, _undated], 30, _now)
+check([p.post_id for p in _kept] == ["p1", "p3"],
+      "窗口内的保留；无日期的也保留 —— 已经抓到的内容不因为算不出日期就丢掉")
+check([p.post_id for p in _skipped] == ["p2"], "只有明确早于窗口的才跳过")
+check(backfill.within_window([_recent, _old], None, _now) == ([_recent, _old], []),
+      "不带 --days 时保持原有全量行为")
+_edge, _ = backfill.within_window([_post("p4", "2026-08-15T00:00:00Z")], 30, _now)
+check([p.post_id for p in _edge] == ["p4"], "边界当天算窗口内，不靠时区凑整")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

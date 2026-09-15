@@ -11,6 +11,12 @@ from core.monitoring import SKIP_LABELS
 from core.store import assert_physical_direct_path
 from localize import images as image_de
 
+# 发现卡上的英文摘要长度；够判断"现在开还是等会儿开"，不喧宾夺主。
+DISCOVERED_EXCERPT = 300
+
+IMAGE_NOTES = {'de': '德语首图', 'original': '尚无有效德语首图，预览使用原图',
+               'unreadable': '首图读不出，请进入审校台核对'}
+
 PLATFORM_LABELS = {'facebook': 'Facebook', 'instagram': 'Instagram'}
 RUN_KIND_LABELS = {'delta': '普通探测', 'reconcile': '兜底对账'}
 
@@ -31,6 +37,16 @@ def skip_summary(skipped) -> str:
     if not parts:
         return ''
     return '本轮跳过 %d 篇：%s' % (sum((skipped or {}).values()), ' / '.join(parts))
+
+
+def _origin(row) -> str:
+    """合作帖由一方发布、双方主页同时显示；不写清楚会被当成本账号原创。"""
+    owner, account = (row.get('owner') or '').strip(), (row.get('account') or '').strip()
+    parts = ['合作帖，原作者 %s' % owner] if owner and account and owner != account else []
+    names = [name for name in row.get('coauthors') or [] if isinstance(name, str) and name.strip()]
+    if names:
+        parts.append('合作方 %s' % '、'.join(names))
+    return '（%s）' % '；'.join(parts) if parts else ''
 
 
 def scan_cards(run_kind, platform, account, rows, skipped, now):
@@ -56,31 +72,32 @@ def scan_cards(run_kind, platform, account, rows, skipped, now):
     if len(found) > len(fresh):
         # known=True 同时涵盖媒体补齐和源内容变化两种重抓，抓取侧不区分，这里也不假装区分。
         headline.append('另有 %d 篇已有帖被重新抓取（媒体补齐或源内容变化）' % (len(found) - len(fresh)))
-    detail = ['· %s  原帖 %s · %d 图%s\n  %s' % (
+    detail = ['· %s  原帖 %s · %d 图%s%s\n  %s' % (
         row['post_id'], shanghai_clock(row.get('created_at')),
         row.get('images', 0), ' %d 视频' % row['videos'] if row.get('videos') else '',
-        row.get('head') or '（无正文）') for row in found]
+        _origin(row), (row.get('head') or '（无正文）')[:DISCOVERED_EXCERPT]) for row in found]
     first = dict(base, text='\n'.join(['、'.join(headline), *detail, skip_line]).strip(),
                  next_step='这一轮的落档结果见紧随其后的「原帖抓取完成」卡片。')
 
-    counted = ['发现 %d 篇' % len(found), '落档 %d 篇' % len(captured)]
-    if incomplete:
-        counted.append('%d 篇媒体未补全' % len(incomplete))
-    report = ['· %s · %d 图 %d 视频 · %s' % (post_id, row.get('images', 0), row.get('videos', 0),
-                                            row.get('folder') or '已入档')
-              for post_id, row in captured.items()]
-    report += ['· %s · 媒体未补全，保留原归档，下一轮重试' % post_id for post_id in incomplete]
+    # 落档卡的职责就是把每篇的成败讲明白，所以每行都带一个明确的状态词。
     missing = [row['post_id'] for row in found
                if row['post_id'] not in captured and row['post_id'] not in incomplete]
-    report += ['· %s · 本轮没有落档记录' % post_id for post_id in missing]
+    failed = len(incomplete) + len(missing)
+    counted = ['发现 %d 篇' % len(found), '成功落档 %d 篇' % len(captured)]
+    counted.append('失败 %d 篇' % failed if failed else '没有失败')
+    report = ['· %s  已落档 · %d 图 %d 视频 · %s' % (
+        post_id, row.get('images', 0), row.get('videos', 0),
+        row.get('folder') or '已入档') for post_id, row in captured.items()]
+    report += ['· %s  未落档 · 媒体未补全，已保留原归档，下一轮重试' % post_id for post_id in incomplete]
+    report += ['· %s  未落档 · 本轮没有留下任何落档记录' % post_id for post_id in missing]
     risk = ''
-    if incomplete or missing:
+    if failed:
         # 原图 CDN URL 带签名且有时效，"下一轮再抓"不是稳妥的假设（HANDOFF §5）。
-        risk = ('有 %d 篇没有完整落档。原图链接有时效，不能假设下一轮还能补回来，'
-                '请核对抓取日志。' % (len(incomplete) + len(missing)))
+        risk = ('有 %d 篇没有成功落档。原图链接有时效，不能假设下一轮还能补回来，'
+                '请核对抓取日志。' % failed)
     second = dict(base, text='\n'.join(['，'.join(counted), *report, skip_line]).strip(), risk=risk,
                   next_step='已落档的内容进入本地化排队；跳过分类不加工也不发布。'
-                  if captured else '本轮没有任何内容落档，请先核对抓取日志与登录状态。')
+                  if captured else '本轮一篇都没有落档，请先核对抓取日志与登录状态。')
     return first, second
 
 
@@ -109,13 +126,17 @@ def material(account, source):
     path, variant = None, 'original'
     if first and first.localized_rel:
         path, variant = account / first.localized_rel, 'de'
-    if path is None and lead is not None:
-        path, _ = image_de._source_from_manifest(account, source, lead[1])
-    if path:
-        assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    try:
+        if path is None and lead is not None:
+            path, _ = image_de._source_from_manifest(account, source, lead[1])
+        if path:
+            assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    except (OSError, ValueError):
+        # 首图读不出只降级图片。德语正文可能完全没问题，整张卡丢掉等于白等一轮审校。
+        path, variant = None, 'unreadable'
     caption = localization.render(draft) if effective else '德语稿尚未就绪，请进入页面查看待处理问题。'
     return {'text': caption[:1000], 'risk': '\n'.join(dict.fromkeys(notes)),
-            'image_variant': variant, 'image_note': '德语首图' if variant == 'de' else '尚无有效德语首图，预览使用原图',
+            'image_variant': variant, 'image_note': IMAGE_NOTES[variant],
             'image_count': sum(m.get('kind') == 'image' for m in source.get('media', [])),
             'source_text_sha256': translated.source_text_sha256(source['text']),
             'checks': checks}, path

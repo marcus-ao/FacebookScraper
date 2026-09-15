@@ -21,9 +21,12 @@ from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 # 消息的先后顺序**。monitor_found < monitor_saved 才让"监测到"排在"抓取完成"前面；改名会静默换序。
 MONITOR_KINDS = frozenset({'monitor_found', 'monitor_saved'})
 KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning', *MONITOR_KINDS}
-# 这两件事绑在一起：不受在岗窗静默限制，且路由到技术组。监测播报属于运行信息而不是运营的
-# 行动项——按 F4-2 混进业务组的结果是两边一起被静音；而压到次日 08:00 又让"接近实时"失去意义。
-URGENT_KINDS = frozenset({'system'}) | MONITOR_KINDS
+# 静默窗只压业务待办；监测播报和系统告警是链路存活信号，压住它们等于让沉默继续有歧义。
+# ⚠️ 这里只管静默豁免，**不决定收件人**。两张监测卡和待审卡一样进业务组（收件人路由另见
+# dispatch），只有 system 进技术组；把两件事绑成一个集合会让播报静默地改收件人。
+ALWAYS_DELIVERED = {'system', *MONITOR_KINDS}
+# 发送前重新取当前素材的消息类型。监测卡的内容在入队时已由抓取事实定稿，不参与重取。
+PREVIEWED = {'ready'}
 # selftest 故意只在 TITLES 里、不在 KINDS 里：它能渲染成卡片，但 enqueue 会拒绝它，
 # 所以人工自检不会在发件箱里留下假事件。
 TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
@@ -197,7 +200,8 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings)
         if payload.get('image_key'):
             elements.append({'tag': 'img', 'img_key': payload['image_key'],
                              'alt': {'tag': 'plain_text', 'content': payload.get('image_note', '帖子首图')}, 'mode': 'fit_horizontal'})
-        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'text', 'image_note', 'risk', 'next_step')
+        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'meta', 'text',
+                                               'image_note', 'risk', 'next_step')
                  if payload.get(key)]
         elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': '\n'.join(parts)[:1600]}})
         actions = []
@@ -364,7 +368,7 @@ class Outbox:
                 else:
                     # Unassigned off-duty work and missing recipient receipts remain live.
                     assigned = [data['deliveries'][key] for key in linked.get(event_id, ())]
-                    recipients = (self.settings.technical_recipients if event['kind'] in URGENT_KINDS
+                    recipients = (self.settings.technical_recipients if event['kind'] == 'system'
                                   else self.settings.recipients)
                     required = set(recipients) | {item['recipient'] for item in assigned}
                     received = {item['recipient'] for item in assigned if item['status'] == 'sent'}
@@ -452,9 +456,9 @@ class Outbox:
         with self._lock():
             data = self._load()
             for kind in sorted(KINDS):
-                if kind not in URGENT_KINDS and not self.schedule.is_on_duty(now):
+                if kind not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
-                recipients = (self.settings.technical_recipients if kind in URGENT_KINDS else self.settings.recipients)
+                recipients = (self.settings.technical_recipients if kind == 'system' else self.settings.recipients)
                 for recipient in dict.fromkeys(recipients):
                     assigned = {event_id for item in data['deliveries'].values()
                                 if item['status'] != 'cancelled' and item['recipient'] == recipient for event_id in item['events']}
@@ -468,7 +472,7 @@ class Outbox:
                     for group in groups:
                         payloads = [dict(data['events'][key]['payload']) for key in group]
                         for payload in payloads:
-                            if kind == 'ready' and prepare_payload is not None:
+                            if kind in PREVIEWED and prepare_payload is not None:
                                 try:
                                     prepare_payload(payload)
                                 except Exception:
@@ -492,7 +496,7 @@ class Outbox:
             for delivery_id, item in data['deliveries'].items():
                 if item['status'] in {'sent', 'uncertain', 'cancelled'} or item['next_at'] > stamp:
                     continue
-                if item['kind'] not in URGENT_KINDS and not self.schedule.is_on_duty(now):
+                if item['kind'] not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
                 if item['attempts'] and now - datetime.fromisoformat(item.get('retry_authorized_at', item['created_at'])) >= timedelta(minutes=50):
                     # 不无限依赖远端去重时间窗；旧不确定请求交由人核对，避免重复催促。
