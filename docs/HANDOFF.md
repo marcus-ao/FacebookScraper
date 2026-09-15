@@ -84,7 +84,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 2026-09-14 阶段一打磨新增三项，均只有离线证据：飞书发现提醒（抓取落地即推、豁免静默窗、回填帖不推）、本地 tag 母目录布局、回填 `--days` 窗口。`[network_evidence]` 随之打开。**这些都不证明飞书权限、云盘目录或真实新帖链路可用**；飞书与云盘仍缺凭据和接收组。
 
-一项已知的证据折扣：`tests_month_inventory` 里的推荐时段用例**不稳定**，2026-09-14 在本轮改动前的基线上实测 6 次跑失败 1 次。它属于阶段五 Planner 读取，与阶段一无关，但它会让「Python 66/66」这种整套通过数变得不可直接采信——看到红要先确认是不是这一条。
+上一条记过的证据折扣已经消除：`tests_month_inventory` 的推荐时段用例基线 6 次跑失败 1 次，根因在夹具不在 production——用例只给 Playwright 的 hover 留了 300ms，而一个页面上的**首次** hover 要付一次性的可操作性开销，实测中位 641ms，其后每次 47ms。超时被 `is_recommendation` 吞成 False，正向断言就红。`read()` 调到它之前 `read_grid` 已扫完 35 个日期格，真实 Planner 路径早把这笔付过，`month_inventory.py` 未改。修后单测连跑 70 次、整文件连跑 12 次均无失败，「Python 66/66」可以直接采信。
 
 运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
