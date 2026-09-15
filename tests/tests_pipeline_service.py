@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
+from capture_fixtures import record_capture_rows
 from core import review
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
@@ -95,7 +96,7 @@ class ServiceTests(unittest.TestCase):
         runtime.mirror.dispatch.assert_called_once_with(runtime.drive, now=self.now)
 
     def test_mirror_delivery_alert_uses_operator_language_not_exception_name(self):
-        runtime = Runtime(detector=Mock(return_value=0))
+        runtime = Runtime(detector=Mock(return_value=0), process=True)
         self.addCleanup(runtime.close)
         runtime.mirror_settings = MirrorSettings(True, 'fixture-root')
         with patch.object(runtime, 'mirror_sources', side_effect=RuntimeError('private failure')), \
@@ -195,16 +196,7 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(events)
 
     def scanned(self, runtime, rows, *, code=0, platform='instagram', kind='delta'):
-        """让探测子进程"记下"逐篇事实，再跑一次 scan，返回入队的事件。"""
-        started = self.now
-        runtime.clock = lambda: started
-
-        def detect(_kind, _platform):
-            for event, fields in rows:
-                runtime.processing.fact(event, started, platform=platform, **fields)
-            return code
-
-        runtime.detector = detect
+        record_capture_rows(runtime, rows, self.now, platform, code=code)
         runtime.scan(kind, platform)
         if not runtime.outbox.path.exists():
             return {}      # 没有可播报的事就连发件箱文件都不建
@@ -224,21 +216,20 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(kinds, {'monitor_found', 'monitor_saved'})
         found = next(item for item in events.values() if item['kind'] == 'monitor_found')
         saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
-        self.assertIn('发现 1 篇新帖', found['payload']['text'])
+        self.assertIn('1 篇', found['payload']['text'])
         self.assertIn('Entdecke den Neakasa M1', found['payload']['text'])
-        self.assertEqual(found['payload']['permalink'], 'https://www.instagram.com/p/p1/')
-        self.assertIn('落档 1 篇', saved['payload']['text'])
-        self.assertIn('2026/09/p1', saved['payload']['text'])
-        self.assertFalse(saved['payload']['risk'])
+        self.assertEqual(saved['payload']['permalink'], 'https://www.instagram.com/p/p1/')
+        self.assertEqual(saved['payload']['capture_status'], '完整')
+        self.assertEqual(saved['payload']['post_id'], 'p1')
 
     def test_every_clock_on_a_scan_card_is_shanghai(self):
         from pipeline.notifications import shanghai_clock
         # 扫描时刻是 datetime，归档 created_at 是字符串。只认一种会让另一种落到 str() 兜底，
         # 结果是 UTC 时刻挂着"上海"标签——读出来差 8 小时，而卡片上看不出错。
-        self.assertEqual(shanghai_clock(datetime(2026, 9, 14, 13, 7, tzinfo=timezone.utc)), '09-14 21:07')
-        self.assertEqual(shanghai_clock('2026-09-14T12:52:00Z'), '09-14 20:52')
-        self.assertEqual(shanghai_clock('not-a-date'), 'not-a-date')
-        self.assertEqual(shanghai_clock(None), '时间未知')
+        self.assertEqual(shanghai_clock(datetime(2026, 9, 14, 13, 7, tzinfo=timezone.utc)), '2026-09-14 21:07:00')
+        self.assertEqual(shanghai_clock('2026-09-14T12:52:00Z'), '2026-09-14 20:52:00')
+        self.assertEqual(shanghai_clock('not-a-date'), '时间待核对')
+        self.assertEqual(shanghai_clock(None), '时间待核对')
         runtime = self.enabled_runtime()
         self.addCleanup(runtime.close)
         self.now = datetime(2026, 9, 14, 13, 7, tzinfo=timezone.utc)
@@ -246,8 +237,9 @@ class ServiceTests(unittest.TestCase):
             ('post_discovered', {'post_id': 'p1', 'created_at': '2026-09-14T12:52:00Z',
                                  'head': 'abend', 'images': 1, 'known': False})])
         found = next(item for item in events.values() if item['kind'] == 'monitor_found')
-        self.assertIn('上海 09-14 21:07', found['payload']['created_at'])
-        self.assertIn('原帖 09-14 20:52', found['payload']['text'])
+        self.assertIn('2026-09-14 21:07:00 北京时间', found['payload']['created_at'])
+        saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
+        self.assertIn('2026-09-14 20:52:00', json.dumps(saved['payload'], ensure_ascii=False))
         self.assertNotIn('+00:00', json.dumps(found['payload'], ensure_ascii=False))
 
     def test_a_scan_with_no_discovery_pushes_nothing(self):
@@ -266,12 +258,12 @@ class ServiceTests(unittest.TestCase):
             ('post_captured', {'post_id': 'p1', 'images': 2, 'videos': 0, 'folder': '2026/09/p1'}),
             ('post_capture_incomplete', {'post_id': 'p2'}),
         ], code=1)
-        saved = next(item for item in events.values() if item['kind'] == 'monitor_saved')
-        self.assertIn('发现 2 篇，成功落档 1 篇，失败 1 篇', saved['payload']['text'])
-        self.assertIn('p2  未落档 · 媒体未补全', saved['payload']['text'])
-        self.assertIn('原图链接有时效', saved['payload']['risk'])
-        # 退出码非零也要报，而不是让整段播报消失。
-        self.assertIn('退出码 1', saved['payload']['risk'])
+        saved = [item['payload'] for item in events.values() if item['kind'] == 'monitor_saved']
+        self.assertEqual(len(saved), 2)
+        failed = next(item for item in saved if item['post_id'] == 'p2')
+        self.assertFalse(failed['archived'])
+        self.assertIn('待人工', failed['capture_status'])
+        self.assertTrue(any(item['kind'] == 'system' for item in events.values()))
 
     def test_the_same_scan_round_never_enqueues_its_cards_twice(self):
         # event_id 绑扫描开始时刻：重启或重跑同一轮不会在群里多出两张卡。

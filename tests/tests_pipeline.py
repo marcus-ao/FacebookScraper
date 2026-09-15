@@ -350,8 +350,8 @@ check("<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>" in alive,
       "不要求联网：这个检查一个字节都不联网，"
       "**'家里断网了'绝不能成为警报不响的理由**")
 for name in (DAILY_TASK, CATCHUP_TASK):
-    check("<RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>"
-          in tasks[name], "%s 仍然要求联网（它真的要联网）" % name)
+    check("<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>"
+          in tasks[name], "%s 不以网络条件阻止启动" % name)
 check("SessionStateChangeTrigger" not in alive,
       "不加解锁触发器：一天最多一个新结论，锁屏解锁就弹是纯噪音——"
       "误报的代价是让整条告警通道失效")

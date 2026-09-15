@@ -1,4 +1,4 @@
-"""Durable scan and processing facts; observed windows may lengthen, never shorten, polling intervals."""
+"""Durable scan/processing facts and display-only posting statistics."""
 from __future__ import annotations
 
 from core import paid_requests
@@ -139,23 +139,6 @@ def posting_distribution(directories, schedule: MonitorSchedule, now: datetime) 
                               and summary["sample_count"] >= MIN_POSTING_SAMPLES
                               and ratio >= TARGET_POSTING_COVERAGE and window is not None)
     return summary
-
-
-def _in_hour_window(hour: int, window: list[int] | tuple[int, int]) -> bool:
-    start, end = window
-    return start <= hour < end if start < end else hour >= start or hour < end
-
-
-def monitor_interval_minutes(schedule: MonitorSchedule, distribution: dict | None,
-                             now: datetime, *, quiet: bool = False) -> float:
-    """Apply the evidence window as a slowdown-only overlay."""
-    base = schedule.interval_minutes(now, quiet=quiet)
-    if (quiet or not isinstance(distribution, dict) or not distribution.get("adapted")
-            or not isinstance(distribution.get("observed_window"), list)):
-        return base
-    if _in_hour_window(schedule.local(now).hour, distribution["observed_window"]):
-        return base
-    return max(base, schedule.off_duty_interval_min)
 
 
 def batch_budget_minutes(schedule: MonitorSchedule, platform_count: int,
@@ -456,3 +439,19 @@ class MonitoringJournal:
                 "reconcile_discovered": reconcile_discovered, "skipped": skipped,
                 "reconcile_skipped": reconcile_skipped,
                 "reconcile_skipped_platforms": sorted(reconcile_skipped_platforms)}
+
+
+def detection_failure_kind(error: str | None) -> str | None:
+    """仅归类已发生的探测失败文字，不新增登录/账号探测。"""
+    value = str(error or "").lower()
+    if not value:
+        return None
+    if "/checkpoint" in value or "/challenge" in value:
+        return "account_checkpoint"
+    if "429" in value:
+        return "rate_limited"
+    if any(marker in value for marker in ("/login", "401", "403", "会话失效")):
+        return "session_or_permission"
+    if any(marker in value for marker in ("net::err_", "timeout", "timed out", "连接失败", "connection")):
+        return "connection_or_timeout"
+    return "unclassified"

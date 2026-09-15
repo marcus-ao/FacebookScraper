@@ -75,7 +75,7 @@ class FeishuTests(unittest.TestCase):
             'text': '发现 1 篇，成功落档 1 篇，没有失败\n· 42  已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc',
             'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
         rendered = json.dumps(card, ensure_ascii=False)
-        self.assertIn('原帖抓取完成', rendered)
+        self.assertIn('原帖抓取结果', rendered)
         self.assertIn('已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc', rendered)
         self.assertIn('查看原帖', rendered)
         # 没有 task_id 也要给原帖按钮：监测卡发生在有审校任务之前。

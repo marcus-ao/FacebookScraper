@@ -9,20 +9,24 @@ import random
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from uuid import uuid4
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from core.capture import (Collector, atomic_write_json, download_media,
-                          prune_captures_days)
+                          prune_captures_days, MediaRateLimited)
+from core.capture_state import CaptureState, verified_images
 from core.chrome import attach, cdp_ready, launch
 from core.config import MonitorSchedule, cfg, per_platform
 from core import integrity
 from core.integrity import parse_ts
+from core.monitor_access import AccessController, AccessDenied
 from core.monitoring import MonitoringJournal
 from core.notify import notify
-from core.parse import extract, partition_by_owner
-from core.store import Archive
+from core.parse import extract, merge_post, partition_by_owner
+from core.store import Archive, Media, Post
 from core.paid_model import FileLock
 
 PLATFORMS = ("facebook", "instagram")
@@ -54,6 +58,10 @@ class DeltaConfig:
     _quiet_slowdown: object = None
     schedule: MonitorSchedule = field(default_factory=MonitorSchedule)
     run_kind: str = "delta"
+    access: object = None
+    scan_id: str = ""
+    source_failures: list[str] = field(default_factory=list)
+    source_attempts: int = 0
 
     @classmethod
     def load(cls, c=None) -> "DeltaConfig":
@@ -71,7 +79,7 @@ class DeltaConfig:
             autostart_chrome=bool(g("autostart_chrome", True)),
             keep_captures_days=int(g("keep_captures_days", 7)),
             min_own_posts=int(g("min_own_posts", 3)),
-            _quiet_slowdown=g("quiet_days_before_slowdown", 7),
+            _quiet_slowdown=0,
             schedule=MonitorSchedule.load(c),
         )
 
@@ -128,18 +136,19 @@ def bind_target_state(state: dict, c) -> None:
 
 
 def load_state(path: Path) -> dict:
-    """读状态文件。坏文件不得让整条链路停摆——重建一个空的继续跑。"""
+    """Legacy safety evidence must remain readable until explicitly migrated."""
+    if not path.exists():
+        return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    # 平台状态也须为对象，防止后续 .get() 在抓取前失败。
-    for platform in PLATFORMS:
-        if platform in data and not isinstance(data[platform], dict):
-            data[platform] = blank_entry()
-    return data
+        if not isinstance(data, dict):
+            raise ValueError("state must be an object")
+        for platform in PLATFORMS:
+            if platform in data and not isinstance(data[platform], dict):
+                raise ValueError("platform state must be an object")
+        return data
+    except (OSError, ValueError) as exc:
+        raise AccessDenied("delta state unreadable; preserve and repair safety evidence") from exc
 
 
 def save_state(path: Path, state: dict) -> None:
@@ -239,18 +248,27 @@ def login_wall_reason(final_url: str, blocked: tuple[int, str] | None = None) ->
     url = (final_url or "").lower()
     for marker in LOGIN_URL_MARKERS:
         if marker in url:
-            return "页面被重定向到 %s —— 会话可能已失效" % final_url
+            return "页面进入登录墙或验证挑战（%s），会话可能已失效，请人工核对" % marker
     if blocked:
         status, endpoint = blocked
         if status == 429:
-            return "接口返回 429（限流）：%s" % endpoint
-        return "接口返回 %d（会话失效或权限不足）：%s" % (status, endpoint)
+            return "接口返回 429（限流），探测身份已暂停"
+        return "接口返回 %d（会话失效或权限不足）" % status
     return None
 
 
 async def _pause(window: tuple[float, float]) -> None:
     """异步随机等待，保持响应体读取的事件循环运行。"""
     await asyncio.sleep(random.uniform(*window))
+
+
+async def _guarded_wait(seconds, guard):
+    while seconds > 0:
+        guard()
+        step = min(seconds, 0.2)
+        await asyncio.sleep(step)
+        seconds -= step
+    guard()
 
 
 async def _eval(page, expr: str, default):
@@ -262,7 +280,7 @@ async def _eval(page, expr: str, default):
     return default if value is None else value
 
 
-async def human_scroll(page, dcfg: DeltaConfig) -> tuple[int, float]:
+async def human_scroll(page, dcfg: DeltaConfig, guard=None) -> tuple[int, float]:
     """有限滚动并返回 (屏数, 实际位移)；滚轮先定位到主视口。"""
     screens = max(0, dcfg.max_scrolls)
     if not screens:
@@ -272,23 +290,45 @@ async def human_scroll(page, dcfg: DeltaConfig) -> tuple[int, float]:
     await page.mouse.move(int(size[0]) // 2, int(size[1]) // 2)
     before = float(await _eval(page, "() => window.scrollY", 0) or 0)
     for _ in range(screens):
+        if guard:
+            guard()
         await page.mouse.wheel(0, random.randint(*WHEEL_PX))
-        await _pause(dcfg.scroll_pause())
+        if guard:
+            await _guarded_wait(random.uniform(*dcfg.scroll_pause()), guard)
+        else:
+            await _pause(dcfg.scroll_pause())
     after = float(await _eval(page, "() => window.scrollY", 0) or 0)
     return screens, after - before
 
 
 async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
     """打开主页、滚有限几屏、把接口响应捞下来。返回 (collector, 落地 URL)。"""
-    col = Collector()
+    platform = 'instagram' if 'instagram.com' in url else 'facebook'
+    def on_block(status):
+        if dcfg.access:
+            dcfg.access.outcome(platform, success=False, hard=True,
+                                reason=f'平台内容接口返回 {status}，探测身份已暂停')
+    col = Collector(on_block=on_block)
     page = await ctx.new_page()
+    def guard():
+        reason = login_wall_reason(page.url, col.blocked_status())
+        if reason:
+            if not col.blocked_status():
+                on_block('登录墙或验证挑战')
+            raise DeltaBlocked(reason, hard=True)
+        if dcfg.access:
+            dcfg.access.check(platform)
     handler = col.submit
     try:
         page.on("response", handler)
-        await page.goto(url, wait_until="domcontentloaded")
+        guard()
+        response = await page.goto(url, wait_until="domcontentloaded")
+        if response is not None and response.status in (401, 403, 429):
+            on_block(response.status)
+            raise DeltaBlocked(f'平台页面返回 {response.status}，探测身份已暂停', hard=True)
         # 首屏的接口响应是异步来的，goto 返回时通常还没到齐
-        await asyncio.sleep(dcfg.first_screen_seconds)
-        screens, moved = await human_scroll(page, dcfg)
+        await _guarded_wait(dcfg.first_screen_seconds, guard)
+        screens, moved = await human_scroll(page, dcfg, guard)
         if screens and moved <= 0:
             print("[!] 滚了 %d 屏但页面没有移动（scrollY 未变）——"
                   "滚轮事件可能没落在可滚动区域" % screens)
@@ -363,6 +403,13 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     请求节奏或滚动行为；``None`` 或 dry-run 时一个字也不写。
     """
     url = profile_url(platform, account)
+    lifecycle = None
+    if dcfg.access and not dry_run:
+        lifecycle = CaptureState(dcfg.access.path.parent)
+        lifecycle.status()
+        lifecycle.recover_interrupted(utcnow())
+    if dcfg.access:
+        dcfg.access.reserve_homepage(platform, dcfg.scan_id, run_kind=dcfg.run_kind)
     try:
         col, final_url = await asyncio.wait_for(
             scan_page(ctx, url, dcfg), timeout=dcfg.max_session_seconds)
@@ -408,6 +455,21 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         newest_known=max((r.get("created_at") or "" for r in known), default=""),
         payloads=len(col.payloads), skipped=scope_skip_counts(posts))
 
+    candidates = [post for post in sorted(posts, key=lambda p: p.created_at or '', reverse=True)
+                  if arc.should_append(post)]
+    if lifecycle:
+        candidates = lifecycle.begin(dcfg.scan_id, candidates,
+                                     {r['post_id']: r for r in known}, utcnow())
+    # 先保存全部发现，再执行任何下载；第一篇中断也不能抹掉响应里的后续候选。
+    for post in candidates:
+        if facts is not None and not dry_run:
+            facts.fact('post_discovered', utcnow(), platform=platform, scan_id=dcfg.scan_id,
+                       post_id=post.post_id, account=post.account, owner=post.owner,
+                       coauthors=list(post.coauthors), created_at=post.created_at,
+                       permalink=post.permalink, head=(post.text or '')[:300],
+                       images=sum(m.kind == 'image' for m in post.media),
+                       videos=sum(m.kind == 'video' for m in post.media), known=arc.has(post.post_id))
+
     # 按目标帖数判断覆盖；空归档仍保留最低门槛，最新帖日期倒退不作失败依据。
     floor = (0 if dcfg.min_own_posts == 0 else
              min(max(1, dcfg.min_own_posts), max(1, len(known))))
@@ -418,50 +480,160 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
                                 "、".join(sorted({(s.get("owner") or "?")
                                                   for s in suspect})[:4]))
                 if suspect else "")
+        if lifecycle:
+            lifecycle.interrupt(dcfg.scan_id, utcnow(), '主页覆盖不足，已发现候选保留并转人工核对')
         raise DeltaBlocked(
             "只看到 %d 篇属于 %s 的帖子（丢弃 %d 篇他人内容，期望至少 %d 篇）"
             " —— 大概率没有拿到时间线，而不是没有新帖%s"
             % (len(posts), account, len(rejected), floor, hint))
 
-    for post in sorted(posts, key=lambda p: p.created_at or "", reverse=True):
-        if not arc.should_append(post):
-            continue
-        was_known = arc.has(post.post_id)
-        head = (post.text or "").replace("\n", " ")[:38]
-        if dry_run:
-            print("  ~ %s  %s  %s" % (post.post_id, post.created_at or "(无日期)", head))
-            if was_known:
-                res.upgraded += 1
-            else:
-                res.new += 1
-            continue
-        if facts is not None:
-            # 先记"发现"再下载媒体：漏帖和抓不下来在群播报里必须分得开。
-            facts.fact("post_discovered", utcnow(), platform=platform, post_id=post.post_id,
-                       created_at=post.created_at, permalink=post.permalink, head=head,
-                       images=sum(1 for m in post.media if m.kind == "image"),
-                       videos=sum(1 for m in post.media if m.kind == "video"), known=was_known,
-                       account=post.account, owner=post.owner, coauthors=list(post.coauthors))
-        await download_media(ctx, arc, post, url)
-        if not arc.append(post):
-            print("    ! %s 媒体仍未补全，保留原归档并留待下次重试" % post.post_id)
+    try:
+        for post in candidates:
+            was_known = arc.has(post.post_id)
+            head = (post.text or "").replace("\n", " ")[:38]
+            if dry_run:
+                print("  ~ %s  %s  %s" % (post.post_id, post.created_at or "(无日期)", head))
+                if was_known:
+                    res.upgraded += 1
+                else:
+                    res.new += 1
+                continue
+            post = await capture_post(ctx, platform, account, arc, dcfg, post, lifecycle=lifecycle)
+            imgs = verified_images(arc.base, post.to_row())
+            vids = sum(1 for m in post.media if m.kind == "video")
+            print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
             if facts is not None:
-                facts.fact("post_capture_incomplete", utcnow(), platform=platform,
-                           post_id=post.post_id)
-            continue
-        imgs = sum(1 for m in post.media if m.kind == "image")
-        vids = sum(1 for m in post.media if m.kind == "video")
-        print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
-        if facts is not None:
-            # 落点用相对归档根的路径：月份 + 产品 tag 都在里面，是"落到哪了"的完整答案。
-            facts.fact("post_captured", utcnow(), platform=platform, post_id=post.post_id,
-                       images=imgs, videos=vids,
-                       folder=arc.post_dir(post).relative_to(arc.base).as_posix())
-        if was_known:
-            res.upgraded += 1
-        else:
-            res.new += 1
+                # 落点用相对归档根的路径：月份 + 产品 tag 都在里面，是"落到哪了"的完整答案。
+                facts.fact("post_captured" if post.media_complete else "post_capture_incomplete",
+                           utcnow(), platform=platform, post_id=post.post_id,
+                           scan_id=dcfg.scan_id, images=imgs, videos=vids,
+                           source_media_complete=post.source_media_complete,
+                           source_media_count=post.source_media_count, media_complete=post.media_complete,
+                           requires_manual=not post.media_complete,
+                           folder=arc.post_dir(post).relative_to(arc.base).as_posix() if arc.has(post.post_id) else None)
+            if arc.has(post.post_id):
+                if was_known:
+                    res.upgraded += 1
+                else:
+                    res.new += 1
+    finally:
+        if lifecycle:
+            lifecycle.interrupt(dcfg.scan_id, utcnow(), '本轮会话中断或预算耗尽，未处理候选已转人工')
     return res
+
+
+async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=None):
+    """一篇一次尝试：只有来源列表不足才打开详情，已失败的下载由人工决定恢复。"""
+    reason, archived = '', False
+    source_visit = False
+    if lifecycle:
+        lifecycle.started(post, utcnow())
+    def guard():
+        if dcfg.access:
+            dcfg.access.check(platform)
+    try:
+        guard()
+        if post.source_media_complete is not True and dcfg.access:
+            if not post.permalink:
+                reason = '来源媒体列表不完整且没有可用的源帖链接'
+            else:
+                parsed = urlsplit(post.permalink)
+                allowed = {'instagram': {'www.instagram.com', 'instagram.com'},
+                           'facebook': {'www.facebook.com', 'facebook.com', 'm.facebook.com'}}
+                if (parsed.scheme != 'https' or parsed.hostname not in allowed[platform]
+                        or parsed.username or parsed.password):
+                    raise ValueError('源帖详情链接与平台不匹配')
+                dcfg.access.reserve_detail(platform, dcfg.scan_id, post.post_id,
+                                           manual=dcfg.run_kind == 'recovery')
+                source_visit = True
+                dcfg.source_attempts += 1
+                detail, final = await scan_page(ctx, post.permalink,
+                    replace(dcfg, max_scrolls=0, run_kind='detail'))
+                reason = login_wall_reason(final, detail.blocked_status())
+                if reason:
+                    raise DeltaBlocked(reason, hard=True)
+                matches, _ = partition_by_owner(extract(detail.payloads, platform, account, route='delta'), account)
+                match = next((p for p in matches if p.platform == post.platform and p.post_id == post.post_id), None)
+                if match:
+                    post = merge_post(post, match)
+                else:
+                    dcfg.source_failures.append('详情没有提供身份匹配的帖子结构')
+                if post.source_media_complete is not True:
+                    reason = '详情没有提供身份匹配且完整的媒体列表'
+                source_visit = False
+        if dcfg.access:
+            await download_media(ctx, arc, post, post.permalink or profile_url(platform, account), check_stop=guard)
+        else:
+            await download_media(ctx, arc, post, post.permalink or profile_url(platform, account))
+    except MediaRateLimited as exc:
+        if dcfg.access:
+            dcfg.access.outcome(platform, success=False, hard=True, reason=str(exc))
+        reason = str(exc)
+        raise DeltaBlocked(reason, hard=True) from exc
+    except (asyncio.CancelledError, DeltaBlocked):
+        reason = '平台阻断或本轮会话预算耗尽，已停止后续请求'
+        raise
+    except Exception as exc:
+        if source_visit and not isinstance(exc, AccessDenied):
+            dcfg.source_failures.append(type(exc).__name__)
+        reason = str(exc) if isinstance(exc, AccessDenied) else f'本篇采集失败（{type(exc).__name__}），请人工处理'
+    finally:
+        if reason:
+            post.media_complete = False
+        try:
+            arc.append(post)
+            archived = arc.has(post.post_id)
+        except (OSError, ValueError):
+            reason = '本地归档未成功，请核对磁盘与采集异常'
+        if lifecycle:
+            lifecycle.finish(post, arc, utcnow(), reason=reason or '', archived=archived)
+    return post
+
+
+def recover_post(key, expected_revision, reason):
+    """人工明确指定的一次采集；与自动入口共享锁、停止状态和详情访问额度。"""
+    c = cfg()
+    lifecycle = CaptureState(c.state_dir)
+    access = AccessController(c.state_dir)
+    with DeltaRunLock(c.state_dir / 'delta.lock'):
+        current = lifecycle.status()
+        if type(expected_revision) is not int or current['revision'] != expected_revision:
+            raise ValueError('采集状态已变化，请刷新后核对')
+        lifecycle.recover_interrupted(utcnow())
+        current = lifecycle.status()
+        item = current['items'].get(key)
+        if not item:
+            raise ValueError('找不到该采集异常')
+        access.check(item['source']['platform'])
+        item = lifecycle.recover(key, current['revision'], reason)
+        row = item['source']
+        post = Post(**{k: v for k, v in row.items() if k != 'media'},
+                    media=[Media(**m) for m in row.get('media', [])])
+        dcfg = replace(DeltaConfig.load(c), access=access, scan_id=item['scan_id'], run_kind='recovery')
+        async def attempt():
+            browser = pw = None
+            try:
+                pw, browser, ctx = await attach(port=c.detect_debug_port, profile=c.detect_profile_dir)
+                arc = Archive(c.archive_dir, post.platform[:2] + '_' + post.account)
+                await asyncio.wait_for(capture_post(ctx, post.platform, post.account, arc, dcfg, post,
+                                                   lifecycle=lifecycle), dcfg.max_session_seconds)
+                if dcfg.source_attempts:
+                    access.outcome(post.platform, success=not dcfg.source_failures,
+                                   reason=', '.join(dcfg.source_failures))
+            except AccessDenied:
+                raise
+            except (Exception, SystemExit) as exc:
+                access.outcome(post.platform, success=False, reason=type(exc).__name__,
+                               hard=isinstance(exc, DeltaBlocked) and exc.hard)
+                raise
+            finally:
+                lifecycle.interrupt(dcfg.scan_id, utcnow(), '人工尝试未完成；保留已有内容，请再次人工核对')
+                if browser:
+                    await browser.close()
+                if pw:
+                    await pw.stop()
+        asyncio.run(attempt())
+        return lifecycle.status()
 
 
 def run_integrity(arc: Archive, entry: dict, platform: str,
@@ -494,107 +666,76 @@ def run_integrity(arc: Archive, entry: dict, platform: str,
 
 async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                    path: Path, dry_run: bool) -> int:
-    """附着一次 Chrome，把到期的平台依次跑完。返回退出码。"""
+    """Attach once; every outcome persists safety even when content writes are disabled."""
+    access = dcfg.access or AccessController(path.parent, schedule=dcfg.schedule)
     try:
         c = cfg()
         pw, browser, ctx = await attach(port=c.detect_debug_port, profile=c.detect_profile_dir)
-    except (Exception, SystemExit) as e:
-        # 附着失败也更新两平台状态；捕获 SystemExit，保留 KeyboardInterrupt。
-        msg = "附着专用 Chrome 失败（%s）：%s" % (
-            type(e).__name__, str(e) or "无错误详情")
-        print("[!] %s" % msg)
-        if not dry_run:
-            now = utcnow()
-            for platform in platforms:
-                record_failure(state.setdefault(platform, blank_entry()), now, msg)
-            save_state(path, state)
-            notify("增量没能启动", msg)
+    except (Exception, SystemExit) as exc:
+        msg = "附着专用 Chrome 失败（%s）：%s" % (type(exc).__name__, exc)
+        for platform in platforms:
+            access.outcome(platform, success=False, reason=msg)
+            record_failure(state.setdefault(platform, blank_entry()), utcnow(), msg)
+        save_state(path, state)
+        print("[!] " + msg)
+        notify("增量没能启动", msg)
         return 1
     rc = 0
     try:
-        for i, platform in enumerate(platforms):
+        for platform in platforms:
             entry = state.setdefault(platform, blank_entry())
-            # 配置和归档初始化也属于平台运行，失败须进入同一状态闭环。
-            account = "账号配置未读取"
             try:
+                access.check(platform)
                 c = cfg()
                 account = c["targets"][platform]
-                arc = Archive(c.archive_dir,
-                              "%s_%s" % (platform[:2], account))
-                print("\n=== %s / %s ===" % (platform, account))
-                # inspect_running=False：只追加事实，不去动内容处理批次的状态。
-                facts = None if dry_run else MonitoringJournal(
-                    c.state_dir, now=utcnow(), inspect_running=False)
+                arc = Archive(c.archive_dir, "%s_%s" % (platform[:2], account))
+                facts = MonitoringJournal(c.state_dir, now=utcnow(), inspect_running=False)
+                scan_config = replace(dcfg, access=access, scan_id=uuid4().hex, source_failures=[], source_attempts=0)
                 res = await asyncio.wait_for(
-                    delta_once(ctx, platform, account, arc, dcfg, dry_run=dry_run, facts=facts),
+                    delta_once(ctx, platform, account, arc, scan_config, dry_run=dry_run, facts=facts),
                     timeout=dcfg.max_session_seconds)
-            except DeltaBlocked as e:
-                # 访问受阻立即停止，不重试或更换身份。
-                print("[!] 本次中止：%s" % e)
-                rc = 1
-                if dry_run:
-                    continue
-                record_failure(entry, utcnow(), str(e))
-                left = dcfg.failure_budget - int(entry["consecutive_failures"])
-                notify("增量抓取中止 · %s" % platform,
-                       "%s：%s（连续失败 %d 次，再失败 %d 次将停止自动运行）"
-                       % (account, e, entry["consecutive_failures"], max(0, left)))
-                if e.hard:
-                    state["detect_hard_blocked"] = {
-                        "reason": str(e), "platform": platform, "recorded_at": iso(utcnow())}
-                    # 硬阻塞同步计入未运行平台的失败预算。
-                    for rest in platforms[i + 1:]:
-                        record_failure(state.setdefault(rest, blank_entry()),
-                                       utcnow(), "同批次的 %s 被拦，本次未执行" % platform)
-                        print("[i] %s 本次不再尝试（同一会话、同一指纹）" % rest)
-                    save_state(path, state)
-                    break
-                save_state(path, state)
+            except AccessDenied as exc:
+                print("[!] " + str(exc))
+                rc = 2
                 continue
-            except (Exception, SystemExit) as e:
-                # 编程与初始化错误同样记录失败；不吞掉 KeyboardInterrupt。
-                msg = "未预期异常（%s）：%s" % (
-                    type(e).__name__, str(e) or "无错误详情")
-                print("[!] %s" % msg)
+            except (Exception, SystemExit) as exc:
+                hard = isinstance(exc, DeltaBlocked) and exc.hard
+                msg = "%s: %s" % (type(exc).__name__, exc)
+                access.outcome(platform, success=False, reason=msg, hard=hard)
+                record_failure(entry, utcnow(), msg)
+                if hard:
+                    state["detect_hard_blocked"] = {"reason": msg, "platform": platform,
+                                                       "recorded_at": iso(utcnow())}
+                    for rest in platforms[platforms.index(platform) + 1:]:
+                        record_failure(state.setdefault(rest, blank_entry()), utcnow(),
+                                       "同批次的 %s 被拦，本次未执行" % platform)
+                save_state(path, state)
+                print("[!] " + msg)
+                notify(("增量抓取中止" if isinstance(exc, DeltaBlocked) else "增量抓取异常")
+                       + " · " + platform, msg)
                 rc = 1
-                if dry_run:
-                    continue
+                if hard:
+                    break
+                continue
+            if scan_config.source_failures:
+                msg = '详情来源请求或解析失败：' + ', '.join(scan_config.source_failures)
+                access.outcome(platform, success=False, reason=msg)
                 record_failure(entry, utcnow(), msg)
                 save_state(path, state)
-                notify("增量抓取异常 · %s" % platform,
-                       "%s：%s（连续失败 %d 次）"
-                       % (account, msg, entry["consecutive_failures"]))
+                rc = 1
                 continue
-
-            print(res.summary() + ("（--dry-run，未写盘）" if dry_run else ""))
-            if res.suspect:
-                # dry-run 也要打：--dry-run 正是排查这类问题时会跑的那一次
-                who = sorted({(s.get("owner") or "?") for s in res.suspect})
-                print("[!] 丢弃的 %d 篇里有 %d 篇来自已知合作方（%s）——"
-                      "合作帖判定可能漏判了，去 _rejected.jsonl 离线查"
-                      % (res.rejected, len(res.suspect), "、".join(who[:4])))
-            if res.stale_view():
-                # 最新帖倒退可能是删帖，仅提示，不消耗失败预算。
-                print("[!] 看到的最新一篇（%s）比归档里最新的（%s）还旧 —— "
-                      "确认一下是不是没拿到时间线"
-                      % (res.newest_seen[:10], res.newest_known[:10]))
-            if dry_run:
-                continue
+            access.outcome(platform, success=True)
+            print(res.summary() + ("（dry-run：仅安全与扫描事实已持久化）" if dry_run else ""))
             record_success(entry, utcnow(), res.new)
-            entry["account"] = account
-            entry["last_run_kind"] = dcfg.run_kind
-            entry["last_observed_skipped"] = res.skipped
+            entry.update(account=account, last_run_kind=dcfg.run_kind,
+                         last_observed_skipped=res.skipped)
             if dcfg.run_kind == "reconcile":
                 entry["last_reconcile_at"] = entry["last_success"]
                 entry["last_reconcile_new_count"] = res.new
                 entry["reconcile_new_total"] = int(entry.get("reconcile_new_total", 0)) + res.new
-            # 检查使用刚更新的状态，告警去重标记一并落盘。
-            run_integrity(arc, entry, platform, suspect=res.suspect)
+            if not dry_run:
+                run_integrity(arc, entry, platform, suspect=res.suspect)
             save_state(path, state)
-            quiet = entry["consecutive_quiet_days"]
-            if quiet >= dcfg.quiet_days_before_slowdown(platform):
-                print("[i] 已连续 %d 天零新增，下次起按降频节奏（%.0f 小时一次）"
-                      % (quiet, dcfg.schedule.off_duty_interval_min / 60))
         return rc
     finally:
         try:
@@ -621,60 +762,47 @@ def _parse_args(argv):
         prog="python -m routes.delta",
         description="每日增量（登录态 + CDP 附着，方案 B）")
     p.add_argument("--platform", choices=(*PLATFORMS, "all"), default="all")
-    p.add_argument("--dry-run", action="store_true", help="只抓不写盘")
+    p.add_argument("--dry-run", action="store_true", help="访问真实浏览器；不写内容，仍持久化配额、停机与扫描事实")
     p.add_argument("--if-stale", action="store_true",
-                   help="距上次成功不足阈值就直接退出（供计划任务的补跑触发器用）")
+                   help="兼容旧调用；所有入口均遵守持久 next_due，不另设 stale 阈值")
     p.add_argument("--no-jitter", action="store_true",
-                   help="跳过入口延迟；手工运行或已持久随机排期的 scheduler 使用")
+                   help="兼容旧调用；随机时刻已经持久化，不在入口二次抽取")
     p.add_argument("--reset-failures", action="store_true",
-                   help="失败预算用尽后，人工确认已处理，用它清零")
+                   help="兼容恢复别名；必须带 expected-revision 与 reason，不发起请求")
     p.add_argument("--status", action="store_true", help="只打印状态，不抓取")
     p.add_argument("--preview", action="store_true", help="离线查看窗口和配置，不接触浏览器")
+    p.add_argument("--initialize-access", action="store_true")
+    p.add_argument("--initialize-baseline", action="store_true")
+    p.add_argument("--recover-access", action="store_true")
+    p.add_argument("--recover-post", metavar="PLATFORM:ACCOUNT:POST_ID", help="人工明确执行该异常项一次采集")
+    p.add_argument("--expected-revision", type=int)
+    p.add_argument("--reason", default="")
     return p.parse_args(argv)
 
 
 def _run_locked(args, dcfg: DeltaConfig, path: Path,
                 state: dict, platforms: list[str]) -> int:
     """持有 :class:`DeltaRunLock` 后执行一次计划/手工增量。"""
+    access = AccessController(path.parent, schedule=dcfg.schedule)
+    dcfg = replace(dcfg, access=access)
+    due = []
+    blocked_by_budget = []
     now = utcnow()
-    if state.get("detect_hard_blocked"):
-        print("[!] detect 会话已被登录墙/限流硬停；请人工检查后 --reset-failures。")
-        return 2
-    due: list[str] = []
-    blocked_by_budget: list[str] = []
     for platform in platforms:
-        entry = state.setdefault(platform, blank_entry())
-        if budget_exhausted(entry, dcfg.failure_budget):
-            blocked_by_budget.append(platform)
-            print("[!] %s 已连续失败 %d 次（预算 %d），**停止自动运行**。"
-                  % (platform, entry["consecutive_failures"], dcfg.failure_budget))
-            print("    最后一次错误：%s" % entry.get("last_error"))
-            print("    请先确认专用 Chrome 里的小号还是登录态，处理后跑：")
-            print("    .venv\\Scripts\\python.exe -m routes.delta --reset-failures")
-            continue
-        if args.if_stale:
-            hours = effective_stale_hours(entry, dcfg, platform, now=now)
-            run, why = stale_enough(entry, now, hours)
-            if not run:
-                print("[i] %s 跳过：%s" % (platform, why))
+        try:
+            status = access.check(platform)
+            next_due = parse_ts(status["platforms"][platform]["next_due_at"])
+            if now < next_due:
+                print("[i] %s 下次访问 %s" % (platform, next_due.isoformat()))
                 continue
-        due.append(platform)
-
+            due.append(platform)
+        except AccessDenied as exc:
+            print("[!] " + str(exc))
+            blocked_by_budget.append(platform)
     if blocked_by_budget:
-        notify("增量已停止自动运行",
-               "%s 连续失败达到预算，需要人工确认会话是否还有效"
-               % "、".join(blocked_by_budget))
+        notify("增量已停止自动运行", "、".join(blocked_by_budget) + "：复核访问状态后人工恢复")
     if not due:
-        print("没有到期的平台，本次不抓取。")
         return 2 if blocked_by_budget else 0
-
-    # 先判断 stale 再抖动；scheduler 已持久化时间时用 --no-jitter。
-    if not args.no_jitter and not args.dry_run:
-        delay = random.uniform(0, dcfg.schedule.interval_minutes(now)
-                               * dcfg.schedule.jitter_ratio * 60)
-        print("随机延迟 %.1f 分钟后开始（避免每天固定整点发起请求）..."
-              % (delay / 60))
-        time.sleep(delay)
 
     c = cfg()
     c.assert_chrome_profiles_isolated()
@@ -700,20 +828,20 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
                         type(launch_error).__name__,
                         str(launch_error) or "无错误详情")
                 print("[!] %s" % msg)
-                if not args.dry_run:
-                    for platform in due:
-                        record_failure(state[platform], utcnow(), msg)
-                    save_state(path, state)
+                for platform in due:
+                    access.outcome(platform, success=False, reason=msg)
+                    record_failure(state[platform], utcnow(), msg)
+                save_state(path, state)
                 notify("增量没能启动", msg)
                 return 1
         else:
             msg = "专用 Chrome 没在跑（调试端口 %d 未就绪），本次跳过" % port
             print("[!] %s" % msg)
-            if not args.dry_run:
-                now = utcnow()
-                for platform in due:
-                    record_failure(state[platform], now, msg)
-                save_state(path, state)
+            now = utcnow()
+            for platform in due:
+                access.outcome(platform, success=False, reason=msg)
+                record_failure(state[platform], now, msg)
+            save_state(path, state)
             notify("增量没能启动", msg)
             return 1
 
@@ -740,29 +868,54 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     platforms = list(PLATFORMS) if args.platform == "all" else [args.platform]
 
     if args.status:
-        _print_status(load_state(path))
-        return 0
+        try:
+            print(json.dumps(AccessController(path.parent).status(), ensure_ascii=False, indent=2))
+            if (path.parent / 'capture_state.json').exists():
+                status = CaptureState(path.parent).status()
+                print(json.dumps({'capture_revision': status['revision'], 'baselines': status['baselines'],
+                    'manual_items': [{'key': key, 'reason': item.get('reason')} for key, item in status['items'].items()
+                                     if item['status'] == 'manual']}, ensure_ascii=False, indent=2))
+            _print_status(load_state(path))
+            return 0
+        except AccessDenied as exc:
+            print("[!] " + str(exc))
+            return 2
 
     lock_path = path.with_name("delta.lock")
     try:
+        if args.recover_post:
+            result = recover_post(args.recover_post, args.expected_revision, args.reason)
+            item = result['items'][args.recover_post]
+            print(json.dumps({'key': item['key'], 'status': item['status'], 'reason': item.get('reason'),
+                              'capture_revision': result['revision']}, ensure_ascii=False, indent=2))
+            return 0 if item['status'] == 'complete' else 2
         with DeltaRunLock(lock_path):
             # 持锁后重读状态，避免用旧值覆盖另一任务的进度。
             state = load_state(path)
             bind_target_state(state, cfg())
-            if args.reset_failures:
-                for platform in platforms:
-                    entry = state.setdefault(platform, blank_entry())
-                    entry["consecutive_failures"] = 0
-                    entry["last_error"] = None
-                state.pop("detect_hard_blocked", None)
-                save_state(path, state)
-                print("已清零 %s 的失败计数。" % "、".join(platforms))
+            access = AccessController(path.parent)
+            if args.initialize_baseline:
+                c = cfg()
+                print(json.dumps(CaptureState(path.parent).initialize(c.archive_dir, c["targets"], args.reason),
+                                 ensure_ascii=False, indent=2))
+                return 0
+            if args.initialize_access:
+                print(json.dumps(access.initialize(args.reason), ensure_ascii=False, indent=2))
+                return 0
+            if args.recover_access or args.reset_failures:
+                if args.expected_revision is None:
+                    raise AccessDenied("恢复需 --expected-revision 与 --reason；先 --status 复核")
+                print(json.dumps(access.recover(args.expected_revision, args.reason,
+                    platform=None if args.platform == "all" else args.platform), ensure_ascii=False, indent=2))
                 return 0
             return _run_locked(args, dcfg, path, state, platforms)
     except DeltaRunAlreadyActive as e:
         print("[i] %s" % e)
         # 计划任务撞上另一个实例属于成功去重；人工 reset 没执行则必须报失败。
-        return 1 if args.reset_failures else 0
+        return 75
+    except (ValueError, OSError) as exc:
+        print("[!] " + str(exc))
+        return 2
 
 
 if __name__ == "__main__":

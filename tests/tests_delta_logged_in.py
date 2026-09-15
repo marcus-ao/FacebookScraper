@@ -141,7 +141,7 @@ class FakeCtx:
 
 def ig_payload(pk="111", code="abc", ts=1755000000, owner="acme_us",
                text="hello world", n_media=1, coauthors=()):
-    node = {"pk": pk, "code": code, "taken_at": ts,
+    node = {"pk": pk, "code": code, "taken_at": ts, "media_type": 8 if n_media > 1 else 1,
             "user": {"username": owner, "full_name": "Acme US"},
             "caption": {"text": text},
             # 保留响应中通常为空的两类 coauthor 字段。
@@ -489,6 +489,10 @@ class MultiCtx:
 
 def run_due(pages, state, tmp, platforms=("facebook", "instagram")):
     path = Path(tmp) / "s.json"
+    delta.AccessController(Path(tmp)).initialize("isolated fixture")
+    from core.capture_state import CaptureState
+    CaptureState(Path(tmp)).initialize(Path(tmp), {"facebook": "acme_page", "instagram": "acme_us"},
+                                       "isolated baseline", now=datetime(2025, 8, 1, tzinfo=timezone.utc))
     ctx = MultiCtx(pages)
     notices = []
 
@@ -640,6 +644,7 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     # attach 在平台循环之前；这条也必须把所有到期平台记失败。
     path = Path(tmp) / "attach_state.json"
+    delta.AccessController(Path(tmp)).initialize("isolated attach failure")
     state = {}
     notices = []
     saved_attach, saved_notify = delta.attach, delta.notify
@@ -720,13 +725,14 @@ with tempfile.TemporaryDirectory() as tmp:
     dirty.write_text(json.dumps({"facebook": None, "instagram": "broken",
                                  "future_field": {"keep": True}}),
                      encoding="utf-8")
-    cleaned = delta.load_state(dirty)
-    check(all(isinstance(cleaned[p], dict) and
-              cleaned[p]["consecutive_failures"] == 0
-              for p in ("facebook", "instagram")),
-          "平台状态为 null/非对象时在读取边界重建，不让 main() 调 .get() 崩溃")
-    check(cleaned["future_field"] == {"keep": True},
-          "修复已知平台坏值时保留未知顶层字段，兼容未来状态版本")
+    original = dirty.read_bytes()
+    try:
+        delta.load_state(dirty)
+    except delta.AccessDenied:
+        check(dirty.read_bytes() == original, "坏平台状态失败闭合并保留原始字节")
+    else:
+        check(False, "坏平台状态不得被重建为零失败")
+
 
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / "delta_state.json"
@@ -789,8 +795,8 @@ check(not budget_exhausted(e, 0), "预算设 0 表示不启用该保护")
 dcfg = test_cfg()
 quiet = blank_entry()
 quiet["consecutive_quiet_days"] = 10
-check(effective_stale_hours(quiet, dcfg, "instagram", now=NOW) == 2.25,
-      "IG 连续 10 天零新增（阈值 7）→ 离岗频率，最小135分钟")
+check(effective_stale_hours(quiet, dcfg, "instagram", now=NOW) == 0.75,
+      "IG 连续零新增也保持在岗最小45分钟")
 check(effective_stale_hours(quiet, dcfg, "facebook", now=NOW) == 0.75,
       "同样 10 天，FB 阈值是 14 天 → 在岗频率，最小45分钟")
 check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9,
@@ -798,8 +804,8 @@ check(DeltaConfig(_quiet_slowdown=9).quiet_days_before_slowdown("facebook") == 9
 # 平台阈值允许相同，只检查按平台解析。
 loaded = DeltaConfig.load()
 check(all(isinstance(loaded.quiet_days_before_slowdown(p), int) and
-          loaded.quiet_days_before_slowdown(p) > 0 for p in delta.PLATFORMS),
-      "config.toml 里的降频阈值能按平台各自解析出正整数")
+          loaded.quiet_days_before_slowdown(p) == 0 for p in delta.PLATFORMS),
+      "加载配置不启用自动降频")
 
 run, why = stale_enough({"last_success": "2026-08-30T08:00:00Z"}, NOW, 26)
 check(not run and "不足" in why, "距上次成功 1 小时 → 跳过，且说清楚为什么")
@@ -825,6 +831,9 @@ def run_main(argv, state, rec, cdp=True, tmp=None, launch_error=None):
         if platform in state:
             state[platform].setdefault("account", delta.cfg()["targets"][platform])
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    access = delta.AccessController(Path(tmp))
+    access.path.unlink(missing_ok=True)  # each call is an independent isolated fixture
+    access.initialize("isolated CLI fixture")
     saved = (delta.state_path, delta.time.sleep, delta.notify,
              delta.cdp_ready, delta.launch, delta.asyncio.run)
     try:
@@ -852,24 +861,23 @@ with tempfile.TemporaryDirectory() as tmp:
     state = {"facebook": {**blank_entry(), "last_success": recent},
              "instagram": {**blank_entry(), "last_success": recent}}
     rc = run_main(["--if-stale"], state, rec, tmp=tmp)
-    check(rc == 0, "--if-stale 且都不到期 → 正常退出")
+    check(rc == 0, "--if-stale 兼容参数不额外拦住持久到期的访问")
     check(rec.sleeps == [],
-          "不到期时**没有先睡半小时** —— 顺序必须是先判 stale 再抖动")
+          "入口不重复睡眠或抽取随机时刻")
 
     rec = Recorder()
     old = delta.iso(delta.utcnow() - timedelta(days=3))
     state = {"facebook": {**blank_entry(), "last_success": old},
              "instagram": {**blank_entry(), "last_success": old}}
     run_main(["--if-stale"], state, rec, tmp=tmp)
-    check(len(rec.sleeps) == 1 and 0 <= rec.sleeps[0] <= 45 * 60,
-          "到期时才抖动，按当前窗口间隔乘抖动比例（最多45分钟）")
+    check(rec.sleeps == [], "入口不重新抽取延迟；仅共享持久 next_due 决定执行")
 
     draws = []
     for _ in range(3):
         rec = Recorder()
         run_main([], dict(state), rec, tmp=tmp)
-        draws.append(rec.sleeps[0])
-    check(len(set(draws)) == 3, "连续三次启动的延迟各不相同（不是固定整点）")
+        draws.append(rec.sleeps)
+    check(draws == [[], [], []], "重启入口不重复抽取抖动")
 
     rec = Recorder()
     run_main(["--dry-run"], dict(state), rec, tmp=tmp)
@@ -903,8 +911,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
     rc = run_main(["--reset-failures"], burnt, rec, tmp=tmp)
     saved_state = json.loads((Path(tmp) / "delta_state.json").read_text(encoding="utf-8"))
-    check(rc == 0 and saved_state["facebook"]["consecutive_failures"] == 0,
-          "--reset-failures 清零，人工确认后能继续")
+    check(rc == 2 and saved_state["facebook"]["consecutive_failures"] == 3,
+          "--reset-failures 无 revision/reason 时拒绝清零")
 
     # 不同计划任务仍须共用进程锁。
     rec = Recorder()
@@ -914,8 +922,8 @@ with tempfile.TemporaryDirectory() as tmp:
         rc = run_main([], dict(state), rec, tmp=tmp)
     finally:
         held.__exit__(None, None, None)
-    check(rc == 0 and rec.sleeps == [] and rec.launched == [],
-          "另一个计划任务持锁时本次成功去重，不抖动、不碰 Chrome")
+    check(rc == 75 and rec.sleeps == [] and rec.launched == [],
+          "另一个计划任务持锁返回75，不碰 Chrome，调度器保留到期时刻")
 
     # Chrome 没在跑
     rec = Recorder()

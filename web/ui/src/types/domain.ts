@@ -352,7 +352,9 @@ export interface TaskStorage {
   readonly account_dir: string
   readonly folder: string | null
   readonly first_archived_at: string | null
-  readonly local: { readonly status: string; readonly saved_images: number; readonly expected_images: number }
+  readonly local: { readonly status: string; readonly saved_images: number; readonly expected_images: number
+    readonly source_media_complete?: boolean | null; readonly media_complete?: boolean | null
+    readonly source_media_count?: number | null; readonly verified_images?: number }
   readonly database: { readonly status: string; readonly verified_at?: string | null; readonly message?: string | null }
   readonly feishu: MirrorStatus
   readonly media: readonly StorageMedia[]
@@ -583,6 +585,7 @@ export interface FeishuDelivery {
   readonly error?: string | null
   readonly preview_error?: string | null
   readonly task_ids?: readonly (string | null)[]
+  readonly capture_keys?: readonly string[]
 }
 
 export interface RuntimeCheck {
@@ -637,6 +640,7 @@ export interface RuntimeStage {
 export interface RuntimeSnapshot {
   readonly observed_at: string
   readonly read_only: boolean
+  readonly monitoring?: MonitorStatus
   readonly activation: string | null
   readonly process: { readonly alive: boolean | null; readonly last_tick_at: string | null }
   readonly business: {
@@ -650,5 +654,37 @@ export interface RuntimeSnapshot {
     readonly last_success_at: string | null
     readonly age_seconds: number | null
   }
-  readonly network: Readonly<Record<string, unknown>>
+}
+
+export interface CaptureItem {
+  readonly key: string
+  readonly scan_id: string
+  readonly status: 'pending' | 'complete' | 'manual'
+  readonly post_id: string
+  readonly platform: Platform
+  readonly account_dir: string
+  readonly classification: string
+  readonly reason: string | null
+  readonly archived: boolean
+  readonly saved_images: number | null
+  readonly source_media_count: number | null
+  readonly source_media_complete: boolean | null
+  readonly media_complete: boolean | null
+  readonly first_seen_at: string
+  readonly finished_at: string | null
+  readonly permalink: string | null
+  readonly discovery_wait_seconds?: number | null
+  readonly capture_seconds?: number | null
+}
+
+export interface MonitorStatus {
+  readonly status: string
+  readonly revision: number | null
+  readonly capture_revision: number | null
+  readonly reason: string | null
+  readonly baselines: Readonly<Record<string, { readonly enabled_at: string; readonly recent_count: number; readonly lookback_days: number }>>
+  readonly platforms: Readonly<Record<string, { readonly paused: boolean; readonly failures: number; readonly reason: string | null
+    readonly next_due_at: string; readonly homepage_used: number; readonly homepage_limit: number
+    readonly detail_used: number; readonly detail_limit: number }>>
+  readonly items: readonly CaptureItem[]
 }

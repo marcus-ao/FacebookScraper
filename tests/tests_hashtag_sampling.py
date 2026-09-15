@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import sys
+import json
 import unittest
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -130,6 +131,9 @@ class HashtagSamplingTests(unittest.TestCase):
             def assert_chrome_profiles_isolated(self):
                 return None
 
+        access = delta.AccessController(Path(directory))
+        if not access.path.exists():
+            access.initialize("isolated sampler fixture")
         return TestConfig()
 
     def test_persistent_hard_stop_and_failure_budget_block_before_attach(self):
@@ -141,6 +145,8 @@ class HashtagSamplingTests(unittest.TestCase):
             state = {"instagram": entry, "detect_hard_blocked": {
                 "reason": "HTTP 429", "platform": "instagram", "recorded_at": NOW.isoformat()}}
             delta.save_state(state_path, state)
+            access = delta.AccessController(Path(directory))
+            access.outcome("instagram", success=False, hard=True, reason="HTTP 429")
             with patch("core.chrome.attach", new_callable=AsyncMock) as attach:
                 with self.assertRaises(hashtag_sampling.SamplingUnavailable):
                     hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
@@ -148,6 +154,9 @@ class HashtagSamplingTests(unittest.TestCase):
 
             state.pop("detect_hard_blocked")
             delta.save_state(state_path, state)
+            access.recover(access.status()["revision"], "fixture profile recovered")
+            for _ in range(3):
+                access.outcome("instagram", success=False, reason="ordinary fixture")
             with patch("core.chrome.attach", new_callable=AsyncMock) as attach:
                 with self.assertRaises(hashtag_sampling.SamplingUnavailable):
                     hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
@@ -165,9 +174,9 @@ class HashtagSamplingTests(unittest.TestCase):
                         return_value=(collector, "https://www.instagram.com/explore/tags/katzen/"))):
                 result = hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
                 self.assertTrue(result["errors"])
-                state = delta.load_state(Path(directory) / "delta_state.json")
-                self.assertEqual(state["instagram"]["consecutive_failures"], 1)
-                self.assertEqual(state["detect_hard_blocked"]["platform"], "instagram")
+                state = delta.AccessController(Path(directory)).status()
+                self.assertEqual(state["platforms"]["instagram"]["failures"], 1)
+                self.assertEqual(state["hard_stop"]["platform"], "instagram")
                 with self.assertRaises(hashtag_sampling.SamplingUnavailable):
                     hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
                 self.assertEqual(attach.await_count, 1)
@@ -183,15 +192,63 @@ class HashtagSamplingTests(unittest.TestCase):
             attach = AsyncMock(return_value=(pw, browser, object()))
             scan = AsyncMock(return_value=(
                 collector, "https://www.instagram.com/explore/tags/katzen/"))
-            with patch("core.chrome.attach", new=attach), patch.object(delta, "scan_page", new=scan):
+            clock = [NOW]
+            access = delta.AccessController(Path(directory), clock=lambda: clock[0])
+            access.plan_homepage("instagram", NOW)
+            with patch("core.chrome.attach", new=attach), patch.object(delta, "scan_page", new=scan), \
+                    patch.object(hashtag_sampling, "AccessController", return_value=access):
                 for _ in range(3):
                     result = hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
                     self.assertEqual(result["instagram"], {})
-                state = delta.load_state(Path(directory) / "delta_state.json")
-                self.assertEqual(state["instagram"]["consecutive_failures"], 3)
+                    clock[0] = datetime.fromisoformat(access.status()["platforms"]["instagram"]["next_due_at"])
+                state = access.status()
+                self.assertEqual(state["platforms"]["instagram"]["failures"], 3)
                 with self.assertRaises(hashtag_sampling.SamplingUnavailable):
                     hashtag_sampling.collect_browser_observations(tags=("#Katzen",), c=c)
                 self.assertEqual(attach.await_count, 3)
+
+    def test_sampling_missing_or_exhausted_access_cannot_attach(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c = self._production_config(directory)
+            access = delta.AccessController(Path(directory))
+            access.path.unlink()
+            with patch('core.chrome.attach', new_callable=AsyncMock) as attach:
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(peers=('peer',), c=c)
+                attach.assert_not_awaited()
+            status = access.initialize('isolated quota fixture')
+            now = delta.utcnow()
+            status['platforms']['instagram']['intents'] = [
+                dict(kind='homepage', run_kind='sampling', scan_id=str(i), post_id='', at=now.isoformat())
+                for i in range(24)]
+            status['platforms']['instagram']['next_due_at'] = now.isoformat()
+            access.path.write_text(json.dumps(status), encoding='utf-8')
+            with patch('core.chrome.attach', new_callable=AsyncMock) as attach:
+                with self.assertRaises(hashtag_sampling.SamplingUnavailable):
+                    hashtag_sampling.collect_browser_observations(tags=('#Katzen',), c=c)
+                attach.assert_not_awaited()
+
+    def test_sampler_debits_shared_homepage_before_scan_and_cannot_run_second_page(self):
+        with tempfile.TemporaryDirectory() as directory:
+            c = self._production_config(directory)
+            access = delta.AccessController(Path(directory))
+            calls = []
+            async def scan(context, url, config):
+                calls.append(url)
+                intents = access.status()['platforms']['instagram']['intents']
+                self.assertEqual(intents[-1]['scan_id'], config.scan_id)
+                self.assertEqual(intents[-1]['run_kind'], 'sampling')
+                self.assertIsNotNone(config.access)
+                return SimpleNamespace(payloads=[], blocked_status=lambda: None), url
+            pw = SimpleNamespace(stop=AsyncMock())
+            browser = SimpleNamespace(close=AsyncMock())
+            with patch('core.chrome.attach', new=AsyncMock(return_value=(pw, browser, object()))), \
+                    patch.object(delta, 'scan_page', new=scan), patch.object(delta, '_pause', new=AsyncMock()), \
+                    patch.object(hashtag_sampling, 'verified_instagram_count', return_value=10):
+                result = hashtag_sampling.collect_browser_observations(tags=('#Katzen', '#Spielzeug'), c=c)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(result['errors'])
+            self.assertEqual(len(access.status()['platforms']['instagram']['intents']), 1)
 
     def test_empty_peer_list_skips_without_calling_fetcher(self):
         called = False

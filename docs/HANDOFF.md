@@ -1,6 +1,6 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储与同群四机器人整合同步至 2026-09-15（§1.1–1.2），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
@@ -16,12 +16,12 @@
 | 激活边界 | 未激活（`state/pipeline_state.json` 已删） |
 | 发布账本 | 空。原 45 条尝试记录（含 18 条可能已提交）已删，防重保护随之消失 |
 | 付费账本 | 空。原 12 行、3 笔共 US$0.274 已删 |
-| 持久停机记录 | 已删。IG `.global` 与 Google Trends 的 HTTP 429 停机标记不复存在，**下一次探测会当成全新会话**，大概率再撞 429 并重新写一遍 |
+| 持久停机记录 | 已删。IG `.global` 与 Google Trends 的 HTTP 429 停机标记不复存在，新访问状态缺失时拒绝浏览器访问，必须先显式初始化；删除旧记录不授权新的访问 |
 | G6/G6c 发布闸 | 全关。`[publish].ui_probe_dump` 与 `ui_constraints_verified` 已退回未签字状态，见 [MANUAL_STEPS 第 8 节](MANUAL_STEPS.md#8-录制单渠道-business-suite-证据) |
 
 **审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`。清理后依赖与构建产物须按 [Web 构建说明](../web/README.md#构建与启动) 重建，不入版本库。本地 `config.local.toml` 只接续 archive/state，不选择前端。
 
-**浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内），清库没有动它们，登录态应仍在。但「登录态还在」不等于「会话可抓取」——9224 与 Google Trends 此前都撞过 HTTP 429，而现在连那条停机记录都没有了，恢复探测前仍要人工核对账号与出口。
+**浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内），清库没有动它们，登录态应仍在。登录态是否有效仍须人在对应 profile 核对。2026-09-14 删除了旧 429 记录，当前没有可复核的持久平台阻断证据。
 
 **外部依赖缺口。** 用户已在同一业务群创建检测、爬取、发布、状态告警四个 webhook 机器人，并确认分工（[FUNCTIONALITY §4.4 F4-1/F4-2](FUNCTIONALITY.md)）。四个地址、各自签名密钥及真实投递尚待配置核验。消息凭据与云盘应用凭据独立配置：云盘目标已由用户提供（§1.1），应用和目录权限仍未验证。运营可达的审校 URL 仍待核验，`127.0.0.1:8765` 不能作为其他机器的卡片入口。镜像与外部心跳未启用；真实群投递、模型和企业流程仍待联调。
 
@@ -82,6 +82,28 @@
 
 以上 `state/` 证据保存在 §1.1 所列的 storage worktree，不随 Git 提交。代码状态为**离线通过**。未运行真实 webhook 自检、FB/IG 采集、模型请求或发布；四机器人真实发送者、运营可见性与链接、飞书云盘应用授权和文件哈希验收均为**待真实联调**。
 
+### 1.3 阶段一实施现场（2026-09-15）
+
+本轮从 `435adc2` 建立 `codex/tweet-monitor-capture-design`，worktree 为 `D:\VSCodeWorkspace\Facebook\FacebookScraper\.worktrees\tweet-monitor-capture-design`。archive/state/.env 独立绑定，仅复用主工作区 `.venv` 解释器。改动保留在该 worktree，未提交、未合并或推送；主工作区保持干净。
+
+阶段一代码为 **离线通过**：FB `neakasaofficial` 与 IG `neakasa.global` 独立采集并保留真实合作关系；9222 人工 30 天回填建立独立监测基线；9224 普通轮次只读主页首屏，晨间 06:30–07:30 随机滚 2–4 屏。每天含周末按北京时间 08–19 点 45–75 分钟、19–08 点 135–225 分钟运行，共享持久下一次访问时刻。主页限 24 次/平台/滚动 24 小时；详情限 1 次/帖/轮、3 次/平台/轮、12 次/平台/滚动 24 小时。缺初始化、坏状态和平台阻断拒绝继续访问。
+
+所有候选在下载前持久化，仅来源列表不完整者允许一次匹配详情；详情与主页证据合并。失败转人工，普通轮次不重试未完成任务。实际已校验文件数、来源列表完整性与本地媒体完整性分别保存。逐帖卡异步入持久发件箱，检测及人工汇总等全轮候选终结后冻结。网络条件相关功能已移除；实际请求失败与平台停机护栏保留。
+
+| 验证 | 结果与证据 |
+|---|---|
+| 最终全量 Python 离线 | **74/74 脚本通过**；[逐脚本结果及日志入口](../state/offline-validation-20260915T121317Z/results.json) |
+| 独立 hygiene | **9 组通过**；[日志](../state/stage1-hygiene.log) |
+| 前端单测 | **26 个文件、511 项通过**；[日志](../state/stage1-ui-tests.log) |
+| 前端生产构建 | TypeScript/Vite 通过，先于浏览器回归；[日志](../state/stage1-ui-build.log)。已有的大于 500 kB chunk 提示保留 |
+| 隔离浏览器回归 | **9/9 场景通过**，包括逐帖定位和一次恢复；[报告与截图](../state/offline-browser-20260915T121321Z-33388/report.json)；没有真实外部操作 |
+| 独立复审 | 访问控制审查的 3 项问题已关闭；整体审查的 4 项代码问题及文档问题全部关闭；[最终定向复审](../state/stage1-final-rereview-report.md)另行验证 9/9 关键用例 |
+| 汇总 | [本机阶段一验证记录](../state/stage1-validation-20260915.json)，含测试、数据边界及真实联调缺口 |
+
+审查修复覆盖：详情响应丢失主页已知字段/部分媒体；扫描结束前冻结不完整摘要；未知 IG 结构误报完整；详情普通失败被轮次成功覆盖；无来源访问的人工尝试误清失败计数。首次失败和修复后证据保存在本 worktree 的 `state/`，不随 Git 提交；最终交付以本节列出的整库结果为准。
+
+本 worktree 的 archive 为空；真实访问状态、采集基线、调度、发件箱均未初始化。`.env` 为占位符，没有复制真实凭据。未运行真实平台、飞书、模型、标签或发布。30 天人工回填、真实 FB 多图/IG 轮播及合作关系、四机器人发送者与链接、自然新帖和正常节奏的 72 小时试运行继续为 **待真实联调**；按 [MANUAL_STEPS §14](MANUAL_STEPS.md#14-阶段一真实验收监测与原帖抓取) 执行，不能以夹具或一次历史采集替代。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
@@ -94,7 +116,6 @@
 8. 发布前先冻结并展示具体文案、图片、账号、单一渠道和时刻，等用户确认后才能提交。
 9. `review_items.jsonl`、`paid_requests.jsonl`、`published.jsonl` 的坏数据必须失败闭合。不得把损坏当空文件继续运行。
 10. 凭据只在本机配置，不写日志、dump、截图或版本库。
-11. 出口类型和稳定性是 F1-8 预检要求，展示 ASN、近期出口变化、采样时间/过期/未知；不把旧网络提醒当当前合格证据。
 
 ## 3. 架构与真相源
 
@@ -137,7 +158,6 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 离线测试入口在清库后仍然全绿：Python 65/66，唯一失败的 `tests_browser_workflow` 是因为前端 `dist/` 随缓存一起删了，重新构建即恢复。这些测试跑在隔离夹具上，证明代码契约成立，不证明任何外部系统可用。
 - 一项留待跟进的性能观察：清库前在 1,067 篇归档上，冻结账号详情页首次打开 8.6 秒、刷新 4.1 秒，其余页面 0.4–3.2 秒。数据重建到相当规模后要重新量，别把空库上的"很快"当成结论。
 
-2026-09-14/15 阶段一打磨新增四项，均只有离线证据：本地 tag 母目录布局、回填 `--days` 窗口、消息通道改走群自建机器人、监测与落档两张卡（由抓取逐篇事实产生，含"发现了但没落档"）。`[network_evidence]` 随之打开。原一帖一张的 `discovered` 提醒已被两张卡取代。**这些都不证明真实群投递、云盘目录或真实新帖链路可用**；云盘仍缺应用凭据，用户已建四机器人，地址与签名配置及真实核验仍待完成。
 
 `tests_month_inventory` 的推荐时段用例已修：基线 6 次跑失败 1 次，根因在夹具不在 production——用例只给 Playwright 的 hover 留了 300ms，而一个页面上的**首次** hover 要付一次性的可操作性开销，实测中位 641ms，其后每次 47ms。超时被 `is_recommendation` 吞成 False，正向断言就红。`read()` 调到它之前 `read_grid` 已扫完 35 个日期格，真实 Planner 路径早把这笔付过，`month_inventory.py` 未改。修后单测连跑 70 次、整文件连跑 12 次均无失败。
 
@@ -163,7 +183,6 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 ### 通用
 
 - 媒体 CDN URL 有签名和时效，拿到响应后立即下载；不能假设以后能重抓。
-- 数据中心 IP 的真实尝试曾在首次请求被拦；抓取应使用稳定住宅网络。
 - 历史归档的“1051 条待译正文”不是可发布口径。2026-08/09 旧归档统计为：
 
 | 平台 | 总数 | 有正文 | 静态图文可发 | 纯视频 | 无媒体 |
@@ -288,5 +307,3 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 ## 10. 文档与验证入口
 
 项目业务文档只维护四份：本文件保存红线和证据边界，[FUNCTIONALITY.md](FUNCTIONALITY.md) 保存功能与附录 A 术语表，[REQUIREMENTS.md](REQUIREMENTS.md) 保存需求和第 10 节验收状态，[MANUAL_STEPS.md](MANUAL_STEPS.md) 保存需要人执行的操作。审校台接口说明位于 [web/DESIGN.md](../web/DESIGN.md)，使用与构建说明位于 [web/README.md](../web/README.md)，界面约束与决策位于 [web/ui/DESIGN.md](../web/ui/DESIGN.md) 和 [web/ui/DECISION_LOG.md](../web/ui/DECISION_LOG.md)。
-
-当前浏览器与静态验证入口是 `tests/tests_browser_workflow.py`、`tests/browser_regression.py --stage ALL`、`tests/network_compare.py`、`tests/cutover_rehearsal.py`、`tests/review_probe.py` 和 `tests/history_thumbnail_cost.py`。它们使用隔离数据或明确的界面响应替代；报告中的通过不能替代真实模型、飞书、Business Suite 提交或远端媒体回读。

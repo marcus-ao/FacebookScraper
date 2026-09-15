@@ -78,13 +78,13 @@ class MonitoringTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             c.assert_chrome_profiles_isolated()
 
-    def test_shanghai_windows_and_quiet_slowdown(self):
+    def test_shanghai_windows_ignore_quiet_slowdown(self):
         s = MonitorSchedule.load()
         self.assertEqual(s.interval_minutes(utc(0)), 60)
         self.assertEqual(s.interval_minutes(utc(10, 59)), 60)
         self.assertEqual(s.interval_minutes(utc(11)), 180)
         self.assertEqual(s.interval_minutes(utc(23, 59)), 180)
-        self.assertEqual(s.interval_minutes(utc(1), quiet=True), 180)
+        self.assertEqual(s.interval_minutes(utc(1), quiet=True), 60)
         self.assertEqual(s.minimum_interval_minutes(utc(1)), 45)
         self.assertEqual(s.minimum_interval_minutes(utc(11)), 135)
         with self.assertRaises(ValueError):
@@ -98,7 +98,7 @@ class MonitoringTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "截止"):
             MonitorSchedule.load(c)
 
-    def test_reconcile_window_moves_before_full_batch_deadline(self):
+    def test_reconcile_window_ignores_processing_budget(self):
         class Latest:
             @staticmethod
             def uniform(_lower, upper):
@@ -110,11 +110,11 @@ class MonitoringTests(unittest.TestCase):
                                clock=lambda: now, rng=Latest())
             # Exercise the scheduling guard independently from config validation.
             object.__setattr__(runner.schedule, "processing_budget_min", 40)
-            planned = runner.schedule.local(runner._next_reconcile(now))
+            planned = runner.schedule.local(runner._next_reconcile_plan(now)[0])
             duty = datetime.combine(planned.date(), runner.schedule.parse_time(
                 runner.schedule.on_duty_window[0]), planned.tzinfo)
-            expected_latest = duty - timedelta(minutes=43)
-            self.assertLessEqual(planned, expected_latest)
+            expected_latest = duty - timedelta(minutes=30)
+            self.assertEqual(planned, expected_latest)
 
     def test_batch_budget_scales_with_posts_images_and_observed_duration(self):
         from core.monitoring import batch_budget_minutes
@@ -128,7 +128,7 @@ class MonitoringTests(unittest.TestCase):
         self.assertGreater(backlog, baseline)
         self.assertGreaterEqual(observed, 183)
 
-    def test_reconcile_schedule_uses_last_successful_batch_duration(self):
+    def test_reconcile_schedule_ignores_last_successful_batch_duration(self):
         class Latest:
             @staticmethod
             def uniform(_lower, upper):
@@ -146,12 +146,12 @@ class MonitoringTests(unittest.TestCase):
             now = utc(18)  # Shanghai 02:00.
             runner = Scheduler(Path(td) / "scheduler.json", lambda *_args: 0,
                                config=config, clock=lambda: now, rng=Latest())
-            planned = runner.schedule.local(runner._next_reconcile(now))
+            planned = runner.schedule.local(runner._next_reconcile_plan(now)[0])
             duty = datetime.combine(planned.date(), runner.schedule.parse_time(
                 runner.schedule.on_duty_window[0]), planned.tzinfo)
-            self.assertLessEqual(planned, duty - timedelta(minutes=183))
+            self.assertEqual(planned, duty - timedelta(minutes=30))
 
-    def test_existing_reconcile_draw_tightens_when_batch_history_grows(self):
+    def test_existing_reconcile_draw_survives_batch_history_growth(self):
         with tempfile.TemporaryDirectory() as td:
             config = Config()
             state = Path(td) / "state"
@@ -168,11 +168,11 @@ class MonitoringTests(unittest.TestCase):
                 }), encoding="utf-8")
                 runner._ensure_jobs(now)
                 after = parse_ts(runner.state["jobs"]["reconcile:facebook"]["next_at"])
-                self.assertLess(after, before)
+                self.assertEqual(after, before)
                 local = runner.schedule.local(after)
                 duty = datetime.combine(local.date(), runner.schedule.parse_time(
                     runner.schedule.on_duty_window[0]), local.tzinfo)
-                self.assertLessEqual(local, duty - timedelta(minutes=183))
+                self.assertLessEqual(local, duty - timedelta(minutes=30))
 
     def test_cross_midnight_reconcile_keeps_its_target_morning_deadline(self):
         with tempfile.TemporaryDirectory() as td:
@@ -197,12 +197,11 @@ class MonitoringTests(unittest.TestCase):
                 deadline = parse_ts(job["deadline_at"])
 
                 self.assertEqual(runner.schedule.local(deadline).isoformat(),
-                                 "2026-09-13T08:00:00+08:00")
-                self.assertEqual(job["budget_minutes"], 503.0)
-                self.assertGreaterEqual((deadline - planned).total_seconds() / 60, 503.0)
+                                 "2026-09-12T07:30:00+08:00")
+                self.assertLessEqual((deadline - planned).total_seconds() / 60, 60)
                 self.assertFalse(runner._reconcile_expired(job, planned))
 
-    def test_reconcile_budget_can_move_execution_across_multiple_calendar_days(self):
+    def test_reconcile_budget_cannot_move_execution_to_other_calendar_days(self):
         with tempfile.TemporaryDirectory() as td:
             config = Config()
             state = Path(td) / "state"
@@ -220,9 +219,8 @@ class MonitoringTests(unittest.TestCase):
                 planned = parse_ts(job["next_at"])
                 deadline = parse_ts(job["deadline_at"])
 
-                self.assertGreaterEqual((deadline - planned).total_seconds() / 60, 3003.0)
-                self.assertGreaterEqual((runner.schedule.local(deadline).date()
-                                         - runner.schedule.local(now).date()).days, 2)
+                self.assertLessEqual((deadline - planned).total_seconds() / 60, 60)
+                self.assertEqual(runner.schedule.local(deadline).date(), runner.schedule.local(now).date())
                 self.assertFalse(runner._reconcile_expired(job, planned))
 
     def test_delta_first_screen_and_window_minimum(self):
@@ -357,14 +355,12 @@ class MonitoringTests(unittest.TestCase):
             runner = Scheduler(path, lambda *args: calls.append(args), clock=lambda: utc(1))
             preview = runner.preview()
             self.assertEqual(len(preview["jobs"]), 4)
-            self.assertEqual(set(preview["posting_distribution"]["coverage_by_archive"]),
-                             set(runner.config.active_accounts()))
-            self.assertFalse(preview["posting_distribution"]["archive_coverage_complete"])
+            self.assertNotIn("posting_distribution", preview)
             self.assertFalse(path.parent.exists())
             self.assertEqual(calls, [])
 
     def test_monthly_distribution_uses_latest_manifest_rows_in_shanghai(self):
-        from pipeline.scheduler import posting_distribution
+        from core.monitoring import posting_distribution
         with tempfile.TemporaryDirectory() as td:
             path = Path(td)
             rows = [dict(post_id="p", created_at="2026-08-12T02:00:00Z", text="old",
@@ -380,8 +376,8 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(summary["on_duty"], 0)
             self.assertEqual(summary["off_duty"], 1)
 
-    def test_supported_previous_month_window_only_slows_outside_observed_hours(self):
-        from pipeline.scheduler import posting_distribution
+    def test_previous_month_distribution_never_slows_configured_polling(self):
+        from core.monitoring import posting_distribution
         with tempfile.TemporaryDirectory() as td:
             path = Path(td)
             rows = [
@@ -403,11 +399,11 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(summary["observed_window"], [9, 10])
             scheduler.state = {"version": 1, "jobs": {}, "posting_distribution": summary}
             self.assertEqual(scheduler._monitor_interval(utc(1)), 60)   # 上海 09:00，在观测窗内
-            self.assertEqual(scheduler._monitor_interval(utc(3)), 180)  # 上海 11:00，只允许降频
+            self.assertEqual(scheduler._monitor_interval(utc(3)), 60)   # 上海 11:00，历史分布不改变间隔
             self.assertEqual(scheduler._monitor_interval(utc(15)), 180) # 上海 23:00，绝不提频
 
     def test_incomplete_or_small_previous_month_sample_keeps_configured_plan(self):
-        from pipeline.scheduler import posting_distribution
+        from core.monitoring import posting_distribution
         with tempfile.TemporaryDirectory() as td:
             path = Path(td)
             rows = [dict(post_id=f"sample-{i}", created_at=f"2026-08-{i + 1:02d}T01:30:00Z",
@@ -464,7 +460,7 @@ class MonitoringTests(unittest.TestCase):
             config = Config()
             config._d["paths"]["state"] = td
             config._d["paths"]["archive"] = td
-            clock = [utc(23, 31) - timedelta(days=1)]  # Shanghai 07:31; cutoff 07:32.
+            clock = [utc(23, 29) - timedelta(days=1)]  # Shanghai 07:29; cutoff 07:30.
             path = Path(td) / "scheduler.json"
             calls = []
 
@@ -477,7 +473,7 @@ class MonitoringTests(unittest.TestCase):
 
             with Scheduler(path, scan, config=config, clock=lambda: clock[0],
                            rng=random.Random(2)) as scheduler:
-                deadline = clock[0].replace(hour=0, minute=0) + timedelta(days=1)
+                deadline = clock[0].replace(hour=23, minute=30)
                 for job in scheduler.state["jobs"].values():
                     job["next_at"] = (clock[0] - timedelta(minutes=2 if job["kind"] == "delta" else 1)).isoformat()
                     if job["kind"] == "reconcile":
@@ -485,7 +481,7 @@ class MonitoringTests(unittest.TestCase):
                 results = scheduler.tick()
                 self.assertEqual([(kind, platform) for kind, platform, _ in calls],
                                  [("reconcile", "facebook"), ("delta", "instagram")])
-                self.assertTrue(all(next_at > clock[0] for _, _, next_at in calls))
+                self.assertTrue(all(next_at <= clock[0] for _, _, next_at in calls))
                 skipped = [result for result in results if result.get("skipped")]
                 self.assertEqual(len(skipped), 1)
                 self.assertEqual(skipped[0]["platform"], "instagram")
@@ -494,6 +490,34 @@ class MonitoringTests(unittest.TestCase):
                 self.assertEqual(parse_ts(skipped[0]["started_at"]), clock[0])
                 self.assertEqual(scheduler.tick(), [])
                 self.assertEqual(len(calls), 2)
+
+    def test_morning_nonzero_and_no_navigation_save_reason_before_advancing(self):
+        from core.monitor_access import AccessController
+        for code in (0, 2):
+            with self.subTest(exit_code=code), tempfile.TemporaryDirectory() as td:
+                config = Config()
+                config._d['paths']['state'] = td
+                now = utc(23) - timedelta(days=1)
+                access = AccessController(Path(td), clock=lambda: now)
+                access.initialize('isolated callback fixture')
+                calls = []
+                def callback(kind, platform):
+                    calls.append((kind, platform))
+                    if code:
+                        access.outcome(platform, success=False, reason='fixture quota rejected')
+                    return code
+                path = Path(td) / 'scheduler.json'
+                with Scheduler(path, callback, config=config, clock=lambda: now) as runner:
+                    for job in runner.state['jobs'].values():
+                        job['next_at'] = now.isoformat()
+                    results = runner.tick()
+                    saved = json.loads(path.read_text(encoding='utf-8'))
+                    for platform in delta.PLATFORMS:
+                        job = saved['jobs']['reconcile:' + platform]
+                        self.assertGreater(parse_ts(job['next_at']), now)
+                        self.assertIn('fixture quota rejected' if code else '未记录主页访问意图', job['last_error'])
+                    self.assertEqual(calls, [('reconcile', 'facebook'), ('reconcile', 'instagram')])
+                    self.assertTrue(all(row.get('error') or row.get('skipped') for row in results))
 
     def test_maintenance_observes_saved_results_even_when_next_tick_is_idle(self):
         with tempfile.TemporaryDirectory() as td:
@@ -631,7 +655,7 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual({post.post_id for post in accepted}, {"1", "2"})
         self.assertEqual(len(rejected), 1)
 
-    def test_custom_scheduler_path_still_reads_configured_delta_state(self):
+    def test_custom_scheduler_path_reads_authoritative_access_draw(self):
         with tempfile.TemporaryDirectory() as td:
             config = Config()
             config._d["paths"]["state"] = str(Path(td) / "actual_state")
@@ -640,7 +664,12 @@ class MonitoringTests(unittest.TestCase):
                              "last_new_at": "2026-08-01T00:00:00Z"}}))
             runner = Scheduler(Path(td) / "separate_schedule" / "scheduler.json",
                                lambda *args: 0, config=config, clock=lambda: utc(1))
-            self.assertTrue(runner._quiet("facebook"))
+            from core.monitor_access import AccessController
+            access = AccessController(config.state_dir, clock=lambda: utc(1))
+            status = access.initialize("isolated fixture")
+            preview = runner.preview()
+            self.assertEqual(preview["jobs"]["delta:facebook"]["next_at"],
+                             status["platforms"]["facebook"]["next_due_at"])
 
 
 if __name__ == "__main__":

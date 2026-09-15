@@ -259,19 +259,5 @@
   "status": "disabled",
   "last_success_at": null,
   "age_seconds": null
- },
- "network": {
-  "status": "disabled",
-  "history": [],
-  "latest": null,
-  "last_success_at": null,
-  "age_seconds": null,
-  "last_error": null,
-  "stability": "insufficient_samples",
-  "distinct_ips": 0,
-  "distinct_asns": 0,
-  "network_type": "unknown",
-  "residential_verified": false,
-  "scope": "python_http_to_ipinfo"
  }
 }

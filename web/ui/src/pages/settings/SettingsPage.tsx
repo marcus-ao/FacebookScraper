@@ -16,7 +16,7 @@ export function validateSettings(values: EditableSettings): string {
   if (!Number.isInteger(values.snooze_default_days) || values.snooze_default_days < 1 || values.snooze_default_days > 30) return '挂起期限须为 1 至 30 个工作日'
   return ''
 }
-const names: Record<string, string> = { targets: '监测来源账号', publish_identity: '发布账号核验名', price_map: '价格映射', trusted_owners: '信任名单', pipeline: '处理方式与预算', delta: '抓取控制', network_evidence: '网络探查设置' }
+const names: Record<string, string> = { targets: '监测来源账号', publish_identity: '发布账号核验名', price_map: '价格映射', trusted_owners: '信任名单', pipeline: '处理方式与预算', delta: '抓取控制' }
 
 export function SettingsPage() {
   const query = useSettings()

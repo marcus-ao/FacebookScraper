@@ -134,7 +134,10 @@ function StorageFacts({ storage }: { storage: TaskStorage }) {
 }
 
 function localStorageCopy(storage: TaskStorage): string {
-  const count = `已保存 ${storage.local.saved_images} / ${storage.local.expected_images} 张`
+  const count = storage.local.verified_images === undefined
+    ? `已保存 ${storage.local.saved_images} 张，历史记录未提供校验证据`
+    : `已保存并校验 ${storage.local.verified_images} / ${storage.local.source_media_count ?? '总数待确认'} 张`
+  if (storage.local.source_media_complete !== true) return `本地媒体：${count}，原帖媒体列表待核对`
   if (storage.local.status === 'complete') return `本地媒体：${count}，文件完整`
   if (storage.local.status === 'partial') return `本地媒体：${count}，仍有待补齐内容`
   if (storage.local.status === 'corrupt') return `本地媒体：${count}，发现损坏文件，请人工核对`

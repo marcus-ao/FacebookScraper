@@ -4,7 +4,7 @@
 
 本文件列人工依赖与开发机操作顺序，存储说明同步至 2026-09-15。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
-当前先保留现场：9224 访问 `.global`、Google Trends 公开页均实际 HTTP 429，分别保存在 `delta_state.json` 和 `trends_export_state.json`，均已停止；需要人工核对探测会话与出口。9223 已登录并录到目标 FB `Neakasa Deutschland`、IG `neakasa.de`，本次完整月份实际读取已经通过，尚无本轮新发布/排期提交。编辑器中曾放入不可发布的技术长文案与 2 张历史原图作控件观察，可能留下草稿；接手时不要直接点击提交。消息已改走群自建机器人（同群四个机器人地址，与云盘应用权限独立）；云盘镜像仍缺应用凭据，外部心跳未启用，完整运营流程尚未通过。
+当前 Stage 1 worktree 的 archive 为空，state 只有隔离测试报告，`.env` 是占位符；没有复制真实凭据，也没有运行真实平台或飞书请求。2026-09-14 删除了旧 429 证据，不能把历史观察当成当前持久停机状态。9223 的 Business Suite 观察和后续发布约束继续按第 8–10 节执行。
 
 ## 1. 接续运行数据前先备份和核验
 
@@ -46,7 +46,6 @@
 
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
-另外这些凭据按对应能力配置：`IPINFO_TOKEN`（F1-8 的出口证据，`[network_evidence]` 默认已开，缺它每天会来一条"出口信息服务暂未返回有效结果"）、`FEISHU_APP_ID` / `FEISHU_APP_SECRET`（**现在只给 `[mirror]` 的云盘镜像用**，不参与发消息）。
 
 **仍然需要企业管理员的只剩云盘**：应用 AppSecret、应用授权与云盘根目录权限（F2-4）。还需运营机器能打开的审校地址——当前审校台在 `127.0.0.1:8765`，卡片里的「去审校」她点不开，这条与消息通道无关。拿到后按第 7 节验证，离线测试不代替权限。
 
@@ -89,7 +88,7 @@ scripts\run_python.bat -m pipeline notifications
 | 发布 | `scripts\start_chrome_publish.bat` | 9223 | 持有德国站资产权限的发布账号 |
 | 探测 | `scripts\start_chrome_detect.bat` | 9224 | 与回填隔离的探测专用小号 |
 
-在各自 Chrome 人工登录/二次验证，核对三个 profile 路径、端口和身份。当前 9222/9224 已启动不表示都已有效登录；9224 已有 429 停机，应先人工检查账号与稳定出口，保留失败证据。F1-8 还需核对出口 ASN 类型、最近出口变化和证据时间，未知不能当合格。
+在各自 Chrome 人工登录或完成二次验证，核对 profile 路径、端口和身份。进程已启动不表示会话有效；实际平台返回登录、checkpoint、challenge、401/403/429 时按共享访问控制立即停机并保留证据。
 
 任何 checkpoint 或会话异常都停下来。不要连续重试，不要增加自动登录脚本，也不要把发布账号拿去抓取。
 
@@ -134,7 +133,7 @@ Trends 人工确认访问恢复后，先取只读版本，再按实际核对理�
 
 ```powershell
 scripts\run_python.bat -m tools.hashtag_sampling trends-status
-scripts\run_python.bat -m tools.hashtag_sampling trends-reset --reason "已人工核对访问和出口恢复" --version <revision>
+scripts\run_python.bat -m tools.hashtag_sampling trends-reset --reason "已人工核对访问恢复" --version <revision>
 ```
 
 `<revision>` 替换为刚读取的 revision，版本已变就重新核对，不删除 `trends_export_state.json`。随后用被动记录的真实 CSV 按钮生成本次 proof，核对同一英文标签的德语候选组、`geo=DE` 和起止日，再运行导出。Sign in 或任意链接不能作 CSV 控件证据；保留原始 CSV 字节、三个摘要和源文上下文，不用编辑器改换行后重新冒充原下载。当前没有可宣称通过的真实 CSV 导出。
@@ -169,7 +168,7 @@ Facebook 在链接区确定德国落地页后，可把对应 `{{linkN}}` 插入�
 
 ## 7. 飞书群与云盘真实联调
 
-卡片/聚合/恢复代码已有离线验证。第 2.1 节需人工核对四张自检卡的真实发送者；HTTP 成功只证明接口接受请求，不能独自证明机器人对应、业务内容或运营可达性。逐条验证：
+卡片/聚合/恢复代码已有离线验证。第 2.1 节需人工核对四张自检卡的真实发送者；HTTP 成功只证明接口接受请求，不能独自证明机器人对应、业务内容或运营能否打开链接。逐条验证：
 
 0. 恢复 9224 探测会话后跑一轮真实探测：检测机器人先发「监测到新帖」，爬取机器人后发「原帖抓取完成」，明细与本地目录、图片数一致；在受控演练中停止探测 Chrome，由状态告警机器人提示系统异常；
 1. 同一群内按四机器人核对全部八类：检测、抓取各一类；发布接待审/排期成功；状态告警接积压/排期失败/晨间摘要/系统异常。`scheduled` 仍只表示远端排期回读确认；
@@ -242,7 +241,7 @@ scripts\run_python.bat -m tools.layout reindex-db
 
 **真实验收清单：**
 
-- 人工确认 9222/9224 登录、账号和出口可用后取得至少一篇 Facebook、一篇 Instagram 真实图文，至少一篇多图；不自动登录或滚历史。
+- 人工确认 9222/9224 登录、账号可用后取得至少一篇 Facebook、一篇 Instagram 真实图文，至少一篇多图；不自动登录或滚历史。
 - 比较原文、来源平台、目标账号/真实作者/合作方、图片数量和顺序。新帖目录用北京时间，原 ISO 保留；型号别名归一，人工清空仍有效。
 - 查询 SQLite 三表，核对帖子身份、分类顺序、媒体路径、尺寸、字节数及 SHA。对已知缺图应明确显示未完整。
 - 在验收子目录核对 `月份/产品/单帖/01_原帖[_vN]`、file/folder ID、运营只读可见性；人工下载隔离副本逐项比较 SHA。
@@ -357,13 +356,11 @@ scripts\run_python.bat -m tools.test_offline
 ```powershell
 scripts\run_python.bat tests/tests_browser_workflow.py -v
 scripts\run_python.bat tests/browser_regression.py --stage ALL
-scripts\run_python.bat tests/network_compare.py
 scripts\run_python.bat tests/cutover_rehearsal.py
 scripts\run_python.bat tests/review_probe.py
 scripts\run_python.bat tests/history_thumbnail_cost.py
 ```
 
-`tests/tests_browser_workflow.py` 的七个迁移场景加日期回归使用实际 dist、临时真实 ASGI 和隔离 archive/state；保存、历史、设置、链接最终计数走临时后端，远端状态用明确的界面响应替代。`network_compare.py` 核对 16 个 React 请求契约，`cutover_rehearsal.py` 默认使用 `web/ui/dist` 和实际 FastAPI，`review_probe.py` 核对密度、图片按需请求和零外部动作。产物统一落在已 gitignore 的 `state/` 下，跑一次回归不会弄脏工作区。
 
 ⛔ **不要对绑定真实数据的目录直接运行会写入的测试脚本。**
 
@@ -475,156 +472,74 @@ npm --prefix web/ui run build
 - [ ] 核对 `/api` 404 仍是 JSON、缺失静态资源仍是 404、深链接刷新仍返回应用
 - [ ] 保留 archive/state 原样；前端整理没有改变数据格式或写入契约
 
-## 14. 阶段一真实验收：监测与抓取
+## 14. 阶段一真实验收：监测与原帖抓取
 
-这一节回答一个问题：**怎么确认「监测到新帖 → 抓取 → 存储 → 飞书告诉我」这条链路在真实环境里真的跑通了。**
+本节是阶段一唯一的真实启用顺序。全程不加 `--process`，不触发模型、标签、审校唤醒、月历、云盘镜像或发布。不得自动登录或自动滚历史。
 
-按 A→G 顺序做，每一段都有明确的通过判据。任何一段不通过就停在那里，按[第 12 节](#12-卡住时保留什么)留证，不要跳过去做下一段。
+### A. 准备与访问初始化
 
-⛔ **全程不要加 `--process`。** 它需要先过激活边界，而激活边界要阶段五的 G8 真机验收证据。阶段一的范围止于抓取和存储，翻译与图片是后面几轮的事。
-
-### A. 前置：三样东西必须先到位
-
-- [ ] **三个 Chrome 各自人工登录**（[第 3 节](#3-登录三个专用-chrome)）。阶段一只用到 9222（回填）和 9224（探测），但三个 profile 的隔离断言会一起检查。**9224 此前撞过 429**，先确认账号能正常打开目标主页再往下走。
-- [ ] **同群四个机器人已建好、地址和各自密钥已填**（[第 2.1 节](#21-配置同群四个机器人)），并且 `notifications --self-test` 在同群收到四张自检卡、真实发送者与卡片中的机器人名称对应。**这一条先过，不然后面分不清"没有新帖"和"通道不通"。**
-- [ ] **本机 `.env` 还要 `IPINFO_TOKEN`**（F1-8 的出口证据）。要连云盘镜像再加 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`——它现在只给云盘用。名称见 `.env.example`。
-- [ ] **`config.toml`**：`[feishu].base_url` 填好后把 `enabled` 改成 `true`；要验云盘再填 `[mirror].root_folder_token` 并开 `enabled`。缺 `base_url` 加载即失败，不会静默降级。
-
-`base_url` 要填**运营那台机器能打开的地址**。填 `127.0.0.1` 卡片上的「去审校」按钮她点不开，而这一点要到她第一次点的时候才会发现。阶段一还不会产生待审卡，所以这条不阻塞本轮，但监测与落档卡上也有这个按钮。
-
-### B. 只读预检：确认配置真的生效
+1. 人工登录 9222（回填）、9224（探测）、9223（发布）三个独立 profile，核对身份。阶段一只让 9222/9224 访问源站。
+2. 配置同群 detect、capture、publish、alert 四个机器人及运营要使用的 `[feishu].base_url`。base_url 只校验 URL 格式。
+3. 离线执行 `scripts\run_pipeline.bat preflight --json`、`scripts\run_python.bat -m routes.delta --status`、`scripts\run_scheduler.bat --preview`。`preflight --json` 与 `GET /api/runtime` 应显示 monitoring state/status/pause/quota/next_due/capture_revision/items/baselines；读取不访问平台或发消息。
+4. 人工核对 9224 身份后初始化：
 
 ```powershell
-scripts\run_pipeline.bat preflight --json
+scripts\run_python.bat -m routes.delta --initialize-access --reason "人工核对 profile 身份，允许阶段一受控探测"
 ```
 
-这条命令零写入、不碰 FB/IG。输出里 `stages` 按阶段编号排列，逐项核对：
+缺初始化或坏状态时真实导航必须失败闭合。
 
-- [ ] 阶段 4「飞书提醒」的 `outbox.credentials_present` 是 `true`——为 `false` 说明至少一个机器人地址未读到；还应核对 `bot_configuration_valid=true`、`duplicate_bot_targets=false`，实际权限另验
-- [ ] 同上 `outbox.bots` 的四个名称齐全，均为 `configured=true`、`valid=true`。同群是预期配置；`duplicate_bot_targets=true` 表示不同阶段复用了同一个机器人地址，需要逐个核对
-- [ ] 同上 `outbox.enabled` 是 `true`，`outbox.status` 不是 `configuration_invalid`
-- [ ] 要验云盘时，阶段 2「源内容与归档」的 `mirror_status` 不再是 `disabled`
-- [ ] 顶层 `network` 的 `last_error` 是 `null`、`network_type` 不是 `unknown`。**`last_error` 为 `missing_token` 就是 `IPINFO_TOKEN` 没配**，此时 F1-8 拿不到任何证据，而且每天会来一条"出口信息服务暂未返回有效结果"的技术告警
-- [ ] `network.network_type` 不是机房段（`hosting`）。是的话先换网络，别开监测——红线 2
-- [ ] `network.scope` 是 `python_http_to_ipinfo`：它量的是**本进程**的出口。Chrome 若走另一条线路（代理、分流），这个数字证明不了抓取那一跳，得另行核对
+### B. 人工回填与独立基线
 
-刚配好时 `network.stability` 会是 `insufficient_samples`，属正常——它要攒够几次采样才能判断出口稳不稳。
-
-⚠️ 这一步只证明**配置**成立，不证明任何消息发得出去。
-
-### C. 建立归档基线：回填最近一个月
-
-在 9222 浏览器里打开目标主页，手工向下滚到一个月前，回到终端按 Enter：
+人在 9222 分别打开 FB `neakasaofficial`、IG `neakasa.global`，手工滚到 30 天前：
 
 ```powershell
 scripts\run_backfill.bat facebook --days 30
 scripts\run_backfill.bat instagram --days 30
 ```
 
-- [ ] 两个账号都打印了新增篇数，以及「窗口外跳过 N 篇」
-- [ ] IG 的合作帖进来了。判据是 `parse.on_timeline_of()` 而不是 `owner == account`，**只看 owner 会把 `.global` 的帖子整批漏掉**
-- [ ] 媒体完整性没有大面积 `media_complete: false`
-
-⛔ 回填帖**不会**产生飞书发现卡片——判据是 `post.json` 的 `source_route`，回填是人主动滚出来的历史。这一段收不到推送是正确的，不是通道坏了。
-
-### D. 核对本地存储契约
-
-打开 `archive/` 逐项看：
-
-- [ ] 布局是 `archive/<账号>/posts/<月份>/<产品 tag>/<帖子>/`
-- [ ] 型号表命中的落在对应 tag 目录，没命中的落在 `未分类/`，**没有乱猜的分类**
-- [ ] 帖子目录里有 `post.json`、`text.txt` 和原图
-- [ ] 随便挑一篇，`post.json` 的 `media[].local_path` 指向的文件真的存在
-
-然后重建查询索引，确认派生层与文件一致：
+核对独立数量、最早/最新时间、实际 owner/coauthors、媒体顺序与完整性。视频、混合、无媒体、无正文也归档计数。historical 只汇总，不逐帖推群。确认覆盖后另行执行：
 
 ```powershell
-scripts\run_python.bat -m tools.layout reindex-db
+scripts\run_python.bat -m routes.delta --initialize-baseline --reason "人工核对 FB/IG 最近 30 天回填完整"
 ```
 
-- [ ] 重建不报错，条数与归档篇数一致
+访问初始化和基线初始化是两步；基线写 `capture_state.json.baselines` 与 monitoring enabled_at，不创建或改写发布激活边界。
 
-### E. 飞书通道：先确认通道，再等真实数据
+### C. 预览、扫描与 72 小时试运行
 
-直接等真实新帖来验通道，一旦不通就分不清是"通道坏了"还是"今天没有新帖"。**通道自检已经在[第 2.1 节](#21-配置同群四个机器人)做过**，这里只把它作为一道闸再确认一次：
-
-```powershell
-scripts\run_python.bat -m pipeline notifications --self-test
-```
-
-- [ ] 同一业务群收到四张「Neakasa 德国站 · 通道自检」卡片，每张标明不同的预期机器人
-- [ ] 逐张核对实际发送者：检测、爬取、发布、状态告警各一张；同群正常，重复 webhook 地址会被拒绝
-- [ ] `notifications`（不带参数）打印的 `status` 是 `ready`，`counts` 里没有 `retry` / `uncertain`
-
-⚠️ **不要再用"往临时归档里塞一份假 post.json"那套办法。** 两张监测卡的内容来自抓取时逐篇记下的
-事实（`state/monitoring_facts.jsonl`），不是遍历归档推导出来的——往归档里放假帖子一张卡也不会产生。
-这正是"发现了但没落档"能被看见的原因，代价就是通道形状和卡片内容得分两步验：通道在这里验，
-卡片内容留到 G 段用真实帖子验。
-
-### F. 开监测，等第一条真实新帖
+预览核对每天含周末：08–19 点间隔 45–75 分钟，19–08 点 135–225 分钟；晨间 06:30–07:30 随机 2–4 屏；08:00 首轮在 08:00–08:15 且距上次主页至少 45 分钟。预览离线。随后先单轮核对，再启动常驻试运行：
 
 ```powershell
-scripts\run_scheduler.bat --preview
-```
-
-- [ ] 打印出四个任务（两平台 × delta/reconcile）和各自的下次触发时刻
-- [ ] 兜底时刻落在上海 07:00 附近、带抖动，且早于 08:00 截止点
-
-确认无误后启动常驻：
-
-```powershell
+scripts\run_scheduler.bat --run --once
 scripts\run_scheduler.bat --run
 ```
 
-在岗窗每小时一次、离岗窗每三小时一次，各带 ±25% 抖动。让它跑着，然后等美国站发新帖。
+常驻命令保持运行至少 72 小时，不加 `--process`。
 
-**这一段的等待时间不可控**，历史样本是 5.9 篇/周。等待期间可以确认这些：
+普通轮次只开主页首屏、不滚动，每平台最多 300 秒。所有 GraphQL/feed 候选先持久化再下载。仅来源媒体不完整者可打开一次匹配详情，不滚动、不翻轮播、不重放 GraphQL。真实浏览器 dry-run 也写停机和配额。
 
-- [ ] 进程没退出，`state\scheduler.json` 的 `last_tick` 在往前走
-- [ ] 探测号会话没失效——失效会由状态告警机器人发一条「监测未完成」，这本身也是通道可用的证明
-- [ ] 每轮输出里有分类跳过数（视频 x / 混合 y / 无正文 z）。「今天没有新帖」和「今天发了 8 条全是视频」必须长得不一样
+连续观察至少 72 小时，覆盖 08:00、19:00、晨间和周末；不足则延长。记录平台、计划/实际时刻、skip reason、主页/详情配额、pause/hard-stop、候选/归档/卡片。核对 scheduler、CLI、`--if-stale` 共用 `next_due`；19:00 不重抽；重启不追补；普通/晨间不足 45 分钟合并；锁忙（退出码 75）不推进；统计不改变间隔。
 
-### G. 收到那两张真实卡片之后
+主页不超过 24 次/平台/滚动 24 小时；详情不超过 1 次/帖/扫描、3 次/平台/扫描、12 次/平台/滚动 24 小时。401/403/429 或登录/checkpoint/challenge 立即全 profile 停机且不再导航、滚动、下载；CDN 过期 403 仅单项失败，CDN 429 全局停机；三次普通失败暂停平台。失败、超额、超时立即待人工，普通扫描不重试。
 
-这是阶段一的验收时刻。**一轮扫描发现新帖就该有两张卡，先「监测到新帖」再「原帖抓取完成」。**
+### D. 核对事实与卡片
 
-监测卡（发现）：
+核对类别 new/historical/source_updated/recovered/time_unknown；原文、元数据、owner/coauthors、`items[key].source.media` 和媒体线索齐全。`source_media_complete` 与 `media_complete` 分开；后者要求每张静态图全图解码、SHA 和原子落盘。IG 重复封面/视频缩略图不计图片；每媒体一个尺寸、顺序不变；未知总数明确 unknown。revision 只由正文与有序实际媒体 SHA 改变。
 
-- [ ] 检测机器人在本轮抓取事实形成后几分钟内发送，离岗时也不等次日 08:00
-- [ ] 逐篇列出 post_id、原帖时刻（**上海**，和卡片顶部那一行同一时区）、图片/视频数、正文首行
-- [ ] 合作帖标出了「合作帖，原作者 X」和「合作方 Y」，没有被当成本账号原创
-- [ ] 「查看原帖」点开就是那一篇
-- [ ] 本轮跳过数按四类中文标签列出（视频 / 图文混合 / 无媒体 / 无正文），不是英文键名
+detect 每平台/扫描至多一张摘要，零新增不发。capture 对每个合格候选恰好一张卡，包含完整/部分完成/失败/待人工、类别、平台、账号、owner/coauthors、三个北京时间、标签、英文前 300 字符与截断、正文状态、验证图片数/已知总数、安全原因和下一步。主按钮按归档状态去 `/history/{account_dir}/{post_id}` 或 `/runtime?capture={key}`，次按钮到源帖。卡片无缩略图，不声称进入本地化队列。
 
-落档卡（成败）——由「新帖爬取推送机器人」发送，逐篇说明成败：
+消息异步入 durable outbox，不阻塞下载；重启补入已持久候选漏掉的意图。未知结果人工核对，不自动重发。FB 多图顺序、IG carousel 顺序、四机器人真实发送者/链接、自然新帖分别留真实证据；无自然新帖时平台捕获仍待真实联调。
 
-- [ ] 头一行是「发现 N 篇，成功落档 M 篇，失败 K 篇」（全成功时写「没有失败」）
-- [ ] 每篇都带一个明确状态词：`已落档` 或 `未落档`
-- [ ] `已落档` 的那几行给出实际图/视频数和归档落点（`posts/<月份>/<产品 tag>/<帖子>`），与本地 `archive/` 下真实存在的目录一致
-- [ ] 数字对得上：发现数 = 成功 + 失败，没有哪一篇在两张卡之间消失
-- [ ] 如果有失败，卡片上有「原图链接有时效，不能假设下一轮还能补回来」这句，而不是只报个数
+### E. CAS 恢复与证据
 
-⛔ **两张卡的篇数不一致是要查的信号，不是显示问题。** 发现 3 篇只落档 2 篇意味着有一篇的原图没拿到，
-而原图 CDN URL 带签名且有时效——下一轮不一定还能补回来。
+先读取 revision，人工核对后执行：
 
-本地与云盘：
+```powershell
+scripts\run_python.bat -m routes.delta --recover-access --expected-revision <N> --reason "具体核对原因"
+scripts\run_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --expected-revision <N> --reason "具体失败原因"
+```
 
-- [ ] `archive/` 下出现对应帖子文件夹，落在正确的月份和 tag 下
-- [ ] 要验云盘时，飞书云盘上出现同一篇的镜像，层级是 `<月份>/<tag>/<帖子>`，且没有反向改动本地文件
+访问恢复不清配额/历史；单帖恢复只尝试一次并服从同一护栏。Web `POST /api/runtime/capture/recover` 含 key/version/reason。`monitor/recover` 含 version/reason 与可选 platform，且不访问平台。版本冲突先重读。
 
-再把两个容易被忽略的行为确认一遍：
-
-- [ ] 同一轮扫描不会推出重复的卡片（`event_id` 绑扫描开始时刻）
-- [ ] 在岗窗之外发布的帖子**照样立刻推**（两张监测卡都不受静默窗限制）
-- [ ] 检测与爬取卡由各自机器人发送；状态告警机器人只收约定的四类状态消息，发布机器人只收待审与排期成功
-
-### 这一轮能证明什么、不能证明什么
-
-| 做完之后成立 | **仍然不成立** |
-|---|---|
-| 监测能发现真实新帖并抓取归档 | 翻译、图片德语化、审校、排期任何一段 |
-| 本地三层布局与云盘镜像同形 | 长期稳定性——封号风险的反馈是延迟的，且只反馈一次 |
-| 同群四个机器人分工正确、卡片可点达，且发现与落档数字对得上 | 运营完整流程（她从卡片进去审完再排期） |
-| 出口 ASN 类型与稳定性有据可查 | 兜底对账真的补到过漏帖（要等一次真实漏帖） |
-
-验收报告里写清楚：跑了什么、哪几条是真实账号的结果、哪些外部依赖仍未联调。离线测试通过不能替代上面任何一项。
+报告保存命令、版本、真实/夹具来源、平台/账号、访问与基线 revision、计划/实际时刻、配额、类别、三个时间、owner/coauthors、两层 completeness、图片 SHA/顺序、delivery 状态和未联调项。离线夹具、无自然新帖、HTTP 接受或已删除的旧 429 记录不能写成真实通过。

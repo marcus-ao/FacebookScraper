@@ -73,7 +73,7 @@ describe('详情标签页按需挂载', () => {
     })
     expect(markup).toContain('归档位置')
     expect(markup).toContain('人工分类')
-    expect(markup).toContain('本地媒体：已保存 1 / 2 张，仍有待补齐内容')
+    expect(markup).toContain('本地媒体：已保存 1 张，历史记录未提供校验证据，原帖媒体列表待核对')
     expect(markup).toContain('展示索引：需要刷新后核对')
     expect(markup).toContain('飞书云盘：有 1 项结果待人工核对')
     expect(markup).toContain('源内容待补齐，缺少 2 个媒体')

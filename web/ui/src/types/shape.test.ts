@@ -228,8 +228,8 @@ describe('GET /api/settings', () => {
     expect(Object.keys(settings.editable).sort()).toEqual(['default_times', 'snooze_default_days'])
   })
 
-  it('七组受控配置只读', () => {
-    expect(Object.keys(settings.controlled)).toHaveLength(7)
+  it('六组受控配置只读', () => {
+    expect(Object.keys(settings.controlled)).toHaveLength(6)
   })
 
   it('editable_help 里确实带着 config.toml 的注释 —— 所以不能常驻渲染', () => {

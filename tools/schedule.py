@@ -29,7 +29,7 @@ def _user() -> str:
     return "%s\\%s" % (domain, name) if domain else name
 
 
-def _settings(network: bool = True, time_limit: str = "PT2H") -> str:
+def _settings(time_limit: str = "PT2H") -> str:
     """共用任务设置；本地缺席检查不要求网络可用。"""
     return """  <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -53,7 +53,7 @@ def _settings(network: bool = True, time_limit: str = "PT2H") -> str:
     <!-- 随机延迟最多 45 分钟 + 抓取本身，2 小时足够；卡住了也不会一直挂着。 -->
     <ExecutionTimeLimit>%s</ExecutionTimeLimit>
     <Priority>7</Priority>
-  </Settings>""" % ("true" if network else "false", time_limit)
+  </Settings>""" % ("false", time_limit)
 
 
 def _principal() -> str:
@@ -158,7 +158,7 @@ def alive_xml(bat: Path, root: Path) -> str:
 %s
 </Task>
 """ % (NS, ALIVE_TASK, _user(), _principal(),
-       _settings(network=False, time_limit="PT10M"),
+       _settings(time_limit="PT10M"),
        _actions(bat, root, "check-alive"))
 
 
@@ -246,7 +246,7 @@ def remove() -> int:
 def scheduler_xml(root: Path | None = None) -> str:
     """生成常驻任务 XML；系统负责重启，Python 管理轮询时间，不能与每日调度并用。"""
     root = root or Path(__file__).resolve().parent.parent
-    settings = _settings(network=False, time_limit="PT0S").replace(
+    settings = _settings(time_limit="PT0S").replace(
         "  </Settings>",
         "    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>\n  </Settings>")
     return '''<?xml version="1.0" encoding="UTF-16"?>

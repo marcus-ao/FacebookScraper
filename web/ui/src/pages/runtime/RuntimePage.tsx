@@ -10,6 +10,7 @@ import { idPath, isConflict } from '@/services/http'
 import { ShanghaiTime } from '@/components/Time'
 import type { FeishuDelivery, RuntimeSnapshot } from '@/types/domain'
 import styles from './RuntimePage.module.css'
+import { MonitorPanel } from './MonitorPanel'
 
 export function RuntimePage() {
   const query = useRuntime()
@@ -38,6 +39,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
     <div className={styles.toolbar}><Typography.Text type="secondary">记录于 <ShanghaiTime at={data.observed_at} /> · 每 30 秒核对状态</Typography.Text><Button loading={busy} onClick={() => { setBusy(true); void load().catch(setError).finally(() => setBusy(false)) }}>刷新状态</Button></div>
     {runtimeSignature(current) !== runtimeSignature(data) && <Alert type="info" title="运行状态有更新，点击刷新后查看" />}
     {error ? <Alert type="warning" title={isConflict(error) ? '状态已在别处更新，请刷新后重新核对' : '本次操作未完成，请刷新状态核对'} /> : null}
+    <MonitorPanel data={data.monitoring} busy={busy} action={action} />
     <section className={styles.attention} aria-label="需要你处理"><h2>需要你处理</h2>
       {!deliveries.length && !interrupted && !unconfirmed && !mirrorNeedsAttention && <p>当前没有可直接恢复的事项；阶段条件请见下方。</p>}
       {interrupted && <p>一批内容处理已中断。 <Button disabled={busy || !batch.batch_id || !batch.state_revision} onClick={closeBatch}>核对后关闭中断批次</Button></p>}
@@ -45,6 +47,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
         <Button disabled={busy} onClick={() => { setMessageId(''); setDelivery(item) }}>登记已送达</Button><Button disabled={busy} onClick={() => resend(item)}>核对未送达后恢复</Button></Space>
         {item.preview_error && <p>这张卡片发出时未能重新读取当前德语稿，内容可能不是最新，请进入审校页核对。</p>}
         <Space wrap>{item.task_ids?.filter((id): id is NonNullable<typeof id> => !!id).map((id, i) => <Link key={id} to={`/review/${idPath(id)}`}>查看相关帖子 {i + 1}</Link>)}</Space>
+        <Space wrap>{item.capture_keys?.map(key => <Link key={key} to={`/runtime?capture=${encodeURIComponent(key)}`}>查看采集记录</Link>)}</Space>
       </div>)}
       {!!unconfirmed && <p>{unconfirmed} 次提交结果需要核对。当前记录只有计数，暂时无法直接定位帖子。 <Button type="link" onClick={() => setMaintenance(true)}>查看维护说明</Button></p>}
       {mirrorNeedsAttention && <p>云盘镜像：{mirrorSummary(mirror).conclusion}</p>}
@@ -60,7 +63,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
       {stage.number === 5 && <p className={styles.help}>Facebook 单渠道验收：{stage.acceptance?.facebook?.verified ? '真实通过' : '尚未完成'} · Instagram 单渠道验收：{stage.acceptance?.instagram?.verified ? '真实通过' : '尚未完成'}</p>}
       <Collapse ghost items={[{ key: 'details', label: '查看技术细节', children: <pre className={styles.diagnostic}>{JSON.stringify({ ...stage, ...(stage.mirror ? { mirror: mirrorDiagnostics(stage.mirror) } : {}), ...(stage.number === 3 ? { processing: batch, timings: data.business.timings } : {}) }, null, 2)}</pre> }]} />
     </article> })}</section>
-    <Collapse ghost items={[{ key: 'runtime', label: '进程、网络与外部心跳记录', children: <pre className={styles.diagnostic}>{JSON.stringify({ process: data.process, activation: data.activation, heartbeat: data.heartbeat, network: data.network }, null, 2)}</pre> }]} />
+    <Collapse ghost items={[{ key: 'runtime', label: '进程与外部心跳记录', children: <pre className={styles.diagnostic}>{JSON.stringify({ process: data.process, activation: data.activation, heartbeat: data.heartbeat }, null, 2)}</pre> }]} />
     <Modal title="登记已送达" open={!!delivery} okText="登记已送达" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: !messageId.trim() }} onCancel={() => { if (!busy) setDelivery(null) }} onOk={() => { if (delivery) void action(() => resolveNotification(delivery, 'delivered', messageId)).then(() => setDelivery(null)).catch(() => {}) }}>
       <label>群机器人不返回消息 ID，请填写你在群里核对到的情况<Input autoFocus aria-label="送达核对说明" placeholder="例如：业务群 21:07 已收到监测卡" value={messageId} maxLength={200} onChange={event => setMessageId(event.target.value)} /></label>
     </Modal>

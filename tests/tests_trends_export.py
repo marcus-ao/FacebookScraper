@@ -35,6 +35,8 @@ class TrendsExportTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.c = TestConfig(self.temp.name)
+        self.access = trends_export.AccessController(self.c.state_dir)
+        self.access.initialize("isolated Trends fixture")
         self.request = trends_export.ExportRequest.create(
             candidate_group="#Cats", tags=("#Katzen", "#Katzenspielzeug", "#Katzentoilette"),
             geo="DE", start="2026-09-01", end="2026-09-07")
@@ -85,9 +87,7 @@ class TrendsExportTests(unittest.TestCase):
         self.assertFalse(called)
 
     def test_shared_detect_hard_stop_also_blocks_before_runner(self):
-        (self.c.state_dir / "delta_state.json").write_text(json.dumps({
-            "detect_hard_blocked": {"reason": "Instagram HTTP 429"}
-        }), encoding="utf-8")
+        self.access.outcome("instagram", success=False, hard=True, reason="Instagram HTTP 429")
         called = False
 
         def runner(**kwargs):
@@ -110,9 +110,35 @@ class TrendsExportTests(unittest.TestCase):
         state = trends_export.load_state(self.c)
         self.assertEqual(state["status"], "blocked")
         self.assertEqual(state["http_status"], 429)
+        self.assertEqual(self.access.status()["hard_stop"]["platform"], "google_trends")
         recovered = trends_export.reset_block(self.c, reason="operator verified challenge cleared", now=NOW,
                                                expected_revision=trends_export.state_revision(state))
         self.assertEqual(recovered["status"], "recovered")
+
+    def test_missing_authoritative_access_blocks_both_export_and_low_level_attach(self):
+        self.access.path.unlink()
+        runner = AsyncMock()
+        with self.assertRaises(trends_export.TrendsExportBlocked):
+            trends_export.export_public_csv(self.request, proof=self.proof, c=self.c, browser_runner=runner, now=NOW)
+        runner.assert_not_called()
+        with patch('core.chrome.attach', new_callable=AsyncMock) as attach:
+            with self.assertRaises(trends_export.TrendsExportBlocked):
+                asyncio.run(trends_export._playwright_download(self.request, self.proof, self.c))
+            attach.assert_not_awaited()
+
+    def test_trends_stop_blocks_instagram_and_own_reset_cannot_clear_profile(self):
+        def blocked(**kwargs):
+            raise trends_export.TrendsExportBlocked('Google Trends HTTP 429', http_status=429)
+        with self.assertRaises(trends_export.TrendsExportBlocked):
+            trends_export.export_public_csv(self.request, proof=self.proof, c=self.c, browser_runner=blocked, now=NOW)
+        with self.assertRaises(trends_export.AccessDenied):
+            self.access.check('instagram')
+        own_state = trends_export.load_state(self.c)
+        trends_export.reset_block(self.c, reason='local export checked', expected_revision=trends_export.state_revision(own_state))
+        with self.assertRaises(trends_export.AccessDenied):
+            self.access.check_profile()
+        self.assertEqual(self.access.status()['platforms']['instagram']['intents'], [])
+        self.assertEqual(self.access.status()['platforms']['instagram']['failures'], 0)
 
     def test_old_reset_cannot_clear_new_block_and_corrupt_stop_never_allows_access(self):
         from routes import delta

@@ -9,11 +9,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.config import MonitorSchedule, cfg
+from core.capture_state import CaptureState, CaptureStateError
 from core.feishu import FeishuSettings, Outbox, WebhookBot
 from core.heartbeat import Heartbeat, HeartbeatSettings
 from core.mirror import DriveClient, MirrorService, MirrorSettings
 from core.monitoring import MonitoringJournal, SKIP_LABELS, SKIP_REASONS
-from core.network_evidence import NetworkEvidence, NetworkEvidenceSettings, network_evidence_status
 from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
 from core.translated import source_text_sha256
@@ -52,7 +52,6 @@ class Runtime:
             raise ValueError('calendar.enabled 须为布尔值，刷新间隔至少 1 分钟')
         self.calendar_attempt = None
         self.thumbnail_sources = {}
-        self.network = NetworkEvidence(self.c.state_dir / 'network_evidence.json', NetworkEvidenceSettings.load(self.c))
 
     def await_delivery(self, timeout: float = 120) -> None:
         """等本轮消息与镜像投递跑完。
@@ -74,7 +73,6 @@ class Runtime:
         self.sampling_executor.shutdown(wait=False, cancel_futures=True)
         self.delivery_executor.shutdown(wait=False, cancel_futures=True)
         self.heartbeat.close()
-        self.network.close()
         if self.delivery_future is not None:
             self.delivery_future.add_done_callback(lambda _: self._close_delivery_clients())
         else:
@@ -114,24 +112,41 @@ class Runtime:
         return code
 
     def _scan_cards(self, kind, platform, started, now, code, skipped):
-        """监测一张、落档一张。播报出问题只写本地日志，绝不改抓取的退出码。"""
+        """先持久入队；抓取已完成后由投递线程发送，失败不改变采集事实。"""
+        self.enqueue_capture_results(now)
+
+    def enqueue_capture_results(self, now):
         if not self.settings.enabled or not self.scan_reports:
             return
+        ledger = CaptureState(self.c.state_dir)
+        if not ledger.path.exists():
+            return
         try:
-            cards = notifications.scan_cards(kind, platform, self.c['targets'][platform],
-                                             self.processing.scan_posts(started, platform),
-                                             skipped, now)
-            if cards is None:
-                return
-            found, saved = cards
-            if code:
-                saved['risk'] = ('%s\n本轮抓取退出码 %d，可能还有没落档的内容。'
-                                 % (saved.get('risk', ''), code)).strip()
-            stamp = started.isoformat()
-            self.outbox.enqueue(f'monitor_found:{platform}:{stamp}', 'monitor_found', found, now)
-            self.outbox.enqueue(f'monitor_saved:{platform}:{stamp}', 'monitor_saved', saved, now)
-        except Exception as exc:
-            notify.notify('监测播报未入队', type(exc).__name__ + '；抓取结果不受影响。', popup=False)
+            snapshot = ledger.status()
+            events = snapshot['events']
+            scans = {event['scan_id'] for event in events.values() if not event['acknowledged']}
+            for scan in scans:
+                rows = [event for event in events.values() if event['scan_id'] == scan]
+                source = rows[0]['source']
+                cards = notifications.scan_cards('delta', source['platform'], source['account'], rows, {}, now)
+                if cards is None:
+                    continue
+                found, saved = cards
+                for event_id, payload in saved:
+                    self.outbox.enqueue('monitor_saved:' + event_id, 'monitor_saved', payload, now)
+                # 未终结的扫描保留未确认事件，维护重放才会生成最终一次摘要。
+                if any(item['scan_id'] == scan and item['status'] == 'pending'
+                       for item in snapshot['items'].values()):
+                    continue
+                self.outbox.enqueue('monitor_found:' + source['platform'] + ':' + scan, 'monitor_found', found, now)
+                manual = [event for event in rows if event['status'] == 'manual']
+                if manual:
+                    self.outbox.enqueue('capture-manual:' + scan, 'system', {
+                        'text': f"{source['platform']} 本轮 {len(manual)} 篇需要人工处理，已有内容仍保留。",
+                        'run_id': scan, 'next_step': '打开运行详情核对逐帖原因，再授权一次恢复。'}, now)
+                ledger.acknowledge([row['event_id'] for row in rows])
+        except (CaptureStateError, OSError, ValueError, RuntimeError) as exc:
+            notify.notify('监测播报未入队', type(exc).__name__ + '；事实保留，后续维护会重新入队。', popup=False)
 
     def _delta_entry(self, platform: str) -> dict:
         path = self.c.state_dir / 'delta_state.json'
@@ -245,25 +260,18 @@ class Runtime:
                 '%s 兜底未执行：%s。普通探测按计划继续，请核对早班素材是否完整。'
                 % (result['platform'], result['skipped']), now)
         self.c = cfg()
-        self.refresh_hashtags(now)
+        if self.process:
+            self.refresh_hashtags(now)
         try:
             directories = engine.active_account_dirs(account_dirs(self.c.archive_dir))
             scheduled = journal.scheduled_source_refs(self.c.state_dir)
-            awakened = review.wake_due(directories, now=now, scheduled_refs=scheduled)
+            awakened = review.wake_due(directories, now=now, scheduled_refs=scheduled) if self.process else []
             if self.process and awakened:
                 self.processing.request(now, 'review', 'wakeup', len(awakened), {},
                                         image_count=len(awakened))
         except Exception as exc:
             notify.notify('本轮维护暂未完成', type(exc).__name__ + '；请检查本地记录。', popup=False)
         self.heartbeat.tick(now)
-        network = self.network.refresh(now)
-        if network.get('status') == 'failed':
-            self._system(f'network:{now.date()}', '出口信息服务暂未返回有效结果；请检查网络或服务配置，不能据此判断社媒账号被封。', now)
-        elif network.get('status') == 'recorded':
-            evidence = network_evidence_status(self.network.path, self.network.settings, now)
-            if evidence['stability'] == 'changed' or evidence['network_type'] in {'hosting', 'anonymous'}:
-                self._system(f'network-change:{now.date()}:{evidence["latest"]["ip"]}',
-                    '观测到出口变化或提供方标记的代理/托管网络，请核对 Chrome 是否使用了同一出口。', now)
         if self.delivery_future is None or self.delivery_future.done():
             previous, self.delivery_future = self.delivery_future, None
             if previous is not None:
@@ -278,8 +286,9 @@ class Runtime:
 
     def _deliver(self, now):
         # Keep batch network work off the monitoring loop.
-        self.refresh_calendar(now)
-        if self.mirror_settings.enabled:
+        if self.process:
+            self.refresh_calendar(now)
+        if self.process and self.mirror_settings.enabled:
             try:
                 self.mirror_sources(now)
             except Exception:
@@ -288,14 +297,17 @@ class Runtime:
         if not self.settings.enabled:
             return
         try:
-            self.collect(engine.active_account_dirs(account_dirs(self.c.archive_dir)), now)
+            self.enqueue_capture_results(now)
+            if self.process:
+                self.collect(engine.active_account_dirs(account_dirs(self.c.archive_dir)), now)
         except Exception as exc:
             notify.notify('审校提醒汇总失败', type(exc).__name__ + '；已有系统告警仍会尝试投递。', popup=False)
         # 汇总失败不能让队列里的故障告警永久失声。
         try:
             if self.client is None:
                 self.client = WebhookBot.from_environment()
-            self.outbox.dispatch(now, self.client.send, prepare_payload=self.prepare_preview)
+            self.outbox.dispatch(now, self.client.send, prepare_payload=self.prepare_preview,
+                                 allowed_kinds=None if self.process else {'monitor_found', 'monitor_saved', 'system'})
         except Exception as exc:
             notify.notify('审校提醒暂未投递', type(exc).__name__ + '；请检查飞书配置与发件箱。', popup=False)
 

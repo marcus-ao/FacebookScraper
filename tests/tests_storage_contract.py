@@ -137,6 +137,7 @@ class StorageContractTests(unittest.TestCase):
     def test_download_rejects_truncated_image_and_records_valid_image_facts(self):
         class Response:
             ok = True
+            status = 200
             headers = {'content-type': 'image/png'}
             async def body(self):
                 return png()[:20] if self.truncated else png()
@@ -216,6 +217,7 @@ class StorageContractTests(unittest.TestCase):
                 store.update_post_tags(test.arc.base, test.arc.rows()[0], ['S1 Pro'])
                 class Response:
                     ok = True
+                    status = 200
                     headers = {'content-type': 'image/png'}
                     async def body(self):
                         return png('blue')

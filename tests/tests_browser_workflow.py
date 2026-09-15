@@ -50,7 +50,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                   "react_build": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                   for path in (ROOT / "web/ui/dist/assets").glob("*.js")},
                   "backend_scope": "temporary archive, human/localization ledgers, source CAS, history, temporary TOML CAS",
-                  "ui_only_scope": "runtime interruption/uncertain-message states and scheduled/published remote observations",
+                  "ui_only_scope": "runtime interruption/uncertain messages, single-post capture recovery controls, scheduled/published observations",
                   "real_external_actions": False}
         (cls.artifacts / "report.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print("\nOffline browser artifacts: " + str(cls.artifacts))
@@ -239,8 +239,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                                      for field in fields if field["help"])
         controlled_names = {"targets": "监测来源账号", "publish_identity": "发布账号核验名",
                             "price_map": "价格映射", "trusted_owners": "信任名单",
-                            "pipeline": "处理方式与预算", "delta": "抓取控制",
-                            "network_evidence": "网络探查设置"}
+                            "pipeline": "处理方式与预算", "delta": "抓取控制"}
         self.page.get_by_role("button", name=controlled_names[controlled_key], exact=True).click()
         expect(self.page.get_by_text(field["help"], exact=True)).to_be_visible()
         time_input.fill("12:00, 19:00")
@@ -394,6 +393,60 @@ class BrowserWorkflowTests(unittest.TestCase):
         dialog.get_by_role("button", name="继续核对", exact=True).click()
         expect(dialog).to_have_count(0)
         self.assertNotIn(("POST", endpoint + "/approve"), self.writes)
+
+    def test_09_capture_link_unknown_total_and_explicit_one_attempt_recovery(self):
+        """UI-only recovery receipt: exact post, current revision, and a required human reason."""
+        payload = runtime_payload()
+        key = "instagram:neakasa.global:offline-capture"
+        item = {"key": key, "scan_id": "offline-scan", "status": "manual",
+                "post_id": "offline-capture", "platform": "instagram", "account_dir": "in_neakasa.global",
+                "classification": "time_unknown", "reason": "来源媒体列表未确认，等待人工处理",
+                "archived": False, "saved_images": 0, "source_media_count": None,
+                "source_media_complete": False, "media_complete": False,
+                "first_seen_at": "2026-09-15T02:00:00Z", "finished_at": "2026-09-15T02:00:15Z",
+                "permalink": "https://www.instagram.com/p/offline-capture/",
+                "discovery_wait_seconds": None, "capture_seconds": 15}
+        payload["monitoring"] = {"status": "ready", "revision": 8, "capture_revision": 11,
+            "reason": None, "baselines": {"instagram": {"enabled_at": "2026-09-14T23:00:00Z",
+                "lookback_days": 30, "recent_count": 9}},
+            "platforms": {"instagram": {"paused": False, "failures": 0, "reason": None,
+                "next_due_at": "2026-09-15T03:00:00Z", "homepage_used": 10, "homepage_limit": 24,
+                "detail_used": 3, "detail_limit": 12}},
+            "items": [item, dict(item, key="instagram:neakasa.global:other-post", post_id="other-post")]}
+        self.responses[("GET", "/api/runtime")] = {"body": payload}
+        posted = []
+
+        def recover(request):
+            posted.append(request.post_data_json)
+            item.update(status="complete", archived=True, saved_images=2, source_media_count=2,
+                        source_media_complete=True, media_complete=True, classification="recovered", reason=None)
+            payload["monitoring"]["capture_revision"] = 12
+            return {"body": payload}
+
+        self.responses[("POST", "/api/runtime/capture/recover")] = recover
+        self.page.goto(self.fixtures.base_url + "/runtime?capture=" + quote(key, safe=""))
+        panel = self.page.get_by_role("region", name="新帖采集状态", exact=True)
+        expect(panel).to_contain_text("主页 10/24 次，详情 3/12 次")
+        expect(panel).to_contain_text("已校验 0 / 总数待核对 张")
+        expect(panel).to_contain_text("发现等待 未知 · 本次抓取 15 秒")
+        expect(panel).not_to_contain_text("other-post")
+        expect(panel.get_by_role("link", name="查看已存原帖", exact=True)).to_have_count(0)
+        expect(panel.get_by_role("link", name="查看源帖", exact=True)).to_have_attribute("href", item["permalink"])
+        panel.get_by_role("button", name="处理后尝试一次", exact=True).click()
+        dialog = self.page.get_by_role("dialog")
+        confirm = dialog.get_by_role("button", name="确认采集一次", exact=True)
+        expect(confirm).to_be_disabled()
+        reason = "已人工核对当前帖子；允许这次离线界面模拟尝试"
+        dialog.get_by_label("处理说明").fill(reason)
+        confirm.click()
+        expect(dialog).to_have_count(0)
+        self.assertEqual(posted, [{"key": key, "version": 11, "reason": reason}])
+        expect(panel).to_contain_text("补齐完成")
+        expect(panel).to_contain_text("已校验 2 / 2 张")
+        expect(panel.get_by_role("link", name="查看已存原帖", exact=True)).to_have_attribute(
+            "href", "/history/in_neakasa.global/offline-capture")
+        expect(panel.get_by_role("button", name="处理后尝试一次", exact=True)).to_have_count(0)
+        self.assertEqual(self.writes, [])
 
 
 if __name__ == "__main__":

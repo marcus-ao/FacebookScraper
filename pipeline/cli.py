@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable, Mapping
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from core.monitoring import detection_failure_kind
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
 from core.notify import notify                      # noqa: E402
@@ -24,8 +25,6 @@ from pipeline.settings import (AUTONOMY_LEVELS as AUTONOMY_LEVELS,      # noqa: 
                                pipeline_settings)
 from core import paid_requests                      # noqa: E402
 from core.heartbeat import HeartbeatSettings, heartbeat_status  # noqa: E402
-from core.network_evidence import (NetworkEvidenceSettings, network_evidence_status,  # noqa: E402
-                                   detection_failure_kind)  # noqa: E402
 from publish.compose import (                        # noqa: E402
     _PROBE_REQUIRED_OBSERVATIONS as required)
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
@@ -539,29 +538,8 @@ def _print_heartbeat_preflight(state_dir: Path, now: datetime) -> None:
     print("    缺席告警由外部服务承担；本机记录无法证明停机时告警仍能送达。")
 
 
-def _print_network_preflight(state_dir: Path, now: datetime) -> None:
-    print("[8] 出口 IP / ASN（只读已采集证据）")
-    try:
-        settings = NetworkEvidenceSettings.load(cfg())
-        status = network_evidence_status(Path(state_dir) / "network_evidence.json", settings, now)
-    except ValueError:
-        print("    出口观测配置无效，请核对 [network_evidence]。")
-        return
-    labels = {"disabled": "未启用采集", "never": "尚无成功记录", "unknown": "本地证据无法读取",
-              "healthy": "最近有出口记录", "stale": "出口记录已过期", "clock_skew": "记录时刻晚于当前时钟"}
-    print("    %s" % labels[status["status"]])
-    if status["latest"]:
-        row = status["latest"]
-        print("    最后成功 %s（距今 %.1f 分钟）：%s / %s / ASN 类型 %s" % (
-            row["at"], status["age_seconds"] / 60, row["ip"], row["asn"], row["asn_type"]))
-        stability = {"insufficient_samples": "样本不足", "stable_observed": "样本内出口相同", "changed": "观察到出口变化"}
-        print("    最近 %d 次：%s，%d 个 IP，%d 个已知 ASN。" % (
-            len(status["history"]), stability[status["stability"]], status["distinct_ips"], status["distinct_asns"]))
-        if status["network_type"] == "hosting":
-            print("    提供方标记为机房/托管网络，请检查出口配置。")
-    if status.get("last_error"):
-        print("    IP 信息服务最近结果：%s（不能据此判断社媒账号被封）。" % status["last_error"])
-    print("    ISP 分类不能证明住宅出口；此进程到 IPinfo 的出口也不能证明浏览器未使用代理/分流。")
+def _print_detection_preflight(state_dir: Path) -> None:
+    print("[8] 平台访问状态（只读）")
     detection = _load_json(Path(state_dir) / "delta_state.json")
     if isinstance(detection, dict):
         reasons = {"account_checkpoint": "账号 checkpoint / challenge，需要人工核对",
@@ -610,7 +588,7 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
     for name, state in _task_states():
         print("    %-24s %s" % (name, state))
     _print_heartbeat_preflight(state_dir, now)
-    _print_network_preflight(state_dir, now)
+    _print_detection_preflight(state_dir)
 
     # ---- 业务配置：激活后决定"每天有多少帖能自己走完" ----
     rules = assisted.publish_rules()

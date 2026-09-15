@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
+
+from core.monitor_access import AccessController, AccessDenied
 import calendar
 import csv
 import hashlib
@@ -257,7 +260,7 @@ async def close_browser_session(playwright, browser) -> None:
 
 
 async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...], c,
-                                dcfg, state: dict, state_path: Path) -> dict:
+                                dcfg) -> dict:
     """Use the isolated detect browser and the repository's capture/parser path."""
     from core.chrome import attach  # 延迟导入：CSV 离线导入不应加载 Playwright。
     from core.parse import extract, partition_by_owner  # 延迟导入：仅浏览器 peer 路径需要帖子解析器。
@@ -267,17 +270,8 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
     c.assert_chrome_profiles_isolated()
     pw = browser = None
     result = {"instagram": {}, "peer_posts": {}, "errors": []}
-    entry = state.setdefault("instagram", delta.blank_entry())
-
     def record_failure(reason: str, *, hard: bool = False) -> None:
-        moment = delta.utcnow()
-        delta.record_failure(entry, moment, reason)
-        if hard:
-            state["detect_hard_blocked"] = {
-                "reason": reason, "platform": "instagram",
-                "recorded_at": delta.iso(moment),
-            }
-        delta.save_state(state_path, state)
+        dcfg.access.outcome("instagram", success=False, reason=reason, hard=hard)
 
     try:
         try:
@@ -292,13 +286,18 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
             return result
         requests = [("tag", tag) for tag in tags] + [("peer", peer) for peer in peers]
         for index, (kind, value) in enumerate(requests):
-            if delta.budget_exhausted(entry, dcfg.failure_budget):
-                result["errors"].append("连续失败达到抓取预算，已停止本批")
+            try:
+                dcfg.access.check("instagram")
+            except AccessDenied as exc:
+                result["errors"].append(str(exc))
                 break
             url = ("https://www.instagram.com/explore/tags/%s/"
                    % quote(value.removeprefix("#"), safe="")
                    if kind == "tag" else delta.profile_url("instagram", value))
             try:
+                if index:
+                    dcfg = replace(dcfg, scan_id=uuid4().hex)
+                    dcfg.access.reserve_homepage("instagram", dcfg.scan_id, run_kind="sampling")
                 collector, final_url = await asyncio.wait_for(
                     delta.scan_page(context, url, dcfg), timeout=dcfg.max_session_seconds)
                 reason = delta.login_wall_reason(final_url, collector.blocked_status())
@@ -321,6 +320,10 @@ async def _browser_observations(*, tags: tuple[str, ...], peers: tuple[str, ...]
                         "tags": extract_hashtags(post.text or ""),
                         "url": post.permalink or url,
                     } for post in posts]
+                dcfg.access.outcome("instagram", success=True)
+            except AccessDenied as exc:
+                result["errors"].append(str(exc))
+                break
             except (Exception, SystemExit) as exc:
                 hard = isinstance(exc, delta.DeltaBlocked) and exc.hard
                 reason = "%s:%s:%s:%s" % (
@@ -350,19 +353,17 @@ def collect_browser_observations(*, tags: Iterable[str] = (), peers: Iterable[st
     if not tag_names and not peer_names:
         return {"instagram": {}, "peer_posts": {}, "errors": []}
     from routes import delta  # 延迟导入：只有实际浏览器采样才争用增量锁和状态。
-    dcfg = replace(delta.DeltaConfig.load(c), max_scrolls=0)
-    state_path = Path(c.state_dir) / "delta_state.json"
+    access = AccessController(Path(c.state_dir))
+    dcfg = replace(delta.DeltaConfig.load(c), max_scrolls=0, access=access,
+                   scan_id=uuid4().hex, run_kind="sampling")
     with delta.DeltaRunLock(Path(c.state_dir) / "delta.lock"):
-        state = delta.load_state(state_path)
-        delta.bind_target_state(state, c)
-        entry = state.setdefault("instagram", delta.blank_entry())
-        if state.get("detect_hard_blocked"):
-            raise SamplingUnavailable("detect 会话已被登录墙或限流硬停，须人工恢复")
-        if delta.budget_exhausted(entry, dcfg.failure_budget):
-            raise SamplingUnavailable("Instagram 连续失败达到预算，须人工恢复")
-        return asyncio.run(_browser_observations(
-            tags=tag_names, peers=peer_names, c=c, dcfg=dcfg,
-            state=state, state_path=state_path))
+        try:
+            access.check("instagram")
+            access.reserve_homepage("instagram", dcfg.scan_id, run_kind="sampling")
+        except AccessDenied as exc:
+            raise SamplingUnavailable(str(exc)) from exc
+        return asyncio.run(_browser_observations(tags=tag_names, peers=peer_names, c=c, dcfg=dcfg))
+
 
 
 def sample_instagram_tags(tags: Iterable[str], *, sampled_at: datetime | None = None,

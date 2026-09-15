@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Mapping
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+from core.monitor_access import AccessController, AccessDenied
 from core import paid_model
 from core.hashtag_sampling import close_browser_session
 
@@ -196,6 +197,11 @@ async def _playwright_download(request: ExportRequest, proof: Mapping, c) -> dic
     from core.chrome import attach  # 延迟导入：proof/CSV 离线校验不应加载 Playwright。
 
     c.assert_chrome_profiles_isolated()
+    access = AccessController(Path(c.state_dir))
+    try:
+        access.check_profile()
+    except AccessDenied as exc:
+        raise TrendsExportBlocked(str(exc)) from exc
     pw = browser = page = None
     blocked_statuses: list[int] = []
 
@@ -204,6 +210,7 @@ async def _playwright_download(request: ExportRequest, proof: Mapping, c) -> dic
             parsed = urlparse(response.url)
             if parsed.netloc == "trends.google.com" and response.status in {401, 403, 429}:
                 blocked_statuses.append(response.status)
+                access.profile_stop("Google Trends HTTP %s" % response.status)
         except (AttributeError, TypeError, ValueError):
             return
 
@@ -213,12 +220,15 @@ async def _playwright_download(request: ExportRequest, proof: Mapping, c) -> dic
             start_script=r"scripts\start_chrome_detect.bat", login_hint="探测小号")
         page = await context.new_page()
         page.on("response", observe_response)
+        access.check_profile()
         response = await page.goto(request.url, wait_until="domcontentloaded")
         status = response.status if response is not None else None
         status = blocked_statuses[0] if blocked_statuses else status
         if status in {401, 403, 429}:
+            access.profile_stop("Google Trends HTTP %s" % status)
             raise TrendsExportBlocked("Google Trends HTTP %s" % status, http_status=status)
         if _challenge_url(page.url):
+            access.profile_stop("Google Trends 返回 challenge/captcha 页面")
             raise TrendsExportBlocked("Google Trends 返回 challenge/captcha 页面")
         _validate_request_url(request, page.url)
         spec = proof["control"]
@@ -228,6 +238,7 @@ async def _playwright_download(request: ExportRequest, proof: Mapping, c) -> dic
             raise TrendsExportUnavailable("proof 记录的唯一 CSV 控件当前不可用；未尝试其他控件")
         try:
             async with page.expect_download() as pending:
+                access.check_profile()
                 await control.click()
         except Exception as exc:
             if blocked_statuses:
@@ -242,6 +253,7 @@ async def _playwright_download(request: ExportRequest, proof: Mapping, c) -> dic
                 "Google Trends HTTP %s" % blocked_statuses[0],
                 http_status=blocked_statuses[0])
         if _challenge_url(page.url):
+            access.profile_stop("Google Trends 返回 challenge/captcha 页面")
             raise TrendsExportBlocked("Google Trends 返回 challenge/captcha 页面")
         download = await pending.value
         failure = await download.failure()
@@ -287,16 +299,22 @@ def export_public_csv(request: ExportRequest, *, proof: Mapping, c=None,
     with delta.DeltaRunLock(Path(c.state_dir) / "delta.lock"):
         previous = load_state(c)
         if previous.get("status") == "blocked":
+            try:
+                AccessController(Path(c.state_dir)).profile_stop(str(previous.get("reason") or "Google Trends 导出已硬停"))
+            except AccessDenied as exc:
+                raise TrendsExportBlocked(str(exc)) from exc
             raise TrendsExportBlocked(
                 "Google Trends 导出已持久硬停；人工核对并显式 reset 前不会再次访问",
                 http_status=previous.get("http_status"))
-        shared_detect = delta.load_state(Path(c.state_dir) / "delta_state.json")
-        if shared_detect.get("detect_hard_blocked"):
-            reason = "共享 detect 会话仍处于登录墙或限流硬停，未访问 Google Trends"
+        access = AccessController(Path(c.state_dir))
+        try:
+            access.check_profile()
+        except AccessDenied as exc:
+            reason = "共享 detect 会话未获访问许可：" + str(exc)
             save_state(c, {"schema_version": 1, "status": "blocked",
                            "http_status": None, "reason": reason,
                            "blocked_at": moment.isoformat(), "request": request.context()})
-            raise TrendsExportBlocked(reason)
+            raise TrendsExportBlocked(reason) from exc
         runner = browser_runner
         try:
             result = (runner(request=request, proof=verified_proof, c=c)
@@ -318,6 +336,7 @@ def export_public_csv(request: ExportRequest, *, proof: Mapping, c=None,
             except UnicodeDecodeError as exc:
                 raise TrendsExportUnavailable("下载内容不是 UTF-8 CSV") from exc
         except TrendsExportBlocked as exc:
+            access.profile_stop(str(exc))
             blocked = {"schema_version": 1, "status": "blocked",
                        "http_status": exc.http_status, "reason": str(exc),
                        "blocked_at": moment.isoformat(), "request": request.context()}

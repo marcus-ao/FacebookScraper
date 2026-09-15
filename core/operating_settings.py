@@ -53,7 +53,7 @@ def read():
             'business_timezone': 'Europe/Berlin', 'workday_timezone': 'Asia/Shanghai',
             # Only non-secret policy fields are exposed, never the local runtime binding or credentials.
             'controlled': {key: deepcopy(raw.get(key, {})) for key in
-                           ('targets', 'delta', 'pipeline', 'network_evidence')}
+                           ('targets', 'delta', 'pipeline')}
                           | {'publish_identity': {key: value for key, value in pub.items()
                                                   if key.startswith('expected_') or key in
                                                   {'facebook_page_name', 'instagram_account'}},

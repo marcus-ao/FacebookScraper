@@ -236,7 +236,6 @@ export const RUNTIME_SHAPE: ShapeSpec = {
   business: shape.object,
   stages: shape.array,
   heartbeat: shape.object,
-  network: shape.object,
 }
 
 export const RUNTIME_STAGE_SHAPE: ShapeSpec = {

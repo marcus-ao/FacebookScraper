@@ -460,6 +460,7 @@ def _mirror_storage_status(account_dir: Path, post_id: str) -> dict:
 def _storage_facts(source: engine.SourcePost) -> dict:
     """Storage evidence for one source post, assembled from read-only truth and journals."""
     row, account_dir = dict(source.row), source.account_dir
+    from core.capture_state import verified_images
     media = store.media_storage_info(account_dir, row)
     images = [item for item in media if item.get('kind') == 'image']
     expected_images = len(images)
@@ -486,7 +487,11 @@ def _storage_facts(source: engine.SourcePost) -> dict:
         'folder': folder,
         'first_archived_at': row.get('archived_at') if isinstance(row.get('archived_at'), str) else None,
         'local': {'status': local_status, 'saved_images': saved_images,
-                  'expected_images': expected_images},
+                  'expected_images': expected_images,
+                  'source_media_complete': row.get('source_media_complete'),
+                  'media_complete': row.get('media_complete'),
+                  'source_media_count': row.get('source_media_count'),
+                  'verified_images': verified_images(account_dir, row)},
         'database': query_index.index_status(history=account_dir.name not in cfg().active_accounts()),
         'feishu': _mirror_storage_status(account_dir, source.post_id),
         'media': media,

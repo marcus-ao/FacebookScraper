@@ -50,6 +50,10 @@ def ig_coauthors(node: dict) -> list[str]:
     return out
 
 
+def _media_count(value) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
 def from_iphone_struct(item: dict, account: str, route: str) -> Post:
     code = item.get("code", "")
     caption = (item.get("caption") or {}).get("text", "") or ""
@@ -67,8 +71,11 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
                      if isinstance(c, dict) and c.get("url")), None)
 
     media: list[Media] = []
+    carousel = item.get('media_type') == 8 or 'carousel_media' in item
+    declared = _media_count(item.get('carousel_media_count'))
     children = item.get("carousel_media") or [item]
-    media_complete = True
+    media_complete = (item.get('media_type') in (1, 2) if not carousel
+                      else item.get('media_type') == 8 and bool(item.get('carousel_media')))
     if not isinstance(children, list):
         children = [item]
         media_complete = False
@@ -77,7 +84,7 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
             media_complete = False
             continue
         versions = child.get("video_versions") or []
-        has_video = bool(versions)
+        has_video = bool(versions) or child.get('media_type') == 2 or child.get('product_type') in {'clips', 'igtv'}
         video = (next((v for v in versions
                        if isinstance(v, dict) and v.get("url")), None)
                  if isinstance(versions, list) else None)
@@ -85,25 +92,33 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
             if video:
                 # 视频不下载，但记录存在，否则连续性检查会误报缺口
                 media.append(Media(url=video["url"], kind="video",
-                                   width=video.get("width"), height=video.get("height")))
+                                   width=video.get("width"), height=video.get("height"),
+                                   source_media_id=str(child.get('pk') or child.get('id') or '') or None))
             else:
                 # 已明确是视频却缺视频 URL，不能退回缩略图并伪装成完整图片项。
                 media_complete = False
+                media.append(Media(url=f'{IG}/p/{code}/' if code else '', kind='video',
+                                   source_media_id=str(child.get('pk') or child.get('id') or '') or None))
             continue
         img = best_image(child)
         if img:
             media.append(Media(url=img["url"], kind="image",
-                               width=img.get("width"), height=img.get("height")))
+                               width=img.get("width"), height=img.get("height"),
+                               source_media_id=str(child.get('pk') or child.get('id') or '') or None))
         else:
             # 局部结构异常保留父帖并标残缺，供后续补齐。
             media_complete = False
 
+    if declared is not None and declared != len(media):
+        media_complete = False
     return Post(
         post_id=str(item.get("pk") or item.get("id") or code),
         platform="instagram", account=account,
         text=caption, created_at=iso(item.get("taken_at")),
         permalink=f"{IG}/p/{code}/" if code else None,
         media=media, source_route=route, media_complete=media_complete,
+        source_media_complete=media_complete,
+        source_media_count=declared if declared is not None else (len(media) if media_complete else None),
         owner=owner, owner_name=owner_name, coauthors=ig_coauthors(item),
     )
 
@@ -128,28 +143,32 @@ def from_graphql_node(node: dict, account: str, route: str) -> Post:
     is_video = bool(node.get("is_video")) or typename == "GraphVideo"
     is_carousel = typename == "GraphSidecar"
 
-    dims = node.get("dimensions") or {}
     media: list[Media] = []
-    if node.get("display_url"):
-        media.append(Media(
-            url=node["display_url"],
-            kind="video" if is_video else "image",
-            width=dims.get("width"), height=dims.get("height"),
-        ))
-
-    # 轮播帖在这个端点只给封面，子项拿不到
-    children = (node.get("edge_sidecar_to_children") or {}).get("edges") or []
-    for e in children:
-        n = e.get("node") or {}
-        if n.get("display_url"):
-            d2 = n.get("dimensions") or {}
-            media.append(Media(
-                url=n["display_url"],
-                kind="video" if n.get("is_video") else "image",
-                width=d2.get("width"), height=d2.get("height"),
-            ))
-
-    complete = not (is_carousel and not children)
+    container = node.get('edge_sidecar_to_children') or {}
+    children = container.get('edges') or []
+    complete = typename in ('GraphImage', 'GraphVideo') if not is_carousel else bool(children)
+    if not isinstance(children, list):
+        children, complete = [], False
+    # 有子项时封面不是额外一张图；缺子项时保留可获得封面并明确不完整。
+    nodes = [(edge.get('node') or {}) for edge in children if isinstance(edge, dict)] if children else [node]
+    if len(nodes) != len(children) and children:
+        complete = False
+    for child in nodes:
+        video = bool(child.get('is_video')) or child.get('__typename') == 'GraphVideo'
+        url = (child.get('video_url') or child.get('display_url')) if video else child.get('display_url')
+        if not url:
+            complete = False
+            if not video:
+                continue
+            url = f'{IG}/p/{code}/' if code else ''
+        dimensions = child.get('dimensions') or {}
+        media.append(Media(url=url, kind='video' if video else 'image',
+            width=dimensions.get('width'), height=dimensions.get('height'),
+            source_media_id=str(child.get('id') or '') or None))
+    declared = _media_count(container.get('count'))
+    if ((declared is not None and declared != len(media))
+            or (container.get('page_info') or {}).get('has_next_page')):
+        complete = False
 
     return Post(
         post_id=str(node.get("id") or code),
@@ -157,6 +176,8 @@ def from_graphql_node(node: dict, account: str, route: str) -> Post:
         text=text, created_at=iso(node.get("taken_at_timestamp")),
         permalink=f"{IG}/p/{code}/" if code else None,
         media=media, source_route=route, media_complete=complete,
+        source_media_complete=complete,
+        source_media_count=declared if declared is not None else (len(media) if complete else None),
         owner=owner, owner_name=owner_name, coauthors=ig_coauthors(node),
     )
 
@@ -197,48 +218,75 @@ def _fb_actor(node: dict) -> tuple[str | None, str | None]:
     return slug, a.get("name")
 
 
-def _fb_videos(node: dict) -> list[Media]:
-    """仅记录顶层附件视频元数据；watch 链接由 ID 构造，不作为下载地址。"""
+def _fb_media(node: dict) -> tuple[list[Media], bool]:
+    """按附件顺序识别媒体；只在同一个媒体内部选择最大图像尺寸。"""
     out: list[Media] = []
     seen: set[str] = set()
+    complete = True
 
     def collect(container) -> None:
+        nonlocal complete
         if not isinstance(container, list):
+            complete = False
             return
         for att in container:
             if not isinstance(att, dict):
+                complete = False
                 continue
-            m = att.get("media")
-            if isinstance(m, dict) and m.get("__typename") == "Video" and m.get("id"):
-                vid = str(m["id"])
-                if vid not in seen:
-                    seen.add(vid)
-                    out.append(Media(url=FB_WATCH + vid, kind="video"))
-            sub = att.get("all_subattachments")
+            sub = att.get('all_subattachments') or att.get('subattachments')
+            children = None
             if isinstance(sub, dict):
-                collect(sub.get("nodes"))
+                children = sub.get('nodes') or sub.get('data') or []
+                count = _media_count(sub.get('count'))
+                if not children or (count is not None and count != len(children)) or (sub.get('page_info') or {}).get('has_next_page'):
+                    complete = False
+            m = att.get("media")
+            if not isinstance(m, dict):
+                if children is not None:
+                    collect(children)
+                    continue
+                # 无媒体身份的图片片段仍保留素材，但不能据此证明原帖列表已给齐。
+                complete = False
+                if isinstance(att.get('image'), dict):
+                    m = {'image': att['image']}
+                else:
+                    continue
+            if m.get('__typename') not in ('Photo', 'Video'):
+                complete = False
+            identifier = str(m.get('id') or '') or None
+            if m.get('__typename') == 'Video':
+                key = 'video:' + (identifier or str(len(out)))
+                if key not in seen:
+                    seen.add(key)
+                    out.append(Media(url=FB_WATCH + identifier if identifier else '', kind='video', source_media_id=identifier))
+                if children is not None:
+                    collect(children)
+                continue
+            images = list(walk(m, lambda value: isinstance(value.get('uri'), str) and 'width' in value and 'height' in value))
+            if not images:
+                if (att.get('styles') or {}).get('__typename') != 'StoryAttachmentProfileMediaStyleRenderer':
+                    complete = False
+                if children is not None:
+                    collect(children)
+                continue
+            image = max(images, key=lambda value: (value.get('width') or 0) * (value.get('height') or 0))
+            key = 'image:' + (identifier or image['uri'])
+            if key not in seen:
+                seen.add(key)
+                out.append(Media(url=image['uri'], kind='image', width=image.get('width'),
+                                 height=image.get('height'), source_media_id=identifier))
+            if children is not None:
+                collect(children)
 
-    collect(node.get("attachments"))
-    return out
+    collect(node.get('attachments') or [])
+    return out, complete
 
 
 def from_fb_story(node: dict, account: str, route: str) -> Post:
     msg = node.get("message")
     text = msg.get("text", "") if isinstance(msg, dict) else (msg or "")
 
-    media: list[Media] = []
-    seen_uris: set[str] = set()
-    for img in walk(node.get("attachments", []),
-                    lambda d: "uri" in d and "width" in d and "height" in d):
-        uri = img["uri"]
-        if uri in seen_uris:
-            continue
-        seen_uris.add(uri)
-        media.append(Media(url=uri, kind="image",
-                           width=img.get("width"), height=img.get("height")))
-    # 同一张图常有多个尺寸变体，按面积降序保留最大的那些
-    media.sort(key=lambda m: (m.width or 0) * (m.height or 0), reverse=True)
-    media.extend(_fb_videos(node))
+    media, complete = _fb_media(node)
 
     owner, owner_name = _fb_actor(node)
     ts = node.get("creation_time") or node.get("created_time")
@@ -248,15 +296,16 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
         permalink=node.get("url") or node.get("permalink_url"),
         media=media, source_route=route,
         # 纯文字或视频不等于媒体残缺；下载失败由下载层标记。
-        media_complete=True,
+        media_complete=complete, source_media_complete=complete,
+        source_media_count=len(media) if complete else None,
         owner=owner, owner_name=owner_name,
     )
 
 
-def _merge_post(current: Post, candidate: Post) -> Post:
+def merge_post(current: Post, candidate: Post) -> Post:
     """合并同帖响应：优先完整媒体，并补齐正文、时间、链接及作者信息。"""
-    def rank(post: Post) -> tuple[int, bool, bool, bool, bool]:
-        return (len(post.media), post.media_complete, bool(post.text),
+    def rank(post: Post) -> tuple[bool, int, bool, bool, bool]:
+        return (bool(post.source_media_complete), len(post.media), bool(post.text),
                 bool(post.created_at), bool(post.permalink))
 
     winner, other = ((candidate, current)
@@ -272,8 +321,10 @@ def _merge_post(current: Post, candidate: Post) -> Post:
     for attr in ("text", "created_at", "permalink", "owner", "owner_name"):
         if not getattr(winner, attr) and getattr(other, attr):
             setattr(winner, attr, getattr(other, attr))
-    if len(winner.media) == len(other.media):
-        winner.media_complete = winner.media_complete or other.media_complete
+    if winner.source_media_count is None and other.source_media_count is not None:
+        winner.source_media_count = other.source_media_count
+        if winner.source_media_count != len(winner.media):
+            winner.source_media_complete = winner.media_complete = False
     return winner
 
 def extract(payloads: list[dict], platform: str, account: str,
@@ -297,7 +348,7 @@ def extract(payloads: list[dict], platform: str, account: str,
                     continue
                 prev = out.get(post.post_id)
                 # 同一帖可能在多个响应里出现：保留媒体更全者，同时补齐正文等字段。
-                out[post.post_id] = post if prev is None else _merge_post(prev, post)
+                out[post.post_id] = post if prev is None else merge_post(prev, post)
     return list(out.values())
 
 

@@ -2,16 +2,19 @@
 import json
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
+from capture_fixtures import record_capture_rows
 from core import paid_consent
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
+from core.feishu import notification_card
+from core.capture_state import CaptureState
 from pipeline import engine, notifications
 from pipeline.service import Runtime
 from publish import journal
@@ -111,16 +114,10 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual((cfg().state_dir / 'published.jsonl').read_bytes(), before)
 
     def scanned(self, rows):
-        """让探测子进程"记下"逐篇事实，再跑一次 scan。两张监测卡由抓取事实产生，
-        不再由 collect() 遍历归档推导——所以回填**结构上**就进不来（它不走 delta_once）。"""
-        started = self.now
-        self.runtime.clock = lambda: started
-        self.runtime.detector = lambda _kind, _platform: [
-            self.runtime.processing.fact(event, started, platform='facebook', **fields)
-            for event, fields in rows] and 0
+        record_capture_rows(self.runtime, rows, self.now, 'facebook')
         self.runtime.scan('delta', 'facebook')
         if not self.runtime.outbox.path.exists():
-            return []      # 没有可播报的事就连发件箱文件都不建
+            return []
         return [e for e in self.events().values() if e['kind'] in {'monitor_found', 'monitor_saved'}]
 
     def test_the_found_card_shows_the_english_source_even_with_a_german_draft_ready(self):
@@ -152,11 +149,14 @@ class NotificationTests(unittest.TestCase):
             ('post_captured', {'post_id': 'p1', 'images': 2, 'videos': 0,
                                'folder': 'posts/2026-09/Riko/2026-09-10_1200_p1'}),
             ('post_capture_incomplete', {'post_id': 'p2'})])
-        saved = next(c['payload'] for c in cards if c['kind'] == 'monitor_saved')
-        self.assertIn('发现 2 篇，成功落档 1 篇，失败 1 篇', saved['text'])
-        self.assertIn('p1  已落档 · 2 图 0 视频 · posts/2026-09/Riko/', saved['text'])
-        self.assertIn('p2  未落档 · 媒体未补全', saved['text'])
-        self.assertIn('原图链接有时效', saved['risk'])
+        saved = [c['payload'] for c in cards if c['kind'] == 'monitor_saved']
+        self.assertEqual(len(saved), 2)
+        self.assertEqual({p['post_id'] for p in saved}, {'p1', 'p2'})
+        success = next(p for p in saved if p['post_id'] == 'p1')
+        failure = next(p for p in saved if p['post_id'] == 'p2')
+        self.assertIn('已保存并校验 2/2 张', json.dumps(success, ensure_ascii=False))
+        self.assertIn('待人工', failure['capture_status'])
+        self.assertFalse(failure['archived'])
 
     def test_a_fully_successful_round_says_so_instead_of_staying_silent(self):
         cards = self.scanned([
@@ -164,8 +164,8 @@ class NotificationTests(unittest.TestCase):
                                  'head': 'alles gut', 'images': 1, 'known': False}),
             ('post_captured', {'post_id': 'p1', 'images': 1, 'videos': 0, 'folder': 'posts/2026-09/未分类/p1'})])
         saved = next(c['payload'] for c in cards if c['kind'] == 'monitor_saved')
-        self.assertIn('成功落档 1 篇，没有失败', saved['text'])
-        self.assertFalse(saved['risk'])
+        self.assertEqual(saved['capture_status'], '完整')
+        self.assertTrue(saved['archived'])
 
     def test_monitor_cards_go_to_separate_stage_bots_even_off_duty(self):
         self.scanned([
@@ -180,7 +180,7 @@ class NotificationTests(unittest.TestCase):
         for recipient, card, _delivery in sent:
             by_group.setdefault(recipient, []).append(card['header']['title']['content'])
         self.assertEqual(by_group['detect'], ['Neakasa 德国站 · 监测到新帖 · 新帖检测推送机器人'])
-        self.assertEqual(by_group['capture'], ['Neakasa 德国站 · 原帖抓取完成 · 新帖爬取推送机器人'])
+        self.assertEqual(by_group['capture'], ['Neakasa 德国站 · 原帖抓取结果：完整 · 新帖爬取推送机器人'])
         self.assertEqual(by_group['alert'], ['Neakasa 德国站 · 系统需要处理 · 状态告警推送机器人'])
 
     def test_a_broken_card_costs_the_broadcast_not_the_scan_exit_code(self):
@@ -233,6 +233,107 @@ class NotificationTests(unittest.TestCase):
         rows = list(self.events().values())
         self.assertTrue(any(row['kind'] == 'system' and 'instagram' in row['payload']['text'] for row in rows))
         self.assertTrue(any(row['kind'] == 'morning' and '未执行兜底 1 次' in row['payload']['text'] for row in rows))
+
+    def test_long_excerpt_preserves_counts_and_per_post_buttons(self):
+        cards = self.scanned([
+            ('post_discovered', {'post_id': 'one', 'created_at': self.f.source['created_at'],
+                                 'head': 'A' * 4000, 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'one', 'images': 1}),
+            ('post_discovered', {'post_id': 'two', 'created_at': self.f.source['created_at'],
+                                 'head': 'Second', 'images': 1, 'known': False}),
+            ('post_captured', {'post_id': 'two', 'images': 1})])
+        saved = [item['payload'] for item in cards if item['kind'] == 'monitor_saved']
+        self.assertEqual(len(saved), 2)
+        for payload in saved:
+            card = notification_card('monitor_saved', [payload], self.runtime.settings)
+            rendered = json.dumps(card, ensure_ascii=False)
+            self.assertIn('已保存并校验 1/1 张', rendered)
+            buttons = [button for part in card['elements'] if part['tag'] == 'action' for button in part['actions']]
+            self.assertEqual(buttons[0]['url'], 'http://review.internal/history/fa_neakasaofficial/' + payload['post_id'])
+            self.assertIn(payload['post_id'], buttons[1]['url'])
+            self.assertFalse(any(part['tag'] == 'img' for part in card['elements']))
+            if payload['post_id'] == 'one':
+                self.assertIn('A' * 300, rendered)
+                self.assertNotIn('A' * 301, rendered)
+                self.assertIn('已截断', rendered)
+
+    def test_interleaved_delivery_waits_for_final_finish(self):
+        self._assert_interleaved_summary(interrupted=False)
+
+    def test_interleaved_delivery_waits_for_restart_recovery(self):
+        self._assert_interleaved_summary(interrupted=True)
+
+    def _assert_interleaved_summary(self, *, interrupted):
+        from core.store import Archive, Post, Media
+        ledger = CaptureState(cfg().state_dir)
+        ledger.initialize(cfg().archive_dir, cfg()['targets'], 'fixture', now=self.now - timedelta(days=1))
+        account = cfg()['targets']['facebook']
+        arc = Archive(cfg().archive_dir, 'fa_' + account)
+        posts = [Post(identifier, 'facebook', account, 'English text', self.now.isoformat(),
+                      media=[Media('https://cdn.invalid/' + identifier, 'image')],
+                      source_media_complete=False) for identifier in ('first', 'second')]
+        ledger.begin('interleaved', posts, {}, self.now)
+        ledger.finish(posts[0], arc, self.now, reason='fixture missing image')
+        self.runtime.enqueue_capture_results(self.now)
+        self.runtime.outbox.dispatch(self.now, lambda *args: 'fake accepted')
+        self.assertEqual([e['kind'] for e in self.events().values()], ['monitor_saved'])
+        self.assertFalse(next(iter(ledger.status()['events'].values()))['acknowledged'])
+        # Restart recovery closes the final pending candidate without losing its summary fact.
+        if interrupted:
+            ledger.recover_interrupted(self.now)
+        else:
+            ledger.finish(posts[1], arc, self.now, reason='fixture missing image')
+        self.runtime.enqueue_capture_results(self.now)
+        self.runtime.outbox.dispatch(self.now, lambda *args: 'fake accepted')
+        self.runtime.enqueue_capture_results(self.now)
+        events = list(self.events().values())
+        self.assertEqual(sum(e['kind'] == 'monitor_saved' for e in events), 2)
+        found = [e for e in events if e['kind'] == 'monitor_found']
+        self.assertEqual(len(found), 1)
+        self.assertIn('新发布 2 篇', found[0]['payload']['text'])
+        manual = [e for e in events if e['kind'] == 'system']
+        self.assertEqual(len(manual), 1)
+        self.assertIn('2 篇需要人工', manual[0]['payload']['text'])
+        self.assertTrue(all(e['acknowledged'] for e in ledger.status()['events'].values()))
+
+    def test_missing_enqueue_replays_from_capture_truth_once(self):
+        rows = [('post_discovered', {'post_id': 'replay', 'created_at': self.f.source['created_at'],
+                                    'head': 'Recover queue', 'images': 1, 'known': False}),
+                ('post_captured', {'post_id': 'replay', 'images': 1})]
+        record_capture_rows(self.runtime, rows, self.now, 'facebook')
+        self.runtime.detector('delta', 'facebook')
+        with patch.object(self.runtime.outbox, 'enqueue', side_effect=RuntimeError('fixture queue busy')):
+            self.runtime.enqueue_capture_results(self.now)
+        self.assertTrue(any(not row['acknowledged'] for row in CaptureState(cfg().state_dir).status()['events'].values()))
+        self.runtime.enqueue_capture_results(self.now)
+        self.runtime.enqueue_capture_results(self.now)
+        self.assertEqual(len(self.events()), 2)
+
+    def test_unknown_total_is_explicit_and_failure_links_to_issue(self):
+        self.scanned([('post_discovered', {'post_id': 'issue', 'created_at': self.f.source['created_at'],
+                                         'head': 'Unknown list', 'images': 1, 'known': False})])
+        event = next(iter(CaptureState(cfg().state_dir).status()['events'].values()))
+        event['source']['source_media_count'] = None
+        payload = notifications.capture_card(event)
+        card = notification_card('monitor_saved', [payload], self.runtime.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn('已保存并校验 0 张，原帖总数待确认', rendered)
+        self.assertIn('/runtime?capture=facebook%3Aneakasaofficial%3Aissue', rendered)
+        self.assertNotIn('/history/', rendered)
+
+    def test_stage_one_maintenance_does_not_start_later_stages_or_send_their_old_cards(self):
+        self.runtime.outbox.enqueue('old-ready', 'ready', {'text': 'later stage'}, self.now)
+        with patch.object(self.runtime, 'refresh_hashtags') as tags, \
+             patch.object(self.runtime, 'refresh_calendar') as calendar, \
+             patch.object(self.runtime, 'mirror_sources') as mirror, \
+             patch.object(self.runtime, 'collect') as collect:
+            self.runtime.maintenance(self.now)
+            self.runtime.await_delivery()
+            tags.assert_not_called()
+            calendar.assert_not_called()
+            mirror.assert_not_called()
+            collect.assert_not_called()
+        self.runtime.client.send.assert_not_called()
 
 
 if __name__ == '__main__':

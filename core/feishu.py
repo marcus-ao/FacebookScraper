@@ -33,7 +33,7 @@ PREVIEWED = {'ready'}
 # 所以人工自检不会在发件箱里留下假事件。
 TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
           'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况',
-          'monitor_found': '监测到新帖', 'monitor_saved': '原帖抓取完成', 'selftest': '通道自检'}
+          'monitor_found': '监测到新帖', 'monitor_saved': '原帖抓取结果', 'selftest': '通道自检'}
 
 
 class FeishuError(RuntimeError):
@@ -80,7 +80,7 @@ class FeishuSettings:
         parsed = urlsplit(self.base_url)
         if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
                 or parsed.username or parsed.password or parsed.query or parsed.fragment):
-            raise ValueError('请配置可访问的审校台 base_url，不要包含凭据、查询参数或锚点')
+            raise ValueError('审校台 base_url 须为 HTTP(S) 地址，不含凭据、查询参数或锚点')
         groups = [getattr(self, role + '_recipients') for role in WEBHOOK_ROLES]
         if any(not group for group in groups):
             raise ValueError('检测、爬取、发布、状态告警各需要一个接收角色')
@@ -248,11 +248,28 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings,
         if payload.get('image_key'):
             elements.append({'tag': 'img', 'img_key': payload['image_key'],
                              'alt': {'tag': 'plain_text', 'content': payload.get('image_note', '帖子首图')}, 'mode': 'fit_horizontal'})
-        parts = [str(payload[key]) for key in ('platform', 'account', 'created_at', 'meta', 'text',
-                                               'image_note', 'risk', 'next_step')
-                 if payload.get(key)]
-        elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': '\n'.join(parts)[:1600]}})
+        if payload.get('fields'):
+            for field in payload['fields']:
+                elements.append({'tag': 'div', 'text': {'tag': 'plain_text',
+                    'content': str(field['label']) + '：' + str(field['value'])}})
+        else:
+            for key in ('platform', 'account', 'created_at', 'meta', 'text', 'image_note', 'risk', 'next_step'):
+                if payload.get(key):
+                    elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': str(payload[key])[:1600]}})
         actions = []
+        if payload.get('capture_key'):
+            if payload.get('archived'):
+                suffix = '/history/' + quote(payload['account_dir'], safe='') + '/' + quote(payload['post_id'], safe='')
+                label = '查看已存原帖'
+            else:
+                suffix = '/runtime?capture=' + quote(payload['capture_key'], safe='')
+                label = '查看该项采集异常'
+            actions.append({'tag': 'button', 'type': 'primary',
+                'text': {'tag': 'plain_text', 'content': label}, 'url': settings.base_url.rstrip('/') + suffix})
+        elif payload.get('run_id'):
+            actions.append({'tag': 'button', 'type': 'primary',
+                'text': {'tag': 'plain_text', 'content': '查看运行详情'},
+                'url': settings.base_url.rstrip('/') + '/runtime?scan=' + quote(payload['run_id'], safe='')})
         if payload.get('task_id'):
             url = settings.base_url.rstrip('/') + '/?task=' + quote(str(payload['task_id']), safe='')
             actions.append({'tag': 'button', 'type': 'primary',
@@ -260,11 +277,13 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings,
         # 原帖按钮不依赖 task_id：监测与抓取卡片发生在有审校任务之前。
         original = urlsplit(str(payload.get('permalink') or ''))
         if original.scheme == 'https' and original.hostname and not original.username and not original.password:
-            actions.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': '查看原帖'},
+            actions.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': '查看源帖' if payload.get('capture_key') else '查看原帖'},
                             'url': payload['permalink']})
         if actions:
             elements.append({'tag': 'action', 'actions': actions})
     title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
+    if kind == 'monitor_saved' and len(payloads) == 1 and payloads[0].get('capture_status'):
+        title += '：' + payloads[0]['capture_status']
     bot_name = BOT_LABELS.get(role or KIND_ROLES.get(kind))
     if bot_name:
         title += ' · ' + bot_name
@@ -373,7 +392,12 @@ class Outbox:
             counts[row['status']] = counts.get(row['status'], 0) + 1
             deliveries.append({'delivery_id': identifier, **{key: row.get(key) for key in
                                ('kind', 'status', 'attempts', 'created_at', 'next_at', 'error', 'sent_at', 'preview_error')},
-                               'version': self._version(row), 'task_ids': [data['events'][key]['payload'].get('task_id')
+                               'version': self._version(row),
+                               'capture_keys': [data['events'][key]['payload']['capture_key'] for key in row['events']
+                                                if key in data['events'] and data['events'][key]['payload'].get('capture_key')],
+                               'captured_at': [data['events'][key]['payload']['captured_at'] for key in row['events']
+                                               if key in data['events'] and data['events'][key]['payload'].get('captured_at')],
+                               'task_ids': [data['events'][key]['payload'].get('task_id')
                                    for key in row['events'] if key in data['events']]})
         return {'enabled': self.settings.enabled, 'status': 'disabled' if not self.settings.enabled else
                 'needs_attention' if any(counts.get(key) for key in ('retry', 'uncertain')) else 'ready',
@@ -487,6 +511,7 @@ class Outbox:
             if not row or self._version(row) != expected_version or row['status'] not in {'retry', 'uncertain'}:
                 raise FeishuError('消息状态已有变化，请刷新后再核对')
             self._migrate_routes(data, now)
+            self._retire_network(data, now)
             stamp = _iso(now)
             row.setdefault('resolutions', []).append({'action': action, 'recorded_at': stamp, 'actor': None})
             if action == 'delivered':
@@ -554,7 +579,8 @@ class Outbox:
                     item['cancelled_at'] = _iso(now)
             atomic_write_json(self.path, data)
 
-    def dispatch(self, now: datetime, send: Callable[[str, dict, str], str], *, prepare_payload=None) -> int:
+    def dispatch(self, now: datetime, send: Callable[[str, dict, str], str], *, prepare_payload=None,
+                 allowed_kinds=None) -> int:
         if not self.settings.enabled:
             return 0
         self.settings.validate()
@@ -563,7 +589,10 @@ class Outbox:
         with self._lock():
             data = self._load()
             self._migrate_routes(data, now)
+            self._retire_network(data, now)
             for kind in sorted(KINDS):
+                if allowed_kinds is not None and kind not in allowed_kinds:
+                    continue
                 if kind not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
                 recipients = [recipient for event in data['events'].values() if event['kind'] == kind
@@ -604,6 +633,8 @@ class Outbox:
             # 先固定每次投递的事件集合与 UUID，重启后不会把新条目混入未确认的请求。
             atomic_write_json(self.path, data)
             for delivery_id, item in data['deliveries'].items():
+                if allowed_kinds is not None and item['kind'] not in allowed_kinds:
+                    continue
                 if item['status'] in {'sent', 'uncertain', 'cancelled'} or item['next_at'] > stamp:
                     continue
                 if item['kind'] not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
@@ -626,3 +657,12 @@ class Outbox:
                 atomic_write_json(self.path, data)
             self._archive_completed(data, now)
         return sent
+
+    def _retire_network(self, data, now):
+        """退出旧网络告警；冻结卡片和已送达/未知回执保留，混合卡的有效事件重新组卡。"""
+        retired = {key for key in data['events'] if key.startswith(('network:', 'network-change:'))}
+        for key in retired:
+            data['events'][key].setdefault('cancelled_at', _iso(now))
+        for item in data['deliveries'].values():
+            if retired.intersection(item['events']) and item['status'] in {'pending', 'retry'}:
+                item.update(status='cancelled', cancelled_at=_iso(now))

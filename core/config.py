@@ -223,7 +223,7 @@ class MonitorSchedule:
         return start <= self.local(now).time() < end
 
     def interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:
-        return (self.on_duty_interval_min if self.is_on_duty(now) and not quiet
+        return (self.on_duty_interval_min if self.is_on_duty(now)
                 else self.off_duty_interval_min)
 
     def minimum_interval_minutes(self, now: datetime, *, quiet: bool = False) -> float:

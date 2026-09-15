@@ -36,7 +36,7 @@ web_profile_info = {"data": {"user": {"id": "999", "username": "acme",
 
 # --- 形态 1：回填拦截到的 iphone_struct，同一批里也有 3002（轮播，这次字段全） ---
 iphone_carousel = {
-    "pk": "3002", "code": "BBB", "taken_at": 1756100000,
+    "pk": "3002", "code": "BBB", "taken_at": 1756100000, "media_type": 8,
     "caption": {"text": "New drop"},
     "carousel_media": [
         {"image_versions2": {"candidates": [
@@ -57,7 +57,7 @@ graphql_empty_caption = {
     "edge_media_to_caption": {"edges": []},
 }
 iphone_with_caption = {
-    "pk": "4001", "code": "DDD", "taken_at": 1756201000,
+    "pk": "4001", "code": "DDD", "taken_at": 1756201000, "media_type": 1,
     "caption": {"text": "Caption recovered from the richer response"},
     "image_versions2": {"candidates": [
         {"url": "https://cdn/ddd.jpg", "width": 1080, "height": 1080}]},
@@ -69,7 +69,7 @@ graphql_caption_cover = {
     "edge_media_to_caption": {"edges": [{"node": {"text": "Keep this caption"}}]},
 }
 iphone_more_media_no_caption = {
-    "pk": "4002", "code": "EEE", "taken_at": 1756202000, "caption": None,
+    "pk": "4002", "code": "EEE", "taken_at": 1756202000, "caption": None, "media_type": 8,
     "carousel_media": [
         {"image_versions2": {"candidates": [
             {"url": "https://cdn/eee_1.jpg", "width": 1080, "height": 1080}]}},
@@ -125,7 +125,8 @@ iphone_partial_carousel = {
 partial = extract([iphone_partial_carousel], "instagram", "acme", "backfill")
 check(len(partial) == 1 and partial[0].post_id == "3004",
       "一个轮播子项字段漂移时保留父帖，不让 extract 静默丢整篇")
-check(len(partial[0].media) == 1 and partial[0].media[0].url.endswith("valid.jpg"),
+check(len(partial[0].media) == 2 and partial[0].media[0].url.endswith("valid.jpg")
+      and partial[0].media[1].kind == 'video',
       "字段正常的兄弟子项保留，缺 URL 的视频不被缩略图伪装成图片")
 check(partial[0].media_complete is False,
       "无法解析的子项把父帖标为媒体残缺，供下次回填重试")

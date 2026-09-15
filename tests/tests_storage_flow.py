@@ -28,7 +28,7 @@ class StorageFlowTests(unittest.TestCase):
             captured_at = int(datetime(2026, 8, 31, 20, tzinfo=timezone.utc).timestamp())
             payloads = {
                 'instagram': {'items': [{
-                    'pk': 'ig_fixture', 'code': 'ABC', 'taken_at': captured_at,
+                    'pk': 'ig_fixture', 'code': 'ABC', 'taken_at': captured_at, 'media_type': 8,
                     'user': {'username': 'neakasa.global'},
                     'caption': {'text': 'Launch #NeakasaP1Pro #S1Pro'},
                     'carousel_media': [
@@ -48,6 +48,7 @@ class StorageFlowTests(unittest.TestCase):
                 async def get(self, url, **_kwargs):
                     class Response:
                         ok = True
+                        status = 200
                         headers = {'content-type': 'image/png'}
                         async def body(self):
                             return image_bytes('PNG', 'blue' if 'blue' in url else 'red')

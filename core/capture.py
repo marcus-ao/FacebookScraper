@@ -23,15 +23,27 @@ def atomic_write_json(path: Path, value) -> None:
 class Collector:
     """异步收集响应；停止监听后须 drain，避免丢失尚未读完的响应。"""
 
-    def __init__(self) -> None:
+    def __init__(self, on_block=None) -> None:
         self.payloads: list[dict] = []
         self.hits = 0
         self.statuses: list[tuple[int, str]] = []   # 非 200 的 (状态码, URL)
         self.sources: list[str] = []                # 出过 payload 的接口，供排查
         self._tasks: set[asyncio.Task] = set()
+        self.on_block = on_block
+
+    def _record_status(self, response) -> None:
+        if response.status == 200 or not any(k in response.url for k in INTEREST):
+            return
+        entry = (response.status, response.url)
+        already_blocked = self.blocked_status() is not None
+        if entry not in self.statuses:
+            self.statuses.append(entry)
+        if not already_blocked and response.status in (401, 403, 429) and self.on_block:
+            self.on_block(response.status)
 
     def submit(self, response) -> None:
         """登记响应处理任务，收尾时统一等待，避免最后几段 JSON 还没读完就落盘。"""
+        self._record_status(response)
         self._tasks.add(asyncio.create_task(self.on_response(response)))
 
     async def drain(self) -> None:
@@ -49,7 +61,7 @@ class Collector:
             return
         if response.status != 200:
             # 保留会话失效和限流信号，即使响应没有 JSON。
-            self.statuses.append((response.status, response.url))
+            self._record_status(response)
             return
         try:
             body = await response.text()
@@ -78,12 +90,18 @@ class Collector:
         return None
 
 
-async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
+class MediaRateLimited(RuntimeError):
+    """媒体端明确限流；调用方须停下后续采集动作。"""
+
+
+async def download_media(ctx, arc: Archive, post: Post, referer: str, *, check_stop=None) -> None:
     """复用浏览器请求栈下载静态媒体；签名 URL 须在当前运行内使用，视频只留元数据。"""
     downloads_complete = True
     if post.source_media_complete is None:
         post.source_media_complete = post.media_complete
     for i, m in enumerate(post.media):
+        if check_stop:
+            check_stop()
         if m.kind == "video":
             continue
         reusable = arc.reusable_media(post, m.url)
@@ -95,13 +113,18 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
             continue
         try:
             resp = await ctx.request.get(m.url, headers={"Referer": referer})
+            if resp.status == 429:
+                post.media_complete = False
+                raise MediaRateLimited('图片服务返回 429，已停止后续请求')
             if not resp.ok:
                 print(f"    ! 媒体 {resp.status} {post.post_id}[{i}]")
                 downloads_complete = False
                 continue
             data = await resp.body()
+        except MediaRateLimited:
+            raise
         except Exception as e:
-            print(f"    ! 媒体失败 {post.post_id}[{i}]: {e}")
+            print(f"    ! 媒体失败 {post.post_id}[{i}]: {type(e).__name__}")
             downloads_complete = False
             continue
         if not data:
@@ -119,7 +142,7 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
         except OSError:
             print(f"    ! 媒体写入失败 {post.post_id}[{i}]，保留已保存内容")
             downloads_complete = False
-    # 源响应或下载不完整时保留 False，让后续抓取继续补齐。
+    # 失败保留已保存文件；是否再次请求由调用方的人工恢复状态决定。
     post.media_complete = post.source_media_complete and downloads_complete
 
 

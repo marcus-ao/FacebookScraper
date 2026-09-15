@@ -41,6 +41,18 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/settings` | version、editable、controlled、controlled_fields、editable_help |
 | `GET /api/runtime` | 与 CLI 共用五阶段 snapshot；读取不扫描平台、不调用模型、不发送消息 |
 
+阶段一 `monitoring` 对象包含以下字段。缺少显式访问初始化或状态损坏时展示失败闭合，旧归档缺字段显示未知。
+
+| 字段 | 含义 |
+|---|---|
+| `status`、`revision`、`reason` | 访问状态、访问恢复使用的版本和暂停/初始化原因 |
+| `capture_revision`、`baselines` | 单帖恢复使用的独立版本；各平台基线的启用时刻、回填天数及核对数量 |
+| `platforms[platform]` | `paused`、`failures`、`reason`、`next_due_at`，以及滚动 24 小时 `homepage_used/homepage_limit`、`detail_used/detail_limit` |
+| `items[]` | 稳定 `key`、`scan_id`、身份、分类、状态、归档入口、原帖链接、两层完整性、实际校验数量与来源总数；未知数值为 null |
+| `items[].discovery_wait_seconds`、`items[].capture_seconds` | 来源发布到首次发现、单次抓取开始到结束的秒数；没有有效时间证据时为 null |
+
+飞书 delivery 保留 `capture_keys` 和 `captured_at` 列表，供逐帖核对。单篇卡的投递耗时由对应抓取结束时间与 `sent_at` 计算；未发送或结果未知时不补造送达耗时。`/runtime?capture={key}` 定位单项，`/runtime?scan={scan_id}` 定位本轮结果。
+
 ## 写入与恢复接口
 
 | 接口 | 契约 |
@@ -59,6 +71,8 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/initial-translation/jobs/{job_id}`、`GET /api/refinements/jobs/{job_id}` | 新任务返回 202 与唯一 job ID，刷新继续轮询同一任务 |
 | `POST /api/content-jobs/{job_id}/recover` | expected_updated_at 校验，先核对费用与产物，不隐含再次调用模型 |
 | `POST /api/runtime/processing/recover` | batch_id、version、outputs_reviewed；version 来自 processing.state_revision，未决付费阻止恢复 |
+| `POST /api/runtime/capture/recover` | key、version、reason；对指定帖子执行一次受控恢复，沿用详情配额、停机、身份匹配和媒体校验 |
+| `POST /api/runtime/monitor/recover` | version、reason、可选 platform；只恢复持久监测状态，不发起平台请求，不清空配额或访问历史 |
 | `POST /api/runtime/notifications/{delivery_id}/resolve` | action=delivered/not_delivered、version；已送达需 message_id，但群机器人不返回平台 ID，这里收的是人写的核对说明 |
 | `POST /api/hashtags/task/{id}` | 语义候选和三类来源的状态、原值、统计口径与时间 |
 | `PUT /api/settings` | 严格接收 values、version，未知字段或过期版本拒绝 |
@@ -81,6 +95,8 @@ FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，
 
 运行状态区分进程存活与业务成功；业务耗时、发帖到就绪时效和晨间就绪率分别统计，缺数为 null/missing。读取不执行恢复；显式恢复请求须带版本及人工核对结果。
 
+原帖详情返回 `source_media_complete`、`media_complete`、`source_media_count` 与 `verified_images`。前两项分别表示来源媒体列表已知完整，以及来源完整且所有静态图片已完成全图解码、实际 SHA 校验与原子落盘；未知不能推成 true。抓取卡主链接按是否已归档选择 history 或 runtime capture 查询，次链接保留源 permalink。
+
 ## 排期与通知
 
 月历读取完整可见范围、所有日期/时刻项、手工任务和延迟加载；推荐时段不算帖子。缺覆盖、未知卡片或无明确空态显示 incomplete/unknown。公开状态附观测时间和来源，不按到点推定成功。
@@ -89,4 +105,4 @@ FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，
 
 成功验收要求全文相等、remote_images_verified=true、图片数量及有序 remote_media/source SHA 与冻结清单一致。仅编辑器图片或远端 ID 不足以通过；中断和不确定结果先核对，恢复只补有证据的记录。界面严格以 ok=true 且 status=scheduled 判定排期成功。
 
-通知首次尝试前读取当前人工优先内容，首次尝试后冻结 UUID、接收组、正文和图片。结果不确定先核对；确认未送达后仅向漏收者补有效内容，保留原记录。终态投递按完整关联组件归档并保留去重引用，未决投递不按时间清除。审校链接须在实际企业网络中验证。
+通知首次尝试前读取当前人工优先内容，首次尝试后冻结 UUID、接收组、正文和图片。结果不确定先核对；确认未送达后仅向漏收者补有效内容，保留原记录。终态投递按完整关联组件归档并保留去重引用，未决投递不按时间清除。真实联调须由运营打开审校链接。

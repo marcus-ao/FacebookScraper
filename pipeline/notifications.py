@@ -28,7 +28,7 @@ def shanghai_clock(value) -> str:
     datetime 落到 str() 兜底，结果是 UTC 时刻挂着"上海"的标签——看不出错，但读出来是错的。
     """
     stamp = value if isinstance(value, datetime) else parse_ts(value)
-    return MonitorSchedule.local(stamp).strftime('%m-%d %H:%M') if stamp else str(value or '时间未知')
+    return MonitorSchedule.local(stamp).strftime('%Y-%m-%d %H:%M:%S') if stamp else '时间待核对'
 
 
 def skip_summary(skipped) -> str:
@@ -49,56 +49,56 @@ def _origin(row) -> str:
     return '（%s）' % '；'.join(parts) if parts else ''
 
 
+CLASS_LABELS = {'new': '新发布', 'historical': '历史补获', 'source_updated': '源帖更新',
+                'recovered': '补齐完成', 'time_unknown': '时间待核对'}
+
+
+def capture_card(event):
+    row = event['source']
+    saved, expected = event.get('saved_images', 0), row.get('source_media_count')
+    complete = event['status'] == 'complete'
+    status = '完整' if complete else '部分完成 / 待人工' if event.get('archived') else '失败 / 待人工'
+    excerpt = row.get('text') or ''
+    if len(excerpt) > DISCOVERED_EXCERPT:
+        excerpt = excerpt[:DISCOVERED_EXCERPT] + '（已截断，完整正文见详情）'
+    image_status = (f'已保存并校验 {saved}/{expected} 张' if expected is not None else
+                    f'已保存并校验 {saved} 张，原帖总数待确认')
+    fields = [
+        ('内容分类', CLASS_LABELS.get(event['classification'], '时间待核对')),
+        ('来源', PLATFORM_LABELS[row['platform']] + ' · ' + row['account']),
+        ('作者', (row.get('owner') or '未知') + _origin(row)),
+        ('原帖发布时间（北京时间）', shanghai_clock(row.get('created_at'))),
+        ('首次发现（北京时间）', shanghai_clock(event['first_seen_at'])),
+        ('抓取结束（北京时间）', shanghai_clock(event.get('finished_at'))),
+        ('产品分类', ' / '.join(row.get('tags') or []) or '未分类'),
+        ('英文摘要', excerpt or '无正文'),
+        ('正文状态', '已保存' if event.get('archived') else '未确认保存'),
+        ('图片状态', image_status),
+        ('异常与下一步', event.get('reason') or ('可查看已存原帖' if complete else '需要人工处理')),
+        ('帖子 ID', row['post_id']),
+    ]
+    return {'capture_status': status, 'fields': [{'label': label, 'value': value} for label, value in fields],
+            'account_dir': row['platform'][:2] + '_' + row['account'], 'post_id': row['post_id'],
+            'capture_key': event['key'], 'archived': bool(event.get('archived')),
+            'captured_at': event.get('finished_at'),
+            'permalink': row.get('permalink')}
+
+
 def scan_cards(run_kind, platform, account, rows, skipped, now):
-    """一轮扫描组两张卡：发现一张、落档一张；没有发现就不推，避免 64 次/天的空播报。
-
-    ⚠️ 两张卡靠 kind 名字的字典序排序（见 core.feishu.MONITOR_KINDS），不是靠这里的返回顺序。
-    """
-    found = [row for row in rows if row['event'] == 'post_discovered']
-    if not found:
+    """同一扫描的持久结果：检测汇总与逐帖结果；原始事件 ID 由调用方保留。"""
+    if not rows:
         return None
-    captured = {row['post_id']: row for row in rows if row['event'] == 'post_captured'}
-    incomplete = [row['post_id'] for row in rows if row['event'] == 'post_capture_incomplete']
-    fresh = [row for row in found if not row.get('known')]
-    skip_line = skip_summary(skipped)
-    base = {'platform': PLATFORM_LABELS.get(platform, platform), 'account': account,
-            'created_at': '%s · 上海 %s（以下时刻均为上海）'
-                          % (RUN_KIND_LABELS.get(run_kind, run_kind), shanghai_clock(now)),
-            'permalink': next((row.get('permalink') for row in found if row.get('permalink')), None)}
-
-    headline = []
-    if fresh:
-        headline.append('发现 %d 篇新帖' % len(fresh))
-    if len(found) > len(fresh):
-        # known=True 同时涵盖媒体补齐和源内容变化两种重抓，抓取侧不区分，这里也不假装区分。
-        headline.append('另有 %d 篇已有帖被重新抓取（媒体补齐或源内容变化）' % (len(found) - len(fresh)))
-    detail = ['· %s  原帖 %s · %d 图%s%s\n  %s' % (
-        row['post_id'], shanghai_clock(row.get('created_at')),
-        row.get('images', 0), ' %d 视频' % row['videos'] if row.get('videos') else '',
-        _origin(row), (row.get('head') or '（无正文）')[:DISCOVERED_EXCERPT]) for row in found]
-    first = dict(base, text='\n'.join(['、'.join(headline), *detail, skip_line]).strip(),
-                 next_step='这一轮的落档结果见紧随其后的「原帖抓取完成」卡片。')
-
-    # 落档卡的职责就是把每篇的成败讲明白，所以每行都带一个明确的状态词。
-    missing = [row['post_id'] for row in found
-               if row['post_id'] not in captured and row['post_id'] not in incomplete]
-    failed = len(incomplete) + len(missing)
-    counted = ['发现 %d 篇' % len(found), '成功落档 %d 篇' % len(captured)]
-    counted.append('失败 %d 篇' % failed if failed else '没有失败')
-    report = ['· %s  已落档 · %d 图 %d 视频 · %s' % (
-        post_id, row.get('images', 0), row.get('videos', 0),
-        row.get('folder') or '已入档') for post_id, row in captured.items()]
-    report += ['· %s  未落档 · 媒体未补全，已保留原归档，下一轮重试' % post_id for post_id in incomplete]
-    report += ['· %s  未落档 · 本轮没有留下任何落档记录' % post_id for post_id in missing]
-    risk = ''
-    if failed:
-        # 原图 CDN URL 带签名且有时效，"下一轮再抓"不是稳妥的假设（HANDOFF §5）。
-        risk = ('有 %d 篇没有成功落档。原图链接有时效，不能假设下一轮还能补回来，'
-                '请核对抓取日志。' % failed)
-    second = dict(base, text='\n'.join(['，'.join(counted), *report, skip_line]).strip(), risk=risk,
-                  next_step='已落档的内容进入本地化排队；跳过分类不加工也不发布。'
-                  if captured else '本轮一篇都没有落档，请先核对抓取日志与登录状态。')
-    return first, second
+    counts = {}
+    for row in rows:
+        label = CLASS_LABELS.get(row['classification'], '时间待核对')
+        counts[label] = counts.get(label, 0) + 1
+    summary = ' / '.join(f'{label} {count} 篇' for label, count in counts.items())
+    detail = '\n'.join(f"{item['source']['post_id']} · {(item['source'].get('text') or '')[:80]} {_origin(item['source'])}" for item in rows[:5])
+    first = {'platform': PLATFORM_LABELS[platform], 'account': account,
+             'created_at': shanghai_clock(now) + ' 北京时间',
+             'text': summary + '\n' + detail[:1000] + ('\n更多条目请查看运行详情' if len(rows) > 5 else '') + ('\n' + skip_summary(skipped) if skipped else ''),
+             'run_id': rows[0]['scan_id'], 'next_step': '逐篇结果见新帖爬取机器人，可在运行页核对本轮记录。'}
+    return first, [(row['event_id'], capture_card(row)) for row in rows if row['eligible']]
 
 
 def material(account, source):

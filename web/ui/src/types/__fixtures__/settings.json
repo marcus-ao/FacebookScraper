@@ -46,13 +46,6 @@
    "monthly_budget_usd": 60,
    "daily_budget_usd": 5
   },
-  "network_evidence": {
-   "enabled": false,
-   "tier": "lite",
-   "interval_minutes": 60,
-   "history_size": 20,
-   "timeout_seconds": 3
-  },
   "publish_identity": {
    "facebook_page_name": "Neakasa Deutschland",
    "instagram_account": "neakasa.de"
@@ -247,33 +240,6 @@
    {
     "key": "pipeline.daily_budget_usd",
     "value": 5,
-    "help": ""
-   }
-  ],
-  "network_evidence": [
-   {
-    "key": "network_evidence.enabled",
-    "value": false,
-    "help": "『文本 55 字』"
-   },
-   {
-    "key": "network_evidence.tier",
-    "value": "lite",
-    "help": ""
-   },
-   {
-    "key": "network_evidence.interval_minutes",
-    "value": 60,
-    "help": ""
-   },
-   {
-    "key": "network_evidence.history_size",
-    "value": 20,
-    "help": ""
-   },
-   {
-    "key": "network_evidence.timeout_seconds",
-    "value": 3,
     "help": ""
    }
   ],

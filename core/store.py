@@ -31,6 +31,7 @@ class Media:
     content_type: str | None = None
     byte_size: int | None = None
     sha256: str | None = None
+    source_media_id: str | None = None
 
 
 @dataclass
@@ -52,6 +53,7 @@ class Post:
     # 源响应未提供全部媒体时标 False，供后续补齐。
     media_complete: bool = True
     source_media_complete: bool | None = None  # 平台是否给齐媒体列表，独立于下载结果
+    source_media_count: int | None = None  # 只有来源明确声明总数或列表完整时才填写
     folder_name: str | None = None  # 创建时固定；修改正文/标签不重命名
     tags: list[str] | None = None   # None 尚未预填；[] 是人工明确清空
     tags_origin: str | None = None
@@ -1045,7 +1047,10 @@ class Archive:
             previous = self._current_row(post)
             if previous is not None:
                 self._rows[post.post_id] = previous
-            if previous is not None and not (self._is_upgrade(previous, post) or self._source_changed(previous, post)):
+            locator_refresh = bool(previous and post.media_complete and
+                [m.get('url') for m in previous.get('media', [])] != [m.url for m in post.media])
+            if previous is not None and not (self._is_upgrade(previous, post) or self._source_changed(previous, post)
+                                             or locator_refresh):
                 return False
             return self._append_locked(post, previous)
 
@@ -1111,7 +1116,9 @@ class Archive:
     def should_append(self, post: Post) -> bool:
         """下载前检查新帖或补齐记录是否可接受，避免重复下载且允许残缺重试。"""
         old = self._current_row(post)
-        return old is None or self._is_upgrade(old, post) or self._source_changed(old, post)
+        # 下载前尚无 local_path；不能用下载后的升级判据挡住缺图恢复。
+        return (old is None or not old.get('media_complete', True)
+                or self._source_changed(old, post))
 
     @staticmethod
     def _source_changed(old: dict, new: Post) -> bool:
@@ -1120,11 +1127,18 @@ class Archive:
         source_complete = new.source_media_complete if new.source_media_complete is not None else new.media_complete
         if not source_complete:
             return False
-        before = [(item.get("kind"), item.get("url")) for item in (old.get("media") or []) if isinstance(item, dict)]
-        if before != [(item.kind, item.url) for item in new.media]:
+        before = old.get('media') or []
+        if len(before) != len(new.media):
             return True
-        return any(item.get('sha256') and media.sha256 and item['sha256'] != media.sha256
-                   for item, media in zip(old.get('media') or [], new.media))
+        for item, media in zip(before, new.media):
+            if item.get('kind') != media.kind:
+                return True
+            if item.get('sha256') and media.sha256:
+                if item['sha256'] != media.sha256:
+                    return True
+            elif item.get('url') != media.url:
+                return True
+        return False
 
     @staticmethod
     def _is_upgrade(old: dict, new: Post) -> bool:

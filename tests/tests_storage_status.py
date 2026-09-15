@@ -43,7 +43,8 @@ class StorageStatusTests(unittest.TestCase):
         self.assertEqual(storage['folder'], folder)
         self.assertEqual(storage['first_archived_at'], '2026-09-14T08:20:00+00:00')
         self.assertEqual(storage['local'], {
-            'status': 'partial', 'saved_images': 1, 'expected_images': 2})
+            'status': 'partial', 'saved_images': 1, 'expected_images': 2,
+            'source_media_complete': None, 'media_complete': True, 'source_media_count': None, 'verified_images': 0})
         self.assertEqual([(item['ordinal'], item['storage_status']) for item in storage['media']],
                          [(0, 'saved'), (1, 'missing')])
         self.assertEqual(storage['database']['status'], 'unbuilt')

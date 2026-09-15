@@ -29,7 +29,6 @@ request_gap_seconds = 8
 first_screen_seconds = 6
 max_session_seconds = 300
 failure_budget = 3  # 连续失败次数，达到后停止。
-quiet_days_before_slowdown = { facebook = 10, instagram = 10 }
 autostart_chrome = true
 keep_captures_days = 7  # 仅清理增量转储，回填转储保留。
 min_own_posts = 3
@@ -239,13 +238,3 @@ stale_after_minutes = 45  # 外部心跳缺席阈值，不代表内容处理成�
 # 刷新前核验发布会话，读取与发布共用锁。
 enabled = false
 refresh_minutes = 60
-
-[network_evidence]
-# F1-8 预检要求出口 ASN 与稳定性；只访问 ipinfo，不增加 FB/IG 请求。
-# 需要环境变量 IPINFO_TOKEN；缺它每轮维护都记 missing_token 并按天发一条技术告警。
-enabled = true
-tier = "lite"  # lite 提供 IP/ASN；类型未知。
-# ⚠️ 观测的是本 Python 进程的出口，抓取用的 Chrome 若走另一条线路，两者可能不是同一个出口。
-interval_minutes = 60
-history_size = 20
-timeout_seconds = 3
