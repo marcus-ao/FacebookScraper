@@ -6,7 +6,7 @@
 
 **2026-09-14 运行数据已整库清空，项目处在"从零逐阶段打磨"的起点。** 下面描述的是清空之后的真实状态，不是历史记录。
 
-**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。两个目录**当前都是空的**：归档、审校账本、付费账本、发布账本、激活边界、probe dump 与截图全部删除，不做备份。既有部分副本工作区用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」；本轮存储 worktree 的独立绑定见 §1.1。
+**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。两个目录**当前都是空的**：归档、审校账本、付费账本、发布账本、激活边界、probe dump 与截图全部删除，不做备份。副本工作区可能用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
 
 **这意味着什么：**
 
@@ -31,7 +31,7 @@
 
 ### 1.1 原始帖子存储实施现场（2026-09-15）
 
-本次从 `main b400c030332f4596fec1dd3bcc1f5f3d4f7512b1` 创建分支 **`codex/raw-post-storage`**，worktree 为 `D:\VSCodeWorkspace\Facebook\FacebookScraper\.worktrees\storage`。本机 `config.local.toml` 单独绑定该 worktree 的 `archive/`、`state/`、`.env`；只复用主工作区 `.venv/Scripts/python.exe`。测试未绑定主工作区真相源，前端依赖与构建也在新 worktree 中准备。
+本次从 `main b400c030332f4596fec1dd3bcc1f5f3d4f7512b1` 创建分支 **`codex/raw-post-storage`**，当时在独立 worktree 里实施，用忽略入库的 `config.local.toml` 单独绑定该 worktree 的 `archive/`、`state/`、`.env`，只复用主工作区的 `.venv/Scripts/python.exe`。测试未绑定主工作区真相源。**该 worktree 已于 2026-09-15 清理，证据迁至主检出 `state/`**；分支内容此前已并入 `main`。
 
 本轮边界是“抓取结果 → 本地原帖 → SQLite/飞书派生 → 可见状态与恢复”，对应原五阶段里的 F2 存储部分。监测预算、人工登录、付费处理与发布闸沿用既有契约；整体业务上线仍须逐阶段验收。
 
@@ -82,7 +82,7 @@
 | Hygiene | 全量记录中通过；文档收尾后再次独立核验，见下方汇总 |
 | 汇总 | [本机整合核验记录](../state/storage-four-bot-validation-20260915.json)，记录命令、证据边界及 Git 交付结果 |
 
-以上 `state/` 证据保存在 §1.1 所列的 storage worktree，不随 Git 提交。代码状态为**离线通过**。未运行真实 webhook 自检、FB/IG 采集、模型请求或发布；四机器人真实发送者、运营可见性与链接、飞书云盘应用授权和文件哈希验收均为**待真实联调**。
+以上 `state/` 证据**已于 2026-09-15 随 storage worktree 清理迁到主检出的 `state/`**，本文的相对链接从主检出解析。它不随 Git 提交，所以清理任何 worktree 之前都要先确认本文引用的证据不是只存在于那一个 worktree 里——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。代码状态为**离线通过**。未运行真实 webhook 自检、FB/IG 采集、模型请求或发布；四机器人真实发送者、运营可见性与链接、飞书云盘应用授权和文件哈希验收均为**待真实联调**。
 
 ## 2. 红线
 
