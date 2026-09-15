@@ -9,6 +9,9 @@ from localize import images as image_de
 # 发现卡片上的英文摘要长度；够判断"现在开还是等会儿开"，不喧宾夺主。
 DISCOVERED_EXCERPT = 300
 
+IMAGE_NOTES = {'de': '德语首图', 'original': '尚无有效德语首图，预览使用原图',
+               'unreadable': '首图读不出，请进入审校台核对'}
+
 
 def discovered_material(account, source):
     """抓取刚完成时的卡片素材。此刻没有译文也没有德语图，**不要复用 material()**——
@@ -62,13 +65,17 @@ def material(account, source):
     path, variant = None, 'original'
     if first and first.localized_rel:
         path, variant = account / first.localized_rel, 'de'
-    if path is None and lead is not None:
-        path, _ = image_de._source_from_manifest(account, source, lead[1])
-    if path:
-        assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    try:
+        if path is None and lead is not None:
+            path, _ = image_de._source_from_manifest(account, source, lead[1])
+        if path:
+            assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    except (OSError, ValueError):
+        # 首图读不出只降级图片。德语正文可能完全没问题，整张卡丢掉等于白等一轮审校。
+        path, variant = None, 'unreadable'
     caption = localization.render(draft) if effective else '德语稿尚未就绪，请进入页面查看待处理问题。'
     return {'text': caption[:1000], 'risk': '\n'.join(dict.fromkeys(notes)),
-            'image_variant': variant, 'image_note': '德语首图' if variant == 'de' else '尚无有效德语首图，预览使用原图',
+            'image_variant': variant, 'image_note': IMAGE_NOTES[variant],
             'image_count': sum(m.get('kind') == 'image' for m in source.get('media', [])),
             'source_text_sha256': translated.source_text_sha256(source['text']),
             'checks': checks}, path

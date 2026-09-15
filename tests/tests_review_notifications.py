@@ -68,6 +68,32 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(payload['image_variant'], 'original')
         self.assertIn('原图', payload['image_note'])
 
+    def test_unreadable_lead_image_degrades_its_card_instead_of_the_round(self):
+        # 首图读不出只降级这一张图；德语正文已经完成，丢掉整张卡等于白等一轮审校。
+        self.event('one')
+        (self.f.post_dir / '01.jpg').unlink()
+        self.runtime.collect([self.f.account], self.now)
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
+        self.assertEqual(payload['image_variant'], 'unreadable')
+        self.assertIn('审校台', payload['image_note'])
+        self.assertIn('Ein sauberes Zuhause', payload['text'])
+        self.runtime.prepare_preview('ready', payload)
+        self.runtime.client.upload_image.assert_not_called()
+        self.assertNotIn('image_key', payload)
+        alerts = [e for e in self.events().values() if e['kind'] == 'system']
+        self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
+        self.assertTrue(any(e['kind'] == 'backlog' for e in self.events().values()))
+
+    def test_unreadable_review_material_costs_only_its_own_card(self):
+        # material() 还要读译文、人工稿和风险扫描；任何一处读不出都不能掀掉本轮其余提醒。
+        self.event('one')
+        with patch.object(notifications, 'material', side_effect=ValueError('读不出')):
+            self.runtime.collect([self.f.account], self.now)
+        self.assertEqual([e for e in self.events().values() if e['kind'] == 'ready'], [])
+        alerts = [e for e in self.events().values() if e['kind'] == 'system']
+        self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
+        self.assertTrue(any(e['kind'] == 'backlog' for e in self.events().values()))
+
     def test_changed_source_image_alert_preserves_remote_schedule(self):
         source = self.f.source
         fingerprint = paid_consent.fingerprint(source, self.f.account)

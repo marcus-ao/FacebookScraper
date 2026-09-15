@@ -413,7 +413,17 @@ class Runtime:
 
         for ref, item in pending.items():
             source, directory, state = item['source'], item['directory'], item['state']
-            current, _ = notifications.material(directory, source)
+            try:
+                current, _ = notifications.material(directory, source)
+            except (OSError, ValueError) as exc:
+                # 一篇读不出的稿子只丢它自己的卡片，不能连累本轮其余提醒；失败要留痕。
+                self._system(f'review-material:{ref}:{now.date()}',
+                             f'{ref} 的审校素材读不出（{type(exc).__name__}），请检查归档与译文。', now)
+                continue
+            if current['image_variant'] == 'unreadable':
+                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
+                self._system(f'lead-image:{ref}:{now.date()}',
+                             f'{ref} 的首图读不出，卡片已降级为纯文字，请检查归档原图。', now)
             payload = {'task_id': directory.name + '/' + source['post_id'],
                        'platform': source['platform'], 'account': source['account'],
                        'created_at': source['created_at'], 'permalink': source.get('permalink'),
