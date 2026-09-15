@@ -200,10 +200,12 @@ web_dist = "web/ui/dist"  # 相对于项目根目录。
 snooze_default_days = 3  # 上海工作日，按周一至周五计。
 
 [feishu]
+# 置 true 前 base_url 与两个接收组必须都有值，且两组不得有交集，否则加载即失败。
+# 凭据走环境变量 FEISHU_APP_ID / FEISHU_APP_SECRET，不写进本文件。
 enabled = false
-base_url = ""  # 运营可访问的审校台地址。
-recipients = []  # 业务接收组。
-technical_recipients = []  # 技术告警接收组。
+base_url = ""  # 运营可访问的审校台地址；不接受带凭据、查询参数或锚点的 URL。
+recipients = []  # 业务接收组 open_id：待审、积压、发现提醒、排期回执。
+technical_recipients = []  # 技术告警接收组 open_id；与上面一组不能重叠。
 keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 
 [mirror]
@@ -226,8 +228,11 @@ enabled = false
 refresh_minutes = 60
 
 [network_evidence]
-enabled = false
+# F1-8 预检要求出口 ASN 与稳定性；只访问 ipinfo，不增加 FB/IG 请求。
+# 需要环境变量 IPINFO_TOKEN；缺它每轮维护都记 missing_token 并按天发一条技术告警。
+enabled = true
 tier = "lite"  # lite 提供 IP/ASN；类型未知。
+# ⚠️ 观测的是本 Python 进程的出口，抓取用的 Chrome 若走另一条线路，两者可能不是同一个出口。
 interval_minutes = 60
 history_size = 20
 timeout_seconds = 3

@@ -766,6 +766,18 @@ with tempfile.TemporaryDirectory() as jsonl_tmp:
     state = L.load_image_state(path)
     check(state.latest[("p", 0)]["out_path"] == "posts/undated_p/media_de/01.jpg",
           "坏尾先补换行，新付费结果仍可独立读回")
+    tagged = dict(valid_row, post_id="p1")
+    tagged["out_path"] = "posts/2026-09/M1-Pro/2026-09-10_1200_sale_p1/media_de/01.jpg"
+    L.append_image_jsonl(path, tagged)
+    state = L.load_image_state(path)
+    check(tagged["out_path"] in state.owned_paths,
+          "tag 母目录下的德语图仍算程序所有；认不出来会被当成人工图，从此不再重做")
+    wrong_month = dict(tagged, post_id="p2")
+    wrong_month["out_path"] = "posts/2026-08/M1-Pro/2026-09-10_1200_sale_p2/media_de/01.jpg"
+    L.append_image_jsonl(path, wrong_month)
+    state = L.load_image_state(path)
+    check(wrong_month["out_path"] not in state.owned_paths,
+          "月份段与帖子目录不符时整行拒绝，tag 层不能绕过月份绑定")
     wrong_owner = dict(valid_row)
     wrong_owner["out_path"] = "posts/undated_someone_else/media_de/01.jpg"
     L.append_image_jsonl(path, wrong_owner)

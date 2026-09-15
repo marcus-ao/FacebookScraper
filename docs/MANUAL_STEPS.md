@@ -1,5 +1,7 @@
 # 人工操作指南
 
+**本周要做阶段一（监测与抓取）的真实验收，整套顺序在[第 14 节](#14-阶段一真实验收监测与抓取)。** 下面 1–13 节是分主题的长期参考，第 14 节把其中与阶段一相关的挑出来排成一条可以照着走的线。
+
 本文件列人工依赖与开发机操作顺序，事实同步至 2026-09-14。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
 当前先保留现场：9224 访问 `.global`、Google Trends 公开页均实际 HTTP 429，分别保存在 `delta_state.json` 和 `trends_export_state.json`，均已停止；需要人工核对探测会话与出口。9223 已登录并录到目标 FB `Neakasa Deutschland`、IG `neakasa.de`，本次完整月份实际读取已经通过，尚无本轮新发布/排期提交。编辑器中曾放入不可发布的技术长文案与 2 张历史原图作控件观察，可能留下草稿；接手时不要直接点击提交。飞书缺凭据、镜像/外部心跳未启用，完整运营流程尚未通过。
@@ -32,6 +34,8 @@
 
 已有本机绑定时编辑绑定指向的环境文件，保留已存在值；首次独立安装才从 `.env.example` 建本机 `.env`。模型/飞书凭据、收件配置、云盘目录和令牌不写入可提交配置、终端截图、probe dump 或日志。
 
+飞书凭据写本机 `.env` 的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（名称见 `.env.example`），消息与云盘共用同一套。收件人和云盘目录写 `config.toml` 的 `[feishu]` / `[mirror]`：置 `enabled = true` 前 `base_url` 与两个接收组必须都有值且两组不得有交集，缺一项加载即失败。
+
 企业管理员需提供应用 AppSecret 并完成应用授权、机器人可接收范围、德国运营/开发者两个接收组与云盘根目录权限。两个组是独立接收配置，可各为一人，不必都是群聊。还需运营机器能打开的开发机审校地址；当前均缺实际联调条件。拿到后按第 7 节验证，离线测试不代替权限。
 
 ## 3. 登录三个专用 Chrome
@@ -53,9 +57,12 @@
 Facebook 目标是 `neakasaofficial`，Instagram 目标是 `neakasa.global`。确认配置后，回填由人在 9222 浏览器里打开目标主页并手工滚动；程序只拦截响应和保存内容。
 
 ```powershell
-scripts\run_backfill.bat facebook
-scripts\run_backfill.bat instagram
+scripts\run_backfill.bat facebook --days 30
+scripts\run_backfill.bat instagram --days 30
 ```
+
+`--days N` 只归档最近 N 天，并打印窗口外跳过数；算不出日期的仍保留。不带该参数是全量。
+它收紧的是归档范围，不改人工滚动——仍要自己滚到看见窗口边界为止。
 
 不要自动滚到底，不绕过 C7 会话/深度限制。完成后检查目标目录名、帖子数量、合作帖、拒绝记录和媒体完整性。`.global` 合作帖无论合作方是谁都应归档；`owner` 仍保存真实作者。
 
@@ -362,3 +369,164 @@ npm --prefix web/ui run build
 - [ ] 保存失败页面、console、Network 和对应测试报告
 - [ ] 核对 `/api` 404 仍是 JSON、缺失静态资源仍是 404、深链接刷新仍返回应用
 - [ ] 保留 archive/state 原样；前端整理没有改变数据格式或写入契约
+
+## 14. 阶段一真实验收：监测与抓取
+
+这一节回答一个问题：**怎么确认「监测到新帖 → 抓取 → 存储 → 飞书告诉我」这条链路在真实环境里真的跑通了。**
+
+按 A→G 顺序做，每一段都有明确的通过判据。任何一段不通过就停在那里，按[第 12 节](#12-卡住时保留什么)留证，不要跳过去做下一段。
+
+⛔ **全程不要加 `--process`。** 它需要先过激活边界，而激活边界要阶段五的 G8 真机验收证据。阶段一的范围止于抓取和存储，翻译与图片是后面几轮的事。
+
+### A. 前置：三样东西必须先到位
+
+- [ ] **三个 Chrome 各自人工登录**（[第 3 节](#3-登录三个专用-chrome)）。阶段一只用到 9222（回填）和 9224（探测），但三个 profile 的隔离断言会一起检查。**9224 此前撞过 429**，先确认账号能正常打开目标主页再往下走。
+- [ ] **本机 `.env` 三组凭据**（[第 2 节](#2-配置本机凭据)）：`FEISHU_APP_ID` / `FEISHU_APP_SECRET`、`IPINFO_TOKEN`。名称见 `.env.example`。
+- [ ] **`config.toml` 填好收件人与云盘**：`[feishu]` 的 `base_url` + 两个接收组（**两组不能有交集**），`[mirror].root_folder_token`，然后把两处 `enabled` 改成 `true`。缺任一项加载即失败，不会静默降级。
+
+`base_url` 要填**运营那台机器能打开的地址**。填 `127.0.0.1` 卡片上的「去审校」按钮她点不开，而这一点要到她第一次点的时候才会发现。
+
+### B. 只读预检：确认配置真的生效
+
+```powershell
+scripts\run_pipeline.bat preflight --json
+```
+
+这条命令零写入、不碰 FB/IG。输出里 `stages` 按阶段编号排列，逐项核对：
+
+- [ ] 阶段 4「飞书提醒」的 `outbox.credentials_present` 是 `true`——为 `false` 说明 `.env` 没被读到，跟飞书权限无关
+- [ ] 同上 `outbox.enabled` 是 `true`，`outbox.status` 不是 `configuration_invalid`
+- [ ] 阶段 2「源内容与归档」的 `mirror_status` 不再是 `disabled`
+- [ ] 顶层 `network` 的 `last_error` 是 `null`、`network_type` 不是 `unknown`。**`last_error` 为 `missing_token` 就是 `IPINFO_TOKEN` 没配**，此时 F1-8 拿不到任何证据，而且每天会来一条"出口信息服务暂未返回有效结果"的技术告警
+- [ ] `network.network_type` 不是机房段（`hosting`）。是的话先换网络，别开监测——红线 2
+- [ ] `network.scope` 是 `python_http_to_ipinfo`：它量的是**本进程**的出口。Chrome 若走另一条线路（代理、分流），这个数字证明不了抓取那一跳，得另行核对
+
+刚配好时 `network.stability` 会是 `insufficient_samples`，属正常——它要攒够几次采样才能判断出口稳不稳。
+
+⚠️ 这一步只证明**配置**成立，不证明任何消息发得出去。
+
+### C. 建立归档基线：回填最近一个月
+
+在 9222 浏览器里打开目标主页，手工向下滚到一个月前，回到终端按 Enter：
+
+```powershell
+scripts\run_backfill.bat facebook --days 30
+scripts\run_backfill.bat instagram --days 30
+```
+
+- [ ] 两个账号都打印了新增篇数，以及「窗口外跳过 N 篇」
+- [ ] IG 的合作帖进来了。判据是 `parse.on_timeline_of()` 而不是 `owner == account`，**只看 owner 会把 `.global` 的帖子整批漏掉**
+- [ ] 媒体完整性没有大面积 `media_complete: false`
+
+⛔ 回填帖**不会**产生飞书发现卡片——判据是 `post.json` 的 `source_route`，回填是人主动滚出来的历史。这一段收不到推送是正确的，不是通道坏了。
+
+### D. 核对本地存储契约
+
+打开 `archive/` 逐项看：
+
+- [ ] 布局是 `archive/<账号>/posts/<月份>/<产品 tag>/<帖子>/`
+- [ ] 型号表命中的落在对应 tag 目录，没命中的落在 `未分类/`，**没有乱猜的分类**
+- [ ] 帖子目录里有 `post.json`、`text.txt` 和原图
+- [ ] 随便挑一篇，`post.json` 的 `media[].local_path` 指向的文件真的存在
+
+然后重建查询索引，确认派生层与文件一致：
+
+```powershell
+scripts\run_python.bat -m tools.layout reindex-db
+```
+
+- [ ] 重建不报错，条数与归档篇数一致
+
+### E. 飞书通道：用受控目录先打通，别拿真实数据试
+
+直接等真实新帖来验通道，一旦不通就分不清是"通道坏了"还是"今天没有新帖"。先用一个隔离目录把通道打通——**真实凭据、真实收件人，但假内容、不碰真实归档**。
+
+1. 建一个临时目录，例如 `D:\Temp\feishu-check\archive` 与 `...\state`；
+2. 在 `D:\Temp\feishu-check\runtime.toml` 里只绑路径（**只能绑路径，写业务段会被拒**）：
+
+```toml
+[paths]
+archive = "D:/Temp/feishu-check/archive"
+state = "D:/Temp/feishu-check/state"
+```
+
+3. 在 `archive/fa_neakasaofficial/posts/2026-09/未分类/2026-09-10_1200_probe_p1/` 下写一份 `post.json`，再把**同一份内容**复制成 `archive/fa_neakasaofficial/manifest.jsonl`（单行）：
+
+```json
+{"post_id":"p1","platform":"facebook","account":"neakasaofficial","owner":"neakasaofficial","coauthors":[],"created_at":"2026-09-10T12:00:00Z","permalink":"https://www.facebook.com/neakasaofficial","text":"Channel check, not a real post.","media":[],"media_complete":true,"folder_name":"2026-09-10_1200_probe_p1","tags":[],"source_route":"delta"}
+```
+
+`source_route` 必须是 `delta`，写 `backfill` 就不会推。目录名要和 `folder_name` 一致，月份目录要和它的日期前缀一致，否则定位不到。
+
+4. 跑一轮：
+
+```powershell
+set FBSCRAPER_RUNTIME_CONFIG=D:\Temp\feishu-check\runtime.toml
+scripts\run_scheduler.bat --run --once
+```
+
+新建的调度状态里没有到期任务，所以这一轮**不会打开浏览器、不会抓取**，只走投递。
+运行时配置里不写 `[runtime].env_file` 时会回落到项目 `.env`，用的就是你的真实飞书凭据——这正是这一步要验的。
+
+上面那份 `post.json` 的 `media` 是空数组，所以卡片没有缩略图，这是正常的；首图那条留到 G 段用真实帖子验。
+
+- [ ] 德国运营组收到一张「Neakasa 德国站 · 监测到新帖」卡片
+- [ ] 卡片上有：平台 · 账号 · 原帖时间、图片数 · 产品 tag、归档路径、英文正文、`原帖预览，德语稿尚未开始`
+- [ ] 「去审校」和「查看原帖」两个按钮都能点开
+- [ ] 开发者组**没有**收到这张卡（两组不串）
+
+验完**必须清掉环境变量**，否则后面每一条命令都还跑在临时目录上，而且不会有任何提示：
+
+```powershell
+set FBSCRAPER_RUNTIME_CONFIG=
+```
+
+### F. 开监测，等第一条真实新帖
+
+```powershell
+scripts\run_scheduler.bat --preview
+```
+
+- [ ] 打印出四个任务（两平台 × delta/reconcile）和各自的下次触发时刻
+- [ ] 兜底时刻落在上海 07:00 附近、带抖动，且早于 08:00 截止点
+
+确认无误后启动常驻：
+
+```powershell
+scripts\run_scheduler.bat --run
+```
+
+在岗窗每小时一次、离岗窗每三小时一次，各带 ±25% 抖动。让它跑着，然后等美国站发新帖。
+
+**这一段的等待时间不可控**，历史样本是 5.9 篇/周。等待期间可以确认这些：
+
+- [ ] 进程没退出，`state\scheduler.json` 的 `last_tick` 在往前走
+- [ ] 探测号会话没失效——失效会给开发者组发一条「监测未完成」，这本身也是通道可用的证明
+- [ ] 每轮输出里有分类跳过数（视频 x / 混合 y / 无正文 z）。「今天没有新帖」和「今天发了 8 条全是视频」必须长得不一样
+
+### G. 收到第一张真实发现卡之后
+
+这是阶段一的验收时刻。逐项核对：
+
+- [ ] 卡片在抓取落地后**几分钟内**到达，不是等到次日 08:00
+- [ ] 卡片上的原帖时间、图片数、产品 tag 与真实帖子一致
+- [ ] 点「查看原帖」打开的就是那一篇
+- [ ] 本地 `archive/` 下出现了对应的帖子文件夹，落在正确的月份和 tag 下
+- [ ] 飞书云盘上出现同一篇的镜像，层级是 `<月份>/<tag>/<帖子>`
+- [ ] 云盘上的内容没有反向改动本地文件
+
+再把两个降级路径也确认一遍（阶段一最容易被忽略的部分）：
+
+- [ ] 同一篇帖子不会被重复推送
+- [ ] 在岗窗之外发布的帖子**照样立刻推**（发现提醒不受静默窗限制）
+
+### 这一轮能证明什么、不能证明什么
+
+| 做完之后成立 | **仍然不成立** |
+|---|---|
+| 监测能发现真实新帖并抓取归档 | 翻译、图片德语化、审校、排期任何一段 |
+| 本地三层布局与云盘镜像同形 | 长期稳定性——封号风险的反馈是延迟的，且只反馈一次 |
+| 飞书两个接收组不串，卡片可点达 | 运营完整流程（她从卡片进去审完再排期） |
+| 出口 ASN 类型与稳定性有据可查 | 兜底对账真的补到过漏帖（要等一次真实漏帖） |
+
+验收报告里写清楚：跑了什么、哪几条是真实账号的结果、哪些外部依赖仍未联调。离线测试通过不能替代上面任何一项。

@@ -1,10 +1,12 @@
 """人工滚动回填：捕获登录会话响应并归档，覆盖范围取决于实际滚动和响应。"""
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 from core.capture import INTEREST, Collector  # noqa: F401  （INTEREST 供外部引用）
 from core.capture import atomic_write_json, download_media as _download
@@ -16,6 +18,22 @@ from core.store import Archive
 
 # 无新响应达到此时长后提示收尾。
 STALL_HINT_SECONDS = 20
+
+
+def within_window(posts, days, now):
+    """按 created_at 把本次回填收进最近 N 天；不传 days 时保持全量。
+
+    算不出日期的一律保留：内容已经抓到手了，媒体 CDN URL 带签名有时效，
+    丢掉就重抓不回来——比多留几篇贵得多。窗口外的另计，让边界可复核。
+    """
+    if days is None:
+        return list(posts), []
+    floor = (now - timedelta(days=int(days))).strftime("%Y-%m-%dT%H:%M:%SZ")
+    kept, skipped = [], []
+    for post in posts:
+        created = (post.created_at or "").strip()
+        (skipped if created and created[:10] < floor[:10] else kept).append(post)
+    return kept, skipped
 
 
 class ScrollProgress:
@@ -71,7 +89,7 @@ def _stdin_waiter(readline=None) -> tuple[threading.Event, threading.Thread]:
     return done, thread
 
 
-async def run(platform: str) -> int:
+async def run(platform: str, days: int | None = None) -> int:
     c = cfg()
     account = c["targets"][platform]
     url = ({"instagram": f"https://www.instagram.com/{account}/",
@@ -139,6 +157,10 @@ async def run(platform: str) -> int:
                   f"（来自 {len(others)} 个其它账号），已记入 _rejected.jsonl"
                   f"（新增 {n_rej} 条）")
 
+        posts, out_of_window = within_window(posts, days, datetime.now(timezone.utc))
+        if out_of_window:
+            print(f"  - 窗口外跳过 {len(out_of_window)} 篇（早于最近 {days} 天），未归档")
+
         # 分开统计原创与合作帖，使合作归属异常可见。
         target = (account or "").strip().lower()
         n_authored = sum(1 for p in posts if p.owner == target)
@@ -187,8 +209,13 @@ if __name__ == "__main__":
     from core.console import force_utf8
 
     force_utf8()
-    if len(sys.argv) != 2 or sys.argv[1] not in ("facebook", "instagram"):
-        raise SystemExit(
-            "用法：scripts\\run_backfill.bat <facebook|instagram>\n"
-            "      （等价命令：.venv\\Scripts\\python.exe -m routes.backfill facebook）")
-    print(f"\n新增 {asyncio.run(run(sys.argv[1]))} 篇")
+    parser = argparse.ArgumentParser(
+        prog="python -m routes.backfill",
+        description="人工滚动回填；程序只拦截响应并归档，不驱动页面。")
+    parser.add_argument("platform", choices=("facebook", "instagram"))
+    parser.add_argument("--days", type=int,
+                        help="只归档最近 N 天的帖子；算不出日期的仍保留。默认全量。")
+    args = parser.parse_args()
+    if args.days is not None and args.days < 1:
+        parser.error("--days 至少为 1")
+    print(f"\n新增 {asyncio.run(run(args.platform, args.days))} 篇")

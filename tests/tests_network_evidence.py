@@ -46,8 +46,8 @@ class NetworkEvidenceTests(unittest.TestCase):
                 if key == "IPINFO_TOKEN":
                     raise AssertionError("read a secret while disabled")
                 return default
-        settings = NetworkEvidenceSettings.load()
-        self.assertFalse(settings.enabled)
+        # 显式构造关闭状态：这里验的是关闭时的行为，不该由线上 config.toml 的取值决定。
+        settings = NetworkEvidenceSettings(enabled=False)
         with patch("core.network_evidence.httpx.Client", side_effect=AssertionError("HTTP")):
             collector = NetworkEvidence(self.path, settings, environ=NoSecrets())
             self.assertEqual(collector.refresh(NOW)["status"], "disabled")

@@ -53,6 +53,21 @@ class Runtime:
         self.thumbnail_sources = {}
         self.network = NetworkEvidence(self.c.state_dir / 'network_evidence.json', NetworkEvidenceSettings.load(self.c))
 
+    def await_delivery(self, timeout: float = 120) -> None:
+        """等本轮消息与镜像投递跑完。
+
+        ⛔ 单轮执行（`--once`）必须调它再退出：`close()` 用 `cancel_futures=True` 关投递
+        执行器，刚提交、尚未启动的 `_deliver` 会被直接取消——实测 8/8 轮一条消息都没发出，
+        而且不报错，看起来和"飞书配置有问题"一模一样。连续 `--run` 靠下一轮重投，不受影响。
+        """
+        future = self.delivery_future
+        if future is None:
+            return
+        try:
+            future.result(timeout=timeout)
+        except Exception as exc:
+            notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
+
     def close(self):
         self.processing_executor.shutdown(wait=False, cancel_futures=False)
         self.sampling_executor.shutdown(wait=False, cancel_futures=True)
@@ -261,15 +276,20 @@ class Runtime:
         except Exception as exc:
             notify.notify('审校提醒暂未投递', type(exc).__name__ + '；请检查飞书配置与发件箱。', popup=False)
 
-    def prepare_preview(self, payload):
+    def prepare_preview(self, kind, payload):
         origin = self.thumbnail_sources.get(payload.get('task_id'))
         if origin is None:
             return
         directory, indexed = origin
         source, _ = read_post_truth(directory, indexed)
-        current, path = notifications.material(directory, source)
-        payload.update(current)
-        payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
+        if kind == 'discovered':
+            # 发现阶段没有译文和德语图；走 material() 只会把英文原文换成"德语稿尚未就绪"。
+            current, path = notifications.discovered_material(directory, source)
+            payload.update(current)
+        else:
+            current, path = notifications.material(directory, source)
+            payload.update(current)
+            payload['risk'] = '\n'.join(dict.fromkeys([*payload.get('processing_notes', []), current['risk']])).strip()
         if path is None:
             return
         if path.stat().st_size >= 10 * 1024 * 1024:
@@ -344,6 +364,28 @@ class Runtime:
         if result['pending']:
             self._system(f'mirror-pending:{now.date()}', '云盘镜像还有未完成条目，系统会重试；本地留档不受影响。', now)
 
+    def _announce_discoveries(self, sources, now: datetime):
+        """监测发现的帖子逐篇报出来。回填是人主动滚的历史，不在这里推。"""
+        for ref, (directory, source) in sources.items():
+            if source.get('source_route') != 'delta':
+                continue
+            try:
+                material, _ = notifications.discovered_material(directory, source)
+            except (OSError, ValueError) as exc:
+                # 一篇坏归档只丢它自己的卡片，不能连累本轮其余通知；失败要留痕。
+                self._system(f'discovered:{ref}:{now.date()}',
+                             f'{ref} 已抓取，但发现卡素材读不出（{type(exc).__name__}），请检查归档。', now)
+                continue
+            if material['image_variant'] == 'unreadable':
+                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
+                self._system(f'lead-image:{ref}:{now.date()}',
+                             f'{ref} 的首图读不出，发现卡已降级为纯文字，请检查归档原图。', now)
+            self.outbox.enqueue('discovered:' + ref, 'discovered', {
+                'task_id': directory.name + '/' + source['post_id'],
+                'platform': source['platform'], 'account': source['account'],
+                'created_at': source['created_at'], 'permalink': source.get('permalink'),
+                **material}, now)
+
     def collect(self, directories, now: datetime):
         started_at = self.outbox.started_at(now)
         sources = {}
@@ -359,6 +401,7 @@ class Runtime:
                 sources[ref] = (directory, source)
         self.thumbnail_sources = {directory.name + '/' + source['post_id']: (directory, source)
                                   for directory, source in sources.values()}
+        self._announce_discoveries(sources, now)
         scheduled = journal.scheduled_source_refs(self.c.state_dir)
         pending = {}
         valid_ready = set()
@@ -389,7 +432,17 @@ class Runtime:
 
         for ref, item in pending.items():
             source, directory, state = item['source'], item['directory'], item['state']
-            current, _ = notifications.material(directory, source)
+            try:
+                current, _ = notifications.material(directory, source)
+            except (OSError, ValueError) as exc:
+                # 一篇读不出的稿子只丢它自己的卡片，不能连累本轮其余提醒；失败要留痕。
+                self._system(f'review-material:{ref}:{now.date()}',
+                             f'{ref} 的审校素材读不出（{type(exc).__name__}），请检查归档与译文。', now)
+                continue
+            if current['image_variant'] == 'unreadable':
+                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
+                self._system(f'lead-image:{ref}:{now.date()}',
+                             f'{ref} 的首图读不出，卡片已降级为纯文字，请检查归档原图。', now)
             payload = {'task_id': directory.name + '/' + source['post_id'],
                        'platform': source['platform'], 'account': source['account'],
                        'created_at': source['created_at'], 'permalink': source.get('permalink'),

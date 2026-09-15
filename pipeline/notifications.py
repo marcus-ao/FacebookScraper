@@ -3,8 +3,50 @@ from __future__ import annotations
 
 from pipeline.risk_scan import result_for
 from core import localization, translated
-from core.store import assert_physical_direct_path
+from core.store import assert_physical_direct_path, infer_tags, post_directory
 from localize import images as image_de
+
+# 发现卡片上的英文摘要长度；够判断"现在开还是等会儿开"，不喧宾夺主。
+DISCOVERED_EXCERPT = 300
+
+IMAGE_NOTES = {'de': '德语首图', 'original': '尚无有效德语首图，预览使用原图',
+               'unreadable': '首图读不出，请进入审校台核对'}
+
+
+def discovered_material(account, source):
+    """抓取刚完成时的卡片素材。此刻没有译文也没有德语图，**不要复用 material()**——
+    它会去读 translated.jsonl 与 media_de/，在发现阶段只会退化成"德语稿尚未就绪"。"""
+    images = [item for item in source.get('media') or []
+              if isinstance(item, dict) and item.get('kind') == 'image']
+    tags = source.get('tags')
+    if not isinstance(tags, list) or not tags:
+        tags = infer_tags(source.get('text') or '')
+    directory = post_directory(account, source)
+    meta = ['%d 张图 · 产品 %s' % (len(images), '、'.join(tags) if tags else '未分类'),
+            '归档 %s' % directory.relative_to(account).as_posix()]
+    owner = (source.get('owner') or '').strip()
+    coauthors = [name for name in source.get('coauthors') or [] if isinstance(name, str) and name.strip()]
+    if owner and owner != (source.get('account') or '').strip():
+        # 合作帖由一方发布、双方主页同时显示；不写清楚会被当成本账号原创。
+        meta.append('合作帖，原作者 %s' % owner)
+    if coauthors:
+        meta.append('合作方 %s' % '、'.join(coauthors))
+    path, variant = None, 'original'
+    try:
+        if images:
+            path, _ = image_de._source_from_manifest(account, source, images[0])
+            assert_physical_direct_path(path.parent, path, kind='file', label='发现卡首图')
+    except (OSError, ValueError):
+        # 与 material() 同一取舍：只降级图片。发现卡是监测链路唯一的存活信号，
+        # 整条不推的话，运营侧看起来和"今天没有新帖"完全一样。
+        path, variant = None, 'unreadable'
+    return {'text': (source.get('text') or '').strip()[:DISCOVERED_EXCERPT],
+            'meta': '\n'.join(meta), 'image_count': len(images), 'tags': list(tags),
+            'image_variant': variant,
+            'image_note': IMAGE_NOTES['unreadable'] if variant == 'unreadable'
+            else '原帖预览，德语稿尚未开始'}, path
+
+
 def material(account, source):
     identifier = source['post_id']
     machine = translated.load_translated(account / 'translated.jsonl').get(identifier)
@@ -30,13 +72,17 @@ def material(account, source):
     path, variant = None, 'original'
     if first and first.localized_rel:
         path, variant = account / first.localized_rel, 'de'
-    if path is None and lead is not None:
-        path, _ = image_de._source_from_manifest(account, source, lead[1])
-    if path:
-        assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    try:
+        if path is None and lead is not None:
+            path, _ = image_de._source_from_manifest(account, source, lead[1])
+        if path:
+            assert_physical_direct_path(path.parent, path, kind='file', label='通知首图')
+    except (OSError, ValueError):
+        # 首图读不出只降级图片。德语正文可能完全没问题，整张卡丢掉等于白等一轮审校。
+        path, variant = None, 'unreadable'
     caption = localization.render(draft) if effective else '德语稿尚未就绪，请进入页面查看待处理问题。'
     return {'text': caption[:1000], 'risk': '\n'.join(dict.fromkeys(notes)),
-            'image_variant': variant, 'image_note': '德语首图' if variant == 'de' else '尚无有效德语首图，预览使用原图',
+            'image_variant': variant, 'image_note': IMAGE_NOTES[variant],
             'image_count': sum(m.get('kind') == 'image' for m in source.get('media', [])),
             'source_text_sha256': translated.source_text_sha256(source['text']),
             'checks': checks}, path

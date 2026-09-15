@@ -354,6 +354,8 @@ def main(argv=None) -> int:
                 now = datetime.now(timezone.utc)
                 runtime.start_processing(now)
                 if args.once:
+                    # 投递在独立执行器上，不等它跑完就退出等于本轮什么都没发出去。
+                    runtime.await_delivery()
                     return 0
                 time.sleep(30)
     except SchedulerAlreadyRunning as exc:

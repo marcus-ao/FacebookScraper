@@ -14,6 +14,12 @@ from core.config import Config
 from publish import month_inventory as month
 from publish.business_suite import PublishStepError
 
+# The real Planner tooltip follows the pointer on and off a slot; is_recommendation's leading
+# mouse.move(0, 0) depends on the off half, so a fixture without it only ever reads one slot.
+TOOLTIP_SLOT = ('<div role="link" onmouseenter="tip.hidden=false" onmouseleave="tip.hidden=true">'
+                '{clock} AM<img alt="Instagram"></div>')
+TOOLTIP = '<div role="tooltip" id="tip" hidden>' + month.RECOMMENDATION + '</div>'
+
 
 class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -28,6 +34,16 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.browser.close()
         await self.pw.stop()
+
+    async def mount_slots(self, count):
+        """Mount `count` recommendation slots, with Playwright's one-off first-hover cost already paid."""
+        await self.page.set_content(''.join(TOOLTIP_SLOT.format(clock=f'{9 + i}:00') for i in range(count)) + TOOLTIP)
+        slots = self.page.get_by_role('link')
+        # The first hover on a page carries an actionability setup measured here at a median 641ms,
+        # against 47ms for every later one. Spend it now: left inside a timed assertion it overruns
+        # short budgets, is_recommendation reports False, and the positive case flakes.
+        await slots.first.hover()
+        return slots
 
     async def test_all_months_require_the_complete_contiguous_day_sequence(self):
         for year in (2026, 2028):
@@ -55,13 +71,34 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
             await month.read_grid(self.page, timeout=.2)
 
     async def test_only_positive_recommendation_tooltip_can_skip_a_slot(self):
-        await self.page.set_content('<div role="link" onmouseenter="tip.hidden=false">10:00 AM<img alt="Instagram"></div>'
-            '<div role="tooltip" id="tip" hidden>' + month.RECOMMENDATION + '</div>')
-        item = self.page.get_by_role('link')
-        self.assertTrue(await month.is_recommendation(self.page, item, timeout=.3))
-        await self.page.get_by_role('tooltip').evaluate("el=>{el.textContent='A future post';el.hidden=true}")
-        await self.page.mouse.move(0, 0)
-        self.assertFalse(await month.is_recommendation(self.page, item, timeout=.3))
+        item = await self.mount_slots(1)
+        self.assertTrue(await month.is_recommendation(self.page, item))
+        await self.page.get_by_role('tooltip').evaluate("el=>el.textContent='A future post'")
+        self.assertFalse(await month.is_recommendation(self.page, item))
+        # Refused for the text, not for a stalled hover: the tooltip did open, and even the full
+        # production budget never lets a non-matching one confirm. Shortening the budget here would
+        # buy a second back and give away the difference between those two reasons.
+        self.assertTrue(await self.page.get_by_role('tooltip').is_visible())
+
+    async def test_every_recommendation_slot_in_a_month_is_confirmed_not_just_the_first(self):
+        slots = await self.mount_slots(2)
+        for index in range(2):
+            self.assertTrue(await month.is_recommendation(self.page, slots.nth(index)))
+
+    async def test_a_slot_whose_tooltip_never_resolves_stays_a_post_rather_than_a_recommendation(self):
+        slots = await self.mount_slots(1)
+        await self.page.get_by_role('tooltip').evaluate("el=>el.removeAttribute('role')")
+        # A short budget cannot flip this one: every way the hover can go wrong also reports False.
+        self.assertFalse(await month.is_recommendation(self.page, slots, timeout=.3))
+        row = {'date': date(2026, 9, 15), 'cell_index': 0}
+        # Refusing to confirm must cost the run an error, never a silently skipped scheduled post.
+        with patch.object(month, 'is_recommendation', AsyncMock(return_value=False)), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SimpleNamespace(
+                    attributes={'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
+                                'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})):
+            with self.assertRaises(PublishStepError):
+                await month.read_item(self.page, row, {'index': 0, 'href': '', 'text': '10:00 AM',
+                                                       'time': '10:00 AM', 'aria': '10:00 AM'})
 
     async def test_conflict_inventory_contains_unknown_channel_cards(self):
         rows = [{'date': date(2026, 9, 15), 'items': [{'index': 0, 'time': '10:00 AM'}]}]

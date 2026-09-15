@@ -11,7 +11,7 @@ from unittest.mock import patch
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.feishu import FeishuClient, FeishuSettings, Outbox
+from core.feishu import FeishuClient, FeishuSettings, Outbox, notification_card
 
 
 def at(value):
@@ -59,6 +59,29 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], ['developer'])
         outbox.dispatch(at('2026-09-12T08:00:00+08:00'), lambda *args: calls.append(args) or 'ok')
         self.assertEqual(calls[-1][0], 'operator')
+
+    def test_discovered_alert_reaches_operator_during_quiet_hours(self):
+        # 发现提醒是监测链路唯一的存活信号，静默窗不能吞掉它。
+        outbox = Outbox(self.path, self.settings)
+        night = at('2026-09-11T23:00:00+08:00')
+        outbox.enqueue('discovered:instagram:42', 'discovered',
+                       {'task_id': 'in_neakasa.global/42', 'text': 'A clean home.'}, night)
+        calls = []
+        self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args) or 'message'), 1)
+        self.assertEqual(calls[0][0], 'operator')
+
+    def test_discovered_card_carries_counts_tags_and_both_source_links(self):
+        card = notification_card('discovered', [{
+            'platform': 'instagram', 'account': 'neakasa.global', 'created_at': '2026-09-10T14:23:00Z',
+            'text': 'Meet the new M1 Pro.', 'meta': '4 张图 · 产品 M1 Pro\n归档 posts/2026-09/M1-Pro/abc',
+            'image_note': '原帖预览，德语稿尚未开始', 'task_id': 'in_neakasa.global/42',
+            'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn('监测到新帖', rendered)
+        self.assertIn('4 张图 · 产品 M1 Pro', rendered)
+        self.assertIn('归档 posts/2026-09/M1-Pro/abc', rendered)
+        self.assertIn('原帖预览，德语稿尚未开始', rendered)
+        self.assertIn('查看原帖', rendered)
 
     def test_daytime_ready_items_are_individual_reminders(self):
         outbox = Outbox(self.path, self.settings)
@@ -137,7 +160,7 @@ class FeishuTests(unittest.TestCase):
         night = at('2026-09-11T23:00:00+08:00')
         outbox.enqueue('a', 'ready', {'task_id': 'account/a'}, night)
         prepared, sent = [], []
-        def prepare(payload):
+        def prepare(kind, payload):
             prepared.append(payload['task_id'])
             payload['image_key'] = 'uploaded-key'
         def fails(recipient, card, delivery_id):

@@ -190,8 +190,8 @@ class ServiceTests(unittest.TestCase):
         runtime.thumbnail_sources[task_id] = (self.fixture.account, source)
         runtime.client.upload_image.return_value = 'fixture-image-key'
         payload = {'task_id': task_id, 'source_text_sha256': journal.text_sha256(source['text'])}
-        runtime.prepare_preview(payload)
-        runtime.prepare_preview(payload)
+        runtime.prepare_preview('ready', payload)
+        runtime.prepare_preview('ready', payload)
         runtime.client.upload_image.assert_called_once()
         self.assertEqual(payload['image_key'], 'fixture-image-key')
 

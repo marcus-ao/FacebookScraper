@@ -37,13 +37,71 @@ class StorageLayoutTests(unittest.TestCase):
         self.assertTrue(self.arc.append(post))
         row = self.arc.rows()[0]
         directory = self.arc.post_dir(post)
-        self.assertEqual(directory.parent, self.arc.posts_dir / "2026-09")
+        self.assertEqual(directory.parent.parent, self.arc.posts_dir / "2026-09")
         self.assertEqual(row["folder_name"],
                          "2026-09-10_1423_m1-pro-anniversary-sale_3973012230169803390")
         self.assertEqual(directory.name, row["folder_name"])
         self.assertEqual(row["tags"], ["M1 Pro"])
         self.assertLess(len(str(directory / "media_de" / "01.jpeg")), 240)
         self.assertEqual(store.read_post_truth(self.arc.base, row), (row, directory))
+
+    def test_new_post_lands_under_its_primary_tag_folder(self):
+        post = self.post()
+        self.assertTrue(self.arc.append(post))
+        directory = self.arc.post_dir(post)
+        self.assertEqual(directory.parent, self.arc.posts_dir / "2026-09" / "M1-Pro")
+        self.assertEqual(store.read_post_truth(self.arc.base, self.arc.rows()[0])[1], directory)
+
+    def test_post_without_a_known_model_lands_in_the_uncategorised_folder(self):
+        post = self.post("Herbst campaign without any model name")
+        self.assertTrue(self.arc.append(post))
+        self.assertEqual(self.arc.rows()[0]["tags"], [])
+        self.assertEqual(self.arc.post_dir(post).parent,
+                         self.arc.posts_dir / "2026-09" / "未分类")
+
+    def with_image(self):
+        post = self.post(media=[store.Media("https://cdn.invalid/a.jpg", "image")])
+        media = self.arc.media_path(post, 0, "image/jpeg")
+        media.write_bytes(b"original image")
+        post.media[0].local_path = media.relative_to(self.arc.base).as_posix()
+        self.arc.append(post)
+        return post, self.arc.rows()[0]
+
+    def test_changing_the_primary_tag_moves_the_folder_and_rewrites_media_paths(self):
+        post, row = self.with_image()
+        saved = store.update_post_tags(self.arc.base, row, ["P1 Pro"], expected_tags=["M1 Pro"])
+        moved, directory = store.read_post_truth(self.arc.base, saved)
+        self.assertEqual(directory.parent, self.arc.posts_dir / "2026-09" / "P1-Pro")
+        self.assertEqual(moved["folder_name"], row["folder_name"])
+        self.assertEqual((self.arc.base / moved["media"][0]["local_path"]).read_bytes(),
+                         b"original image")
+
+    def test_changing_the_tag_never_leaves_the_original_month(self):
+        # 留证语义跟着月份走；改分类不能把 9 月的帖子搬到别的月份目录里。
+        post, row = self.with_image()
+        saved = store.update_post_tags(self.arc.base, row, ["P1 Pro"], expected_tags=["M1 Pro"])
+        directory = store.read_post_truth(self.arc.base, saved)[1]
+        self.assertEqual(directory.parent.parent, self.arc.posts_dir / "2026-09")
+
+    def test_extra_tags_stay_in_the_field_and_only_the_primary_one_places_the_folder(self):
+        post, row = self.with_image()
+        saved = store.update_post_tags(self.arc.base, row, ["P1 Pro", "M1", "Herbst"],
+                                       expected_tags=["M1 Pro"])
+        moved, directory = store.read_post_truth(self.arc.base, saved)
+        self.assertEqual(directory.parent.name, "P1-Pro")
+        self.assertEqual(moved["tags"], ["P1 Pro", "M1", "Herbst"])
+        self.assertEqual(len(list((self.arc.posts_dir / "2026-09").iterdir())), 1)
+
+    def test_longest_possible_path_still_fits_the_windows_budget(self):
+        # tag 层吃掉约 21 个字符。用最长的 slug、最长的 tag 和最深的派生文件一起量。
+        post = self.post("M1 Pro " + "sehr-langer-kampagnentext " * 10)
+        self.assertTrue(self.arc.append(post))
+        row = self.arc.rows()[0]
+        saved = store.update_post_tags(self.arc.base, row, ["X" * 60], expected_tags=["M1 Pro"])
+        directory = store.read_post_truth(self.arc.base, saved)[1]
+        self.assertLessEqual(len(directory.parent.name), store.TAG_COMPONENT_MAX)
+        deepest = directory / "media_de" / ("01_v" + "0" * 32 + ".jpeg")
+        self.assertLess(len(str(deepest.relative_to(self.arc.root))), 200)
 
     def test_source_edit_keeps_folder_and_manual_tags_and_archives_previous_source(self):
         original = self.post(media=[store.Media("https://cdn.invalid/a.jpg", "image")])
@@ -52,8 +110,9 @@ class StorageLayoutTests(unittest.TestCase):
         original.media[0].local_path = media.relative_to(self.arc.base).as_posix()
         self.arc.append(original)
         first = self.arc.rows()[0]
-        directory = self.arc.post_dir(original)
-        store.update_post_tags(self.arc.base, first, ["Custom campaign"], expected_tags=["M1 Pro"])
+        # 改 tag 会移动落点；基准取移动之后，这条守的是"源帖被编辑时不再动它"。
+        retagged = store.update_post_tags(self.arc.base, first, ["Custom campaign"], expected_tags=["M1 Pro"])
+        directory = store.read_post_truth(self.arc.base, retagged)[1]
         changed = self.post("P1 launch after source edit", media=[store.Media("https://cdn.invalid/a.jpg", "image")])
         self.assertTrue(self.arc.should_append(changed))
         self.assertTrue(self.arc.append(changed))
@@ -61,7 +120,7 @@ class StorageLayoutTests(unittest.TestCase):
         self.assertEqual(latest_dir, directory)
         self.assertEqual(latest["folder_name"], first["folder_name"])
         self.assertEqual(latest["tags"], ["Custom campaign"])
-        self.assertEqual(latest["media"][0]["local_path"], first["media"][0]["local_path"])
+        self.assertEqual(latest["media"][0]["local_path"], retagged["media"][0]["local_path"])
         history = [json.loads(line) for line in (directory / "source_history.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual(history[-1]["source"]["text"], original.text)
         self.assertFalse(self.arc.append(changed))
@@ -176,7 +235,8 @@ class StorageLayoutTests(unittest.TestCase):
         self.assertEqual(layout.migrate(self.arc.base, dry_run=False), 1)
         moved = store.Archive(self.arc.base.parent, self.arc.base.name).rows()[0]
         truth, directory = store.read_post_truth(self.arc.base, moved)
-        self.assertEqual(directory.parent.name, "2026-09")
+        self.assertEqual(directory.parent.name, store.primary_tag_folder(truth))
+        self.assertEqual(directory.parent.parent.name, "2026-09")
         self.assertEqual(truth["text"], row["text"])
         self.assertEqual((self.arc.base / truth["media"][0]["local_path"]).read_bytes(), b"ORIGINAL")
         self.assertEqual((directory / "text_de.txt").read_text(encoding="utf-8"), "Human draft")
