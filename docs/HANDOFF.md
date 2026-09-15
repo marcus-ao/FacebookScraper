@@ -86,7 +86,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 `tests_month_inventory` 的推荐时段用例已修：基线 6 次跑失败 1 次，根因在夹具不在 production——用例只给 Playwright 的 hover 留了 300ms，而一个页面上的**首次** hover 要付一次性的可操作性开销，实测中位 641ms，其后每次 47ms。超时被 `is_recommendation` 吞成 False，正向断言就红。`read()` 调到它之前 `read_grid` 已扫完 35 个日期格，真实 Planner 路径早把这笔付过，`month_inventory.py` 未改。修后单测连跑 70 次、整文件连跑 12 次均无失败。
 
-⚠️ **但「Python 66/66」仍然不能直接采信**：同一类计时敏感在另一处还在。`tests_browser_workflow` 的 `test_03_history_pages_and_frozen_account_are_read_only` 在全量套件里出现过一次 `to_have_count` 等 12 行超过 5000ms 而失败，单独连跑 8 次（工作区 3 + HEAD 5）全过。它与 tag 母目录改动无因果：同一文件在 main 上三次实测 26.3/28.7/29.5 秒，在本分支上 26.8/27.0/26.7 秒，改动后反而更快更稳。**看到红先确认是不是这一条**，再判断是否真的回归。
+`tests_browser_workflow` 的 `test_03_history_pages_and_frozen_account_are_read_only` 也已修，「Python 66/66」可以直接采信。这一条的根因**在 production 不在夹具**：列表行无条件带上 `thumbnail_url`，而前端的契约是空串才改画占位符（`columns.tsx` 和它的单测早就有这一支，只是后端从不给空串），于是 32 条历史行里没有图的那 31 条也各发一次注定 404 的图片请求。浏览器每源只有 6 条连接，翻页的列表查询排在这些请求后面：实测 stall 中位 2223ms、最大 3018ms，而服务端本身只花 30ms——5000ms 预算有三分之二耗在排队上，慢一点的盘就越线。`reader.py` 改成无图时给空串后，stall 中位 0.8ms，点击到 12 行中位 86ms、最大 109ms。
 
 运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
 
@@ -202,6 +202,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 - **历史页首屏缩略图成本。** 隔离夹具（63 篇）上是每张 0.03–0.11 秒、50 行首屏约 3.9 秒；换到原归档（1,067 篇）直接向运行中的宿主取 8 张，中位 1.57 秒、最大 2.0 秒——按每源六连接算，首屏约 12–13 秒。成本随账号目录规模走（`assert_physical_direct_path` 要遍历它），所以夹具数字注定偏乐观。文字行仍然立刻出来，页面可用；如果图片补齐太慢，先让运营选每页 20 条。
 - **一个量不准的陷阱。** 缩略图是 `loading="lazy"`，没有被绘制的标签页发出的图片请求数为零。`document.visibilityState === "hidden"` 时 38 秒内什么都没加载——看起来像卡死，其实不是。**要量就从前台窗口量，或者直接取 URL。**
+- **上面这两个数是按"每行都发一次请求"量的，2026-09-15 起不再成立。** 当时无图的帖子也带 `thumbnail_url`，于是也各占一次连接；现在无图就给空串，只有真有图的行才发请求（根因与实测见第 4 节）。首屏成本要按有图行数重算，1.57 秒的单张中位仍然有效。
 
 ## 8. 内容安全规则
 

@@ -311,7 +311,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | 单一 React 审校台 | 离线通过 | `web/ui/` 是唯一源码目录，构建为 `web/ui/dist`；真实路由支持深链接刷新和分享 | React 26 文件 505 项测试；`tests/browser_regression.py --stage ALL` 12 组通过 |
 | 前端静态部署契约 | 离线通过 | `SinglePageFiles` 提供 SPA 回落，且不吞 `/api` 404、带扩展名的缺失资源和非 HTML 客户端 | `tests/tests_spa_static.py` 14 项；退回裸 `StaticFiles` 会红 11 项 |
 | FastAPI 静态演练 | 离线通过 | `tests/cutover_rehearsal.py` 默认伺服 `web/ui/dist`；深链接、旧链接、真实资源、API/资源 404 和刷新均通过 | 实际 FastAPI、零外部写入；需先构建前端 |
-| 历史页缩略图成本 | 待真实联调 | React 默认 50 行。原归档（1,067 篇）实测中位 1.57s、最大 2.0s，六连接下首屏约 12–13 秒；文字行立即可用 | `3718c0d` 实测；合并后的日常服务观察一个工作日，太慢先把每页改成 20 条 |
+| 历史页缩略图成本 | 待真实联调 | React 默认 50 行。原归档（1,067 篇）实测单张中位 1.57s、最大 2.0s。当时无图的帖子也发请求，六连接下首屏约 12–13 秒；现在只有真有图的行才发，首屏要按有图行数重算 | `3718c0d` 实测 + 无图行不发请求（`tests_history`）；合并后的日常服务观察一个工作日，太慢先把每页改成 20 条 |
 | 当前 Python + 前端构建 + 浏览器回归 | 离线通过 | 清库后 Python 65/66；`tests_browser_workflow` 与 React 单测需先重建 `web/ui/dist` 和 `node_modules` | 产物落在已 gitignore 的 `state/`；浏览器夹具不算真实外部系统 |
 | 审校台日常启动与只读检查 | 待真实联调 | 清库前曾在真实数据上通过，但那次证据与数据已随清库删除。重建数据后按 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台) 重跑 | 需先 `npm --prefix web/ui ci` 与 `run build` |
 | 运营飞书到审校排期闭环 | 待真实联调 | 运营从真实卡片开帖、改审文图标签链接、选期确认、收到回执 | 两渠道排期证据 + 实际经过；两个独立 CLI 调用不算闭环 |

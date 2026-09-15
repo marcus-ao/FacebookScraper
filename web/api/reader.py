@@ -217,11 +217,27 @@ def has_schedule(source: engine.SourcePost) -> bool:
 
 
 def _image_media(source: engine.SourcePost) -> list[Mapping[str, Any]]:
-    media = source.row.get("media")
+    return _row_image_media(source.row)
+
+
+def _row_image_media(row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    media = row.get("media")
     if not isinstance(media, list):
         return []
     return [item for item in media
             if isinstance(item, Mapping) and item.get("kind") == "image"]
+
+
+def _thumbnail_url(task_id: str, images: list[Mapping[str, Any]]) -> str:
+    """⚠️ 取不到第 0 张图就得给空串，前端据此改画占位符。给了地址那一行就会发一次注定 404 的
+    请求，占掉浏览器每源 6 条连接之一——实测这样能把同页的列表查询压在队里等 2.2 秒，而列表
+    本身只要 30ms。
+
+    判据跟着 `image_bytes` 走：只认已经落盘的 `local_path`，不在这里逐行解析德语图——逐行解析
+    正是首屏慢的原因。德语图在而原图没落盘时会少给一个地址，缩略图是装饰（`alt=""`），少画
+    一张远好过每行白跑一次。"""
+    local = images[0].get("local_path") if images else None
+    return "/api/tasks/%s/image/0?variant=de" % task_id if isinstance(local, str) and local.strip() else ""
 
 
 class _Context:
@@ -300,13 +316,14 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         author_kind, author_flag = _author_kind(source, details, alerts)
         entry = _effective_translation_of(source) if reviewable[source.ref] else None
         when = already[source.ref] or allocated.get(source.ref)
+        images = _image_media(source)
         tasks.append({
             "id": task_id,
             "source_text_sha256": translation.source_text_sha256(source.text),
             "platform": source.platform,
-            "thumbnail_url": "/api/tasks/%s/image/0?variant=de" % task_id,
+            "thumbnail_url": _thumbnail_url(task_id, images),
             "text_de_excerpt": excerpt(entry.get("text_de", "")) if entry else "",
-            "image_count": len(_image_media(source)),
+            "image_count": len(images),
             "tags": list(source.row.get("tags") or []),
             "month": str(source.row.get("created_at") or "")[:7],
             "review": states[source.ref],
@@ -352,13 +369,15 @@ def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None,
                                      platform=platform, page=page, limit=limit)
     tasks = []
     for row in result['rows']:
+        # 数的是 image 媒体，不是全部媒体：只有视频的帖子取不到第 0 张图。
+        images = _row_image_media(row)
         tasks.append({'id': row['id'], 'platform': row['platform'], 'month': row['month'],
                       'created_at': row.get('created_at'), 'account': row['account_dir'],
                       'read_only': row['account_dir'] not in cfg().active_accounts(),
                       'text_de_excerpt': excerpt(row.get('text_de') or row.get('text') or ''),
                       'tags': row['tags'], 'status': row['status'],
-                      'image_count': len(row.get('media') or []),
-                      'thumbnail_url': '/api/tasks/' + row['id'] + '/image/0?variant=de'})
+                      'image_count': len(images),
+                      'thumbnail_url': _thumbnail_url(row['id'], images)})
     return {'tasks': tasks, 'index': result['index'], 'scope': 'history',
             'range': {'scope': 'history', 'days': None, 'month': month, 'platform': platform},
             'pagination': {'page': page, 'limit': limit, 'total': result['total']},
