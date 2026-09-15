@@ -144,11 +144,23 @@ class NotificationTests(unittest.TestCase):
         self.assertTrue(any(element.get('tag') == 'img' for element in cards[0]['elements']))
         self.runtime.client.upload_image.assert_called_once_with((self.f.post_dir / '01.jpg').read_bytes())
 
-    def test_unreadable_lead_image_costs_only_its_own_card_and_leaves_a_trace(self):
-        # 一篇坏归档不能掀掉整轮发现推送；它自己的失败要看得见，不是静默消失。
+    def test_unreadable_lead_image_degrades_the_discovery_card_instead_of_dropping_it(self):
+        # 发现卡是监测链路唯一的存活信号。少一张图就整条不推，运营侧看起来和"今天没有新帖"一样。
         self.route('delta')
         (self.f.post_dir / '01.jpg').unlink()
         self.runtime.collect([self.f.account], self.now)
+        self.assertEqual(len(self.discovered()), 1)
+        payload = self.discovered()[0]['payload']
+        self.assertIn('A clean home', payload['text'])
+        self.assertIn('审校台', payload['image_note'])
+        alerts = [e for e in self.events().values() if e['kind'] == 'system']
+        self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))
+
+    def test_unreadable_discovery_material_costs_only_its_own_card(self):
+        # 首图之外还要读 post.json 与型号表；读不出的那一篇不能连累本轮其余发现。
+        self.route('delta')
+        with patch.object(notifications, 'discovered_material', side_effect=ValueError('读不出')):
+            self.runtime.collect([self.f.account], self.now)
         self.assertEqual(self.discovered(), [])
         alerts = [e for e in self.events().values() if e['kind'] == 'system']
         self.assertTrue(any('facebook:' + self.f.post_id in e['payload']['text'] for e in alerts))

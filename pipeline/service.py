@@ -361,6 +361,10 @@ class Runtime:
                 self._system(f'discovered:{ref}:{now.date()}',
                              f'{ref} 已抓取，但发现卡素材读不出（{type(exc).__name__}），请检查归档。', now)
                 continue
+            if material['image_variant'] == 'unreadable':
+                # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
+                self._system(f'lead-image:{ref}:{now.date()}',
+                             f'{ref} 的首图读不出，发现卡已降级为纯文字，请检查归档原图。', now)
             self.outbox.enqueue('discovered:' + ref, 'discovered', {
                 'task_id': directory.name + '/' + source['post_id'],
                 'platform': source['platform'], 'account': source['account'],

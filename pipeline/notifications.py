@@ -31,13 +31,20 @@ def discovered_material(account, source):
         meta.append('合作帖，原作者 %s' % owner)
     if coauthors:
         meta.append('合作方 %s' % '、'.join(coauthors))
-    path = None
-    if images:
-        path, _ = image_de._source_from_manifest(account, source, images[0])
-        assert_physical_direct_path(path.parent, path, kind='file', label='发现卡首图')
+    path, variant = None, 'original'
+    try:
+        if images:
+            path, _ = image_de._source_from_manifest(account, source, images[0])
+            assert_physical_direct_path(path.parent, path, kind='file', label='发现卡首图')
+    except (OSError, ValueError):
+        # 与 material() 同一取舍：只降级图片。发现卡是监测链路唯一的存活信号，
+        # 整条不推的话，运营侧看起来和"今天没有新帖"完全一样。
+        path, variant = None, 'unreadable'
     return {'text': (source.get('text') or '').strip()[:DISCOVERED_EXCERPT],
             'meta': '\n'.join(meta), 'image_count': len(images), 'tags': list(tags),
-            'image_note': '原帖预览，德语稿尚未开始'}, path
+            'image_variant': variant,
+            'image_note': IMAGE_NOTES['unreadable'] if variant == 'unreadable'
+            else '原帖预览，德语稿尚未开始'}, path
 
 
 def material(account, source):
