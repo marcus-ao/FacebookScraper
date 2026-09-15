@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core.feishu import FeishuSettings, Outbox, notification_card
+from core.feishu import FeishuRejected, FeishuSettings, Outbox, notification_card
 
 
 def at(value):
@@ -22,7 +22,7 @@ class FeishuTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'outbox.json'
         self.settings = FeishuSettings(True, 'http://review.internal:8765',
-                                       ('operator',), ('developer',))
+                                       publish_recipients=('publish',), alert_recipients=('alert',))
 
     def test_empty_and_disabled_are_silent(self):
         outbox = Outbox(self.path, self.settings)
@@ -40,33 +40,33 @@ class FeishuTests(unittest.TestCase):
         restarted = Outbox(self.path, self.settings)
         self.assertEqual(restarted.dispatch(at('2026-09-12T08:00:00+08:00'),
                                            lambda *args: calls.append(args) or 'message'), 1)
-        self.assertEqual(calls[0][0], 'operator')
+        self.assertEqual(calls[0][0], 'publish')
         rendered = json.dumps(calls[0][1], ensure_ascii=False)
         self.assertTrue(all(f'Deutsch {i}' in rendered for i in range(3)))
         self.assertIn('task=account%2F0', rendered)
         self.assertEqual(restarted.dispatch(at('2026-09-12T08:01:00+08:00'),
                                            lambda *args: self.fail('duplicate')), 0)
 
-    def test_urgent_only_goes_to_technical_group_during_quiet_hours(self):
+    def test_only_system_bypasses_quiet_hours_among_alert_kinds(self):
         outbox = Outbox(self.path, self.settings)
         now = at('2026-09-11T23:00:00+08:00')
         outbox.enqueue('alert', 'system', {'text': '会话失效，请手动登录'}, now)
         outbox.enqueue('failed', 'schedule_failed', {'text': '请重新核对排期'}, now)
         calls = []
         outbox.dispatch(now, lambda *args: calls.append(args) or 'ok')
-        self.assertEqual([call[0] for call in calls], ['developer'])
+        self.assertEqual([call[0] for call in calls], ['alert'])
         outbox.dispatch(at('2026-09-12T08:00:00+08:00'), lambda *args: calls.append(args) or 'ok')
-        self.assertEqual(calls[-1][0], 'operator')
+        self.assertEqual(calls[-1][0], 'alert')
 
-    def test_monitor_cards_reach_the_operator_during_quiet_hours(self):
-        # 监测播报是这条链路唯一的存活信号，静默窗不能吞掉它；但它仍然进业务组。
+    def test_monitor_cards_reach_separate_stage_bots_during_quiet_hours(self):
+        # 监测播报不受静默窗影响，收件角色分别对应检测与爬取阶段。
         outbox = Outbox(self.path, self.settings)
         night = at('2026-09-11T23:00:00+08:00')
         for kind in ('monitor_found', 'monitor_saved'):
             outbox.enqueue(kind + ':instagram:42', kind, {'text': 'A clean home.'}, night)
         calls = []
         self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args) or 'message'), 2)
-        self.assertEqual([call[0] for call in calls], ['operator', 'operator'])
+        self.assertEqual([call[0] for call in calls], ['detect', 'capture'])
 
     def test_monitor_cards_carry_counts_folders_and_the_source_link(self):
         card = notification_card('monitor_saved', [{
@@ -95,7 +95,7 @@ class FeishuTests(unittest.TestCase):
         ids = []
         def fails(recipient, card, delivery_id):
             ids.append(delivery_id)
-            raise RuntimeError('untrusted detail must not be stored')
+            raise FeishuRejected('明确未接受请求')
         outbox.dispatch(now, fails)
         outbox.dispatch(at('2026-09-12T09:01:00+08:00'), fails)
         self.assertEqual(len(ids), 1)
@@ -127,7 +127,7 @@ class FeishuTests(unittest.TestCase):
             payload['image_key'] = 'uploaded-key'
         def fails(recipient, card, delivery_id):
             sent.append(card)
-            raise TimeoutError()
+            raise FeishuRejected('明确未接受请求')
         outbox.dispatch(night, fails, prepare_payload=prepare)
         self.assertFalse(prepared)
         outbox.dispatch(at('2026-09-12T08:00:00+08:00'), fails, prepare_payload=prepare)
@@ -180,7 +180,7 @@ class FeishuTests(unittest.TestCase):
         self.assertIsNone(outbox.archived_event('waiting'))
 
     def test_multi_recipient_shared_groups_keep_every_member_until_all_terminal(self):
-        settings = replace(self.settings, recipients=('ops1', 'ops2'))
+        settings = replace(self.settings, publish_recipients=('ops1', 'ops2'))
         outbox = Outbox(self.path, settings)
         night = at('2026-09-11T23:00:00+08:00')
         for identifier in ('a', 'b'):
@@ -288,7 +288,7 @@ class FeishuTests(unittest.TestCase):
         self.assertEqual(outbox.archived_event('cancelled-attempt')['deliveries'], original)
 
     def test_cancelled_group_does_not_expire_a_still_required_recipient_reminder(self):
-        settings = replace(self.settings, recipients=('ops1', 'ops2'))
+        settings = replace(self.settings, publish_recipients=('ops1', 'ops2'))
         outbox = Outbox(self.path, settings)
         now = at('2026-09-12T09:00:00+08:00')
         outbox.enqueue('still-required', 'ready', {'text': 'pending recipient'}, now)

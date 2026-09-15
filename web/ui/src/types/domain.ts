@@ -620,8 +620,10 @@ export interface RuntimeStage {
   readonly outbox?: {
     readonly enabled: boolean
     readonly credentials_present?: boolean
-    /** 两个群的机器人地址填成了同一个；不静默合并，界面要说出来。 */
-    readonly groups_merged?: boolean
+    /** 不同阶段复用了同一个机器人地址。 */
+    readonly duplicate_bot_targets?: boolean
+    readonly bot_configuration_valid?: boolean
+    readonly bots?: ReadonlyArray<{ readonly role: string; readonly name: string; readonly configured: boolean; readonly valid: boolean }>
     readonly counts?: Readonly<Record<string, number>>
     readonly deliveries?: readonly FeishuDelivery[]
   }

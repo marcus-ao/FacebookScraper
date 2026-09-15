@@ -62,7 +62,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len([e for e in paid_requests.load_events(self.state) if e['event'] == 'started']), 1)
 
     def test_uncertain_message_keeps_card_and_uuid_after_human_resolution(self):
-        outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost:8765', ('ops',), ('dev',)))
+        outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost:8765', publish_recipients=('publish',), alert_recipients=('alert',)))
         outbox.enqueue('ready-one', 'ready', {'task_id': 'fa_brand/1', 'text': 'Frozen German'}, NOW)
         sent = []
         def fail(recipient, card, uid):
@@ -92,7 +92,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(observations.status(self.state, attempt)['status'], 'published')
 
     def test_cancelled_part_of_merged_message_does_not_hide_valid_post_for_other_recipient(self):
-        outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost', ('ops1', 'ops2'), ('dev',)))
+        outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost', publish_recipients=('ops1', 'ops2'), alert_recipients=('alert',)))
         night = NOW - timedelta(hours=4)
         for key in ('a', 'b'):
             outbox.enqueue(key, 'ready', {'task_id': 'fa_brand/' + key, 'text': key}, night)

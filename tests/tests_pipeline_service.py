@@ -121,7 +121,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_backlog_and_schedule_failure_have_durable_events(self):
         runtime = Runtime(detector=Mock(return_value=0))
-        runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
+        runtime.settings = FeishuSettings(True, 'http://review.internal')
         runtime.outbox = Outbox(self.state / 'feishu_outbox.json', runtime.settings)
         runtime.outbox.started_at(self.now - timedelta(days=1))
         source = self.fixture.source
@@ -143,7 +143,7 @@ class ServiceTests(unittest.TestCase):
 
     def enabled_runtime(self):
         runtime = Runtime(detector=Mock(return_value=0))
-        runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
+        runtime.settings = FeishuSettings(True, 'http://review.internal')
         runtime.outbox = Outbox(self.state / 'feishu_outbox.json', runtime.settings)
         runtime.client = Mock()
         runtime.client.send.return_value = 'bot-accepted:fixture'

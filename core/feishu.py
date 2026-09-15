@@ -20,10 +20,12 @@ from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 # ⚠️ dispatch 先按 sorted(KINDS) 建投递，再按建立顺序逐条发送——**kind 名字的字典序就是群里
 # 消息的先后顺序**。monitor_found < monitor_saved 才让"监测到"排在"抓取完成"前面；改名会静默换序。
 MONITOR_KINDS = frozenset({'monitor_found', 'monitor_saved'})
-KINDS = {'ready', 'backlog', 'scheduled', 'schedule_failed', 'system', 'morning', *MONITOR_KINDS}
+KIND_ROLES = {'monitor_found': 'detect', 'monitor_saved': 'capture', 'ready': 'publish',
+              'scheduled': 'publish', 'backlog': 'alert', 'schedule_failed': 'alert',
+              'morning': 'alert', 'system': 'alert'}
+KINDS = set(KIND_ROLES)
 # 静默窗只压业务待办；监测播报和系统告警是链路存活信号，压住它们等于让沉默继续有歧义。
-# ⚠️ 这里只管静默豁免，**不决定收件人**。两张监测卡和待审卡一样进业务组（收件人路由另见
-# dispatch），只有 system 进技术组；把两件事绑成一个集合会让播报静默地改收件人。
+# 这里只管静默豁免；同一告警机器人接收的不同 kind 仍分别判断静默。
 ALWAYS_DELIVERED = {'system', *MONITOR_KINDS}
 # 发送前重新取当前素材的消息类型。监测卡的内容在入队时已由抓取事实定稿，不参与重取。
 PREVIEWED = {'ready'}
@@ -42,15 +44,21 @@ class FeishuAuthError(FeishuError):
     pass
 
 
+class FeishuRejected(FeishuError):
+    """已明确拒绝的请求可退避重试；其余异常均可能已经送达。"""
+
+
 @dataclass(frozen=True)
 class FeishuSettings:
     enabled: bool
     base_url: str
     # 接收方是角色标签，不是群地址。发件箱会把它原样写进投递记录，而群机器人地址带
     # token——落盘就等于把凭据写进了状态文件（红线 10）。URL 由 WebhookBot 按标签解析。
-    recipients: tuple[str, ...] = ('ops',)
-    technical_recipients: tuple[str, ...] = ('tech',)
+    publish_recipients: tuple[str, ...] = ('publish',)
+    alert_recipients: tuple[str, ...] = ('alert',)
     keep_delivered_days: int = 30
+    detect_recipients: tuple[str, ...] = ('detect',)
+    capture_recipients: tuple[str, ...] = ('capture',)
 
     def __post_init__(self):
         if type(self.keep_delivered_days) is not int or self.keep_delivered_days < 1:
@@ -73,13 +81,17 @@ class FeishuSettings:
         if (parsed.scheme not in {'http', 'https'} or not parsed.hostname
                 or parsed.username or parsed.password or parsed.query or parsed.fragment):
             raise ValueError('请配置可访问的审校台 base_url，不要包含凭据、查询参数或锚点')
-        if not self.recipients or not self.technical_recipients:
-            raise ValueError('业务组与技术组各需要一个接收角色')
+        groups = [getattr(self, role + '_recipients') for role in WEBHOOK_ROLES]
+        if any(not group for group in groups):
+            raise ValueError('检测、爬取、发布、状态告警各需要一个接收角色')
         if any(not isinstance(item, str) or not item.strip()
-               for item in (*self.recipients, *self.technical_recipients)):
+               for group in groups for item in group):
             raise ValueError('飞书接收角色必须是非空标签')
-        if set(self.recipients) & set(self.technical_recipients):
-            raise ValueError('运营和开发者接收组应分别配置')
+        if sum(len(set(group)) for group in groups) != len({item for group in groups for item in group}):
+            raise ValueError('四个阶段机器人必须分别配置接收角色')
+
+    def recipients_for(self, kind: str) -> tuple[str, ...]:
+        return getattr(self, KIND_ROLES[kind] + '_recipients')
 
 
 class FeishuClient:
@@ -126,8 +138,33 @@ class FeishuClient:
         return {'Authorization': 'Bearer ' + self.token}
 
 
-WEBHOOK_ROLES = {'ops': 'FEISHU_WEBHOOK_OPS', 'tech': 'FEISHU_WEBHOOK_TECH'}
+WEBHOOK_ROLES = {'detect': 'FEISHU_WEBHOOK_DETECT', 'capture': 'FEISHU_WEBHOOK_CAPTURE',
+                 'publish': 'FEISHU_WEBHOOK_PUBLISH', 'alert': 'FEISHU_WEBHOOK_ALERT'}
+BOT_LABELS = {'detect': '新帖检测推送机器人', 'capture': '新帖爬取推送机器人',
+              'publish': '新帖发布推送机器人', 'alert': '状态告警推送机器人'}
 WEBHOOK_PREFIX = 'https://open.feishu.cn/open-apis/bot/v2/hook/'
+
+
+def webhook_configuration(targets: dict) -> dict:
+    """仅返回角色和配置健康度，运行页和传输端共用；地址不进入状态。"""
+    bots, normalized = [], []
+    for role in WEBHOOK_ROLES:
+        value = targets.get(role) or ''
+        try:
+            parsed = urlsplit(value.strip())
+            token = parsed.path.removeprefix('/open-apis/bot/v2/hook/')
+            valid = (parsed.scheme == 'https' and parsed.netloc.lower() == 'open.feishu.cn'
+                     and parsed.path.startswith('/open-apis/bot/v2/hook/') and bool(token)
+                     and all(char.isascii() and (char.isalnum() or char in '-_') for char in token)
+                     and not parsed.query and not parsed.fragment)
+        except (ValueError, AttributeError):
+            valid = False
+        bots.append({'role': role, 'name': BOT_LABELS[role], 'configured': bool(value), 'valid': valid})
+        if valid:
+            normalized.append(token)
+    return {'bots': bots, 'credentials_present': all(bot['configured'] for bot in bots),
+            'bot_configuration_valid': all(bot['valid'] for bot in bots) and len(set(normalized)) == len(normalized),
+            'duplicate_bot_targets': len(set(normalized)) != len(normalized)}
 
 
 def webhook_signature(timestamp: str, secret: str) -> str:
@@ -140,15 +177,19 @@ class WebhookBot:
     """群自建机器人。地址按角色标签解析，响应里没有 message_id，也没有远端去重。"""
 
     def __init__(self, targets: dict, secrets: dict | None = None, *, http=None):
-        missing = [name for role, name in WEBHOOK_ROLES.items() if not targets.get(role)]
+        health = webhook_configuration(targets)
+        missing = [WEBHOOK_ROLES[bot['role']] for bot in health['bots'] if not bot['configured']]
         if missing:
-            raise FeishuError('未配置群机器人地址（%s）；业务组与技术组都必须填'
+            raise FeishuError('未配置群机器人地址（%s）；四个阶段机器人都必须填'
                               % '、'.join(missing))
-        for url in targets.values():
-            if not str(url).startswith(WEBHOOK_PREFIX) or len(str(url)) <= len(WEBHOOK_PREFIX):
-                raise FeishuError('群机器人地址必须是 %s 开头的完整链接' % WEBHOOK_PREFIX)
-        self.targets, self.secrets = dict(targets), dict(secrets or {})
+        if health['duplicate_bot_targets']:
+            raise FeishuError('四个阶段的机器人地址有重复；同群可用，须分别填写四个机器人的地址')
+        if not health['bot_configuration_valid']:
+            raise FeishuError('群机器人地址必须是 %s 开头的完整链接，不能带查询参数或锚点' % WEBHOOK_PREFIX)
+        self.targets = {role: targets[role].strip() for role in WEBHOOK_ROLES}
+        self.secrets = dict(secrets or {})
         self.http = http or httpx.Client(timeout=15, follow_redirects=False)
+        self.next_send = {}
 
     @classmethod
     def from_environment(cls):
@@ -174,17 +215,24 @@ class WebhookBot:
         if recipient not in self.targets:
             raise FeishuError('未知的飞书接收角色，不猜测投递目标')
         try:
+            delay = self.next_send.get(recipient, 0) - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self.next_send[recipient] = time.monotonic() + 0.61
             response = self.http.post(self.targets[recipient],
                                       json=self.envelope(recipient, card, time.time()))
             if not response.is_success:
-                raise FeishuError('群机器人 HTTP 请求失败（状态 %d）' % response.status_code)
+                error = FeishuRejected if 400 <= response.status_code < 500 else FeishuError
+                raise error('群机器人 HTTP 请求失败（状态 %d）' % response.status_code)
             data = response.json()
             if not isinstance(data, dict):
                 raise FeishuError('群机器人响应不是对象，投递结果尚不明确')
             # 成功响应同时带 code 与旧版 StatusCode；错误只带 code。
             code = data.get('code', data.get('StatusCode'))
+            if type(code) is not int:
+                raise FeishuError('群机器人响应缺少有效状态码，投递结果尚不明确')
             if code != 0:
-                raise FeishuError('群机器人未接受卡片（code=%s）：19021 为签名或时间戳不符，'
+                raise FeishuRejected('群机器人未接受卡片（code=%s）：19021 为签名或时间戳不符，'
                                   '19022 为 IP 限制，19024 为群关键词限制' % code)
         except (httpx.HTTPError, ValueError) as exc:
             # 不记录响应体或异常原文，连接错误的文案里可能带地址。
@@ -193,7 +241,7 @@ class WebhookBot:
         return 'bot-accepted:' + delivery_id
 
 
-def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings) -> dict:
+def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings, *, role: str | None = None) -> dict:
     """源文案以纯文本渲染；按钮只导航审校台，不在卡片里直接批准发布。"""
     elements = []
     for payload in payloads:
@@ -217,6 +265,9 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings)
         if actions:
             elements.append({'tag': 'action', 'actions': actions})
     title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
+    bot_name = BOT_LABELS.get(role or KIND_ROLES.get(kind))
+    if bot_name:
+        title += ' · ' + bot_name
     return {'config': {'wide_screen_mode': True},
             'header': {'title': {'tag': 'plain_text', 'content': 'Neakasa 德国站 · ' + title},
                        'template': 'red' if kind in {'system', 'schedule_failed'}
@@ -242,11 +293,19 @@ class Outbox:
 
     def _load(self):
         if not self.path.exists():
-            return {'schema_version': 1, 'events': {}, 'deliveries': {}, 'archived_events': {}}
+            return {'schema_version': 2, 'events': {}, 'deliveries': {}, 'archived_events': {}}
         data = json.loads(self.path.read_text(encoding='utf-8'))
-        if (not isinstance(data, dict) or not isinstance(data.get('events'), dict)
+        if (not isinstance(data, dict) or data.get('schema_version', 1) not in {1, 2}
+                or not isinstance(data.get('events'), dict)
                 or not isinstance(data.get('deliveries'), dict)):
             raise FeishuError('飞书投递记录损坏，请先核对；未发送消息')
+        for event in data['events'].values():
+            if (not isinstance(event, dict) or event.get('kind') not in KINDS
+                    or not isinstance(event.get('payload'), dict)
+                    or ('recipients' in event and (not isinstance(event['recipients'], list)
+                        or not event['recipients'] or any(not isinstance(role, str) or not role.strip()
+                                                         for role in event['recipients'])))):
+                raise FeishuError('飞书事件或冻结路由损坏，请保留现场核对')
         for row in data['deliveries'].values():
             if (not isinstance(row, dict) or row.get('status') not in {'pending', 'retry', 'sent', 'uncertain', 'cancelled'}
                     or not isinstance(row.get('events'), list) or not isinstance(row.get('card'), dict)):
@@ -258,6 +317,27 @@ class Outbox:
                 for key, value in index.items())):
             raise FeishuError('飞书归档去重索引损坏，请先核对；未发送消息')
         return data
+
+    def _event_recipients(self, event):
+        return event.get('recipients', self.settings.recipients_for(event['kind']))
+
+    def _migrate_routes(self, data, now):
+        """旧回执保留原角色；未尝试的事件转新路由，已尝试的未知结果先核对。"""
+        for event_id, event in data['events'].items():
+            if 'recipients' in event:
+                continue
+            assigned = [row for row in data['deliveries'].values() if event_id in row['events']]
+            if any(row['attempts'] or row['status'] == 'sent' for row in assigned):
+                event['recipients'] = list(dict.fromkeys(row['recipient'] for row in assigned))
+                for row in assigned:
+                    if row['status'] in {'pending', 'retry'}:
+                        row.update(status='uncertain', error='旧通道路由待核对；确认送达或未送达后再结转')
+            else:
+                event['recipients'] = list(self.settings.recipients_for(event['kind']))
+                for row in assigned:
+                    if row['status'] == 'pending':
+                        row.update(status='cancelled', cancelled_at=_iso(now))
+        data['schema_version'] = 2
 
     def enqueue(self, event_id: str, kind: str, payload: dict, now: datetime) -> bool:
         if kind not in KINDS or not event_id:
@@ -276,7 +356,8 @@ class Outbox:
                                           if event_id not in item['events']}
                     atomic_write_json(self.path, data)
                 return False
-            data['events'][event_id] = {'kind': kind, 'payload': payload, 'created_at': _iso(now)}
+            data['events'][event_id] = {'kind': kind, 'payload': payload, 'created_at': _iso(now),
+                                       'recipients': list(self.settings.recipients_for(kind))}
             atomic_write_json(self.path, data)
         return True
 
@@ -368,9 +449,7 @@ class Outbox:
                 else:
                     # Unassigned off-duty work and missing recipient receipts remain live.
                     assigned = [data['deliveries'][key] for key in linked.get(event_id, ())]
-                    recipients = (self.settings.technical_recipients if event['kind'] == 'system'
-                                  else self.settings.recipients)
-                    required = set(recipients) | {item['recipient'] for item in assigned}
+                    required = set(self._event_recipients(event))
                     received = {item['recipient'] for item in assigned if item['status'] == 'sent'}
                     eligible = bool(assigned) and old(event.get('created_at')) and required <= received
                 if not eligible:
@@ -401,12 +480,13 @@ class Outbox:
         if action not in {'delivered', 'not_delivered'}:
             raise ValueError('请选择已确认送达或已核对未送达')
         if action == 'delivered' and (not isinstance(message_id, str) or not message_id.strip() or len(message_id) > 200):
-            raise ValueError('请填写核对后的飞书消息 ID')
+            raise ValueError('请填写在群里核对到的送达情况')
         with self._lock():
             data = self._load()
             row = data['deliveries'].get(identifier)
             if not row or self._version(row) != expected_version or row['status'] not in {'retry', 'uncertain'}:
                 raise FeishuError('消息状态已有变化，请刷新后再核对')
+            self._migrate_routes(data, now)
             stamp = _iso(now)
             row.setdefault('resolutions', []).append({'action': action, 'recorded_at': stamp, 'actor': None})
             if action == 'delivered':
@@ -416,9 +496,36 @@ class Outbox:
                 obsolete = any(data['events'][key].get('cancelled_at') for key in row['events'])
                 row.update(status='cancelled' if obsolete else 'retry', next_at=stamp,
                            retry_authorized_at=stamp)
+                if row['recipient'] not in self.settings.recipients_for(row['kind']):
+                    self._rebind_confirmed_delivery(data, identifier, row, stamp)
             row.pop('error', None)
             atomic_write_json(self.path, data)
         return self.status()
+
+    def _rebind_confirmed_delivery(self, data, identifier, row, stamp):
+        """人已确认旧通道未送达；新建当前通道的冻结投递，原卡与回执仍保留。"""
+        row.update(status='cancelled', cancelled_at=stamp)
+        recipients = self.settings.recipients_for(row['kind'])
+        live = [key for key in row['events'] if not data['events'][key].get('cancelled_at')]
+        for key in live:
+            event = data['events'][key]
+            event['recipients'] = list(dict.fromkeys(
+                [role for role in self._event_recipients(event) if role != row['recipient']] + list(recipients)))
+        for recipient in recipients:
+            assigned = {key for item in data['deliveries'].values()
+                        if item['recipient'] == recipient and item['status'] != 'cancelled' for key in item['events']}
+            missing = [key for key in live if key not in assigned]
+            # 整张原卡仍有效才复用；部分失效或部分已送达时由 dispatch 只组尚缺事件。
+            if not missing or missing != row['events']:
+                continue
+            seed = identifier + '\0' + recipient + '\0' + str(len(row['resolutions']))
+            next_id = hashlib.sha256(seed.encode()).hexdigest()[:32]
+            if next_id in data['deliveries']:
+                raise FeishuError('已有该次路由结转，请刷新投递状态')
+            data['deliveries'][next_id] = {
+                'events': list(row['events']), 'kind': row['kind'], 'recipient': recipient, 'card': row['card'],
+                'status': 'pending', 'attempts': 0, 'next_at': stamp, 'created_at': stamp,
+                'routing_from': identifier, 'preview_error': row.get('preview_error')}
 
     def started_at(self, now: datetime) -> datetime:
         """第一次启用的本地边界；不把旧发布回执当成今天的新消息。"""
@@ -455,15 +562,18 @@ class Outbox:
         sent = 0
         with self._lock():
             data = self._load()
+            self._migrate_routes(data, now)
             for kind in sorted(KINDS):
                 if kind not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
-                recipients = (self.settings.technical_recipients if kind == 'system' else self.settings.recipients)
+                recipients = [recipient for event in data['events'].values() if event['kind'] == kind
+                              for recipient in self._event_recipients(event)]
                 for recipient in dict.fromkeys(recipients):
                     assigned = {event_id for item in data['deliveries'].values()
                                 if item['status'] != 'cancelled' and item['recipient'] == recipient for event_id in item['events']}
                     ids = [key for key, item in data['events'].items()
-                           if key not in assigned and item['kind'] == kind and not item.get('cancelled_at')]
+                           if key not in assigned and item['kind'] == kind and not item.get('cancelled_at')
+                           and recipient in self._event_recipients(item)]
                     # Recipient success never masks another recipient's missing reminder.
                     overnight = [key for key in ids if kind == 'ready' and not self.schedule.is_on_duty(
                         datetime.fromisoformat(data['events'][key]['created_at']))]
@@ -498,13 +608,10 @@ class Outbox:
                     continue
                 if item['kind'] not in ALWAYS_DELIVERED and not self.schedule.is_on_duty(now):
                     continue
-                if item['attempts'] and now - datetime.fromisoformat(item.get('retry_authorized_at', item['created_at'])) >= timedelta(minutes=50):
-                    # 不无限依赖远端去重时间窗；旧不确定请求交由人核对，避免重复催促。
-                    item['status'] = 'uncertain'
-                    atomic_write_json(self.path, data)
-                    continue
                 item['attempts'] += 1
                 item['next_at'] = _iso(now + timedelta(minutes=15))
+                # webhook 无远端去重。意图先记为未知，进程退出或成功回执落盘失败都不能自动重发。
+                item['status'] = 'uncertain'
                 atomic_write_json(self.path, data)
                 try:
                     message_id = send(item['recipient'], item['card'], delivery_id)
@@ -512,7 +619,7 @@ class Outbox:
                         raise FeishuError('未获得投递回执')
                 except Exception as exc:
                     item['error'] = str(exc) if isinstance(exc, FeishuError) else type(exc).__name__
-                    item['status'] = 'retry'
+                    item['status'] = 'retry' if isinstance(exc, FeishuRejected) else 'uncertain'
                 else:
                     item.update(status='sent', message_id=message_id, sent_at=stamp)
                     sent += 1

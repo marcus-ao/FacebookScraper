@@ -12,9 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.feishu import (FeishuError, FeishuSettings, Outbox, WEBHOOK_PREFIX,
                          WebhookBot, notification_card, webhook_signature)
 
-OPS_URL = WEBHOOK_PREFIX + 'ops-hook-token'
-TECH_URL = WEBHOOK_PREFIX + 'tech-hook-token'
-SECRETS = {'ops': 'fixture-secret', 'tech': 'zweites-geheimnis'}
+PUBLISH_URL = WEBHOOK_PREFIX + 'publish-hook-token'
+ALERT_URL = WEBHOOK_PREFIX + 'alert-hook-token'
+TARGETS = {'detect': WEBHOOK_PREFIX + 'detect-fixture', 'capture': WEBHOOK_PREFIX + 'capture-fixture',
+           'publish': PUBLISH_URL, 'alert': ALERT_URL}
+SECRETS = {'publish': 'fixture-secret', 'alert': 'zweites-geheimnis'}
 
 
 def at(value):
@@ -22,7 +24,7 @@ def at(value):
 
 
 def bot(handle, *, secrets=None):
-    return WebhookBot({'ops': OPS_URL, 'tech': TECH_URL}, secrets,
+    return WebhookBot(TARGETS, secrets,
                       http=httpx.Client(transport=httpx.MockTransport(handle)))
 
 
@@ -43,21 +45,21 @@ class SignatureTests(unittest.TestCase):
     def test_envelope_keeps_the_card_as_an_object_and_signs_per_attempt(self):
         client = bot(accepted, secrets=SECRETS)
         self.addCleanup(client.close)
-        body = client.envelope('ops', {'header': {'title': 'x'}}, 1599360473.9)
+        body = client.envelope('publish', {'header': {'title': 'x'}}, 1599360473.9)
         # ⚠️ card 必须是对象。im/v1/messages 的 content 要 json.dumps，机器人相反。
         self.assertIsInstance(body['card'], dict)
         self.assertEqual(body['msg_type'], 'interactive')
         self.assertEqual(body['timestamp'], '1599360473')
-        self.assertEqual(body['sign'], webhook_signature('1599360473', SECRETS['ops']))
+        self.assertEqual(body['sign'], webhook_signature('1599360473', SECRETS['publish']))
         # 同一张卡在下一次尝试用新时间戳重签：信封不冻结，卡片才冻结。
-        later = client.envelope('ops', {'header': {'title': 'x'}}, 1599362000.0)
+        later = client.envelope('publish', {'header': {'title': 'x'}}, 1599362000.0)
         self.assertEqual(later['card'], body['card'])
         self.assertNotEqual(later['sign'], body['sign'])
 
     def test_no_secret_means_no_signature_fields(self):
         client = bot(accepted)
         self.addCleanup(client.close)
-        body = client.envelope('ops', {'header': {}}, 1599360473.0)
+        body = client.envelope('publish', {'header': {}}, 1599360473.0)
         self.assertNotIn('timestamp', body)
         self.assertNotIn('sign', body)
 
@@ -72,17 +74,17 @@ class TransportTests(unittest.TestCase):
 
         client = bot(handle, secrets=SECRETS)
         self.addCleanup(client.close)
-        self.assertEqual(client.send('ops', {'header': {}}, 'delivery-a'), 'bot-accepted:delivery-a')
-        client.send('tech', {'header': {}}, 'delivery-b')
-        self.assertEqual([url for url, _ in seen], [OPS_URL, TECH_URL])
+        self.assertEqual(client.send('publish', {'header': {}}, 'delivery-a'), 'bot-accepted:delivery-a')
+        client.send('alert', {'header': {}}, 'delivery-b')
+        self.assertEqual([url for url, _ in seen], [PUBLISH_URL, ALERT_URL])
         # 每个群用自己的密钥签名，不共用。
-        self.assertEqual(seen[0][1]['sign'], webhook_signature(seen[0][1]['timestamp'], SECRETS['ops']))
-        self.assertEqual(seen[1][1]['sign'], webhook_signature(seen[1][1]['timestamp'], SECRETS['tech']))
+        self.assertEqual(seen[0][1]['sign'], webhook_signature(seen[0][1]['timestamp'], SECRETS['publish']))
+        self.assertEqual(seen[1][1]['sign'], webhook_signature(seen[1][1]['timestamp'], SECRETS['alert']))
 
     def test_legacy_status_code_only_response_still_counts_as_accepted(self):
         client = bot(lambda _r: httpx.Response(200, json={'StatusCode': 0, 'StatusMessage': 'success'}))
         self.addCleanup(client.close)
-        self.assertTrue(client.send('ops', {}, 'delivery'))
+        self.assertTrue(client.send('publish', {}, 'delivery'))
 
     def test_rejections_and_broken_responses_all_fail_closed(self):
         cases = {
@@ -98,7 +100,7 @@ class TransportTests(unittest.TestCase):
                 client = bot(lambda _r, response=response: response)
                 self.addCleanup(client.close)
                 with self.assertRaises(FeishuError):
-                    client.send('ops', {}, 'delivery')
+                    client.send('publish', {}, 'delivery')
 
     def test_unknown_role_is_refused_instead_of_guessing_a_group(self):
         client = bot(accepted)
@@ -106,8 +108,8 @@ class TransportTests(unittest.TestCase):
         with self.assertRaisesRegex(FeishuError, '接收角色'):
             client.send('marketing', {}, 'delivery')
 
-    def test_both_groups_are_required_and_addresses_must_be_bot_hooks(self):
-        for targets in ({'ops': OPS_URL}, {'tech': TECH_URL}, {'ops': OPS_URL, 'tech': ''}):
+    def test_all_four_bots_are_required_and_addresses_must_be_bot_hooks(self):
+        for targets in ({'publish': PUBLISH_URL}, {'alert': ALERT_URL}, {'publish': PUBLISH_URL, 'alert': ''}):
             with self.subTest(targets=sorted(targets)):
                 with self.assertRaisesRegex(FeishuError, 'FEISHU_WEBHOOK'):
                     WebhookBot(targets)
@@ -115,7 +117,7 @@ class TransportTests(unittest.TestCase):
                       'http://open.feishu.cn/open-apis/bot/v2/hook/token'):
             with self.subTest(url=wrong):
                 with self.assertRaisesRegex(FeishuError, WEBHOOK_PREFIX):
-                    WebhookBot({'ops': wrong, 'tech': TECH_URL})
+                    WebhookBot(dict(TARGETS, publish=wrong))
 
     def test_transport_failures_never_carry_the_address_or_secret(self):
         def refuses(request):
@@ -124,10 +126,10 @@ class TransportTests(unittest.TestCase):
         client = bot(refuses, secrets=SECRETS)
         self.addCleanup(client.close)
         with self.assertRaises(FeishuError) as caught:
-            client.send('ops', {}, 'delivery')
+            client.send('publish', {}, 'delivery')
         message = str(caught.exception)
-        self.assertNotIn('ops-hook-token', message)
-        self.assertNotIn(SECRETS['ops'], message)
+        self.assertNotIn('publish-hook-token', message)
+        self.assertNotIn(SECRETS['publish'], message)
 
 
 class OutboxIntegrationTests(unittest.TestCase):
@@ -137,7 +139,7 @@ class OutboxIntegrationTests(unittest.TestCase):
         self.path = Path(self.temp.name) / 'outbox.json'
         self.settings = FeishuSettings(True, 'http://review.internal:8765')
 
-    def test_role_labels_route_to_the_two_groups_without_crossing(self):
+    def test_role_labels_route_publish_and_alert_without_crossing(self):
         seen = []
 
         def handle(request):
@@ -151,7 +153,7 @@ class OutboxIntegrationTests(unittest.TestCase):
         outbox.enqueue('alert', 'system', {'text': '请检查探测会话'}, now)
         outbox.enqueue('task', 'ready', {'text': 'Deutscher Text'}, now)
         self.assertEqual(outbox.dispatch(now, client.send), 2)
-        self.assertEqual(sorted(seen), sorted([TECH_URL, OPS_URL]))
+        self.assertEqual(sorted(seen), sorted([ALERT_URL, PUBLISH_URL]))
 
     def test_the_outbox_file_records_role_labels_and_never_the_hook_address(self):
         client = bot(accepted, secrets=SECRETS)
@@ -162,16 +164,16 @@ class OutboxIntegrationTests(unittest.TestCase):
         outbox.dispatch(now, client.send)
         saved = self.path.read_text(encoding='utf-8')
         # 地址带 token，落盘就等于把凭据写进状态文件（红线 10）。
-        self.assertNotIn('ops-hook-token', saved)
-        self.assertNotIn(SECRETS['ops'], saved)
-        self.assertIn('"recipient": "ops"', saved)
+        self.assertNotIn('publish-hook-token', saved)
+        self.assertNotIn(SECRETS['publish'], saved)
+        self.assertIn('"recipient": "publish"', saved)
         status = json.dumps(outbox.status(), ensure_ascii=False)
-        self.assertNotIn('ops-hook-token', status)
+        self.assertNotIn('publish-hook-token', status)
 
-    def test_settings_no_longer_need_open_ids_and_keep_the_two_groups_apart(self):
+    def test_settings_use_stage_roles_without_open_ids(self):
         self.settings.validate()
-        self.assertEqual((self.settings.recipients, self.settings.technical_recipients),
-                         (('ops',), ('tech',)))
+        self.assertEqual((self.settings.publish_recipients, self.settings.alert_recipients),
+                         (('publish',), ('alert',)))
 
 
 class CardTests(unittest.TestCase):
@@ -223,7 +225,7 @@ class CardTests(unittest.TestCase):
         from core.feishu import ALWAYS_DELIVERED, MONITOR_KINDS, PREVIEWED
         # dispatch 按 sorted(KINDS) 建投递、按建立顺序发送，所以字典序就是群里的先后顺序。
         self.assertEqual(sorted(MONITOR_KINDS), ['monitor_found', 'monitor_saved'])
-        # 静默豁免与收件人是两件事：监测卡豁免静默，但和待审卡一样进业务组。
+        # 静默豁免与收件人分开：监测卡豁免静默，检测与爬取各自路由。
         self.assertTrue(MONITOR_KINDS <= ALWAYS_DELIVERED)
         self.assertIn('system', ALWAYS_DELIVERED)
         self.assertFalse({'ready', 'backlog', 'morning'} & ALWAYS_DELIVERED)

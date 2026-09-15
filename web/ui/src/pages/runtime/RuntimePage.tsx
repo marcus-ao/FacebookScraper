@@ -53,8 +53,9 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
     <section aria-label="五阶段概览">{data.stages.map(stage => { const summary = stageSummary(stage); return <article key={stage.number} className={styles.stage}>
       <div className={styles.stageHeading}><h2>{stage.number}. {stage.name}</h2><Badge status={summary.tone} text={summary.label} /></div><p>{summary.conclusion}</p>
       {stage.number === 3 && <p className={styles.help}>本轮开始 <ShanghaiTime at={batch.started_at} /> · 完成 <ShanghaiTime at={batch.finished_at} />{stage.trends_export?.status === 'blocked' && ' · 趋势采样已暂停，仍可使用语义候选。'}</p>}
-      {stage.number === 4 && stage.outbox?.enabled && stage.outbox.credentials_present === false && <p>两个飞书群的机器人地址尚未配置完整，请联系维护人员。</p>}
-      {stage.number === 4 && stage.outbox?.groups_merged && <p className={styles.help}>业务组与技术组当前指向同一个群，系统告警会和待审提醒混在一起。</p>}
+      {stage.number === 4 && stage.outbox?.enabled && stage.outbox.credentials_present === false && <p>四个飞书机器人的地址尚未配置完整，请联系维护人员。</p>}
+      {stage.number === 4 && stage.outbox?.duplicate_bot_targets && <p className={styles.help}>不同阶段重复配置了同一个机器人地址，请分别填写四个机器人的地址。</p>}
+      {stage.number === 4 && stage.outbox?.bots && <ul>{stage.outbox.bots.map(bot => <li key={bot.role}>{bot.name}：{!bot.configured ? '未配置' : bot.valid ? '地址格式已检查' : '地址格式有误'}</li>)}</ul>}
       {stage.number === 2 && stage.mirror && <MirrorFact mirror={stage.mirror} />}
       {stage.number === 5 && <p className={styles.help}>Facebook 单渠道验收：{stage.acceptance?.facebook?.verified ? '真实通过' : '尚未完成'} · Instagram 单渠道验收：{stage.acceptance?.instagram?.verified ? '真实通过' : '尚未完成'}</p>}
       <Collapse ghost items={[{ key: 'details', label: '查看技术细节', children: <pre className={styles.diagnostic}>{JSON.stringify({ ...stage, ...(stage.mirror ? { mirror: mirrorDiagnostics(stage.mirror) } : {}), ...(stage.number === 3 ? { processing: batch, timings: data.business.timings } : {}) }, null, 2)}</pre> }]} />
@@ -77,9 +78,9 @@ function MirrorFact({ mirror }: { mirror: NonNullable<RuntimeSnapshot['stages'][
 
 function ResendContext({ onChange }: { onChange: (group: string, summary: string, checked: boolean) => void }) {
   const [group, setGroup] = useState(''), [summary, setSummary] = useState(''), [checked, setChecked] = useState(false)
-  return <><p>确认后将恢复原消息向原接收对象的投递。当前状态记录未提供接收对象和正文，请先在飞书核对并填写以下信息。</p>
-    <label>已核对的接收组<Input autoFocus aria-label="已核对的接收组" value={group} onChange={event => { setGroup(event.target.value); onChange(event.target.value, summary, checked) }} /></label>
+  return <><p>确认后将恢复冻结消息投递；旧通道记录会转交当前阶段的机器人。请先在群里核对原机器人和消息内容，再填写以下信息。</p>
+    <label>已核对的机器人<Input autoFocus aria-label="已核对的机器人" value={group} onChange={event => { setGroup(event.target.value); onChange(event.target.value, summary, checked) }} /></label>
     <label>原消息内容摘要<Input.TextArea aria-label="原消息内容摘要" value={summary} onChange={event => { setSummary(event.target.value); onChange(group, event.target.value, checked) }} /></label>
-    <Checkbox checked={checked} onChange={event => { setChecked(event.target.checked); onChange(group, summary, event.target.checked) }}>已在飞书核对未送达，确认接收组和摘要无误</Checkbox>
+    <Checkbox checked={checked} onChange={event => { setChecked(event.target.checked); onChange(group, summary, event.target.checked) }}>已在飞书核对未送达，确认机器人和摘要无误</Checkbox>
   </>
 }

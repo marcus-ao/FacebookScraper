@@ -25,7 +25,7 @@ class NotificationTests(unittest.TestCase):
         self.now = datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc)
         self.runtime = Runtime(detector=Mock())
         self.addCleanup(self.runtime.close)
-        self.runtime.settings = FeishuSettings(True, 'http://review.internal', ('operator',), ('developer',))
+        self.runtime.settings = FeishuSettings(True, 'http://review.internal')
         self.runtime.outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', self.runtime.settings)
         self.runtime.client = Mock()
         self.runtime.client.send.return_value = 'bot-accepted:fixture'
@@ -167,7 +167,7 @@ class NotificationTests(unittest.TestCase):
         self.assertIn('成功落档 1 篇，没有失败', saved['text'])
         self.assertFalse(saved['risk'])
 
-    def test_both_monitor_cards_go_to_the_business_group_even_off_duty(self):
+    def test_monitor_cards_go_to_separate_stage_bots_even_off_duty(self):
         self.scanned([
             ('post_discovered', {'post_id': 'p1', 'created_at': self.f.source['created_at'],
                                  'head': 'nachts', 'images': 1, 'known': False}),
@@ -179,9 +179,9 @@ class NotificationTests(unittest.TestCase):
         by_group = {}
         for recipient, card, _delivery in sent:
             by_group.setdefault(recipient, []).append(card['header']['title']['content'])
-        self.assertEqual(sorted(by_group['operator']), ['Neakasa 德国站 · 原帖抓取完成',
-                                                        'Neakasa 德国站 · 监测到新帖'])
-        self.assertEqual(by_group['developer'], ['Neakasa 德国站 · 系统需要处理'])
+        self.assertEqual(by_group['detect'], ['Neakasa 德国站 · 监测到新帖 · 新帖检测推送机器人'])
+        self.assertEqual(by_group['capture'], ['Neakasa 德国站 · 原帖抓取完成 · 新帖爬取推送机器人'])
+        self.assertEqual(by_group['alert'], ['Neakasa 德国站 · 系统需要处理 · 状态告警推送机器人'])
 
     def test_a_broken_card_costs_the_broadcast_not_the_scan_exit_code(self):
         # 播报是旁路。它抛异常不能改抓取的退出码，否则会被当成"抓取失败"去查浏览器。

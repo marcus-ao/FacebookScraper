@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import config
 from core.config import MonitorSchedule
+from core.feishu import WEBHOOK_ROLES, WEBHOOK_PREFIX
 from pipeline import metrics, runtime_status
 from pipeline.cli import main
 
@@ -110,6 +111,32 @@ class RuntimeStatusTests(unittest.TestCase):
             result = runtime_status.snapshot(NOW)
         self.assertTrue(result['process']['alive'])
         self.assertIsNone(result['business']['last_successful_run'])
+
+    def test_four_bot_configuration_is_read_only_and_hides_all_addresses(self):
+        config.cfg()._d['feishu'].update(enabled=True, base_url='http://review.internal')
+        values = {name: WEBHOOK_PREFIX + role + '-private-token' for role, name in WEBHOOK_ROLES.items()}
+        before = sorted(str(p) for p in self.root.rglob('*'))
+        with patch.object(runtime_status.ModelCredentials, 'optional_value', autospec=True,
+                          side_effect=lambda credential: values.get(credential.env_name, '')):
+            result = runtime_status.snapshot(NOW)
+        outbox = result['stages'][3]['outbox']
+        self.assertTrue(outbox['bot_configuration_valid'])
+        self.assertFalse(outbox['duplicate_bot_targets'])
+        self.assertEqual([bot['role'] for bot in outbox['bots']], ['detect', 'capture', 'publish', 'alert'])
+        self.assertNotIn('groups_merged', outbox)
+        self.assertNotIn('private-token', json.dumps(result))
+        self.assertEqual(before, sorted(str(p) for p in self.root.rglob('*')))
+
+    def test_duplicate_bot_targets_are_reported_even_when_other_bots_are_missing(self):
+        config.cfg()._d['feishu'].update(enabled=True, base_url='http://review.internal')
+        values = {'FEISHU_WEBHOOK_DETECT': WEBHOOK_PREFIX + 'same',
+                  'FEISHU_WEBHOOK_CAPTURE': WEBHOOK_PREFIX + 'same'}
+        with patch.object(runtime_status.ModelCredentials, 'optional_value', autospec=True,
+                          side_effect=lambda credential: values.get(credential.env_name, '')):
+            stage = runtime_status.snapshot(NOW)['stages'][3]
+        self.assertEqual(stage['status'], 'configuration_invalid')
+        self.assertTrue(stage['outbox']['duplicate_bot_targets'])
+        self.assertFalse(stage['outbox']['credentials_present'])
 
     def test_malformed_mirror_queue_is_blocked_without_reset_or_network(self):
         self.state.mkdir()

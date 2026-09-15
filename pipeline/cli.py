@@ -776,7 +776,7 @@ def main(argv=None) -> int:
                                help='已在群里看到；机器人不返回 message ID，这里填人写的核对说明')
     notify_parser.add_argument('--not-delivered', action='store_true', help='已核对确实没有送到')
     notify_parser.add_argument('--self-test', action='store_true',
-                               help='真的往两个群各发一张自检卡片（外发动作，只能人工敲）')
+                               help='四个机器人各发一张可区分的自检卡片（外发动作，只能人工敲）')
 
     recovery_parser = sub.add_parser('recover-processing', help='核账后关闭中断批次；不会重新调用模型')
     recovery_parser.add_argument('--batch-id', required=True)
@@ -810,20 +810,23 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == 'notifications':
-        from core.feishu import FeishuSettings, Outbox, WebhookBot, notification_card
+        from core.feishu import BOT_LABELS, WEBHOOK_ROLES, FeishuSettings, Outbox, WebhookBot, notification_card
         try:
+            if args.self_test and (args.resolve or args.version or args.delivered or args.not_delivered):
+                raise ValueError('通道自检不能与投递核对参数组合')
             settings = FeishuSettings.load()
             outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', settings)
             if args.self_test:
                 bot = WebhookBot.from_environment()
                 try:
-                    for role, group in ((settings.recipients[0], '业务组'),
-                                        (settings.technical_recipients[0], '技术组')):
+                    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+                    for role in WEBHOOK_ROLES:
+                        name = BOT_LABELS[role]
                         card = notification_card('selftest', [{'text':
-                            '通道自检，没有业务含义。\n本条发往：%s（%s）\n'
-                            '两个群看到的角色应当不同；相同说明两个地址配成了同一个群。'
-                            % (group, role)}], settings)
-                        print('%s（%s）：%s' % (group, role, bot.send(role, card, 'selftest')))
+                            '通道自检，没有业务含义。\n预期发送者：%s\n'
+                            '请核对群内本条消息的机器人名称；四张卡应分别来自四个机器人。'
+                            % name}], settings, role=role)
+                        print('%s（%s）：%s' % (name, role, bot.send(role, card, 'selftest-' + role + '-' + stamp)))
                 finally:
                     bot.close()
                 return 0

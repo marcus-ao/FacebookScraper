@@ -399,12 +399,20 @@ def stage_h(page, ui):
     data['stages'][2]['status']='interrupted'
     item={'delivery_id':'fixture-delivery','version':'delivery-v1','status':'uncertain','created_at':'2026-09-13T00:00:00Z','task_ids':[]}
     data['stages'][3]['outbox']={'enabled':True,'credentials_present':True,'counts':{'uncertain':1},'deliveries':[item]}
+    bot_names=['新帖检测推送机器人','新帖爬取推送机器人','新帖发布推送机器人','状态告警推送机器人']
+    data['stages'][3]['outbox'].update(duplicate_bot_targets=True, bot_configuration_valid=False,
+        bots=[{'role':role,'name':name,'configured':True,'valid':True}
+              for role,name in zip(('detect','capture','publish','alert'),bot_names)])
     data['stages'][3]['status']='needs_attention';data['stages'][4]['unconfirmed_attempts']=2
     ui.overrides[('GET','/api/runtime')]=(200,data)
     ui.overrides[('POST','/api/runtime/processing/recover')]=(200,{'ok':True})
     ui.overrides[('POST','/api/runtime/notifications/fixture-delivery/resolve')]=(200,{'ok':True})
     page.clock.install()
     page.goto(ui.fx.base_url+'/runtime',wait_until='networkidle')
+    for name in bot_names:
+        expect(page.get_by_text(name+'：地址格式已检查',exact=True)).to_be_visible()
+    expect(page.get_by_text('不同阶段重复配置了同一个机器人地址，请分别填写四个机器人的地址。',exact=True)).to_be_visible()
+    assert '业务组与技术组当前指向同一个群' not in page.locator('main').inner_text()
     assert 'private-paid-id' not in page.locator('main').inner_text()
     page.get_by_role('button',name='登记已送达',exact=True).click()
     modal=page.get_by_role('dialog');expect(modal.get_by_role('button',name='登记已送达',exact=True)).to_be_disabled()
@@ -412,9 +420,9 @@ def stage_h(page, ui):
     modal.get_by_role('button',name='登记已送达',exact=True).click();expect(modal).to_have_count(0)
     page.get_by_role('button',name='核对未送达后恢复',exact=True).click()
     modal=page.get_by_role('dialog');expect(modal.get_by_role('button',name='确认未送达并恢复投递')).to_be_disabled()
-    page.get_by_role('textbox',name='已核对的接收组').fill('德国站运营组')
+    page.get_by_role('textbox',name='已核对的机器人').fill('新帖检测推送机器人')
     page.get_by_role('textbox',name='原消息内容摘要').fill('三篇新内容待审校')
-    page.get_by_role('checkbox',name='已在飞书核对未送达，确认接收组和摘要无误').check()
+    page.get_by_role('checkbox',name='已在飞书核对未送达，确认机器人和摘要无误').check()
     modal.get_by_role('button',name='确认未送达并恢复投递').click();expect(modal).to_have_count(0)
     page.get_by_role('button',name='核对后关闭中断批次').click()
     expect(page.get_by_role('dialog')).to_contain_text('费用、已保存文案和图片')
@@ -428,7 +436,7 @@ def stage_h(page, ui):
     expect(page.get_by_text('运行状态有更新，点击刷新后查看',exact=True)).to_be_visible()
     expect(page.get_by_text('调度进程：活跃',exact=True)).to_be_visible()
     page.get_by_role('button',name='刷新状态',exact=True).click();expect(page.get_by_text('调度进程：已退出',exact=True)).to_be_visible()
-    return {'H':'PASS','delivered_requires_message_id':True,'resend_context_confirmation':True,'paid_batch_confirmation_and_versions':True,'count_only_maintenance':True,'poll_does_not_replace_reading_page':True,'exact_three_recovery_bodies':True}
+    return {'H':'PASS','four_bot_status_and_duplicate_warning':True,'delivered_requires_message_id':True,'resend_context_confirmation':True,'paid_batch_confirmation_and_versions':True,'count_only_maintenance':True,'poll_does_not_replace_reading_page':True,'exact_three_recovery_bodies':True}
 
 
 def stage_i(page, ui):
