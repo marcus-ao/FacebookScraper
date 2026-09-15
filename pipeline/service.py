@@ -53,6 +53,21 @@ class Runtime:
         self.thumbnail_sources = {}
         self.network = NetworkEvidence(self.c.state_dir / 'network_evidence.json', NetworkEvidenceSettings.load(self.c))
 
+    def await_delivery(self, timeout: float = 120) -> None:
+        """等本轮消息与镜像投递跑完。
+
+        ⛔ 单轮执行（`--once`）必须调它再退出：`close()` 用 `cancel_futures=True` 关投递
+        执行器，刚提交、尚未启动的 `_deliver` 会被直接取消——实测 8/8 轮一条消息都没发出，
+        而且不报错，看起来和"飞书配置有问题"一模一样。连续 `--run` 靠下一轮重投，不受影响。
+        """
+        future = self.delivery_future
+        if future is None:
+            return
+        try:
+            future.result(timeout=timeout)
+        except Exception as exc:
+            notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
+
     def close(self):
         self.processing_executor.shutdown(wait=False, cancel_futures=False)
         self.sampling_executor.shutdown(wait=False, cancel_futures=True)

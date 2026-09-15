@@ -144,6 +144,16 @@ class NotificationTests(unittest.TestCase):
         self.assertTrue(any(element.get('tag') == 'img' for element in cards[0]['elements']))
         self.runtime.client.upload_image.assert_called_once_with((self.f.post_dir / '01.jpg').read_bytes())
 
+    def test_a_single_cycle_finishes_its_delivery_before_shutting_down(self):
+        # --once 提交投递后立刻 close()，cancel_futures 会把还没启动的那个取消掉：
+        # 一条消息都发不出去，而且不报错——正好会被误判成"飞书配置有问题"。
+        self.route('delta')
+        with patch.object(self.runtime, 'refresh_hashtags'), patch.object(self.runtime, 'refresh_calendar'):
+            self.runtime.maintenance(self.now, [])
+        self.runtime.await_delivery()
+        self.runtime.close()
+        self.assertEqual(len(self.discovered()), 1)
+
     def test_unreadable_lead_image_degrades_the_discovery_card_instead_of_dropping_it(self):
         # 发现卡是监测链路唯一的存活信号。少一张图就整条不推，运营侧看起来和"今天没有新帖"一样。
         self.route('delta')
