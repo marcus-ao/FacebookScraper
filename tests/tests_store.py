@@ -170,7 +170,7 @@ with tempfile.TemporaryDirectory() as d:
     # 下载发生在 append 之前：media_path 必须能在此时就建好文件夹
     m0 = arc.media_path(p, 0, "image/jpeg")
     check(m0.name == "01.jpg", "帖内第 1 张图叫 01.jpg（1 起、补零）")
-    check(m0.parent.name == "2026-08-25_1423_sommer-sale_900", "图片落在该帖自己的文件夹里")
+    check(m0.parent.name == "2026-08-25_2223_sommer-sale_900", "图片落在该帖自己的北京时间文件夹里")
     check(m0.parent.exists(), "media_path 顺手把文件夹建好了（下载先于 append）")
     check(arc.media_path(p, 1, "video/mp4").name == "02.mp4",
           "编号跟的是帖内位置，不是「第几张图」—— 顺序信息比连号更值钱")

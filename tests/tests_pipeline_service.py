@@ -12,6 +12,7 @@ import tests_web_review as fixtures
 from core import review
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
+from core.mirror import MirrorSettings
 from pipeline import engine
 from pipeline.service import Runtime
 from publish import journal
@@ -92,6 +93,16 @@ class ServiceTests(unittest.TestCase):
         runtime.mirror.dispatch.return_value = {'completed': 1, 'pending': 0}
         runtime.mirror_sources(self.now)
         runtime.mirror.dispatch.assert_called_once_with(runtime.drive, now=self.now)
+
+    def test_mirror_delivery_alert_uses_operator_language_not_exception_name(self):
+        runtime = Runtime(detector=Mock(return_value=0))
+        self.addCleanup(runtime.close)
+        runtime.mirror_settings = MirrorSettings(True, 'fixture-root')
+        with patch.object(runtime, 'mirror_sources', side_effect=RuntimeError('private failure')), \
+             patch.object(runtime, '_system') as system:
+            runtime._deliver(self.now)
+        self.assertEqual(system.call_args.args[1],
+                         '归档云盘镜像尚未完成，请由维护人员核对运行状态；本地内容仍保留。')
 
     def test_old_ready_cannot_be_approved_after_operator_snoozes(self):
         source = self.fixture.source

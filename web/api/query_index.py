@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 from core import index_db
 from core.config import ROOT, cfg
 from core.paid_model import FileLock, atomic_write_json
+from core import store
 from core.store import assert_physical_direct_path, iter_post_dirs
 
 
@@ -35,7 +39,18 @@ def _source_signature(archive: Path, state: Path, *, history=False) -> str:
             files.append([str(path), _file_stamp(path)])
         for directory in iter_post_dirs(account):
             path = directory / 'post.json'
-            files.append([str(path), _file_stamp(path)])
+            if not path.exists():
+                continue
+            stamp = _file_stamp(path)
+            source = json.loads(path.read_text(encoding='utf-8'))
+            physical_media = [
+                [item.get('ordinal'), item.get('kind'), item.get('source_url'),
+                 item.get('local_path'), item.get('content_type'), item.get('width'),
+                 item.get('height'), item.get('byte_size'), item.get('sha256'),
+                 item.get('storage_status')]
+                for item in store.media_storage_info(account, source)
+            ]
+            files.append([str(path), stamp, physical_media])
     files.append([str(state / 'published.jsonl'), _file_stamp(state / 'published.jsonl')])
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
@@ -46,6 +61,38 @@ def _meta_guard(path, _role=None):
 
 # 历史查询短时复用源校验，避免翻页反复扫描全档；待审查询仍逐次核对。
 HISTORY_INDEX_MAX_AGE_SECONDS = 30.0
+
+
+def index_status(*, history: bool = False) -> dict:
+    """只读报告最近一次已验证索引；不触发源扫描、重建或元数据写入。"""
+    _archive, _state, database = _paths(history=history)
+    metadata_path = database.with_suffix('.meta.json')
+    if not database.exists():
+        return {'status': 'unbuilt', 'verified_at': None, 'message': None}
+    try:
+        if not metadata_path.exists():
+            raise ValueError('verification metadata missing')
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        if not isinstance(metadata, dict) or metadata.get('schema_version') != index_db.SCHEMA_VERSION:
+            raise ValueError('verification metadata schema mismatch')
+        verified_at = metadata.get('verified_at')
+        verified_moment = datetime.fromisoformat(verified_at) if isinstance(verified_at, str) else None
+        if verified_moment is None or verified_moment.tzinfo is None or verified_moment.utcoffset() is None:
+            raise ValueError('verification time missing')
+        if metadata.get('database_stamp') != _file_stamp(database):
+            raise ValueError('database changed after verification')
+        with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as connection:
+            if connection.execute('PRAGMA user_version').fetchone()[0] != index_db.SCHEMA_VERSION:
+                raise ValueError('database schema mismatch')
+            if connection.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+                raise ValueError('database integrity check failed')
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {'posts', 'post_tags', 'post_media'}.issubset(tables):
+                raise ValueError('database tables missing')
+        return {'status': 'verified', 'verified_at': verified_at, 'message': None}
+    except (OSError, ValueError, TypeError, sqlite3.DatabaseError) as exc:
+        return {'status': 'stale', 'verified_at': None, 'message': str(exc) or type(exc).__name__}
 
 
 def refresh_display_index(*, now: datetime | None = None, force: bool = False,
@@ -71,7 +118,7 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                     previous = {}
             # 窗口从校验完成时起算，不能使用重建开始时间。
             if (max_age_seconds > 0 and not force and database.exists()
-                    and previous.get('schema_version') == 1
+                    and previous.get('schema_version') == index_db.SCHEMA_VERSION
                     and isinstance(previous.get('verified_at'), str)):
                 try:
                     age = (moment - datetime.fromisoformat(previous['verified_at'])).total_seconds()
@@ -82,15 +129,39 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                     return {'available': True, 'stale': False,
                             'rebuilt_at': previous['rebuilt_at'], 'error': None}
             signature = _source_signature(archive, state, history=history)
-            dirty = (force or not database.exists() or previous.get('schema_version') != 1
+            dirty = (force or not database.exists()
+                     or previous.get('schema_version') != index_db.SCHEMA_VERSION
                      or previous.get('source_signature') != signature
                      or previous.get('database_stamp') != _file_stamp(database))
             if dirty:
-                index_db.rebuild_index(archive, database, state_dir=state, include_frozen=history)
-                consistency = index_db.check_consistency(archive, database, state_dir=state, include_frozen=history)
-                if not consistency['consistent']:
-                    raise ValueError('展示索引与源文件不一致')
-                previous = {'schema_version': 1, 'source_signature': signature,
+                candidate = database.with_name(database.stem + '.candidate.sqlite')
+                assert_physical_direct_path(
+                    database.parent, candidate, kind='file', label='展示索引候选数据库')
+                try:
+                    index_db.rebuild_index(
+                        archive, candidate, state_dir=state, include_frozen=history)
+                    current_signature = _source_signature(archive, state, history=history)
+                    if signature != current_signature:
+                        return {'available': database.exists(), 'stale': True,
+                                'rebuilt_at': previous.get('rebuilt_at'),
+                                'error': 'source_changed_during_rebuild'}
+                    consistency = index_db.check_consistency(
+                        archive, candidate, state_dir=state, include_frozen=history)
+                    if not consistency['consistent']:
+                        raise ValueError('展示索引与源文件不一致')
+                    if signature != _source_signature(archive, state, history=history):
+                        return {'available': database.exists(), 'stale': True,
+                                'rebuilt_at': previous.get('rebuilt_at'),
+                                'error': 'source_changed_during_rebuild'}
+                    assert_physical_direct_path(
+                        database.parent, database, kind='file', label='展示索引数据库')
+                    os.replace(candidate, database)
+                    candidate = None
+                finally:
+                    if candidate is not None:
+                        candidate.unlink(missing_ok=True)
+                previous = {'schema_version': index_db.SCHEMA_VERSION,
+                            'source_signature': signature,
                             'database_stamp': _file_stamp(database),
                             'rebuilt_at': moment.astimezone(timezone.utc).isoformat(),
                             'verified_at': moment.astimezone(timezone.utc).isoformat()}
@@ -99,10 +170,8 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                 # 刚走完一趟核对且结论是干净的；记下来，窗口内的后续请求不必重走。
                 previous = dict(previous, verified_at=moment.astimezone(timezone.utc).isoformat())
                 atomic_write_json(metadata_path, previous, guard=_meta_guard)
-            # 仅重建后再取指纹，以检测重建期间的来源变化。
-            stale = dirty and signature != _source_signature(archive, state, history=history)
-            return {'available': True, 'stale': stale, 'rebuilt_at': previous['rebuilt_at'],
-                    'error': 'source_changed_during_rebuild' if stale else None}
+            return {'available': True, 'stale': False, 'rebuilt_at': previous['rebuilt_at'],
+                    'error': None}
     except Exception as exc:
         return {'available': database.exists(), 'stale': True, 'rebuilt_at': previous.get('rebuilt_at'),
                 'error': type(exc).__name__}

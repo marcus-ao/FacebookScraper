@@ -64,6 +64,7 @@ CONFIG_DATA_TABLES = {
     "publish.price_map",        # 美元→欧元定价表，apply_money_mapping 整表查
     "publish.trusted_owners",   # 合作方白名单
     "image.keep_verbatim",      # 图内不翻译的型号名
+    "storage.product_aliases", # 首次归档按完整别名整表分类
 }
 
 
@@ -196,7 +197,8 @@ def normalized(path: Path) -> list[tuple[int, str]]:
         if not stripped or stripped.startswith("#"):
             continue
         stripped = re.sub(r'"""[\s\S]*?"""|"[^"]*"|\'[^\']*\'', "S", stripped)
-        if stripped in {"S", "S,", "S)", ")", "(", "]", "["}:
+        # 纯字符串映射也是数据；不同文案表归一化后均为 S: S,，不代表重复逻辑。
+        if stripped in {"S", "S,", "S)", ")", "(", "]", "[", "S: S,", "S:S,"}:
             continue
         out.append((number, stripped))
     return out
@@ -459,10 +461,13 @@ if mirror_tree is not None:
         if (node.func.attr == "get" and isinstance(node.func.value, ast.Attribute)
                 and node.func.value.attr == "http"):
             permitted = (node.args and isinstance(node.args[0], ast.Constant)
-                         and node.args[0].value == "https://open.feishu.cn/open-apis/drive/v1/files/task_check")
+                         and node.args[0].value in {
+                             "https://open.feishu.cn/open-apis/drive/v1/files/task_check",
+                             "https://open.feishu.cn/open-apis/drive/v1/files",
+                         })
             if not permitted:
                 reverse_mirror.append(str(node.lineno))
-check(not reverse_mirror, "镜像仅可读取异步任务状态元数据，无云内容反向入口，实得：%s"
+check(not reverse_mirror, "镜像仅可读取目录及异步任务元数据，无云内容反向入口，实得：%s"
       % ("、".join(reverse_mirror) or "无"))
 
 print("\n[9] 同名源文版本字段只使用统一摘要")

@@ -8,53 +8,11 @@ from pathlib import Path
 
 from core.store import Archive, Post
 from core import paid_model
+from core.media import image_facts
 
 # 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
 INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
             "/api/v1/users/", "/api/v1/media")
-
-
-_IMAGE_MIME_ALIASES = {
-    "image/jpeg": "image/jpeg",
-    "image/jpg": "image/jpeg",
-    "image/png": "image/png",
-    "image/webp": "image/webp",
-    "image/gif": "image/gif",
-    "image/avif": "image/avif",
-}
-
-
-def normalized_image_content_type(value: str | None) -> str | None:
-    """只接受归档和人工审校链路能安全处理的静态光栅图片类型。"""
-    if not value:
-        return None
-    return _IMAGE_MIME_ALIASES.get(value.split(";", 1)[0].strip().lower())
-
-
-def _detected_image_content_type(data: bytes) -> str | None:
-    """用文件签名识别允许的图片，避免 CDN/登录墙伪造 Content-Type。"""
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if data.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    # AVIF 是 ISO-BMFF：ftyp box 的 major/compatible brand 必须含 avif/avis。
-    if len(data) >= 16 and data[4:8] == b"ftyp":
-        box_size = int.from_bytes(data[:4], "big")
-        end = min(len(data), box_size if box_size >= 16 else len(data))
-        brands = [data[i:i + 4] for i in range(8, end - 3, 4) if i != 12]
-        if any(brand in {b"avif", b"avis"} for brand in brands):
-            return "image/avif"
-    return None
-
-
-def validated_image_content_type(value: str | None, data: bytes) -> str | None:
-    """MIME 与文件签名一致时返回规范 MIME，否则拒绝。"""
-    declared = normalized_image_content_type(value)
-    return declared if declared and _detected_image_content_type(data) == declared else None
 
 
 def atomic_write_json(path: Path, value) -> None:
@@ -123,18 +81,18 @@ class Collector:
 async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
     """复用浏览器请求栈下载静态媒体；签名 URL 须在当前运行内使用，视频只留元数据。"""
     downloads_complete = True
+    if post.source_media_complete is None:
+        post.source_media_complete = post.media_complete
     for i, m in enumerate(post.media):
         if m.kind == "video":
             continue
-        reusable = arc.reusable_media_path(post, m.url)
+        reusable = arc.reusable_media(post, m.url)
         if reusable is not None:
-            try:
-                existing = reusable.read_bytes()
-            except OSError:
-                existing = b""
-            if existing and _detected_image_content_type(existing):
-                m.local_path = str(reusable.relative_to(arc.base)).replace("\\", "/")
-                continue
+            path, facts = reusable
+            m.local_path = path.relative_to(arc.base).as_posix()
+            for key, value in facts.items():
+                setattr(m, key, value)
+            continue
         try:
             resp = await ctx.request.get(m.url, headers={"Referer": referer})
             if not resp.ok:
@@ -150,18 +108,19 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str) -> None:
             print(f"    ! 媒体为空 {post.post_id}[{i}]")
             downloads_complete = False
             continue
-        content_type = validated_image_content_type(
-            resp.headers.get("content-type"), data)
-        if not content_type:
+        facts = image_facts(data, resp.headers.get("content-type") or "")
+        if not facts:
             print(f"    ! 媒体类型或文件签名异常 {post.post_id}[{i}]: "
                   f"{resp.headers.get('content-type') or '缺少 Content-Type'}")
             downloads_complete = False
             continue
-        p = arc.media_path(post, i, content_type)
-        p.write_bytes(data)
-        m.local_path = str(p.relative_to(arc.base))
+        try:
+            arc.save_media(post, i, data, facts)
+        except OSError:
+            print(f"    ! 媒体写入失败 {post.post_id}[{i}]，保留已保存内容")
+            downloads_complete = False
     # 源响应或下载不完整时保留 False，让后续抓取继续补齐。
-    post.media_complete = post.media_complete and downloads_complete
+    post.media_complete = post.source_media_complete and downloads_complete
 
 
 def prune_captures(base: Path, keep: int, prefix: str = "_capture_delta_") -> int:

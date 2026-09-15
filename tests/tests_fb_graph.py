@@ -2,6 +2,7 @@
 import sys
 import tempfile
 from pathlib import Path
+from image_fixtures import image_bytes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.console import force_utf8   # noqa: E402
@@ -32,20 +33,20 @@ class Client:
         request = httpx.Request("GET", url)
         if url.endswith("good.jpg"):
             return httpx.Response(
-                200, content=b"\xff\xd8\xff\xe0jpeg",
+                200, content=image_bytes(),
                 headers={"content-type": "image/jpeg"},
                 request=request)
         if url.endswith("good.png"):
             return httpx.Response(
-                200, content=b"\x89PNG\r\n\x1a\npng",
+                200, content=image_bytes('PNG'),
                 headers={"content-type": "image/png"}, request=request)
         if url.endswith("good.webp"):
             return httpx.Response(
-                200, content=b"RIFF\x04\x00\x00\x00WEBP",
+                200, content=image_bytes('WEBP'),
                 headers={"content-type": "image/webp"}, request=request)
         if url.endswith("good.gif"):
             return httpx.Response(
-                200, content=b"GIF87a", headers={"content-type": "image/gif"},
+                200, content=image_bytes('GIF'), headers={"content-type": "image/gif"},
                 request=request)
         if url.endswith("spoof.jpg"):
             return httpx.Response(
@@ -97,7 +98,7 @@ with tempfile.TemporaryDirectory() as d:
     check(post.media[10].local_path is None, "视频只保留 URL 与 kind 元数据")
     check(post.media[0].local_path is not None, "成功图片记录本地相对路径")
     check((archive.base / post.media[0].local_path).read_bytes()
-          == b"\xff\xd8\xff\xe0jpeg",
+          == image_bytes(),
           "成功图片非空落盘")
     check(all(post.media[i].local_path for i in range(4)),
           "JPEG/PNG/WebP/GIF 四种允许的静态图片均可落盘")

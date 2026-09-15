@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:                          # 支持 `python -m web.a
 
 from localize import images as image_de  # noqa: E402
 from core import store, review, localization                         # noqa: E402
+from core.mirror import MirrorService, MirrorSettings                # noqa: E402
 from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
@@ -325,7 +326,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "text_de_excerpt": excerpt(entry.get("text_de", "")) if entry else "",
             "image_count": len(images),
             "tags": list(source.row.get("tags") or []),
-            "month": str(source.row.get("created_at") or "")[:7],
+            "month": _archive_month(source),
             "review": states[source.ref],
             "schedule": ({"at": _iso(when), "channel": source.platform}
                          if when is not None else None),
@@ -428,6 +429,80 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
     return out
 
 
+def _mirror_storage_status(account_dir: Path, post_id: str) -> dict:
+    """Read only the local mirror journal; never construct a cloud client from a page view."""
+    try:
+        summary = MirrorService(cfg().state_dir, MirrorSettings.load()).status()
+        if not summary['enabled']:
+            return {**summary, 'counts': {'pending': 0, 'completed': 0, 'uncertain': 0, 'blocked': 0},
+                    'operations': [], 'posts': {}, 'incomplete_source': False, 'missing_media': []}
+        key = account_dir.name + '/' + post_id
+        post = summary['posts'].get(key)
+        if post is None:
+            return {'enabled': True, 'status': 'idle',
+                    'counts': {'pending': 0, 'completed': 0, 'uncertain': 0, 'blocked': 0},
+                    'last_success_at': None, 'last_error': None, 'operations': [], 'posts': {},
+                    'incomplete_source': False, 'missing_media': []}
+        status = post.get('status') if post.get('status') in {'pending', 'completed', 'uncertain', 'blocked'} else 'uncertain'
+        counts = {'pending': 0, 'completed': 0, 'uncertain': 0, 'blocked': 0}
+        counts[status] = 1
+        return {'enabled': True, 'status': status, 'counts': counts,
+                'last_success_at': summary.get('last_success_at') if status == 'completed' else None,
+                'last_error': None, 'operations': [], 'posts': {key: post},
+                'incomplete_source': bool(post.get('incomplete_source')),
+                'missing_media': list(post.get('missing_media') or [])}
+    except Exception:
+        return {'enabled': True, 'status': 'blocked',
+                'counts': {'pending': 0, 'completed': 0, 'uncertain': 0, 'blocked': 0},
+                'last_success_at': None, 'last_error': '镜像记录暂时无法读取，请由维护人员核对。',
+                'operations': [], 'posts': {}, 'incomplete_source': False, 'missing_media': []}
+
+def _storage_facts(source: engine.SourcePost) -> dict:
+    """Storage evidence for one source post, assembled from read-only truth and journals."""
+    row, account_dir = dict(source.row), source.account_dir
+    media = store.media_storage_info(account_dir, row)
+    images = [item for item in media if item.get('kind') == 'image']
+    expected_images = len(images)
+    saved_images = sum(item.get('storage_status') == 'saved' for item in images)
+    statuses = {item.get('storage_status') for item in media}
+    if 'corrupt' in statuses:
+        local_status = 'corrupt'
+    elif (not row.get('media_complete', True)
+          or statuses.intersection({'missing', 'metadata_only'})
+          or saved_images != expected_images):
+        local_status = 'partial'
+    else:
+        local_status = 'complete'
+    tags_origin = row.get('tags_origin')
+    classified_by = tags_origin if tags_origin in {'auto', 'manual'} else 'legacy'
+    directory = store.post_directory(account_dir, row)
+    try:
+        folder = directory.relative_to(account_dir).as_posix()
+    except ValueError:
+        folder = None
+    return {
+        'classified_by': classified_by,
+        'account_dir': account_dir.name,
+        'folder': folder,
+        'first_archived_at': row.get('archived_at') if isinstance(row.get('archived_at'), str) else None,
+        'local': {'status': local_status, 'saved_images': saved_images,
+                  'expected_images': expected_images},
+        'database': query_index.index_status(history=account_dir.name not in cfg().active_accounts()),
+        'feishu': _mirror_storage_status(account_dir, source.post_id),
+        'media': media,
+    }
+
+
+def _archive_month(source: engine.SourcePost) -> str:
+    """The existing directory month is evidence; only a new/unlocatable row falls back to Beijing time."""
+    row = dict(source.row)
+    try:
+        directory = store.post_directory(source.account_dir, row)
+    except (OSError, ValueError):
+        return store.archive_month(row)
+    return store.archive_month(dict(row, folder_name=directory.name))
+
+
 def _metrics(record: Mapping[str, Any] | None) -> dict | None:
     """将图片指标字段映射到接口名称，不改变数值。"""
     if not isinstance(record, Mapping):
@@ -522,6 +597,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "review": state,
         "tags": tags,
         "tags_revision": tags_revision(tags),
+        "storage": _storage_facts(source),
         "localization": localized,
         "localization_validation": localization.validate(localized),
         "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),

@@ -5,6 +5,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from image_fixtures import image_bytes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.console import force_utf8   # noqa: E402
@@ -110,7 +111,7 @@ class FakePage:
 
 
 class FakeRequest:
-    def __init__(self, payload=b"\xff\xd8\xffjpegbytes"):
+    def __init__(self, payload=image_bytes()):
         self.payload = payload
         self.gets = []
 
@@ -282,7 +283,7 @@ with tempfile.TemporaryDirectory() as d:
                       Media(url="https://cdn.example.com/reuse_2.jpg", kind="image")],
                media_complete=False)
     first = arc.media_path(old, 0, "image/jpeg")
-    first.write_bytes(b"\xff\xd8\xffsaved")
+    first.write_bytes(image_bytes())
     old.media[0].local_path = str(first.relative_to(arc.base)).replace("\\", "/")
     arc.append(old)
     fresh = Post(post_id="reuse", platform="instagram", account="acme_us",

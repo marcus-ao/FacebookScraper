@@ -25,8 +25,8 @@ import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
-import { AUTHOR_KIND_LABEL, formatDate } from '@/lib/format'
-import type { ContentJob, TaskDetail } from '@/types/domain'
+import { AUTHOR_KIND_LABEL, formatDate, formatTrailTime } from '@/lib/format'
+import type { ContentJob, MirrorStatus, TaskDetail, TaskStorage } from '@/types/domain'
 import styles from './ReviewDetailPage.module.css'
 
 export function ReviewDetailPage({ source }: { source: ListSource }) {
@@ -101,6 +101,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     <div className={styles.body}>
       <div className={styles.title}><PageTitle /><Typography.Text type="secondary">{detail.read_only ? '冻结账号的历史归档 · 仅供查阅' : '对照原文，完成这篇内容的人工审核'}</Typography.Text></div>
       {detail.read_only && <div className={styles.source}><span>作者：{AUTHOR_KIND_LABEL[detail.meta.author_kind]} {detail.meta.owner}</span><span>原帖发布：{formatDate(detail.meta.created_at)}</span>{detail.meta.permalink && <a href={detail.meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}</div>}
+      {detail.storage && <StorageFacts storage={detail.storage} />}
       <div ref={setInitialContainer} />
       {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title="保存未完成，你的修改仍在编辑区，请重试" /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
@@ -121,4 +122,44 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <DetailDrawers detail={detail} />
     </div>
   </article>
+}
+
+function StorageFacts({ storage }: { storage: TaskStorage }) {
+  return <section className={styles.storage} aria-label="归档存储情况">
+    <span>归档位置：{storage.account_dir}{storage.folder ? ` / ${storage.folder}` : ''}</span>
+    <span>{({ auto: '自动分类', manual: '人工分类', legacy: '历史记录，分类来源未知' } as const)[storage.classified_by]}</span>
+    {storage.first_archived_at && <span>首次归档：{formatTrailTime(storage.first_archived_at)} 上海</span>}
+    <span>{localStorageCopy(storage)}</span><span>{databaseCopy(storage)}</span><span>{feishuCopy(storage.feishu)}</span>
+  </section>
+}
+
+function localStorageCopy(storage: TaskStorage): string {
+  const count = `已保存 ${storage.local.saved_images} / ${storage.local.expected_images} 张`
+  if (storage.local.status === 'complete') return `本地媒体：${count}，文件完整`
+  if (storage.local.status === 'partial') return `本地媒体：${count}，仍有待补齐内容`
+  if (storage.local.status === 'corrupt') return `本地媒体：${count}，发现损坏文件，请人工核对`
+  return `本地媒体：${count}，状态尚未确认`
+}
+
+function databaseCopy(storage: TaskStorage): string {
+  if (storage.database.status === 'unbuilt') return '展示索引：尚未建立'
+  if (storage.database.status === 'stale') return '展示索引：需要刷新后核对'
+  if (storage.database.status === 'verified') return `展示索引：已于 ${formatTrailTime(storage.database.verified_at)} 上海核对`
+  return '展示索引：状态尚未确认'
+}
+
+function feishuCopy(feishu: MirrorStatus): string {
+  let message = '飞书云盘：状态尚未确认'
+  if (feishu.status === 'disabled') message = '飞书云盘：未启用'
+  else if (feishu.status === 'pending') message = `飞书云盘：有 ${feishu.counts.pending} 项等待同步`
+  else if (feishu.status === 'uncertain') message = `飞书云盘：有 ${feishu.counts.uncertain} 项结果待人工核对`
+  else if (feishu.status === 'blocked') message = `飞书云盘：有 ${feishu.counts.blocked} 项已暂停，请由维护人员核对`
+  else if (feishu.status === 'completed') message = '飞书云盘：本地记录已有完成项，未再次向云端确认'
+  else if (feishu.status === 'idle') message = '飞书云盘：尚无待同步内容'
+
+  const details = [
+    feishu.incomplete_source ? '源内容待补齐' : '',
+    feishu.missing_media?.length ? `缺少 ${feishu.missing_media.length} 个媒体` : '',
+  ].filter(Boolean).join('，')
+  return details ? `${message}；${details}` : message
 }

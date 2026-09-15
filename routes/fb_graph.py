@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 
-from core.capture import validated_image_content_type
+from core.media import image_facts
 from core.store import Archive, Media, Post
 
 GRAPH = "https://graph.facebook.com/v21.0"
@@ -34,6 +34,8 @@ def _media_from_attachments(att: dict) -> list[Media]:
 def _download_images(client, arc: Archive, post: Post) -> None:
     """只下载图片；视频保留元数据。失败时留下可补全的归档状态。"""
     downloads_complete = True
+    if post.source_media_complete is None:
+        post.source_media_complete = post.media_complete
     for i, media in enumerate(post.media):
         if media.kind == "video":
             continue
@@ -48,17 +50,18 @@ def _download_images(client, arc: Archive, post: Post) -> None:
             print(f"    ! 媒体为空 {post.post_id}[{i}]")
             downloads_complete = False
             continue
-        content_type = validated_image_content_type(
-            response.headers.get("content-type"), response.content)
-        if not content_type:
+        facts = image_facts(response.content, response.headers.get("content-type") or "")
+        if not facts:
             print(f"    ! 媒体类型或文件签名异常 {post.post_id}[{i}]: "
                   f"{response.headers.get('content-type') or '缺少 Content-Type'}")
             downloads_complete = False
             continue
-        path = arc.media_path(post, i, content_type)
-        path.write_bytes(response.content)
-        media.local_path = str(path.relative_to(arc.base))
-    post.media_complete = post.media_complete and downloads_complete
+        try:
+            arc.save_media(post, i, response.content, facts)
+        except OSError:
+            print(f"    ! 媒体写入失败 {post.post_id}[{i}]，保留已保存内容")
+            downloads_complete = False
+    post.media_complete = post.source_media_complete and downloads_complete
 
 
 def scrape_page(page_id: str, token: str, archive_root: str | Path = "archive",

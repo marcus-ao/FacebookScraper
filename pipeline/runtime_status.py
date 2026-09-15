@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from core.config import ROOT, cfg
 from core.feishu import FeishuSettings, Outbox
 from core.heartbeat import HeartbeatSettings, heartbeat_status
+from core.mirror import MirrorService, MirrorSettings
 from core.network_evidence import NetworkEvidenceSettings, network_evidence_status
 from core.paid_model import atomic_write_json, ModelCredentials
 from core.monitoring import MonitoringJournal
@@ -29,6 +30,19 @@ def read_json(path):
 def record_process_tick(now):
     atomic_write_json(cfg().state_dir / 'scheduler_heartbeat.json',
                       {'worker': current_worker(), 'tick_at': now.isoformat()})
+
+
+def _mirror_status(state):
+    """Read the durable mirror summary without creating a client or changing the queue."""
+    try:
+        return MirrorService(state, MirrorSettings.load()).status()
+    except Exception:
+        # Keep the queue intact: a malformed record needs a human to inspect it before
+        # any recovery action.  Do not reveal the raw record or provider diagnostics here.
+        return {'enabled': True, 'status': 'blocked',
+                'counts': {'pending': 0, 'completed': 0, 'uncertain': 0, 'blocked': 0},
+                'last_success_at': None, 'last_error': '镜像记录暂时无法读取，请由维护人员核对。',
+                'operations': [], 'posts': {}}
 
 
 def snapshot(now=None):
@@ -62,8 +76,7 @@ def snapshot(now=None):
     except ValueError as exc:
         feishu = {'status': 'configuration_invalid', 'message': str(exc)}
     feishu['credentials_present'] = all(ModelCredentials(key).optional_value() for key in ('FEISHU_APP_ID', 'FEISHU_APP_SECRET'))
-    mirror = read_json(state / 'mirror_queue.json')
-    mirror_state = 'disabled' if not c.get('mirror', 'enabled', False) else mirror.get('status', 'configured')
+    mirror = _mirror_status(state)
     detection = read_json(state / 'delta_state.json')
     return {'observed_at': now.isoformat(), 'read_only': True,
             'activation': business.get('activated_at'),
@@ -75,7 +88,9 @@ def snapshot(now=None):
                  'status': 'blocked' if detection.get('detect_hard_blocked') else 'active' if alive else 'not_observed',
                  'detection': detection},
                 {'number': 2, 'name': '源内容与归档', 'status': 'available' if c.archive_dir.is_dir() else 'missing',
-                 'mirror_status': mirror_state},
+                 # mirror_status is retained for existing API consumers.  `mirror` is the
+                 # durable queue summary and deliberately does not mean cloud content exists.
+                 'mirror_status': mirror['status'], 'mirror': mirror},
                 {'number': 3, 'name': '德语本地化', 'status': processing.get('status', 'not_observed'),
                  'tag_sampling': read_json(state / 'hashtag_sampling_state.json'),
                  'trends_export': read_json(state / 'trends_export_state.json')},

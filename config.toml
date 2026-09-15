@@ -211,9 +211,22 @@ keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 [mirror]
 # 本地到云盘的单向版本镜像。
 enabled = false
-root_folder_token = ""
+root_folder_token = "TsQef8msClS2i6dlzpfcpfn6nAc"
 mirror_state = true
 state_interval_minutes = 60
+
+[storage.product_aliases]
+# 自动分类：完整型号 hashtag 优先，正文补充；键为统一产品名。
+M1 = ["NeakasaM1"]
+P1 = []
+"P1 Pro" = ["P1Pro", "NeakasaP1Pro"]
+P2 = []
+S1 = []
+"S1 Pro" = ["S1Pro", "NeakasaS1Pro"]
+F1 = ["NeakasaF1"]
+N3 = []
+Magic1 = ["NeakasaMagic1"]
+Riko = ["RIKO"]
 
 [heartbeat]
 enabled = false

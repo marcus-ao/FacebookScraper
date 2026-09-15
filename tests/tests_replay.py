@@ -48,7 +48,7 @@ def make_directory_link(link, target):
             raise
     result = subprocess.run(
         ["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError("无法创建测试 junction：" + result.stderr.strip())
 
@@ -230,9 +230,12 @@ with tempfile.TemporaryDirectory() as temp:
     outside_media = root / "outside_known_media.jpg"
     outside_media.write_bytes(b"KNOWN MEDIA SENTINEL")
     linked_media = media_dir / "01.jpg"
-    os.link(outside_media, linked_media)
+    linked_media.write_bytes(b"ORIGINAL LOCAL MEDIA")
     kept.media[0].local_path = str(linked_media.relative_to(arc.base)).replace("\\", "/")
     arc.append(kept)
+    # 归档入口已拒绝 hardlink；在正常入档后模拟外部替换，验证 replay 也会拒绝。
+    linked_media.unlink()
+    os.link(outside_media, linked_media)
     capture = arc.base / "capture_known_link.json"
     capture.write_text('[{"synthetic":true}]', encoding="utf-8")
     before = tree_snapshot(arc.base)

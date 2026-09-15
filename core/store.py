@@ -8,13 +8,17 @@ import os  # noqa: F401  兼容现有故障注入测试对 core.store.os.replace
 import re
 import shutil
 import stat
+import tempfile
 import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from zoneinfo import ZoneInfo
+from uuid import uuid4
 from core import paid_model
 from core.config import cfg
+from core.media import image_facts
 
 
 @dataclass
@@ -24,6 +28,9 @@ class Media:
     local_path: str | None = None
     width: int | None = None
     height: int | None = None
+    content_type: str | None = None
+    byte_size: int | None = None
+    sha256: str | None = None
 
 
 @dataclass
@@ -44,8 +51,11 @@ class Post:
     coauthors: list[str] = field(default_factory=list)
     # 源响应未提供全部媒体时标 False，供后续补齐。
     media_complete: bool = True
+    source_media_complete: bool | None = None  # 平台是否给齐媒体列表，独立于下载结果
     folder_name: str | None = None  # 创建时固定；修改正文/标签不重命名
     tags: list[str] | None = None   # None 尚未预填；[] 是人工明确清空
+    tags_origin: str | None = None
+    archived_at: str | None = None
 
     def to_row(self) -> dict:
         d = asdict(self)
@@ -228,6 +238,27 @@ def _folder_month(folder_name: str) -> str:
     return folder_name[:7] if re.match(r"^\d{4}-\d{2}-\d{2}_", folder_name) else "undated"
 
 
+def _archive_time(created_at: object) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(created_at).replace('Z', '+00:00'))
+        if moment.tzinfo is not None and moment.utcoffset() is not None:
+            return moment.astimezone(ZoneInfo('Asia/Shanghai'))
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return None
+
+
+def archive_month(source: dict | str | None) -> str:
+    """已有目录月份保持稳定；新原帖按北京时间归档，未知日期不猜测。"""
+    if isinstance(source, dict):
+        name = source.get('folder_name')
+        if isinstance(name, str) and name:
+            return _folder_month(name)
+        source = source.get('created_at')
+    moment = _archive_time(source)
+    return moment.strftime('%Y-%m') if moment else 'undated'
+
+
 def _safe_folder_name(value: object) -> str:
     if (not isinstance(value, str) or not value or value in {".", ".."}
             or not re.fullmatch(r"[A-Za-z0-9._~\-]+", value)
@@ -283,26 +314,50 @@ def post_folder_matches_id(folder_name: str, post_id: str) -> bool:
 
 
 def _new_folder_name(post: Post) -> str:
-    legacy = _safe_folder_name(post_dirname(post.post_id, post.created_at))
     safe_id = _stable_post_id_component(post.post_id)
     text = unicodedata.normalize("NFKD", post.text).encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:30].rstrip("-")
-    prefix = legacy[:15] if not legacy.startswith("undated_") else "undated"
+    moment = _archive_time(post.created_at)
+    prefix = moment.strftime('%Y-%m-%d_%H%M') if moment else 'undated'
     return _safe_folder_name("_".join(part for part in (prefix, slug, safe_id) if part))
 
 
 def infer_tags(text: str, models: list[str] | None = None) -> list[str]:
-    """只按维护中的型号表预填；长型号优先，字母数字边界避免 M1 命中 M10。"""
+    """明确的型号 hashtag 优先、正文补充；别名映射不改写原文。"""
+    configured = models is None
     if models is None:
         models = cfg().get("image", "keep_verbatim", {}).get("models", [])
     choices = sorted({model for model in models if isinstance(model, str) and model.strip()},
                      key=lambda model: (-len(model), model))
-    if not choices:
-        return []
     canonical = {model.casefold(): model for model in choices}
-    pattern = re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, choices))
-                         + r")(?![A-Za-z0-9])", re.IGNORECASE)
-    return list(dict.fromkeys(canonical[match.group().casefold()] for match in pattern.finditer(text)))
+    if configured:
+        aliases = cfg().get('storage', 'product_aliases', {})
+        if not isinstance(aliases, dict):
+            raise ValueError('storage.product_aliases 必须是型号到别名数组的映射')
+        explicit = {}
+        for product, names in aliases.items():
+            if (not isinstance(product, str) or not product.strip() or not isinstance(names, list)
+                    or any(not isinstance(name, str) or not name.strip().lstrip('#') for name in names)):
+                raise ValueError('产品名与别名必须是非空字符串')
+            for alias in [product, *names]:
+                key = alias.strip().lstrip('#').casefold()
+                if key in explicit and explicit[key] != product:
+                    raise ValueError('同一产品别名不能指向多个型号')
+                explicit[key] = product
+        canonical.update(explicit)
+    if not canonical:
+        return []
+    tagged = []
+    body = list(text)
+    for match in re.finditer(r'(?<![\w#])#\w+', text):
+        product = canonical.get(match.group()[1:].casefold())
+        if product:
+            tagged.append(product)
+        body[match.start():match.end()] = ' ' * len(match.group())
+    names = sorted(canonical, key=lambda value: (-len(value), value))
+    pattern = re.compile(r'(?<!\w)(?:' + '|'.join(map(re.escape, names)) + r')(?!\w)', re.IGNORECASE)
+    return list(dict.fromkeys([*tagged, *(canonical[match.group().casefold()]
+                                         for match in pattern.finditer(''.join(body)))]))
 
 
 def _is_month_name(value: str) -> bool:
@@ -420,6 +475,9 @@ def planned_post_directory(account_dir: Path, post: Path | Post) -> Path:
         # 必须在算落点之前定下来：媒体下载先于 append 发生，
         # 晚一步会让图片落进 未分类/ 而 post.json 落进 <tag>/。
         post.tags = infer_tags(post.text)
+        post.tags_origin = 'auto'
+    elif post.tags_origin is None:
+        post.tags_origin = 'manual'
     return post_directory(account_dir, post.to_row())
 
 
@@ -443,34 +501,175 @@ def read_post_truth(account_dir: Path, indexed: dict) -> tuple[dict, Path]:
     return source, post_dir
 
 
-def _relocate_for_tag(account_dir: Path, directory: Path, row: dict) -> Path:
-    """改主 tag 时在同一月份目录内移动落点，并就地改写每个媒体的 local_path。
+def resolve_media_path(account_dir: Path, source: dict, media: dict) -> Path | None:
+    """通过稳定帖子目录解析当前/历史媒体；分类移动不改写历史证据。"""
+    local = media.get('local_path')
+    if local is None or local == '':
+        return None
+    if not isinstance(local, str):
+        raise ArchivePathError('媒体路径必须是相对路径')
+    relative = PurePosixPath(local.replace('\\', '/'))
+    if relative.is_absolute() or '..' in relative.parts or ':' in local or len(relative.parts) < 3:
+        raise ArchivePathError('媒体路径超出帖子归档')
+    account_dir = Path(account_dir)
+    directory = post_directory(account_dir, source)
+    if not directory.exists():
+        directory = post_directory(account_dir, dict(source, folder_name=None))
+    previous_parent = account_dir.joinpath(*relative.parts[:-1])
+    assert_post_directory(account_dir, previous_parent)
+    if (previous_parent != directory and
+            (not post_folder_matches_id(previous_parent.name, source['post_id'])
+             or not post_folder_matches_id(directory.name, source['post_id']))):
+        raise ArchivePathError('媒体路径不属于同一稳定帖子目录')
+    if (directory / 'post.json').exists():
+        read_post_truth(account_dir, dict(source, folder_name=directory.name))
+    return assert_physical_direct_path(directory, directory / relative.name, kind='file', label='原图')
 
-    `local_path` 相对账号目录，不跟着改会让图片、镜像和图片本地化一起指向旧路径。
-    留证保护的是内容不被改写，不是路径永不变（F2-4 规则 4）。
-    """
+
+def media_storage_info(account_dir: Path, source: dict) -> list[dict]:
+    """只读观察每张原图实际字节，不以路径或 manifest 存在代替完整性。"""
+    result = []
+    for ordinal, media in enumerate(source.get('media') or []):
+        item = dict(media, ordinal=ordinal, source_url=media.get('url'))
+        item.update(content_type=None, byte_size=None, sha256=None, storage_status='missing')
+        if media.get('kind') == 'video':
+            item['storage_status'] = 'metadata_only'
+        else:
+            try:
+                path = resolve_media_path(account_dir, source, media)
+                if path is not None:
+                    item['local_path'] = path.relative_to(account_dir).as_posix()
+                if path is not None and path.exists():
+                    before = path.stat()
+                    raw = path.read_bytes()
+                    after = path.stat()
+                    digest = hashlib.sha256(raw).hexdigest()
+                    item.update(byte_size=len(raw), sha256=digest, storage_status='corrupt')
+                    facts = image_facts(raw)
+                    stable = (before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (
+                        after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                    if (facts and stable and len(raw) == after.st_size
+                            and (not media.get('sha256') or media['sha256'] == digest)
+                            and (media.get('byte_size') is None or media['byte_size'] == len(raw))):
+                        item.update(facts, storage_status='saved')
+            except (ArchivePathError, OSError):
+                item.update(content_type=None, byte_size=None, sha256=None, storage_status='corrupt')
+        result.append(item)
+    return result
+
+
+def _tag_destination(account_dir: Path, directory: Path, row: dict) -> Path:
     wanted = primary_tag_folder({"tags": row.get("tags")})
     if directory.parent.name != wanted and (
             _is_month_name(directory.parent.name) or _is_month_name(directory.parent.parent.name)):
         month = directory.parent if _is_month_name(directory.parent.name) else directory.parent.parent
-        target = assert_post_directory(account_dir, month / wanted / directory.name)
-        if target != directory:
-            if target.exists():
-                raise ArchivePathError("目标标签目录下已有同名帖子目录，请先核对归档")
-            previous_parent = directory.parent
-            target.parent.mkdir(parents=True, exist_ok=True)
-            directory.rename(target)
-            directory = target
-            if previous_parent != month:
-                # 最后一篇搬走后收掉空的 tag 母目录，否则月份下会积一堆空壳。
-                with suppress(OSError):
-                    previous_parent.rmdir()
-    relative = directory.relative_to(account_dir).as_posix()
-    for media in row.get("media") or []:
-        if isinstance(media, dict) and isinstance(media.get("local_path"), str):
-            media["local_path"] = relative + "/" + PurePosixPath(
-                media["local_path"].replace("\\", "/")).name
+        return assert_post_directory(account_dir, month / wanted / directory.name)
     return directory
+
+
+def remap_archive_paths(value, old_prefix: str, new_prefix: str, *, path_value: bool = False):
+    """只重定位明确的归档路径字段；正文、URL 与历史字节保持原样。"""
+    if isinstance(value, dict):
+        return {key: remap_archive_paths(item, old_prefix, new_prefix,
+                                        path_value=key in {'local_path', 'out_path', 'source_rel'})
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [remap_archive_paths(item, old_prefix, new_prefix, path_value=path_value) for item in value]
+    if path_value and isinstance(value, str):
+        normalized = value.replace('\\', '/')
+        if normalized.startswith(old_prefix + '/'):
+            return new_prefix + normalized[len(old_prefix):]
+    return value
+
+
+def _append_archive_record(account_dir: Path, name: str, row: dict) -> None:
+    paid_model.append_jsonl(account_dir / name, row, guard=lambda path: assert_physical_direct_path(
+        account_dir, path, kind='file', label=name))
+
+
+def _complete_tag_move(account_dir: Path, event: dict) -> None:
+    before = assert_post_directory(account_dir, account_dir / event['source'])
+    target = assert_post_directory(account_dir, account_dir / event['target'])
+    if (before.name != target.name or not post_folder_matches_id(target.name, event['post_id'])
+            or _tag_destination(account_dir, before, event['row']) != target):
+        raise ArchivePathError('分类移动记录的帖子或月份不一致')
+    if before != target and before.exists():
+        if target.exists():
+            raise ArchivePathError('分类移动源与目标同时存在，请先核对归档')
+        truth = assert_physical_direct_path(before, before / 'post.json', kind='file', label='移动源帖')
+        raw = truth.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != event['before_sha256']:
+            raise ArchiveRevisionConflict('移动开始之后源帖发生变化，保留移动记录等待核对')
+        intended = remap_archive_paths(dict(json.loads(raw), tags=event['row'].get('tags'), tags_origin=event['row'].get('tags_origin')),
+                                      event['source'], event['target'])
+        if intended != event['row']:
+            raise ArchiveRevisionConflict('分类移动计划含来源内容变化，未移动或覆盖原帖')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        assert_post_directory(account_dir, target)
+        before.rename(target)
+    truth = assert_physical_direct_path(target, target / 'post.json', kind='file', label='移动源帖')
+    raw = truth.read_bytes()
+    if hashlib.sha256(raw).hexdigest() == event['before_sha256']:
+        _atomic_write_text(truth, json.dumps(event['row'], ensure_ascii=False, indent=2), label='post.json')
+    elif json.loads(raw) != event['row']:
+        raise ArchiveRevisionConflict('移动后的源帖版本不符，未覆盖内容')
+    images = assert_physical_direct_path(account_dir, account_dir / 'images_de.jsonl', kind='file', label='图片归属账本')
+    if images.exists():
+        raw = images.read_bytes()
+        if raw and not raw.endswith(b'\n'):
+            raise ArchivePathError('图片归属账本尚未写完，稍后恢复分类移动')
+        entries = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        seen = {json.dumps(item, sort_keys=True) for item in entries}
+        for item in entries:
+            updated = remap_archive_paths(item, event['source'], event['target'])
+            if updated == item:
+                continue
+            updated['tag_move_operation_id'] = event['operation_id']
+            signature = json.dumps(updated, sort_keys=True)
+            if signature not in seen:
+                _append_archive_record(account_dir, 'images_de.jsonl', updated)
+                seen.add(signature)
+    _append_archive_record(account_dir, 'manifest.jsonl', event['row'])
+    _append_archive_record(account_dir, 'tag_moves.jsonl', dict(event, status='completed'))
+    if before != target and not _is_month_name(before.parent.name):
+        with suppress(OSError):
+            before.parent.rmdir()
+
+
+def _recover_tag_moves_locked(account_dir: Path) -> int:
+    path = assert_physical_direct_path(account_dir, account_dir / 'tag_moves.jsonl', kind='file', label='分类移动账本')
+    if not path.exists():
+        return 0
+    raw = path.read_bytes()
+    if raw and not raw.endswith(b'\n'):
+        raise ArchivePathError('分类移动记录未写完，请先核对，不能自动重置')
+    events = {}
+    try:
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if (not isinstance(event, dict) or event.get('status') not in {'started', 'completed'}
+                    or not re.fullmatch(r'[a-f0-9]{32}', event.get('operation_id', ''))
+                    or not re.fullmatch(r'[a-f0-9]{64}', event.get('before_sha256', ''))
+                    or not isinstance(event.get('source'), str) or not isinstance(event.get('target'), str)
+                    or _archive_row_error(event.get('row'))
+                    or event.get('post_id') != event['row']['post_id']):
+                raise ValueError('invalid move event')
+            events[event['operation_id']] = event
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ArchivePathError('分类移动记录损坏，请先核对，不能自动重置') from exc
+    pending = [event for event in events.values() if event['status'] == 'started']
+    for event in pending:
+        _complete_tag_move(account_dir, event)
+    return len(pending)
+
+
+def recover_tag_moves(account_dir: Path) -> int:
+    """显式恢复中断的分类移动；普通查询不调用此写入入口。"""
+    account_dir = Path(account_dir)
+    with archive_write_lock(account_dir):
+        return _recover_tag_moves_locked(account_dir)
 
 
 def update_post_tags(account_dir: Path, indexed: dict, tags: list[str], *,
@@ -479,19 +678,32 @@ def update_post_tags(account_dir: Path, indexed: dict, tags: list[str], *,
     if not isinstance(tags, list) or any(not isinstance(tag, str) or not tag.strip() for tag in tags):
         raise ValueError("tags 必须是非空字符串的数组；不分类时可保存空数组")
     normalized = list(dict.fromkeys(tag.strip() for tag in tags))
+    account_dir = Path(account_dir)
     with archive_write_lock(account_dir):
+        _recover_tag_moves_locked(account_dir)
         current, directory = read_post_truth(account_dir, indexed)
         if expected_tags is not _UNSET and (current.get("tags") or []) != expected_tags:
             raise ArchiveRevisionConflict("标签已有新版本，请重新载入后保存")
         source_hash = source_text_digest(current["text"])
         if expected_source_sha256 is not None and source_hash != expected_source_sha256:
             raise ArchiveRevisionConflict("源帖已更新，请重新载入后保存标签")
-        row = dict(current, tags=normalized)
-        directory = _relocate_for_tag(Path(account_dir), directory, row)
-        _atomic_write_text(directory / "post.json", json.dumps(row, ensure_ascii=False, indent=2), label="post.json")
-        paid_model.append_jsonl(Path(account_dir) / "manifest.jsonl", row,
-                                guard=lambda path: assert_physical_direct_path(
-                                    path.parent, path, kind="file", label="manifest.jsonl"))
+        return _save_tagged_row(account_dir, directory, dict(current, tags=normalized, tags_origin='manual'))
+
+
+def _save_tagged_row(account_dir: Path, directory: Path, row: dict) -> dict:
+    """调用方持账号锁；当前源帖可已更新，但移动意图必须先于目录移动。"""
+    target = _tag_destination(account_dir, directory, row)
+    if target == directory:
+        _atomic_write_text(directory / 'post.json', json.dumps(row, ensure_ascii=False, indent=2), label='post.json')
+        _append_archive_record(account_dir, 'manifest.jsonl', row)
+    else:
+        source_rel, target_rel = directory.relative_to(account_dir).as_posix(), target.relative_to(account_dir).as_posix()
+        row = remap_archive_paths(row, source_rel, target_rel)
+        event = {'operation_id': uuid4().hex, 'status': 'started', 'post_id': row['post_id'],
+                 'source': source_rel, 'target': target_rel, 'row': row,
+                 'before_sha256': hashlib.sha256((directory / 'post.json').read_bytes()).hexdigest()}
+        _append_archive_record(account_dir, 'tag_moves.jsonl', event)
+        _complete_tag_move(account_dir, event)
     return row
 
 
@@ -645,30 +857,63 @@ class Archive:
         return assert_physical_direct_path(
             d, media, kind="file", label=f"媒体文件 {media.name}")
 
-    def reusable_media_path(self, post: "Post", url: str) -> Path | None:
-        """仅复用同帖、同 URL、当前事实目录中的真实媒体；目录变化时不跨目录借用。"""
-        old = self._current_row(post)
-        if not isinstance(old, dict):
-            return None
-        expected_dir = self.post_dir(post)
-        for item in old.get("media") or []:
-            if not isinstance(item, dict) or item.get("url") != url:
-                continue
-            local = item.get("local_path")
-            if not isinstance(local, str) or not local.strip():
-                continue
-            rel = Path(local.replace("\\", "/"))
-            candidate = self.base / rel
-            try:
-                parent = assert_post_directory(self.base, candidate.parent)
-                if parent.resolve() != expected_dir.resolve():
+    def save_media(self, post: Post, idx: int, data: bytes, facts: dict) -> Path:
+        """下载结束后持锁重新定位，完整临时文件落盘后再暴露原图路径。"""
+        with archive_write_lock(self.base):
+            _recover_tag_moves_locked(self.base)
+            self._rows = self._load_rows()
+            target = self.media_path(post, idx, facts['content_type'])
+            if target.exists() and target.read_bytes() != data:
+                target = target.with_name(f'{idx + 1:02d}_{facts["sha256"][:16]}{target.suffix}')
+                revision = 1
+                while True:
+                    assert_physical_direct_path(target.parent, target, kind='file', label='版本原图落点')
+                    if not target.exists() or target.read_bytes() == data:
+                        break
+                    target = target.with_name(f'{idx + 1:02d}_{facts["sha256"][:16]}_{revision}{target.suffix}')
+                    revision += 1
+            assert_physical_direct_path(target.parent, target, kind='file', label='原图落点')
+            if not target.exists():
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.download-', suffix='.tmp', delete=False) as handle:
+                        temporary = Path(handle.name)
+                        handle.write(data)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    assert_post_directory(self.base, target.parent)
+                    assert_physical_direct_path(target.parent, target, kind='file', label='原图落点')
+                    temporary.rename(target)
+                    temporary = None
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+            media = post.media[idx]
+            media.local_path = target.relative_to(self.base).as_posix()
+            for key, value in facts.items():
+                setattr(media, key, value)
+            return target
+
+    def reusable_media(self, post: Post, url: str) -> tuple[Path, dict] | None:
+        """复用须匹配已有字节证据；同时返回已验证元信息，调用方不重新认可被改写的文件。"""
+        with archive_write_lock(self.base):
+            old = self._current_row(post)
+            if not isinstance(old, dict):
+                return None
+            for item in old.get('media') or []:
+                if not isinstance(item, dict) or item.get('url') != url:
                     continue
-                assert_physical_direct_path(
-                    parent, candidate, kind="file", label="已归档媒体")
-            except (ArchivePathError, OSError, RuntimeError):
-                continue
-            if candidate.exists():
-                return candidate
+                try:
+                    path = resolve_media_path(self.base, old, item)
+                    if path is None:
+                        continue
+                    raw = path.read_bytes()
+                except (ArchivePathError, OSError):
+                    continue
+                facts = image_facts(raw)
+                if (facts and (not item.get('sha256') or item['sha256'] == facts['sha256'])
+                        and (item.get('byte_size') is None or item['byte_size'] == facts['byte_size'])):
+                    return path, facts
         return None
 
     @staticmethod
@@ -795,6 +1040,7 @@ class Archive:
     def append(self, post: Post) -> bool:
         """追加新帖或更完整的记录，返回是否写入；重复内容忽略。"""
         with archive_write_lock(self.base):
+            _recover_tag_moves_locked(self.base)
             self._rows = self._load_rows()
             previous = self._current_row(post)
             if previous is not None:
@@ -806,18 +1052,36 @@ class Archive:
     def _append_locked(self, post: Post, previous: dict | None) -> bool:
         # 人工改过的 tag 优先于重新推断，且要早于落点计算。
         if previous is not None and isinstance(previous.get("tags"), list):
-            post.tags = list(previous["tags"])
-        self.post_dir(post)
+            post.tags_origin = previous.get('tags_origin') or 'legacy'
+            post.tags = infer_tags(post.text) if post.tags_origin == 'auto' else list(previous['tags'])
+        post.archived_at = (previous.get('archived_at') if previous is not None
+                            else datetime.now(timezone.utc).isoformat())
+        directory = self.post_dir(post)
+        for media in post.media:
+            if media.local_path and PurePosixPath(media.local_path.replace('\\', '/')).parent.name == directory.name:
+                media.local_path = resolve_media_path(self.base, post.to_row(), asdict(media)).relative_to(self.base).as_posix()
         if previous is not None and self._source_changed(previous, post):
             old_media = previous.get("media") or []
-            if previous.get("media_complete") is True and not post.media_complete:
+            source_complete = post.source_media_complete if post.source_media_complete is not None else post.media_complete
+            if not source_complete and (previous.get('media_complete') is True
+                                        or len(old_media) > len(post.media)
+                                        or _post_quality_parts(previous)[2] > _post_quality_parts(post)[2]):
+                observed = {media.url: media for media in post.media}
                 post.media = [Media(**item) for item in old_media]
-                post.media_complete = True
+                for media in post.media:
+                    fresh = observed.get(media.url)
+                    if fresh and fresh.local_path:
+                        for key in ('local_path', 'content_type', 'byte_size', 'sha256', 'width', 'height'):
+                            setattr(media, key, getattr(fresh, key))
+                post.media_complete = previous.get('media_complete', False)
             else:
                 by_url = {item.get("url"): item for item in old_media if isinstance(item, dict)}
                 for media in post.media:
                     if not media.local_path and media.url in by_url:
-                        media.local_path = by_url[media.url].get("local_path")
+                        previous_media = by_url[media.url]
+                        for key in ('local_path', 'content_type', 'byte_size', 'sha256', 'width', 'height'):
+                            if getattr(media, key) is None:
+                                setattr(media, key, previous_media.get(key))
         row = post.to_row()
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
@@ -834,8 +1098,13 @@ class Archive:
             self._isolate_other_truth_dirs(post, self.post_dir(post))
         assert_physical_direct_path(
             self.base, self.manifest, kind="file", label="manifest.jsonl")
-        paid_model.append_jsonl(self.manifest, row, guard=lambda path: assert_physical_direct_path(
-            path.parent, path, kind="file", label="manifest.jsonl"))
+        if _tag_destination(self.base, directory, row) != directory:
+            row = _save_tagged_row(self.base, directory, row)
+            for media, item in zip(post.media, row['media']):
+                media.local_path = item.get('local_path')
+        else:
+            paid_model.append_jsonl(self.manifest, row, guard=lambda path: assert_physical_direct_path(
+                path.parent, path, kind="file", label="manifest.jsonl"))
         self._rows[post.post_id] = row
         return True
 
@@ -848,10 +1117,14 @@ class Archive:
     def _source_changed(old: dict, new: Post) -> bool:
         if any(old.get(key) != getattr(new, key) for key in ("text", "created_at", "owner", "coauthors", "permalink")):
             return True
-        if not new.media_complete:
+        source_complete = new.source_media_complete if new.source_media_complete is not None else new.media_complete
+        if not source_complete:
             return False
         before = [(item.get("kind"), item.get("url")) for item in (old.get("media") or []) if isinstance(item, dict)]
-        return before != [(item.kind, item.url) for item in new.media]
+        if before != [(item.kind, item.url) for item in new.media]:
+            return True
+        return any(item.get('sha256') and media.sha256 and item['sha256'] != media.sha256
+                   for item, media in zip(old.get('media') or [], new.media))
 
     @staticmethod
     def _is_upgrade(old: dict, new: Post) -> bool:

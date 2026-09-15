@@ -111,6 +111,39 @@ class RuntimeStatusTests(unittest.TestCase):
         self.assertTrue(result['process']['alive'])
         self.assertIsNone(result['business']['last_successful_run'])
 
+    def test_malformed_mirror_queue_is_blocked_without_reset_or_network(self):
+        self.state.mkdir()
+        queue = self.state / 'mirror_queue.json'
+        queue.write_text('{not valid json', encoding='utf-8')
+        c = config.cfg()
+        c._d['mirror'] = {'enabled': True, 'root_folder_token': 'fixture-root'}
+        before = queue.read_bytes()
+        with patch('core.mirror.DriveClient.from_environment', side_effect=AssertionError('network')):
+            snapshot = runtime_status.snapshot(NOW)
+
+        mirror = snapshot['stages'][1]['mirror']
+        self.assertEqual(mirror['status'], 'blocked')
+        self.assertEqual(mirror['counts'], {'pending': 0, 'completed': 0,
+                                             'uncertain': 0, 'blocked': 0})
+        self.assertEqual(queue.read_bytes(), before)
+
+    def test_mirror_pending_and_uncertain_counts_are_read_without_cloud_work(self):
+        self.state.mkdir()
+        queue = self.state / 'mirror_queue.json'
+        queue.write_text(json.dumps({
+            'schema_version': 2, 'root_token': 'fixture-root', 'folders': {},
+            'posts': {'fa_fixture/1': {'token': 'post-folder', 'status': 'completed'}},
+            'snapshots': {'source': {'post_key': 'fa_fixture/1', 'status': 'uncertain'}},
+            'operations': {},
+        }), encoding='utf-8')
+        config.cfg()._d['mirror'] = {'enabled': True, 'root_folder_token': 'fixture-root'}
+        before = queue.read_bytes()
+        with patch('core.mirror.DriveClient.from_environment', side_effect=AssertionError('network')):
+            mirror = runtime_status.snapshot(NOW)['stages'][1]['mirror']
+        self.assertEqual(mirror['status'], 'uncertain')
+        self.assertEqual(mirror['counts']['uncertain'], 1)
+        self.assertEqual(queue.read_bytes(), before)
+
 
 if __name__ == '__main__':
     unittest.main()

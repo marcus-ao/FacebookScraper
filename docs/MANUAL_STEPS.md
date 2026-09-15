@@ -2,13 +2,13 @@
 
 **本周要做阶段一（监测与抓取）的真实验收，整套顺序在[第 14 节](#14-阶段一真实验收监测与抓取)。** 下面 1–13 节是分主题的长期参考，第 14 节把其中与阶段一相关的挑出来排成一条可以照着走的线。
 
-本文件列人工依赖与开发机操作顺序，事实同步至 2026-09-14。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
+本文件列人工依赖与开发机操作顺序，存储说明同步至 2026-09-15。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
 当前先保留现场：9224 访问 `.global`、Google Trends 公开页均实际 HTTP 429，分别保存在 `delta_state.json` 和 `trends_export_state.json`，均已停止；需要人工核对探测会话与出口。9223 已登录并录到目标 FB `Neakasa Deutschland`、IG `neakasa.de`，本次完整月份实际读取已经通过，尚无本轮新发布/排期提交。编辑器中曾放入不可发布的技术长文案与 2 张历史原图作控件观察，可能留下草稿；接手时不要直接点击提交。飞书缺凭据、镜像/外部心跳未启用，完整运营流程尚未通过。
 
 ## 1. 接续运行数据前先备份和核验
 
-主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本工作区用忽略入库的 `config.local.toml` 指回同一份数据。
+主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本的绑定以 `config.local.toml` 和运行状态为准。本轮 `codex/raw-post-storage` 位于 `.worktrees/storage`，单独绑定该目录中的 archive/state/.env，只复用主工作区 Python 解释器，未接主工作区业务数据。不能把这种隔离假定到其他副本。
 
 ⛔ 2026-09-14 已按业务决定把 archive/state 整库清空且**没有备份**，现在两个目录都是空的。这条决定是一次性的：**以后再接续或恢复，仍然必须先备份再动**，下面这套核验步骤照做。
 
@@ -32,9 +32,9 @@
 
 ## 2. 配置本机凭据
 
-已有本机绑定时编辑绑定指向的环境文件，保留已存在值；首次独立安装才从 `.env.example` 建本机 `.env`。模型/飞书凭据、收件配置、云盘目录和令牌不写入可提交配置、终端截图、probe dump 或日志。
+已有本机绑定时编辑绑定指向的环境文件，保留已存在值；首次独立安装才从 `.env.example` 建本机 `.env`。模型/飞书凭据和访问令牌不写入可提交配置、终端截图、probe dump 或日志。云盘 folder token 是目标资源标识，不能代替应用凭据和目录授权。
 
-飞书凭据写本机 `.env` 的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（名称见 `.env.example`），消息与云盘共用同一套。收件人和云盘目录写 `config.toml` 的 `[feishu]` / `[mirror]`：置 `enabled = true` 前 `base_url` 与两个接收组必须都有值且两组不得有交集，缺一项加载即失败。
+飞书凭据写本机 `.env` 的 `FEISHU_APP_ID` / `FEISHU_APP_SECRET`（名称见 `.env.example`），消息与云盘共用同一套。消息配置 `[feishu]` 与云盘配置 `[mirror]` 独立启用：消息需要 `base_url` 和两个不相交的接收组；仅测试云盘时不必先开消息。机器专属覆盖写本机 `config.local.toml`，不要在聊天中提供 AppSecret。
 
 企业管理员需提供应用 AppSecret 并完成应用授权、机器人可接收范围、德国运营/开发者两个接收组与云盘根目录权限。两个组是独立接收配置，可各为一人，不必都是群聊。还需运营机器能打开的开发机审校地址；当前均缺实际联调条件。拿到后按第 7 节验证，离线测试不代替权限。
 
@@ -143,6 +143,69 @@ Facebook 在链接区确定德国落地页后，可把对应 `{{linkN}}` 插入�
 在运营机器点击真实卡片到对应帖子详情，记录两个接收组、日期和 message/file ID，不记录密钥。关机/断网/停调度的缺席告警由外部心跳服务验证，不能只看本机发送成功。
 
 outbox 的终态在线保留期默认 30 天，过期完整关联组件归档后原卡片、UUID 与回执仍可读，事件去重索引留在主状态。未决、待重试、待发和离岗待发不归档；不要为缩小文件手工删除这些记录。归档异常时保留原文件与 hash 记录核对。
+
+### 7.1 原帖云盘接入与恢复
+
+**目标已确定为[原帖归档文件夹](https://genhigh.feishu.cn/drive/folder/TsQef8msClS2i6dlzpfcpfn6nAc)。** 代码配置保留该 folder token，`mirror.enabled=false`。目标内容、权限、容量与运营账号可见性均未实测；本轮 worktree 环境文件没有应用凭据。
+
+**管理员准备：**
+
+1. 在飞书开放平台创建企业自建应用，启用机器人；按下表申请接口权限，由管理员批准并发布可用版本。当前文档提供的细分权限为：建目录 `space:folder:create`、上传 `drive:file:upload`、目录列表 `space:document:retrieve`、移动 `space:document:move`；[异步任务查询](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/drive-v1/file/task_check)另需 `drive:drive.metadata:readonly`。各接口也接受范围较大的 `drive:drive`；是否授予统一权限由企业管理员按实际调用范围决定。
+2. 按[应用获得目录访问权限的官方步骤](https://open.feishu.cn/document/uAjLw4CM/ugTN1YjL4UTN24CO1UjN/trouble-shooting/how-to-add-permissions-to-app)，将已发布机器人加入授权群，并把目标文件夹分享给该群。应用权限和资源权限是两道条件；开发者本人能打开目录不能证明应用有权限。运营读者配置为只读。
+3. 在实际运行绑定的 `.env` 中填写 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`，不放进 Git。用审校台运行状态检查是否存在凭据；该状态不会打印值。
+4. 在目标下人工创建独立验收子目录，记下其 folder token。验收使用独立 archive/state/.env 绑定，在该运行配置的 `[mirror]` 设 `enabled=true`、验收子目录 token、`mirror_state=false`，先只验原帖。已有镜像队列不能换根 token 后重置；不同验收根应使用独立 state，保留旧队列和冻结字节。
+
+**接口限制与实现依据：**
+
+| 操作 | 核对入口和实现约束 |
+|---|---|
+| 建目录 | [create_folder](https://open.feishu.cn/document/server-docs/docs/drive-v1/folder/create_folder)，目录名按 UTF-8 计最多 256 字节；分类名与本地相同。 |
+| 元数据分页 | [list](https://open.feishu.cn/document/server-docs/docs/drive-v1/folder/list)，逐页处理 `has_more/next_page_token`，单页至多 200 项；同名文件不是相同内容的证据。 |
+| 普通上传 | [upload_all](https://open.feishu.cn/document/server-docs/docs/drive-v1/upload/upload_all)，上限 20,971,520 字节；普通 Drive 文件使用 `explorer` 父节点。空正文由清单表达。 |
+| 大文件 | [分片上传](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/drive-v1/file/multipart-upload-file-/introduction)，保存 upload ID、分片及完成进度；超过 24 小时有效期停止，完成请求结果未知先核对。 |
+| 移动 | [move](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/drive-v1/file/move)，采用 20 次/分钟的较严限制，真实回读确认之前保持待处理。 |
+
+**操作命令**（在已核对绑定的 worktree 根目录运行）：
+
+```powershell
+scripts\run_python.bat -m tools.mirror status
+scripts\run_python.bat -m tools.mirror preflight
+scripts\run_python.bat -m tools.mirror run --account in_neakasa.global
+```
+
+无参数和 `status` 都是本地只读预览。`preflight` 会认证并读取目录元数据，返回 `root_visible` 和 `write_permission=unverified`：可见不等于可上传或移动。`run` 才会冻结、上传和处理移动；兼容旧 `--run`。常驻服务独立执行镜像，原帖入档即可排队，不等待本地化完成。
+
+**遇到 `uncertain` 或 `blocked`：**
+
+1. 保留 `mirror_queue.json`、`mirror_spool/` 及操作 ID、错误码、请求标识。先运行 `status`，再用 `preflight` 读取分页目录和任务元数据。不要删 token、队列或冻结文件来“重试”。
+2. 唯一同名目录只是候选，需要核对父目录与意图；多个候选或权限不足继续保留不确定。文件由人工核对远端文件、时间、名称和内容；必要时下载到**隔离目录**，用 `Get-FileHash -Algorithm SHA256` 比较冻结摘要。代码不会从云端下载正文或原图。
+3. 明确成功后绑定原操作 ID 和远端 token，文件操作必须提供对应冻结 SHA-256；未创建则填写相同操作的未创建确认及依据：
+
+```powershell
+scripts\run_python.bat -m tools.mirror resolve --operation-id OPERATION_ID --sha256 FROZEN_SHA256 --remote-token VERIFIED_TOKEN --note "已核对远端文件与冻结摘要，记录见验收表"
+scripts\run_python.bat -m tools.mirror resolve --operation-id OPERATION_ID --sha256 FROZEN_SHA256 --not-created --note "已检查原父目录和操作记录，确认未创建"
+```
+
+这两条是二选一的模板，替换为实际值后执行。目录操作不要求文件 SHA；移动成功使用原目录 token。`resolve` 只记本地人工结论，不执行上传，不能和 `--run` 组合。明确未创建后，另行运行 `run` 恢复。计数限流先退避；权限、容量或每日配额先解除阻断；请求结果未知不得直接重发。
+
+**本地与数据库恢复：**
+
+```powershell
+scripts\run_python.bat -m tools.layout recover-tags instagram --dry-run
+scripts\run_python.bat -m tools.layout recover-tags instagram
+scripts\run_python.bat -m tools.layout reindex-db
+```
+
+分类移动恢复只处理已记录的意图；损坏或内容冲突保留现场，在副本核对。普通查询不会触发恢复写入。数据库重建只写派生 SQLite；历史入口独立使用 `index-history.sqlite`，首次查询会按当前源文件重建。详情显示媒体保存数及上次数据库核验时间。
+
+**真实验收清单：**
+
+- 人工确认 9222/9224 登录、账号和出口可用后取得至少一篇 Facebook、一篇 Instagram 真实图文，至少一篇多图；不自动登录或滚历史。
+- 比较原文、来源平台、目标账号/真实作者/合作方、图片数量和顺序。新帖目录用北京时间，原 ISO 保留；型号别名归一，人工清空仍有效。
+- 查询 SQLite 三表，核对帖子身份、分类顺序、媒体路径、尺寸、字节数及 SHA。对已知缺图应明确显示未完整。
+- 在验收子目录核对 `月份/产品/单帖/01_原帖[_vN]`、file/folder ID、运营只读可见性；人工下载隔离副本逐项比较 SHA。
+- 再次同步不重复；只改分类移动目录且不重传；原文或原图修订产生新版本；缺图补齐和重启补送不冒充已完成，旧版本仍可核查。
+- 保存 UTC 测试时间、样本 ID、文件清单/哈希、远端回执与人工核验结论。只有这些企业证据可复核后，才将相应单元从“待真实联调”改为“真实通过”。
 
 ## 8. 录制单渠道 Business Suite 证据
 

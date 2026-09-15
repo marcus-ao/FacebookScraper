@@ -39,7 +39,7 @@ class StorageLayoutTests(unittest.TestCase):
         directory = self.arc.post_dir(post)
         self.assertEqual(directory.parent.parent, self.arc.posts_dir / "2026-09")
         self.assertEqual(row["folder_name"],
-                         "2026-09-10_1423_m1-pro-anniversary-sale_3973012230169803390")
+                         "2026-09-10_2223_m1-pro-anniversary-sale_3973012230169803390")
         self.assertEqual(directory.name, row["folder_name"])
         self.assertEqual(row["tags"], ["M1 Pro"])
         self.assertLess(len(str(directory / "media_de" / "01.jpeg")), 240)

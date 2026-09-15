@@ -332,6 +332,32 @@ export interface TaskDetailText {
   readonly current_prompt_version: number
 }
 
+export interface StorageMedia {
+  readonly ordinal: number
+  readonly kind: string
+  readonly url: string | null
+  readonly source_url: string | null
+  readonly local_path: string | null
+  readonly content_type: string | null
+  readonly width: number | null
+  readonly height: number | null
+  readonly byte_size: number | null
+  readonly sha256: Sha256 | null
+  readonly storage_status: string
+}
+
+/** 一篇来源内容在本机、展示索引和飞书云盘中的独立只读事实。 */
+export interface TaskStorage {
+  readonly classified_by: 'auto' | 'manual' | 'legacy'
+  readonly account_dir: string
+  readonly folder: string | null
+  readonly first_archived_at: string | null
+  readonly local: { readonly status: string; readonly saved_images: number; readonly expected_images: number }
+  readonly database: { readonly status: string; readonly verified_at?: string | null; readonly message?: string | null }
+  readonly feishu: MirrorStatus
+  readonly media: readonly StorageMedia[]
+}
+
 export interface TaskDetail {
   readonly id: TaskId
   /** 冻结账号：只能查阅，不渲染任何加工/发布入口。 */
@@ -356,6 +382,8 @@ export interface TaskDetail {
   readonly risks: readonly BodyRisk[]
   readonly images: readonly ImageAsset[]
   readonly schedule: ScheduleSlot | null
+  /** 新版服务提供；旧版详情未提供时页面仍可正常查看。 */
+  readonly storage?: TaskStorage
   readonly meta: TaskDetailMeta
   readonly trail: readonly OperationRecord[]
 }
@@ -563,6 +591,18 @@ export interface RuntimeCheck {
   readonly reason?: string
 }
 
+/** 云盘镜像是本地队列的只读汇总，不代表已向云端再次查询。 */
+export interface MirrorStatus {
+  readonly enabled: boolean
+  readonly status: string
+  readonly counts: { readonly pending: number; readonly completed: number; readonly uncertain: number; readonly blocked: number }
+  readonly last_success_at: string | null
+  readonly last_error?: string | null
+  readonly incomplete_source?: boolean
+  readonly missing_media?: readonly number[]
+  readonly operations: readonly { readonly id: string; readonly kind?: string; readonly status?: string; readonly sha256?: string | null; readonly remote_token?: string | null; readonly error?: unknown }[]
+}
+
 /** 各阶段无 kind 字段，以 number 辨识可选字段。 */
 export interface RuntimeStage {
   readonly number: 1 | 2 | 3 | 4 | 5
@@ -570,6 +610,7 @@ export interface RuntimeStage {
   readonly status: string
   readonly detection?: Readonly<Record<string, unknown>>
   readonly mirror_status?: string
+  readonly mirror?: MirrorStatus
   readonly tag_sampling?: { readonly status?: string; readonly message?: string }
   readonly trends_export?: {
     readonly status?: string

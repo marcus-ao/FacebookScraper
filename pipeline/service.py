@@ -259,9 +259,9 @@ class Runtime:
         if self.mirror_settings.enabled:
             try:
                 self.mirror_sources(now)
-            except Exception as exc:
+            except Exception:
                 self._system(f'mirror:{now.date()}',
-                             f'归档云盘镜像尚未完成（{type(exc).__name__}），本地内容仍保留。', now)
+                             '归档云盘镜像尚未完成，请由维护人员核对运行状态；本地内容仍保留。', now)
         if not self.settings.enabled:
             return
         try:

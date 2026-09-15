@@ -1,10 +1,17 @@
 """Web 展示索引可丢弃，修改/提交路径仍读取文件；全部使用临时归档。"""
+import io
+import json
+import os
+import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import config, index_db, review, store, translated  # noqa: E402
@@ -29,6 +36,33 @@ class QueryIndexTests(unittest.TestCase):
         self.arc.append(self.second)
         self.now = datetime(2026, 9, 12, 1, tzinfo=timezone.utc)
 
+    def test_index_status_is_read_only_and_only_verified_for_matching_v2_metadata(self):
+        """Database existence alone must never be reported as a current verified snapshot."""
+        state = self.root / 'state'
+        self.assertEqual(query_index.index_status(), {
+            'status': 'unbuilt', 'verified_at': None, 'message': None,
+        })
+        self.assertFalse(state.exists())
+
+        query_index.candidates(now=self.now)
+        database = state / 'index.sqlite'
+        metadata_before = (state / 'index.meta.json').read_bytes()
+        database_before = database.read_bytes()
+        verified = query_index.index_status()
+        self.assertEqual(verified['status'], 'verified')
+        self.assertEqual(verified['verified_at'], self.now.isoformat())
+        self.assertIsNone(verified['message'])
+        self.assertEqual((state / 'index.meta.json').read_bytes(), metadata_before)
+        self.assertEqual(database.read_bytes(), database_before)
+
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('PRAGMA user_version=1')
+            connection.commit()
+        stale = query_index.index_status()
+        self.assertEqual(stale['status'], 'stale')
+        self.assertIsNone(stale['verified_at'])
+        self.assertTrue(stale['message'])
+
     def test_missing_database_rebuilds_and_sql_filters_ignore_manifest(self):
         self.arc.manifest.write_text('{bad derived index', encoding='utf-8')
         before = (self.arc.post_dir(self.first) / 'post.json').read_bytes()
@@ -39,6 +73,13 @@ class QueryIndexTests(unittest.TestCase):
         self.assertTrue((self.root / 'state' / 'index.sqlite').exists())
         self.assertEqual((self.arc.post_dir(self.first) / 'post.json').read_bytes(), before)
         self.assertEqual(query_index.candidates(tag='__untagged__', now=self.now)['task_ids'], ['in_neakasa.global/2'])
+
+    def test_empty_non_post_directory_does_not_make_the_index_unavailable(self):
+        """The source signature must skip the same non-truth directories as the rebuilder."""
+        (self.arc.posts_dir / 'empty-recovery-dir').mkdir()
+        result = query_index.candidates(now=self.now)
+        self.assertEqual(result['task_ids'], ['in_neakasa.global/1', 'in_neakasa.global/2'])
+        self.assertFalse(result['index']['stale'])
 
     def test_changed_tags_and_missing_or_corrupt_database_are_rebuilt(self):
         query_index.candidates(now=self.now)
@@ -62,6 +103,18 @@ class QueryIndexTests(unittest.TestCase):
         self.assertIsNone(result['task_ids'])
         self.assertTrue(result['index']['stale'])
         self.assertTrue(result['index']['available'])
+        self.assertEqual(database.read_bytes(), original)
+
+    def test_query_failure_returns_stale_fallback_without_touching_database(self):
+        query_index.candidates(now=self.now)
+        database = self.root / 'state' / 'index.sqlite'
+        original = database.read_bytes()
+        with patch.object(query_index.index_db, 'query_posts',
+                          side_effect=sqlite3.OperationalError('read failed')):
+            result = query_index.candidates(now=self.now + timedelta(seconds=1))
+        self.assertIsNone(result['task_ids'])
+        self.assertTrue(result['index']['stale'])
+        self.assertEqual(result['index']['error'], 'OperationalError')
         self.assertEqual(database.read_bytes(), original)
 
     def test_review_and_publish_facts_refresh_but_unchanged_queries_reuse_snapshot(self):
@@ -100,6 +153,149 @@ class QueryIndexTests(unittest.TestCase):
         self.assertEqual(index_db.rebuild_index(
             self.root / 'archive', self.root / 'state' / 'index.sqlite',
             state_dir=self.root / 'state'), 2)
+
+    def test_media_content_signature_detects_same_size_bytes_and_missing_files(self):
+        """File size and timestamps can stay stable while archived evidence bytes change."""
+        media = store.Media('https://cdn.invalid/evidence.jpg', 'image', width=20, height=10)
+        post = store.Post('media', 'instagram', 'neakasa.global', 'Media',
+                          '2026-09-11T12:00:00Z', media=[media], tags=[])
+        path = self.arc.media_path(post, 0, 'image/jpeg')
+        variants = []
+        for colour in ((255, 0, 0), (0, 0, 255)):
+            buffer = io.BytesIO()
+            Image.new('RGB', (1, 1), colour).save(buffer, format='PNG')
+            variants.append(buffer.getvalue())
+        self.assertEqual(len(variants[0]), len(variants[1]))
+        path.write_bytes(variants[0])
+        media.local_path = path.relative_to(self.arc.base).as_posix()
+        self.arc.append(post)
+
+        self.assertIn('in_neakasa.global/media', query_index.candidates(now=self.now)['task_ids'])
+        database = self.root / 'state' / 'index.sqlite'
+        metadata_path = self.root / 'state' / 'index.meta.json'
+        with closing(sqlite3.connect(database)) as connection:
+            first_hash = connection.execute(
+                "SELECT sha256 FROM post_media WHERE task_id='in_neakasa.global/media'"
+            ).fetchone()[0]
+        source_path = self.arc.post_dir(post) / 'post.json'
+        source_before = (source_path.read_bytes(), source_path.stat().st_mtime_ns)
+        media_mtime = path.stat().st_mtime_ns
+
+        path.write_bytes(variants[1])
+        os.utime(path, ns=(path.stat().st_atime_ns, media_mtime))
+        result = query_index.candidates(now=self.now + timedelta(seconds=1))
+        self.assertIn('in_neakasa.global/media', result['task_ids'])
+        self.assertFalse(result['index']['stale'])
+        with closing(sqlite3.connect(database)) as connection:
+            changed_hash = connection.execute(
+                "SELECT sha256 FROM post_media WHERE task_id='in_neakasa.global/media'"
+            ).fetchone()[0]
+            changed_state = connection.execute(
+                "SELECT storage_status FROM post_media WHERE task_id='in_neakasa.global/media'"
+            ).fetchone()[0]
+        self.assertNotEqual(changed_hash, first_hash)
+        self.assertEqual(changed_state, 'saved')
+        self.assertEqual((source_path.read_bytes(), source_path.stat().st_mtime_ns), source_before)
+        self.assertEqual(path.stat().st_mtime_ns, media_mtime)
+
+        previous_signature = json.loads(metadata_path.read_text(encoding='utf-8'))['source_signature']
+        path.unlink()
+        missing = query_index.candidates(now=self.now + timedelta(seconds=2))
+        self.assertFalse(missing['index']['stale'])
+        current = json.loads(metadata_path.read_text(encoding='utf-8'))
+        self.assertNotEqual(current['source_signature'], previous_signature)
+        with closing(sqlite3.connect(database)) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT storage_status FROM post_media WHERE task_id='in_neakasa.global/media'"
+            ).fetchone()[0], 'missing')
+
+    def test_source_change_during_rebuild_returns_stale_source_fallback(self):
+        """A rebuild snapshot must not be presented as current if its source changes mid-flight."""
+        real_rebuild = index_db.rebuild_index
+
+        def rebuild_then_change(*args, **kwargs):
+            count = real_rebuild(*args, **kwargs)
+            truth = self.arc.post_dir(self.first) / 'post.json'
+            row = json.loads(truth.read_text(encoding='utf-8'))
+            row['text'] = 'Changed during rebuild'
+            truth.write_text(json.dumps(row), encoding='utf-8')
+            return count
+
+        with patch.object(query_index.index_db, 'rebuild_index', side_effect=rebuild_then_change):
+            result = query_index.candidates(now=self.now)
+        self.assertIsNone(result['task_ids'])
+        self.assertFalse(result['index']['available'])
+        self.assertTrue(result['index']['stale'])
+        self.assertEqual(result['index']['error'], 'source_changed_during_rebuild')
+        self.assertFalse((self.root / 'state' / 'index.sqlite').exists())
+
+    def test_source_change_during_final_validation_is_not_marked_verified(self):
+        """The verification metadata must describe the source after validation also completes."""
+        real_check = index_db.check_consistency
+
+        def check_then_change(*args, **kwargs):
+            result = real_check(*args, **kwargs)
+            truth = self.arc.post_dir(self.first) / 'post.json'
+            row = json.loads(truth.read_text(encoding='utf-8'))
+            row['text'] = 'Changed after consistency read'
+            truth.write_text(json.dumps(row), encoding='utf-8')
+            return result
+
+        with patch.object(query_index.index_db, 'check_consistency', side_effect=check_then_change):
+            result = query_index.candidates(now=self.now)
+        self.assertIsNone(result['task_ids'])
+        self.assertTrue(result['index']['stale'])
+        self.assertEqual(result['index']['error'], 'source_changed_during_rebuild')
+        self.assertFalse((self.root / 'state' / 'index.meta.json').exists())
+
+    def test_source_change_during_candidate_validation_preserves_previous_verified_database(self):
+        """A stale candidate must never replace the last verified database."""
+        initial = query_index.candidates(now=self.now)
+        self.assertFalse(initial['index']['stale'])
+        database = self.root / 'state' / 'index.sqlite'
+        metadata = self.root / 'state' / 'index.meta.json'
+        database_before = database.read_bytes()
+        metadata_before = metadata.read_bytes()
+
+        truth = self.arc.post_dir(self.first) / 'post.json'
+        source_b = json.loads(truth.read_text(encoding='utf-8'))
+        source_b['text'] = 'Source B'
+        truth.write_text(json.dumps(source_b), encoding='utf-8')
+        real_validation = index_db._consistency_from_connection
+        changed = False
+
+        def validate_then_change(*args, **kwargs):
+            nonlocal changed
+            result = real_validation(*args, **kwargs)
+            if not changed:
+                source_c = json.loads(truth.read_text(encoding='utf-8'))
+                source_c['text'] = 'Source C'
+                truth.write_text(json.dumps(source_c), encoding='utf-8')
+                changed = True
+            return result
+
+        with patch.object(index_db, '_consistency_from_connection', side_effect=validate_then_change):
+            result = query_index.candidates(now=self.now + timedelta(seconds=1))
+        self.assertIsNone(result['task_ids'])
+        self.assertTrue(result['index']['available'])
+        self.assertTrue(result['index']['stale'])
+        self.assertEqual(result['index']['error'], 'source_changed_during_rebuild')
+        self.assertEqual(database.read_bytes(), database_before)
+        self.assertEqual(metadata.read_bytes(), metadata_before)
+        self.assertEqual(list(database.parent.glob('*.candidate.sqlite')), [])
+
+    def test_old_schema_is_rebuilt_and_metadata_records_v2(self):
+        query_index.candidates(now=self.now)
+        database = self.root / 'state' / 'index.sqlite'
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('PRAGMA user_version=1')
+            connection.commit()
+        result = query_index.candidates(now=self.now + timedelta(seconds=1))
+        self.assertFalse(result['index']['stale'])
+        with closing(sqlite3.connect(database)) as connection:
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 2)
+        metadata = json.loads((self.root / 'state' / 'index.meta.json').read_text(encoding='utf-8'))
+        self.assertEqual(metadata['schema_version'], 2)
 
 
 if __name__ == '__main__':

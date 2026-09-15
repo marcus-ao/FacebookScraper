@@ -6,6 +6,7 @@ import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from image_fixtures import image_bytes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.console import force_utf8   # noqa: E402
@@ -88,13 +89,13 @@ class Request:
     async def get(self, url, headers=None):
         self.urls.append((url, headers))
         if url.endswith("good.jpg"):
-            return Response(b"\xff\xd8\xff\xe0jpeg")
+            return Response(image_bytes())
         if url.endswith("good.png"):
-            return Response(b"\x89PNG\r\n\x1a\npng", content_type="image/png")
+            return Response(image_bytes('PNG'), content_type="image/png")
         if url.endswith("good.webp"):
-            return Response(b"RIFF\x04\x00\x00\x00WEBP", content_type="image/webp")
+            return Response(image_bytes('WEBP'), content_type="image/webp")
         if url.endswith("good.gif"):
-            return Response(b"GIF89a", content_type="image/gif")
+            return Response(image_bytes('GIF'), content_type="image/gif")
         if url.endswith("spoof.jpg"):
             return Response(b"<html>login required</html>", content_type="image/jpeg")
         if url.endswith("vector.svg"):
@@ -136,7 +137,7 @@ with tempfile.TemporaryDirectory() as d:
     arc, post, ctx = asyncio.run(download_case(d))
     check(post.media[0].local_path is not None, "成功图片写入本地并记录相对路径")
     saved = arc.base / post.media[0].local_path
-    check(saved.read_bytes() == b"\xff\xd8\xff\xe0jpeg",
+    check(saved.read_bytes() == image_bytes(),
           "落盘内容与响应体一致且非零字节")
     check(all(post.media[i].local_path for i in range(4)),
           "JPEG/PNG/WebP/GIF 四种允许的静态图片均可落盘")

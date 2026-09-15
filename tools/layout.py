@@ -7,7 +7,6 @@ import json
 import os
 import shutil
 import sys
-from dataclasses import fields
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,9 +17,9 @@ from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from core import index_db, paid_model                       # noqa: E402
 from core.store import (                                     # noqa: E402
-    Archive, ArchivePathError, Post, _atomic_write_text, _new_folder_name,
+    Archive, ArchivePathError, _atomic_write_text,
     archive_write_lock, assert_physical_direct_path, assert_post_directory,
-    infer_tags, iter_post_dirs, primary_tag_folder,
+    infer_tags, iter_post_dirs, primary_tag_folder, remap_archive_paths, recover_tag_moves,
 )
 
 PREFIX = {"facebook": "fa", "instagram": "in"}
@@ -68,9 +67,7 @@ def _migration_plan(base: Path) -> list[dict]:
             target = base / plan["target"]
             assert_post_directory(base, target)
         else:
-            values = {key: value for key, value in row.items() if key in {field.name for field in fields(Post)}}
-            post = Post(**values)
-            name = row.get("folder_name") or _new_folder_name(post)
+            name = row.get("folder_name") or directory.name
             updated = dict(row, folder_name=name, tags=row.get("tags") if isinstance(row.get("tags"), list) else infer_tags(row["text"]))
             # 规划目标强制月份 + 主 tag 层级；post_directory 的旧平铺兼容仅用于日常读取。
             month = name[:7] if name[:4].isdigit() else "undated"
@@ -90,20 +87,6 @@ def _migration_plan(base: Path) -> list[dict]:
     if len(ids) != len(set(ids)):
         raise ArchivePathError("同一 post_id 有多个真相目录，请先核对再迁移")
     return plans
-
-
-def _remap_paths(value, old_prefix: str, new_prefix: str, *, path_value: bool = False):
-    if isinstance(value, dict):
-        return {key: _remap_paths(item, old_prefix, new_prefix,
-                                 path_value=key in {"local_path", "out_path", "source_rel"})
-                for key, item in value.items()}
-    if isinstance(value, list):
-        return [_remap_paths(item, old_prefix, new_prefix, path_value=path_value) for item in value]
-    if path_value and isinstance(value, str):
-        normalized = value.replace("\\", "/")
-        if normalized.startswith(old_prefix + "/"):
-            return new_prefix + normalized[len(old_prefix):]
-    return value
 
 
 def _migrate_one(base: Path, plan: dict) -> None:
@@ -128,23 +111,18 @@ def _migrate_one(base: Path, plan: dict) -> None:
             raise ArchivePathError("迁移目标超出账号归档目录")
         target.parent.mkdir(parents=True, exist_ok=True)
         current.rename(target)
-    row = _remap_paths(plan["row"], plan["source"], plan["target"])
+    row = remap_archive_paths(plan["row"], plan["source"], plan["target"])
     row["folder_name"] = plan["folder_name"]
     if not isinstance(row.get("tags"), list):
         row["tags"] = infer_tags(row["text"])
     _atomic_write_text(target / "post.json", json.dumps(row, ensure_ascii=False, indent=2), label="post.json")
-    history = target / "source_history.jsonl"
-    if history.exists():
-        assert_physical_direct_path(target, history, kind="file", label="源版本历史")
-        rewritten = [json.dumps(_remap_paths(json.loads(line), plan["source"], plan["target"]), ensure_ascii=False)
-                     for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
-        _atomic_write_text(history, "\n".join(rewritten) + "\n", label="源版本历史路径迁移")
+    # 历史原样保留；resolve_media_path 按帖子身份定位迁移后的原图。
     images = assert_physical_direct_path(base, base / "images_de.jsonl", kind="file", label="图片账本")
     if images.exists():
         entries = [json.loads(line) for line in images.read_text(encoding="utf-8").splitlines() if line.strip()]
         seen = {json.dumps(entry, sort_keys=True) for entry in entries}
         for entry in entries:
-            rewritten = _remap_paths(entry, plan["source"], plan["target"])
+            rewritten = remap_archive_paths(entry, plan["source"], plan["target"])
             signature = json.dumps(rewritten, sort_keys=True)
             if rewritten != entry and signature not in seen:
                 paid_model.append_jsonl(images, rewritten, guard=guard)
@@ -252,7 +230,7 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
 def main(argv=None) -> int:
     force_utf8()
     ap = argparse.ArgumentParser(description="归档布局工具（J 组）")
-    ap.add_argument("command", choices=("reindex", "index", "reindex-db", "migrate"))
+    ap.add_argument("command", choices=("reindex", "index", "reindex-db", "migrate", "recover-tags"))
     ap.add_argument("platform", choices=sorted(PREFIX), nargs="?")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -275,6 +253,13 @@ def main(argv=None) -> int:
     if not base.exists():
         print("[!] 找不到归档目录 %s" % base)
         return 1
+
+    if args.command == "recover-tags":
+        if args.dry_run:
+            print("分类移动恢复为显式写入；预览不改变归档")
+            return 0
+        print("已恢复分类移动：%d" % recover_tag_moves(base))
+        return 0
 
     if args.command == "index":
         return build_index(base, account, args.dry_run)
