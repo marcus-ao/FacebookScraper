@@ -168,7 +168,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 `tests_browser_workflow` 的 `test_03_history_pages_and_frozen_account_are_read_only` 也已修，「Python 66/66」可以直接采信。这一条的根因**在 production 不在夹具**：列表行无条件带上 `thumbnail_url`，而前端的契约是空串才改画占位符（`columns.tsx` 和它的单测早就有这一支，只是后端从不给空串），于是 32 条历史行里没有图的那 31 条也各发一次注定 404 的图片请求。浏览器每源只有 6 条连接，翻页的列表查询排在这些请求后面：实测 stall 中位 2223ms、最大 3018ms，而服务端本身只花 30ms——5000ms 预算有三分之二耗在排队上，慢一点的盘就越线。`reader.py` 改成无图时给空串后，stall 中位 0.8ms，点击到 12 行中位 86ms、最大 109ms。
 
-运行机器迁移、登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。
+登录/RBAC/actor、视频、跨平台复用、`supervised` 和无人审核发布是明确延期，单独管理。**运行机器迁移 2026-09-15 起不再延期**：服务机 24 小时运行业务，本机只做调试与回归，两台机器各一份 `archive/state`；顺序与代价见 [MANUAL_STEPS §15](MANUAL_STEPS.md#15-服务机部署与日常更新)。
 
 ## 5. 2026-08/09 抓取侧历史事实
 

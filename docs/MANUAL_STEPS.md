@@ -1,8 +1,8 @@
 # 人工操作指南
 
-**本周要做阶段一（监测与抓取）的真实验收，整套顺序在[第 14 节](#14-阶段一真实验收监测与抓取)。** 下面 1–13 节是分主题的长期参考，第 14 节把其中与阶段一相关的挑出来排成一条可以照着走的线。
+**本周先按[第 15 节](#15-服务机部署与日常更新)把服务机装起来，再在服务机上按[第 14 节](#14-阶段一真实验收监测与抓取)做阶段一（监测与抓取）的真实验收。** 1–13 节是分主题的长期参考；第 14 节把与阶段一相关的挑出来排成一条可以照着走的线，第 15 节是一次性的装机顺序和日常更新动作。
 
-本文件列人工依赖与开发机操作顺序，存储说明同步至 2026-09-15。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
+本文件列人工依赖与操作顺序（2026-09-15 起开发机与服务机分开，分工见第 15 节），存储说明同步至 2026-09-15。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
 
 当前 Stage 1 worktree 的 archive 为空，state 只有隔离测试报告，`.env` 是占位符；没有复制真实凭据，也没有运行真实平台或飞书请求。2026-09-14 删除了旧 429 证据，不能把历史观察当成当前持久停机状态。9223 的 Business Suite 观察和后续发布约束继续按第 8–10 节执行。
 
@@ -480,16 +480,16 @@ npm --prefix web/ui run build
 
 本节是阶段一唯一的真实启用顺序。全程不加 `--process`，不触发模型、标签、审校唤醒、月历、云盘镜像或发布。不得自动登录或自动滚历史。
 
+**整段在服务机上做**（装机顺序见[第 15 节](#15-服务机部署与日常更新)）。验收证据只对产生它的那台机器成立，开发机上跑过的不算数。
+
 ### A. 准备与访问初始化
 
 ⛔ **全程不要加 `--process`。** 它需要先过激活边界，而激活边界要阶段五的 G8 真机验收证据。阶段一的范围止于监测与抓取，翻译与图片是后面几轮的事。
 
-### A. 准备与访问初始化
-
 1. 人工登录 9222（回填）、9224（探测）、9223（发布）三个独立 profile，核对身份。阶段一只让 9222/9224 访问源站。
 2. 配置同群 detect、capture、publish、alert 四个机器人及运营要使用的 `[feishu].base_url`。base_url 只校验 URL 格式。
-   → 2026-09-15 用户已在群里收到四个机器人的响应。**这只证明通道可达**，不证明真实探测往返或运营能打开审校链接。换机器、换绑定或换群之后要重做。
-3. 离线执行 `scriptsun_pipeline.bat preflight --json`、`scriptsun_python.bat -m routes.delta --status`、`scriptsun_scheduler.bat --preview`。`preflight --json` 与 `GET /api/runtime` 应显示 monitoring state/status/pause/quota/next_due/capture_revision/items/baselines；读取不访问平台或发消息。
+   → 2026-09-15 在**开发机**上收到过四个机器人的响应，只证明通道可达。这一轮改在服务机上运行，**这一条要在服务机上重做**，那次不算数。
+3. 离线执行 `scripts\run_pipeline.bat preflight --json`、`scripts\run_python.bat -m routes.delta --status`、`scripts\run_scheduler.bat --preview`。`preflight --json` 与 `GET /api/runtime` 应显示 monitoring state/status/pause/quota/next_due/capture_revision/items/baselines；读取不访问平台或发消息。
 4. 人工核对 9224 身份后初始化：
 ```powershell
 scripts\run_python.bat -m routes.delta --initialize-access --reason "人工核对 profile 身份，允许阶段一受控探测"
@@ -546,8 +546,8 @@ detect 每平台/扫描至多一张摘要，零新增不发。capture 对每个�
 先读取 revision，人工核对后执行：
 
 ```powershell
-scriptsun_python.bat -m routes.delta --recover-access --expected-revision <N> --reason "具体核对原因"
-scriptsun_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --expected-revision <N> --reason "具体失败原因"
+scripts\run_python.bat -m routes.delta --recover-access --expected-revision <N> --reason "具体核对原因"
+scripts\run_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --expected-revision <N> --reason "具体失败原因"
 ```
 
 访问恢复不清配额/历史；单帖恢复只尝试一次并服从同一护栏。Web `POST /api/runtime/capture/recover` 含 key/version/reason。`monitor/recover` 含 version/reason 与可选 platform，且不访问平台。版本冲突先重读。
@@ -572,3 +572,186 @@ scriptsun_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID --
 | 详情补齐与媒体校验在真实响应上成立 | 晨间轮次真的补到过漏帖（要等一次真实漏帖） |
 
 验收报告里写清楚：跑了什么、哪几条是真实账号的结果、哪些外部依赖仍未联调。离线测试通过不能替代上面任何一项。
+
+## 15. 服务机部署与日常更新
+
+**2026-09-15 决定：开发机与服务机分开。** 本机（开发机）只做功能调试和回归测试；服务机是唯一 24 小时运行业务的机器，真实抓取、真实归档、真实审校、真实发布都在它上面。两台机器各有一份 `archive/` 与 `state/`，互不相干——代价写在 [15.15](#1515-这次决定留下的三个开口)。
+
+这一节是一次性的装机顺序，从上到下做，每段有通过判据。任何一段不通过就停在那里，按[第 12 节](#12-卡住时保留什么)留证。装完之后在服务机上按[第 14 节](#14-阶段一真实验收监测与原帖抓取)做阶段一验收。
+
+### 15.1 先确认这台机器能干这件事
+
+- [ ] **网络由你自行保障**，项目不再跟踪出口类型与稳定性（2026-09-15 决定），`preflight` 也不再输出这一块
+- [ ] **接电源、不休眠、合盖不睡眠**；显示器可以关
+- [ ] **磁盘留够**。原图只增不减，且 CDN URL 带签名有时效，删了重抓不回来
+- [ ] **Windows 账户**：运营一个、你一个
+
+⚠️ **业务全部装在运营那个账户下，不是你的账户。** 常驻任务的 `UserId` 与 `LogonType InteractiveToken` 绑死在注册它的那个账户（`tools/schedule.py`），三个 Chrome profile 在 `%USERPROFILE%\.fbscraper-*`（`config.toml` 里写作 `~/.fbscraper-*`）。你从自己的账户登进去，看到的是三个空 profile 和一台什么都没在跑的机器——**这不会报错，看起来就是"系统坏了"**。你那个账户只做系统层面的维护。
+
+### 15.2 装环境
+
+在**运营账户**里装这四样。版本对齐开发机当前的档位即可（Python 3.12.9 / Node 24.12.0）：
+
+| 装什么 | 说明 |
+|---|---|
+| Python 3.11+ | 安装时勾上 "Add python.exe to PATH"。3.11 是硬下限，`core/config.py` 用了 `tomllib` |
+| Node.js 20+ | 审校台前端要构建 |
+| Google Chrome | 三个 profile 用的是系统 Chrome，CDP 附着的就是它 |
+| Git | 取代码和以后更新都靠它 |
+
+### 15.3 取代码并装依赖
+
+仓库放在**用户目录之外**，例如 `D:\FacebookScraper`。放进运营的用户目录下面，你那个账户以后不好维护。
+
+```powershell
+cd D:\
+git clone https://github.com/marcus-ao/FacebookScraper.git
+cd FacebookScraper
+scripts\setup.bat
+```
+
+`setup.bat` 一条命令做四件事：建 `.venv`、装依赖、装 Playwright 的 Chromium、跑一遍全部离线测试。
+
+- [ ] 最后一步「离线测试」全绿。**不绿就停在这里**——基线本身是坏的，往下走就分不清"我装错了"和"本来就坏"
+- [ ] 自检那一步打印出了 Chrome 路径。没探测到就把完整路径填进 `config.toml` 的 `[chrome].exe`
+
+依赖下载卡住多半是到 PyPI 的吞吐问题，换镜像重试：`set PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple`
+
+### 15.4 搬凭据
+
+**只搬 `.env` 一个文件**，用 U 盘，用完立刻在开发机上把 U 盘格式化掉。不要走微信、网盘或邮件——四个 webhook 地址本身带 token，等于密钥。
+
+- [ ] 服务机仓库根目录下有 `.env`，对照 `.env.example` 逐键确认都有值
+- [ ] 服务机**不需要** `config.local.toml`。它按 `config.toml` 的默认相对路径读同目录的 `archive/` 与 `state/`
+
+### 15.5 打开飞书通道
+
+`config.toml` 改两个键并提交。它们不是凭据，两台机器共用同一个值（开发机的审校台也在同一个地址）：
+
+```toml
+[feishu]
+enabled = true
+base_url = "http://127.0.0.1:8765"
+```
+
+填 `127.0.0.1` 在这一轮是对的：**运营在服务机的桌面上开飞书**，卡片里的「去审校」按钮点开的就是本机审校台。她在自己手机上点这个按钮打不开，这是预期行为——上线第一天当面告诉她一次，否则她第一次点不开会以为系统坏了。
+
+### 15.6 构建审校台前端
+
+```powershell
+npm.cmd --prefix web/ui ci
+npm.cmd --prefix web/ui run build
+```
+
+- [ ] `web/ui/dist/index.html` 存在
+- [ ] `config.toml` 的 `[paths].web_dist` 是 `web/ui/dist`
+
+### 15.7 登录三个 Chrome
+
+**不搬开发机的 profile，三个账号在服务机上重新人工登录。** 对平台来说这是"新浏览器 + 新出口"两个变量同时变，撞 checkpoint 的概率比拷 profile 高一档，所以按风险从低到高来，把最不能丢的放最后：
+
+1. **9224 探测号**（`scripts\start_chrome_detect.bat`）。它本来就有 429 停机史，最不值钱，拿它试这台新机器和新出口会不会立刻触发验证
+2. **9222 回填号**（`scripts\start_chrome.bat`）
+3. **9223 发布号**（`scripts\start_chrome_publish.bat`）。持德国站资产权限，丢了最贵
+
+每个的判据一样：能正常打开目标主页、没有 checkpoint、没有挂起的二次验证。任一步撞上验证就停下来按[第 3 节](#3-登录三个专用-chrome)处理，不要连续重试。
+
+9223 还有一步，但**等阶段一验收完再做**：`[publish].ui_probe_dump` 指向的控件证据不进版本库，换机器之后 `--submit` 永久失效（[FUNCTIONALITY §7.2](FUNCTIONALITY.md)）。要在这台机器上按[第 8 节](#8-录制单渠道-business-suite-证据)重录一次，开发机上录过的不算。这是"全部跑通"路上的一块，不是阶段一的前置。
+
+### 15.8 只读预检
+
+```powershell
+scripts\run_pipeline.bat preflight --json
+```
+
+逐项核对[第 14 节 A 段](#a-准备与访问初始化)那份清单。这台机器上额外要看两条：
+
+- [ ] `monitoring` 的 `state`/`status` 是这台机器自己的初始化结果，`quota` 与 `next_due` 都是空的起点——**看到开发机那边的数字就说明绑错了 `archive/state`**
+- [ ] `outbox` 的四个机器人 `configured=true`、`valid=true` 且 `duplicate_bot_targets=false`。地址是从这台机器的 `.env` 读的，不是从开发机继承的
+
+### 15.9 四机器人自检
+
+```powershell
+scripts\run_python.bat -m pipeline notifications --self-test
+```
+
+**这一条在开发机上做过不算。** 它证明的是"这台机器发得出去"，换机器就要重做。
+
+- [ ] 同一业务群收到四张「通道自检」卡片
+- [ ] 逐张核对实际发送者与卡片上写的机器人名称一致
+
+### 15.10 前台跑一次调度器
+
+先别装常驻任务。在终端里前台跑，看得见输出：
+
+```powershell
+scripts\run_scheduler.bat --preview
+scripts\run_scheduler.bat --run --once
+```
+
+- [ ] `--preview` 打印出各平台的下次触发时刻，且落在[第 14 节 C 段](#c-预览扫描与-72-小时试运行)写的区间里
+- [ ] `--run --once` 之后 `state\scheduler.json` 的 `last_tick` 在往前走
+
+到这里[第 14 节](#14-阶段一真实验收监测与原帖抓取)就可以从 A 段开始走了——访问初始化、回填基线、72 小时试运行。
+
+### 15.11 装常驻任务
+
+⛔ **这一步之后，这台机器每天会真的去访问 Facebook 和 Instagram。** 按[第 11 节](#11-安装当前调度器)的规矩：真实依赖验收完成才装。
+
+```powershell
+scripts\run_python.bat -m tools.schedule scheduler-xml
+scripts\run_python.bat -m tools.schedule scheduler-install --dry-run
+scripts\run_python.bat -m tools.schedule scheduler-install
+scripts\run_python.bat -m tools.schedule scheduler-status
+```
+
+- [ ] XML 里的 `UserId` 是**运营那个账户**，`WorkingDirectory` 是仓库根目录
+- [ ] `scheduler-status` 显示已注册且已启用
+
+### 15.12 每天要看的那一眼
+
+⚠️ **这台机器重启之后不会自己把服务起回来。** 常驻任务是 `BootTrigger` + `LogonTrigger` + `InteractiveToken`，没有人登录进桌面它就不触发。而且四个机器人都是本机发的——机器停了，告警也跟着停；`[heartbeat]` 没启用，`[pipeline].dead_man_days` 量的是业务连续未成功，不是进程存活。所以**没有任何东西会主动告诉你服务停了**。
+
+每天上班第一件事：
+
+- [ ] `state\scheduler.json` 的 `last_tick` 比昨天新
+- [ ] 审校台 `/runtime` 页面打得开
+
+### 15.13 维护窗口更新
+
+固定一个窗口，人在跟前做，不要挂自动拉取。调度器是常驻进程，改了代码不重启不生效；`web/api/app.py` 的 `DIST` 在 import 时就定死，前端更新必须重启服务。
+
+在服务机上依次执行：
+
+```powershell
+scripts\run_python.bat -m tools.schedule scheduler-disable
+git pull
+scripts\setup.bat
+npm.cmd --prefix web/ui ci
+npm.cmd --prefix web/ui run build
+scripts\run_python.bat -m tools.test_offline
+scripts\run_python.bat -m tools.schedule scheduler-enable
+```
+
+- [ ] `test_offline` 全绿之后才 `scheduler-enable`。不绿就 `git checkout` 回上一个提交，把现场留给开发机查
+- [ ] 审校台也要重启：关掉原来那个 `run_web.bat` 窗口再开一次
+
+配置改动一律走这套停-改-起，别只看文件时间判断有没有生效：等长改写（例如 `["10:00","17:00"]→["11:30","18:00"]`）`st_size` 不变、多数情况下 `st_mtime_ns` 也相同，长跑进程会继续用旧值。
+
+### 15.14 开发机侧：把服务机的数据拉回来
+
+⛔ **云盘镜像本轮延期，所以这是唯一的备份手段，没有任何代码会替你做。** `state/published.jsonl` 不可重建，丢了会让已发过的帖子被再发一遍。
+
+从**开发机**主动去拉——拉的方向不需要服务机持有开发机的任何凭据。整个 `archive/` 与 `state/` 一起拷，每次按[第 1 节](#1-接续运行数据前先备份和核验)记下时间、文件数、字节数和哈希。
+
+频率：现在 `archive/` 是空的，每周一次够；**第一次真实发布之后改成每天一次**。
+
+### 15.15 这次决定留下的三个开口
+
+这三条是上面那些决定的代价，不是待办的缺陷。写在这里是为了出问题时能立刻认出来，不用再去别处查。
+
+| 开口 | 它长什么样 |
+|---|---|
+| **两份账本** | 两台机器各有 `archive/state`，`published.jsonl`、`paid_requests.jsonl`、`delta_state.json`、`feishu_outbox.json` 都是各算各的。防重因此按机器算——开发机提交过的发布，服务机的账本里没有记录；`[pipeline]` 那个月度预算实际也是两份，真正的上限只能设在模型供应商那一侧 |
+| **没有自动登录** | 重启、断电或 Windows Update 之后服务停在那里，直到有人登录进桌面。靠 15.12 那一眼发现 |
+| **三个账号换了机器** | 新浏览器 + 新出口重新登录，风控反馈是延迟的且只反馈一次。9224 本来就有 429 史 |
