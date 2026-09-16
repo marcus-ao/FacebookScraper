@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from core.config import ROOT, cfg
 from publish import business_suite as bs
+from publish import planning
 from publish.planner_cache import inventory_from_cache, read_cache, read_live_inventory, refresh_cache
 from publish.planning import calendar_bounds, configured_window
 
@@ -40,8 +41,8 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
     state_dir = ROOT / config.get("paths", "state", "state")
     snapshot = snapshot or read_cache(state_dir / "planner_cache.json", now=now)
     ui_timezone = str(config.get("publish", "ui_timezone", ""))
-    business_timezone = str(config.get("publish", "timezone", "Europe/Berlin"))
-    ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_ui_timezone(business_timezone)
+    business_timezone = bs.business_timezone()
+    ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_business_timezone()
     local = now.astimezone(ui_zone)
     month_start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_end = month_start.replace(year=month_start.year + (month_start.month == 12),
@@ -66,7 +67,8 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
     for card in data.get("cards", []):
         at = datetime.fromisoformat(card["at"])
         if at.astimezone(ui_zone).strftime("%Y-%m") == local.strftime("%Y-%m"):
-            cards.append({**card, "at_business": at.astimezone(business_zone).isoformat()})
+            cards.append({**card, "at_business": at.astimezone(business_zone).isoformat(),
+                          "audience": planning.audience_local(at)})
     cards.sort(key=lambda item: item["at"])
     unavailable = _readiness()
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
@@ -82,6 +84,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             "refresh_available": unavailable is None, "refresh_unavailable_reason": unavailable,
             "advisory_only": True, "month_ui": local.strftime("%Y-%m"),
             "ui_timezone": ui_timezone, "business_timezone": business_timezone,
+            "audience_timezone": planning.AUDIENCE_TIMEZONE,
             "display_start": month_start.astimezone(business_zone).isoformat(),
             "display_end_exclusive": month_end.astimezone(business_zone).isoformat()}
 

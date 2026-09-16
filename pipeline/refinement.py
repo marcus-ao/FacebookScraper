@@ -156,7 +156,9 @@ def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_
     scheduled = journal.source_ref(source['platform'], source['post_id']) in journal.scheduled_source_refs(cfg().state_dir)
     state = review.state_for(account_dir, source, scheduled=scheduled)
     if state['status'] not in {'pending_review', 'edited'}:
-        raise review.ReviewConflict('请先恢复这篇的审校，再发起优化')
+        raise review.ReviewConflict('这篇的内容已冻结；要改动请先解除冻结'
+                                    if state['status'] == 'content_locked'
+                                    else '请先恢复这篇的审校，再发起优化')
     if translated.source_text_sha256(source['text']) != source_hash:
         raise review.ReviewConflict('原文已有更新，请重新核对后发起优化')
     human = translated.load_human_translated(account_dir / 'translated_human.jsonl').get(source['post_id'])

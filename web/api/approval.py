@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -29,18 +28,20 @@ def _source(task_id):
     return source
 
 
-def berlin_time(value: str) -> datetime:
+def business_time(value: str) -> datetime:
+    """把页面填的业务时区墙上时刻变成绝对时刻。⚠️ 两条夏令时分支要保留：当前业务时区
+    （上海）没有夏令时，不等于这个函数以后不会换到有夏令时的时区。"""
     if not isinstance(value, str):
-        raise ValueError('请填写柏林发布时间')
+        raise ValueError('请填写发布时间')
     moment = datetime.fromisoformat(value.replace('Z', '+00:00'))
     if moment.tzinfo is not None:
         return moment
-    zone = ZoneInfo('Europe/Berlin')
+    zone = bs.resolve_business_timezone()
     candidate = moment.replace(tzinfo=zone)
     if candidate.astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) != moment:
-        raise ValueError('这个柏林时刻因夏令时切换不存在，请重新选择')
+        raise ValueError('这个时刻因夏令时切换不存在，请重新选择')
     if candidate.utcoffset() != candidate.replace(fold=1).utcoffset():
-        raise ValueError('这个柏林时刻在夏令时切换中出现两次，请选择其他时刻或提供明确UTC偏移')
+        raise ValueError('这个时刻在夏令时切换中出现两次，请选择其他时刻或提供明确UTC偏移')
     return candidate
 
 
@@ -61,7 +62,7 @@ async def post_approve(task_id: str, request: Request):
         if not isinstance(fingerprint, str) or not fingerprint:
             raise ValueError('请重新载入本篇的排期信息后确认')
         result = await approval.approve(source.account_dir, dict(source.row),
-            scheduled_at=berlin_time(body.get('scheduled_at')),
+            scheduled_at=business_time(body.get('scheduled_at')),
             source_text_sha256=body.get('source_text_sha256'),
             human_revision=body.get('human_revision'), review_revision=body.get('review_revision'),
             content_fingerprint=fingerprint)

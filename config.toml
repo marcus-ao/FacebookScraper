@@ -116,10 +116,10 @@ facebook_page_slug = ""  # 主页 URL 账号名段；可留空，不用于账号
 instagram_account = "neakasa.de"
 profile_dir = "~/.fbscraper-publish"  # 发布会话；与回填、监测隔离。
 debug_port = 9223
-timezone = "Europe/Berlin"  # 运营选择的业务时区。
+timezone = "Asia/Shanghai"  # 运营选择发布时刻用的时区；决定她看到和填写的墙上时刻。与下面的 ui_timezone 是两件事。
 ui_constraints_verified = false  # 绑定下方 dump；更换证据后须重新核验。
 ui_probe_dump = ""  # 人工复核的控件证据路径；操作见 docs/MANUAL_STEPS.md。
-ui_timezone = "America/Los_Angeles"  # Business Suite 所在设备时区，换设备或时区时须核对。
+ui_timezone = "America/Los_Angeles"  # Business Suite 所在设备时区，决定日期选择器能选到哪个月；换设备或时区时须核对。
 ui_timeout_seconds = 30
 require_confirmation = true  # 提交前确认最终内容。
 require_all_media_de = true  # 缺德语图时拒绝发布。
@@ -182,7 +182,7 @@ facebook = ["neakasaofficial"]
 instagram = ["neakasa.tech", "neakasa.global"]
 
 [publish.schedule_rule]
-times = ["10:00", "17:00"]  # 柏林默认候选；可选其它合法时刻。
+times = ["16:00", "23:00"]  # 北京默认候选（≈柏林 10:00/17:00）；可选其它合法时刻。
 
 [pipeline]
 autonomy = "assisted"  # manual 仅对账；assisted 按许可和预算处理，逐篇人工审校。

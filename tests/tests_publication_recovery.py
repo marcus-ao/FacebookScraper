@@ -19,13 +19,20 @@ class PublicationRecoveryTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.f = self.fixture
 
+    def approved_state(self, snapshot_id):
+        """排期前必须先「编辑确认无误」；这里把两步一起做到 approved。"""
+        locked = review.transition(self.f.account, self.f.source, 'content_locked',
+            expected_revision=None, expected_source_sha256=self.f.params['source_text_sha256'],
+            snapshot_id=snapshot_id)
+        return review.transition(self.f.account, self.f.source, 'approved',
+            expected_revision=locked['revision'],
+            expected_source_sha256=self.f.params['source_text_sha256'])
+
     def test_orphan_approved_recovers_only_after_worker_exit(self):
         from publish import records, snapshots
-        frozen, _, directory = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, directory = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
-        approved = review.transition(self.f.account, self.f.source, 'approved',
-            expected_revision=None, expected_source_sha256=self.f.params['source_text_sha256'],
-            snapshot_id=directory.name)
+        approved = self.approved_state(directory.name)
         with self.assertRaises(review.ReviewConflict):
             records.recover(self.f.account, self.f.source)
         with patch('publish.records.worker_alive', return_value=False):
@@ -36,10 +43,9 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_receipt_and_side_effects_repaired_from_frozen_version_once(self):
         from publish import records, snapshots
-        frozen, files, directory = snapshots.freeze(self.f.post, self.f.source,
+        frozen, files, directory = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
-        review.transition(self.f.account, self.f.source, 'approved', expected_revision=None,
-            expected_source_sha256=self.f.params['source_text_sha256'], snapshot_id=directory.name)
+        self.approved_state(directory.name)
         attempt = replace(workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles'),
                           status=journal.STATUS_SCHEDULED, readback_signal='offline-fixture')
         journal.append(config.cfg().state_dir, attempt)
@@ -55,10 +61,9 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_pending_remote_result_remains_blocked(self):
         from publish import records, snapshots
-        frozen, _, directory = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, directory = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
-        review.transition(self.f.account, self.f.source, 'approved', expected_revision=None,
-            expected_source_sha256=self.f.params['source_text_sha256'], snapshot_id=directory.name)
+        self.approved_state(directory.name)
         attempt = replace(workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles'),
                           status=journal.STATUS_SUBMIT_AMBIGUOUS)
         journal.append(config.cfg().state_dir, attempt)
@@ -68,15 +73,15 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_source_fingerprint_includes_image_bytes_order_and_count(self):
         from publish import snapshots
-        first, _, _ = snapshots.freeze(self.f.post, self.f.source, expected_fingerprint=self.f.params['content_fingerprint'])
+        first, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at, expected_fingerprint=self.f.params['content_fingerprint'])
         original = self.f.fixture.post_dir / '01.jpg'
         original.write_bytes(b'changed source image')
-        second, _, _ = snapshots.freeze(self.f.post, self.f.source, expected_fingerprint=self.f.params['content_fingerprint'])
+        second, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at, expected_fingerprint=self.f.params['content_fingerprint'])
         self.assertNotEqual(first.source_fingerprint, second.source_fingerprint)
 
     def test_existing_snapshot_cannot_change_identity_or_schedule(self):
         from publish import snapshots
-        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
         from datetime import timedelta
         for changes in ({'post_id': 'different'}, {'platform': 'instagram'},
@@ -91,7 +96,7 @@ class PublicationRecoveryTests(unittest.TestCase):
         source = dict(self.f.source, text='  ' + self.f.source['text'] + '\n')
         post = replace(self.f.post, source_text=source['text'], text_de='  ' + self.f.post.text_de + '\n')
         expected = journal.text_sha256(post.text_de) + ':' + ','.join(journal.file_sha256(p) for p in post.image_paths)
-        frozen, _, directory = snapshots.freeze(post, source, expected_fingerprint=expected)
+        frozen, _, directory = snapshots.freeze(post, source, scheduled_at=post.scheduled_at, expected_fingerprint=expected)
         row = workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles')
         metadata = json.loads((directory / 'snapshot.json').read_text('utf-8'))
         self.assertEqual(row.source_text_sha256, source_text_sha256(self.f.source['text']))
@@ -105,7 +110,7 @@ class PublicationRecoveryTests(unittest.TestCase):
         other.write_bytes(b'second image')
         post = replace(self.f.post, image_paths=(*self.f.post.image_paths, other))
         expected = journal.text_sha256(post.text_de) + ':' + ','.join(journal.file_sha256(p) for p in post.image_paths)
-        frozen, _, directory = snapshots.freeze(post, self.f.source, expected_fingerprint=expected)
+        frozen, _, directory = snapshots.freeze(post, self.f.source, scheduled_at=post.scheduled_at, expected_fingerprint=expected)
         path = directory / 'snapshot.json'
         metadata = json.loads(path.read_text('utf-8'))
         metadata['images'].reverse()
@@ -115,7 +120,7 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_projection_rejects_schedule_or_source_or_image_mismatch(self):
         from publish import records, snapshots
-        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
         original = workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles')
         for changes in ({'source_fingerprint': 'wrong'}, {'image_sha256': ('wrong',)},
@@ -128,7 +133,7 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_prepared_is_not_notified_as_failed(self):
         from publish import records, snapshots
-        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
         attempt = replace(workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles'),
                           status=journal.STATUS_PREPARED)
@@ -139,7 +144,7 @@ class PublicationRecoveryTests(unittest.TestCase):
 
     def test_new_acceptance_requires_frozen_single_channel_readback(self):
         from publish import capabilities, snapshots
-        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source,
+        frozen, _, _ = snapshots.freeze(self.f.post, self.f.source, scheduled_at=self.f.post.scheduled_at,
             expected_fingerprint=self.f.params['content_fingerprint'])
         attempt = replace(workflow.new_attempt(frozen, frozen.scheduled_at, ui_timezone='America/Los_Angeles'),
                           status=journal.STATUS_SCHEDULED, remote_id='facebook=12345678',

@@ -61,11 +61,16 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(data["bounds"]["facebook"]["end_exclusive"], "2026-10-01T07:00:00+00:00")
         self.assertFalse(self.state.exists())
 
-    def test_calendar_keeps_berlin_next_month_card_inside_la_current_month(self):
+    def test_calendar_keeps_next_business_month_card_inside_la_current_month(self):
+        """北京比美西快 15–16 小时，所以美西 9 月的尾巴伸进北京 10 月一整个白天。"""
         self.populate()
         data = self.client.get("/api/calendar").json()
         self.assertEqual(data["month_ui"], "2026-09")
-        self.assertEqual(data["cards"][0]["at_business"], "2026-10-01T06:00:00+02:00")
+        self.assertEqual(data["cards"][0]["at_business"], "2026-10-01T12:00:00+08:00")
+        self.assertEqual(data["cards"][0]["audience"],
+                         {"timezone": "Europe/Berlin", "at": "2026-10-01T06:00:00+02:00",
+                          "quiet_hours": False})
+        self.assertEqual(data["business_timezone"], "Asia/Shanghai")
         self.assertEqual(data["cards"][0]["channels"], ["facebook"])
         self.assertEqual(data["cached_at"], NOW.isoformat())
         self.assertEqual(data["coverage"]["visible_start"], "2026-09-01")

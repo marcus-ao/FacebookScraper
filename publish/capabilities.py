@@ -75,7 +75,7 @@ def acceptance(state_dir):
                 if (metadata['fingerprint'] != fingerprint
                         or metadata['source_fingerprint'] != row['source_fingerprint']
                         or source['platform'] != channel or source['post_id'] != row['post_id']
-                        or datetime.fromisoformat(metadata['scheduled_at']) != datetime.fromisoformat(row['scheduled_at'])):
+                        or snapshots.require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
                     continue
             except (Exception, SystemExit):
                 continue

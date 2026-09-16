@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from publish import capabilities
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core import notify, review, translated
+from core import notify, paid_consent, review, translated
 from core.config import cfg
 from core.store import read_post_truth
 from pipeline import engine
@@ -27,22 +27,37 @@ def _moment(value) -> datetime:
     return value
 
 
+def composed_post(account_dir: Path, source: dict, *, now=None, strict: bool = False):
+    """组装待发内容。`scheduled_at` 只参与窗口校验，不进正文与图片指纹。"""
+    moment = now or datetime.now(timezone.utc)
+    return compose.compose_post(source['post_id'], moment,
+        archive_root=account_dir.parent, account=account_dir.name,
+        price_map=engine.publish_rules().price_map, now=moment,
+        require_verified_ui_constraints=strict, warning_sink=None)
+
+
 def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
     moment = now or datetime.now(timezone.utc)
     source, _ = read_post_truth(account_dir, indexed)
     result = {'available': False, 'reason': '', 'fingerprint': None,
-              'platform': source['platform'], 'business_timezone': 'Europe/Berlin',
+              'lockable': False, 'lock_reason': '',
+              'platform': source['platform'], 'business_timezone': bs.business_timezone(),
+              'audience_timezone': planning.AUDIENCE_TIMEZONE,
+              'audience_quiet_hours': [planning.AUDIENCE_QUIET_HOURS.start, planning.AUDIENCE_QUIET_HOURS.stop],
               'default_times': cfg().get('publish', 'schedule_rule', {}).get('times', ['10:00', '17:00'])}
+    # 冻结只认内容本身：录证缺失让排期不可用，但不该挡住人确认文案和图片。
+    try:
+        result['fingerprint'] = engine._publish_fingerprint(
+            composed_post(account_dir, source, now=moment))
+        result['lockable'] = True
+    except (ValueError, compose.ComposeError, engine.PipelineRunError) as exc:
+        result['lock_reason'] = str(exc)
     try:
         window = planning.configured_window(source['platform'])
         bounds = planning.calendar_bounds(moment, window=window)
         result.update(earliest=bounds.earliest.isoformat(), latest=bounds.latest.isoformat(),
                       ui_timezone=bounds.ui_timezone)
-        post = compose.compose_post(source['post_id'], bounds.earliest,
-            archive_root=account_dir.parent, account=account_dir.name,
-            price_map=engine.publish_rules().price_map, now=moment,
-            require_verified_ui_constraints=True, warning_sink=None)
-        result['fingerprint'] = engine._publish_fingerprint(post)
+        composed_post(account_dir, source, now=moment, strict=True)
         capabilities.require(source['platform'])
         result['available'] = True
     except (ValueError, compose.ComposeError, bs.PublishStepError, bs.ProbeRequired, engine.PipelineRunError) as exc:
@@ -50,9 +65,45 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
     return result
 
 
-def _freeze(post, source, expected_fingerprint):
+def lock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
+         review_revision: str | None, content_fingerprint: str, now=None) -> dict:
+    """「编辑确认无误」：冻住正文与图片字节，时刻留到排期时再绑。"""
+    moment = now or datetime.now(timezone.utc)
+    with review.transaction(account_dir) as session:
+        source, _ = session.validate(indexed, expected_revision=review_revision,
+                                     expected_source_sha256=source_text_sha256)
+        post = composed_post(account_dir, source, now=moment)
+        try:
+            _, _, snapshot = snapshots.freeze(post, source, scheduled_at=None,
+                                              expected_fingerprint=content_fingerprint)
+        except review.ReviewConflict as exc:
+            raise ApprovalConflict(str(exc)) from exc
+        return session.change(source, 'content_locked', expected_revision=review_revision,
+                              expected_source_sha256=source_text_sha256, now=moment,
+                              snapshot_id=snapshot.name)
+
+
+def unlock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
+           review_revision: str | None, now=None) -> dict:
+    """解除冻结退回可编辑。⛔ 快照只标作废、不删字节——它是当时确认过什么的证据。"""
+    with review.transaction(account_dir) as session:
+        source, state = session.validate(indexed, expected_revision=review_revision,
+                                         expected_source_sha256=source_text_sha256)
+        if state['status'] != 'content_locked':
+            raise ApprovalConflict('这篇当前不是已冻结状态，请刷新后重试')
+        snapshots.discard(state['snapshot_id'])
+        return session.change(source, 'unlocked', expected_revision=review_revision,
+                              expected_source_sha256=source_text_sha256,
+                              now=now or datetime.now(timezone.utc))
+
+
+def _bind(post, snapshot_id, source, account_dir):
+    """把已冻结内容接到本次提交上：先核内容，再绑时刻。"""
+    account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
+    candidate = replace(post, snapshot_id=snapshot_id,
+                        source_fingerprint=paid_consent.fingerprint(source, account))
     try:
-        return snapshots.freeze(post, source, expected_fingerprint=expected_fingerprint)
+        return snapshots.ensure(candidate, bind=True)
     except review.ReviewConflict as exc:
         raise ApprovalConflict(str(exc)) from exc
 
@@ -75,8 +126,9 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
         with review.transaction(account_dir) as session:
             source, state = session.validate(source, expected_revision=review_revision,
                                              expected_source_sha256=source_text_sha256)
-            if state['status'] not in {'pending_review', 'edited'}:
-                raise ApprovalConflict('请先恢复这篇的审校再批准发布')
+            if state['status'] != 'content_locked':
+                raise ApprovalConflict('请先确认内容无误并冻结，再选择发布时间')
+            snapshot_id = state['snapshot_id']
         capabilities.require(source['platform'])
         window = planning.configured_window(source['platform'])
         inventory = (await inventory_reader(now=moment) if inventory_reader is not None
@@ -88,8 +140,9 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
         with review.transaction(account_dir) as session:
             source, state = session.validate(source, expected_revision=review_revision,
                                              expected_source_sha256=source_text_sha256)
-            if state['status'] not in {'pending_review', 'edited'}:
-                raise ApprovalConflict('请先恢复这篇的审校再批准发布')
+            if state['status'] != 'content_locked':
+                raise ApprovalConflict('请先确认内容无误并冻结，再选择发布时间')
+            snapshot_id = state['snapshot_id']
             human = translated.load_human_translated(account_dir / 'translated_human.jsonl').get(source['post_id'])
             if (human or {}).get('revision') != human_revision:
                 raise ApprovalConflict('人工文案已有更新，请刷新后重新确认')
@@ -100,10 +153,12 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             post = compose.compose_post(source['post_id'], target, archive_root=account_dir.parent,
                 account=account_dir.name, price_map=engine.publish_rules().price_map, now=moment,
                 require_verified_ui_constraints=True, warning_sink=None)
-            frozen, files, snapshot = _freeze(post, source, content_fingerprint)
+            if engine._publish_fingerprint(post) != content_fingerprint:
+                raise ApprovalConflict('内容在确认之后已有变化，请重新核对并冻结')
+            frozen = _bind(post, snapshot_id, source, account_dir)
             approved = session.change(source, 'approved', expected_revision=review_revision,
-                                      expected_source_sha256=source_text_sha256, now=moment, snapshot_id=snapshot.name)
-        records.queue_approved(snapshot.name, now=moment)
+                                      expected_source_sha256=source_text_sha256, now=moment, snapshot_id=snapshot_id)
+        records.queue_approved(snapshot_id, now=moment)
         try:
             outcome = await (executor or workflow.execute)(frozen, target, ui_timezone=window.ui_timezone,
                 timeout=float(c.get('publish', 'ui_timeout_seconds', bs.DEFAULT_UI_TIMEOUT)),

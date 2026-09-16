@@ -21,13 +21,13 @@ class SettingsConflict(RuntimeError):
 
 
 def validate_default_times(times):
-    """Validate the shared operator-facing Berlin slot defaults."""
+    """Validate the shared operator-facing default slots, in the business timezone."""
     if (not isinstance(times, list) or not 1 <= len(times) <= 12
             or any(not isinstance(value, str)
                    or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value)
                    for value in times)
             or len(set(times)) != len(times)):
-        raise ValueError('默认时间须为 1 至 12 个不重复的 HH:MM 柏林时刻')
+        raise ValueError('默认时间须为 1 至 12 个不重复的 HH:MM 业务时区时刻')
     return tuple(times)
 
 
@@ -50,7 +50,7 @@ def read():
     result = {'version': hashlib.sha256(data).hexdigest(),
             'editable': {'default_times': pub.get('schedule_rule', {}).get('times', ['10:00', '17:00']),
                          'snooze_default_days': raw.get('review', {}).get('snooze_default_days', 3)},
-            'business_timezone': 'Europe/Berlin', 'workday_timezone': 'Asia/Shanghai',
+            'business_timezone': pub.get('timezone', ''), 'workday_timezone': 'Asia/Shanghai',
             # Only non-secret policy fields are exposed, never the local runtime binding or credentials.
             'controlled': {key: deepcopy(raw.get(key, {})) for key in
                            ('targets', 'delta', 'pipeline')}

@@ -63,7 +63,7 @@ def project(attempt, *, now=None) -> dict:
                 or metadata['post_id'] != row['post_id'] or metadata['platform'] != row['platform']
                 or metadata['account'] != source['platform'][:2] + '_' + source['account']
                 or metadata['source_fingerprint'] != row.get('source_fingerprint')
-                or datetime.fromisoformat(metadata['scheduled_at']) != datetime.fromisoformat(row['scheduled_at'])):
+                or snapshots.require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
             raise review.ReviewConflict('发布回执与批准快照不一致')
         account = cfg().archive_dir / metadata['account']
         progress_path = directory / 'projection.json'

@@ -292,22 +292,24 @@ with tempfile.TemporaryDirectory() as folder:
     check(again.calls == [("delta", False)], "历史覆盖两来源的 scheduled 回执仍防止重复处理")
 
 
-print("\n[6] 德国 10:00/17:00 槽位跨两地 DST 窗口仍正确")
+print("\n[6] 北京槽位跨美西 DST 窗口仍正确")
 rules = A.publish_rules()
+slot_hours = {slot.hour for slot in rules.slots}
+# 北京不切夏令时，槽位小时固定；会动的是它在美西 UI 里显示成几点。
 for when, want_hour in [
-        (datetime.fromisoformat("2026-10-28T00:00:00-07:00"), 2),
-        (datetime.fromisoformat("2026-11-03T00:00:00-08:00"), 1),
-        (datetime.fromisoformat("2027-03-20T00:00:00-07:00"), 2)]:
+        (datetime.fromisoformat("2026-10-28T00:00:00-07:00"), 1),   # 美西仍是 PDT
+        (datetime.fromisoformat("2026-11-03T00:00:00-08:00"), 7),   # 美西已回到 PST
+        (datetime.fromisoformat("2027-03-20T00:00:00-07:00"), 1)]:
     slot = A.next_slots(when, (), 1, rules)[0]
     shown = slot.astimezone(A.ZoneInfo("America/Los_Angeles"))
-    check(slot.hour == 10 and shown.hour == want_hour,
-          "德国槽始终 10:00；%s 的美西 UI 正确显示 %02d:00"
+    check(slot.hour in slot_hours and shown.hour == want_hour,
+          "北京槽小时来自配置；%s 的美西 UI 正确显示 %02d:00"
           % (slot.date(), want_hour))
 # now 与目标时刻须在同一 UI 月份，避免月界检查遮蔽 DST 测试。
 fallback = A.next_slots(
     datetime.fromisoformat("2026-11-01T00:30:00-07:00"), (), 1, rules)[0]
-check(fallback.date().isoformat() == "2026-11-01" and fallback.hour == 17,
-      "美西回拨日 10:00 槽无法在 UI 无歧义表达时，自动改用当天 17:00 安全槽")
+check(fallback.date().isoformat() == "2026-11-01" and fallback.hour == 23,
+      "美西回拨日 16:00 槽（=美西 01:00，当天出现两次）无法无歧义表达时，改用 23:00 安全槽")
 
 # 夹具限制为可见月份，跨月必须明确失败。
 month_end = A.next_slots(

@@ -31,7 +31,7 @@ async def read_live_inventory() -> RemoteSlotInventory:
         page = await context.new_page()
         return await month_inventory.read(
             page, ui_timezone=str(config.get("publish", "ui_timezone", "")),
-            business_timezone=str(config.get("publish", "timezone", "Europe/Berlin")),
+            business_timezone=bs.business_timezone(),
             timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)))
     finally:
         try:

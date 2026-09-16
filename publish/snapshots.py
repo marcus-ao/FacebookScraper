@@ -26,7 +26,8 @@ def folder(snapshot_id: str) -> Path:
     return store.assert_physical_direct_path(root, root / snapshot_id, kind='directory', label='发布快照目录')
 
 
-def freeze(post, source: dict, *, expected_fingerprint: str):
+def freeze(post, source: dict, *, expected_fingerprint: str, scheduled_at=None):
+    """冻结正文与图片字节。`scheduled_at=None` 表示人已确认内容、时刻待选。"""
     account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
     source_fingerprint = paid_consent.fingerprint(source, account)
     files = {'text_de.txt': post.text_de.encode('utf-8'),
@@ -51,11 +52,44 @@ def freeze(post, source: dict, *, expected_fingerprint: str):
         'schema_version': 1, 'snapshot_id': directory.name, 'fingerprint': fingerprint,
         'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256(source['text']),
         'account': account.name, 'post_id': post.post_id, 'platform': post.platform,
-        'status': 'frozen', 'scheduled_at': post.scheduled_at.isoformat(),
+        'status': 'frozen',
+        'scheduled_at': scheduled_at.isoformat() if scheduled_at is not None else None,
         'worker': current_worker(), 'files': {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
         'images': image_names})
     return replace(post, image_paths=tuple(directory / name for name in image_names),
                    snapshot_id=directory.name, source_fingerprint=source_fingerprint), files, directory
+
+
+def bind_schedule(snapshot_id: str, when: datetime) -> dict:
+    """把已冻结内容绑到一个时刻；调用方须持发布锁。重复绑同一时刻幂等。"""
+    if not isinstance(when, datetime) or when.tzinfo is None or when.utcoffset() is None:
+        raise review.ReviewValidationError('发布时间需要包含时区')
+    metadata, _, _, directory = load(snapshot_id)
+    if metadata.get('status') != 'frozen':
+        raise review.ReviewConflict('这份冻结内容已作废，请重新确认后再排期')
+    bound = metadata.get('scheduled_at')
+    if bound is not None and datetime.fromisoformat(bound) != when:
+        raise review.ReviewConflict('这份冻结内容已绑定其它时刻，请重新确认后再排期')
+    metadata['scheduled_at'] = when.isoformat()
+    atomic_write_json(directory / 'snapshot.json', metadata)
+    return metadata
+
+
+def discard(snapshot_id: str) -> None:
+    """解冻时作废快照。⛔ 只改状态位，保留字节——它是当时确认过什么的证据。"""
+    metadata, _, _, directory = load(snapshot_id)
+    if metadata.get('status') == 'discarded':
+        return
+    atomic_write_json(directory / 'snapshot.json', dict(metadata, status='discarded'))
+
+
+def require_bound(metadata: dict) -> datetime:
+    """提交路径共用：拒绝尚未绑定时刻或已作废的快照。"""
+    if metadata.get('status') != 'frozen':
+        raise review.ReviewConflict('这份冻结内容已作废，不能提交')
+    if metadata.get('scheduled_at') is None:
+        raise review.ReviewConflict('这份冻结内容尚未选定发布时间')
+    return datetime.fromisoformat(metadata['scheduled_at'])
 
 
 def load(snapshot_id: str):
@@ -90,19 +124,25 @@ def load(snapshot_id: str):
     return metadata, source, files, directory
 
 
-def ensure(post):
+def ensure(post, *, bind: bool = False):
+    """核对 post 与其冻结快照一致。`bind=True` 在核对通过后才绑定时刻——顺序反过来会
+    在内容不符时留下一个已绑错时刻、只能解冻才能脱身的快照。"""
     if getattr(post, 'snapshot_id', ''):
         metadata, _, files, directory = load(post.snapshot_id)
         if (files['text_de.txt'].decode('utf-8') != post.text_de
                 or metadata.get('post_id') != post.post_id or metadata.get('platform') != post.platform
                 or metadata.get('account') != post.platform[:2] + '_' + post.account
-                or metadata.get('source_fingerprint') != post.source_fingerprint
-                or datetime.fromisoformat(metadata['scheduled_at']) != post.scheduled_at):
-            raise review.ReviewConflict('提交身份、时间或内容与批准快照不一致，请重新审核')
+                or metadata.get('source_fingerprint') != post.source_fingerprint):
+            raise review.ReviewConflict('提交身份或内容与冻结快照不一致，请重新审核')
+        if bind:
+            metadata = bind_schedule(post.snapshot_id, post.scheduled_at)
+        if require_bound(metadata) != post.scheduled_at:
+            raise review.ReviewConflict('提交时间与冻结快照不一致，请重新审核')
         return replace(post, image_paths=tuple(directory / name for name in metadata['images']))
     account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
     source, _ = store.read_post_truth(account, {'post_id': post.post_id, 'platform': post.platform,
                                                'account': post.account, 'created_at': None})
     fingerprint = journal.text_sha256(post.text_de) + ':' + ','.join(journal.file_sha256(path) for path in post.image_paths)
-    frozen, _, _ = freeze(post, source, expected_fingerprint=fingerprint)
+    frozen, _, _ = freeze(post, source, expected_fingerprint=fingerprint,
+                          scheduled_at=post.scheduled_at)
     return frozen

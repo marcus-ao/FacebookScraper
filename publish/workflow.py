@@ -82,7 +82,7 @@ async def _screenshot(page, attempt_id: str, phase: str, *,
 async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeout: float):
     """在单次提交意图落盘前再读远端；缓存从不参与最终裁决。"""
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-        business_timezone='Europe/Berlin', timeout=timeout)
+        business_timezone=bs.business_timezone(), timeout=timeout)
     decision = planning.evaluate_slot(when, post.platform, inventory,
         now=datetime.now().astimezone(), window=planning.configured_window(post.platform))
     if not decision.allowed:
