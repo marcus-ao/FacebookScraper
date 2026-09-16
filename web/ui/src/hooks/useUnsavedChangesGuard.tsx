@@ -1,22 +1,19 @@
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { App } from 'antd'
-import { useBlocker } from 'react-router'
+import { useBlocker, useLocation } from 'react-router'
 
 import {
   UNSAVED_MESSAGES,
-  applyBeforeUnload,
   shouldBlockNavigation,
 } from '@/lib/unsaved-changes'
-import type { UnsavedMessageKey } from '@/lib/unsaved-changes'
-
-export interface UnsavedChangesGuardOptions {
-  readonly dirty: boolean
-  readonly message: UnsavedMessageKey
-}
+import { deploymentStore } from '@/app/deployment-store'
 
 /** 统一保护应用导航、前进后退及刷新关闭时的未保存草稿。 */
-export function useUnsavedChangesGuard({ dirty, message }: UnsavedChangesGuardOptions): void {
+export function useUnsavedChangesGuard(): void {
   const { modal } = App.useApp()
+  const { dirty } = useSyncExternalStore(deploymentStore.subscribe, deploymentStore.getSnapshot, deploymentStore.getSnapshot)
+  const location = useLocation()
+  const message = location.pathname === '/settings' ? 'settings' : 'detail'
 
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
@@ -26,6 +23,7 @@ export function useUnsavedChangesGuard({ dirty, message }: UnsavedChangesGuardOp
   useEffect(() => {
     if (blocker.state !== 'blocked') return
     modal.confirm({
+      rootClassName: 'deployment-unsaved-dialog',
       title: UNSAVED_MESSAGES[message],
       okText: '离开',
       cancelText: '留在本页',
@@ -35,10 +33,4 @@ export function useUnsavedChangesGuard({ dirty, message }: UnsavedChangesGuardOp
     })
   }, [blocker, message, modal])
 
-  useEffect(() => {
-    if (!dirty) return
-    const handler = (event: BeforeUnloadEvent) => applyBeforeUnload(event, true)
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [dirty])
 }

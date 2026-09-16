@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from core import operator_preferences
+from core.runtime_identity import validate_binding
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,6 +51,12 @@ class Config:
                     if not isinstance(value, str) or not value.strip() or not Path(value).is_absolute():
                         raise ValueError(f'本机配置 {section}.{key} 必须为绝对路径')
                 self._d.setdefault(section, {}).update(values)
+        self.preferences_path = None
+        if (ROOT / 'release.json').exists():
+            validate_binding(self, ROOT)
+            self.preferences_path = Path(self.get('paths', 'state')) / 'operator_preferences.json'
+        self.preferences_stamp = operator_preferences.revision(self.preferences_path)
+        operator_preferences.apply(self._d, operator_preferences.decode(self.preferences_stamp))
 
     def __getitem__(self, k: str):
         return self._d[k]
@@ -158,7 +166,8 @@ def cfg() -> Config:
         _cfg = Config(runtime_path=os.environ.get('FBSCRAPER_RUNTIME_CONFIG') or ROOT / 'config.local.toml')
     elif hasattr(_cfg, '_file_stamp'):
         current = _cfg.path.stat()
-        if (current.st_mtime_ns, current.st_size) != _cfg._file_stamp:
+        if ((current.st_mtime_ns, current.st_size) != _cfg._file_stamp
+                or operator_preferences.revision(_cfg.preferences_path) != _cfg.preferences_stamp):
             _cfg = Config(_cfg.path, runtime_path=_cfg.runtime_path)
     return _cfg
 

@@ -395,6 +395,8 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 
 ## 11. 安装当前调度器
 
+本节用于未接入部署控制器的独立检出。受管服务机按[第 15 节](#15-服务机部署与日常更新)安装唯一控制器任务，通过 `deployment mode` 管理调度，不并行安装这里的旧任务。
+
 本轮已实际只读运行 `python -m tools.schedule scheduler-status`，返回 `FBScraperScheduler: 未注册`，退出码 0。当前 8765 端口的 Web 服务已经启动，常驻监测任务仍未安装；两个进程的状态不能混用。
 
 `tools.schedule install` 是旧每日组合。常驻 scheduler 当前已有下列入口，先做只读预览与安装演练：
@@ -719,183 +721,150 @@ scripts\run_scheduler.bat --run --process --once
 
 ## 15. 服务机部署与日常更新
 
-**2026-09-15 决定：开发机与服务机分开。** 本机（开发机）只做功能调试和回归测试；服务机是唯一 24 小时运行业务的机器，真实抓取、真实归档、真实审校、真实发布都在它上面。两台机器各有一份 `archive/` 与 `state/`，互不相干——代价写在 [15.15](#1515-这次决定留下的三个开口)。
+服务机使用 **Actions 构建 → 本机主动获取 → 空闲切换**。开发机负责代码与隔离测试；服务机是唯一真实运行业务的机器。自动部署的验收与真实抓取、付费和发布验收分别记录，见 [REQUIREMENTS §10.7](REQUIREMENTS.md#107-服务机自动部署)。
 
-这一节是一次性的装机顺序，从上到下做，每段有通过判据。任何一段不通过就停在那里，按[第 12 节](#12-卡住时保留什么)留证。装完之后在服务机上按[第 14 节](#14-阶段一真实验收监测与原帖抓取)做阶段一验收。
+### 15.1 服务机与账户
 
-### 15.1 先确认这台机器能干这件事
+使用 Windows x64、Python **3.12.9**、系统 Chrome；Node **24.12.0** 只用于 CI/开发机构建，服务机日常更新无需 Node、Git 或访问 PyPI。服务机须可出站访问 GitHub API 和 Actions 制品域名，并保持接电、不休眠、足够磁盘空间。
 
-- [ ] **网络由你自行保障**，项目不再跟踪出口类型与稳定性（2026-09-15 决定），`preflight` 也不再输出这一块
-- [ ] **接电源、不休眠、合盖不睡眠**；显示器可以关
-- [ ] **磁盘留够**。原图只增不减，且 CDN URL 带签名有时效，删了重抓不回来
-- [ ] **Windows 账户**：运营一个、你一个
+所有任务、Python 和三个 Chrome profile 都由**运营账户**运行。控制器计划任务使用 `InteractiveToken`、最小权限和登录触发；Windows 重启后尚无人登录时不保证业务运行。技术账户不能替代运营账户的 Chrome 会话。
 
-⚠️ **业务全部装在运营那个账户下，不是你的账户。** 常驻任务的 `UserId` 与 `LogonType InteractiveToken` 绑死在注册它的那个账户（`tools/schedule.py`），三个 Chrome profile 在 `%USERPROFILE%\.fbscraper-*`（`config.toml` 里写作 `~/.fbscraper-*`）。你从自己的账户登进去，看到的是三个空 profile 和一台什么都没在跑的机器——**这不会报错，看起来就是"系统坏了"**。你那个账户只做系统层面的维护。
+### 15.2 首次安装已验证制品
 
-### 15.2 装环境
+首次安装与真实业务启用分开进行。先在 GitHub 的 `Windows release` 工作流中核对：仓库 `marcus-ao/FacebookScraper`、分支 `main`、当前提交 SHA、全部检查成功；下载该次 `fbscraper-windows` 制品，解压到临时目录。不要从来源不明的 ZIP 启动安装程序。
 
-在**运营账户**里装这四样。版本对齐开发机当前的档位即可（Python 3.12.9 / Node 24.12.0）：
-
-| 装什么 | 说明 |
-|---|---|
-| Python 3.11+ | 安装时勾上 "Add python.exe to PATH"。3.11 是硬下限，`core/config.py` 用了 `tomllib` |
-| Node.js 20+ | 审校台前端要构建 |
-| Google Chrome | 三个 profile 用的是系统 Chrome，CDP 附着的就是它 |
-| Git | 取代码和以后更新都靠它 |
-
-### 15.3 取代码并装依赖
-
-仓库放在**用户目录之外**，例如 `D:\FacebookScraper`。放进运营的用户目录下面，你那个账户以后不好维护。
+以下路径仅为示例，在运营账户的 PowerShell 中执行：
 
 ```powershell
-cd D:\
-git clone https://github.com/marcus-ao/FacebookScraper.git
-cd FacebookScraper
-scripts\setup.bat
+Set-Location D:\Downloads\fbscraper-windows
+py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows
 ```
 
-`setup.bat` 一条命令做四件事：建 `.venv`、装依赖、装 Playwright 的 Chromium、跑一遍全部离线测试。
+安装器检查 Python 版本、包哈希、前后端指纹和旧计划任务冲突，在**最终目录**创建两个独立虚拟环境，并从包内 wheel 安装。临时业务数据上的 Web 验证成功才完成安装。目标必须为空；安装器不会覆盖已有业务目录。失败时保留现场，查明原因后处理安装目录，不能把未完成安装误当成可运行实例。
 
-- [ ] 最后一步「离线测试」全绿。**不绿就停在这里**——基线本身是坏的，往下走就分不清"我装错了"和"本来就坏"
-- [ ] 自检那一步打印出了 Chrome 路径。没探测到就把完整路径填进 `config.toml` 的 `[chrome].exe`
-
-依赖下载卡住多半是到 PyPI 的吞吐问题，换镜像重试：`set PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple`
-
-### 15.4 搬凭据
-
-**只搬 `.env` 一个文件**，用 U 盘，用完立刻在开发机上把 U 盘格式化掉。不要走微信、网盘或邮件——四个 webhook 地址本身带 token，等于密钥。
-
-- [ ] 服务机仓库根目录下有 `.env`，对照 `.env.example` 逐键确认都有值
-- [ ] 服务机**不需要** `config.local.toml`。它按 `config.toml` 的默认相对路径读同目录的 `archive/` 与 `state/`
-
-### 15.5 打开飞书通道
-
-`config.toml` 改两个键并提交。它们不是凭据，两台机器共用同一个值（开发机的审校台也在同一个地址）：
-
-```toml
-[feishu]
-enabled = true
-base_url = "http://127.0.0.1:8765"
+```text
+D:\FacebookScraperService\
+  controller\              固定控制器与独立 .venv
+  releases\<sha>\          程序、dist、.venv、config.local.toml
+  shared\archive\          原帖、原图、人工稿与人工图片
+  shared\state\            发布/付费/审校及运行状态
+  shared\.env              业务凭据
+  shared\instance.json     业务实例标识
+  control\                 部署记录、维护会话和 GitHub 凭据
+  logs\                    每个受管进程的日志
 ```
 
-填 `127.0.0.1` 在这一轮是对的：**运营在服务机的桌面上开飞书**，卡片里的「去审校」按钮点开的就是本机审校台。她在自己手机上点这个按钮打不开，这是预期行为——上线第一天当面告诉她一次，否则她第一次点不开会以为系统坏了。
+各版本由安装器生成绝对路径绑定；Web、调度器和受管 CLI 使用同一 `shared`。缺失绑定或实例标识不一致时拒绝启动，不回落到版本内的空数据。不得手改标识掩盖目录错误。
 
-### 15.6 构建审校台前端
+### 15.3 配置凭据与初始数据
+
+按 `.env.example` 填写 `shared\.env`。GitHub 的仓库范围细粒度凭据只需 `Actions: read`、`Contents: read`，写入 `control\github.token` 一行；不放进业务 `.env`、Git、日志或聊天。安装器为 token 文件设置运营账户 ACL；按组织政策保管和轮换。认证失败时保留当前服务。
+
+默认新建空业务实例，调度与付费处理均关闭。开发机和服务机各自的测试数据不能混入生产账本。若要接续已经存在的真实业务数据，先停止其写入，按[第 1 节](#1-接续运行数据前先备份和核验)完整备份核验，再由技术人员在新实例首次启动前接续完整 `archive/state` 与必要凭据；核对全部路径及实例归属。不得只搬部分 JSONL，不能覆盖已有运行中的 `shared`，也不自动合并两份账本。
+
+两个运营可编辑偏好保存在 `shared\state\operator_preferences.json`：默认柏林排期时刻与挂起工作日数。其余配置、提示词和业务规则由已验证版本交付；不要在服务机直接改 `releases\<sha>\config.toml`。
+
+### 15.4 注册控制器与首次启动
+
+先处理旧 `FBScraperScheduler`、`FBScraperDelta`、`FBScraperDeltaCatchup` 任务。确认旧业务空闲并正常退出后，人工停用旧启动机制；不使用 `schtasks /End` 中断长任务。安装和启动控制器遇到启用的旧任务会拒绝继续。
 
 ```powershell
-npm.cmd --prefix web/ui ci
-npm.cmd --prefix web/ui run build
+Set-Location D:\FacebookScraperService\controller
+.venv\Scripts\python.exe -m deployment install-task --root D:\FacebookScraperService --dry-run
+.venv\Scripts\python.exe -m deployment install-task --root D:\FacebookScraperService
+.venv\Scripts\python.exe -m deployment supervise --root D:\FacebookScraperService
 ```
 
-- [ ] `web/ui/dist/index.html` 存在
-- [ ] `config.toml` 的 `[paths].web_dist` 是 `web/ui/dist`
+核对 XML 的运营账户、`InteractiveToken`、`LeastPrivilege`、固定 controller 工作目录、单实例规则。最后一条可用于前台观察；计划任务与手动重复启动受到控制器锁保护。首次成功启动只开放 Web，默认不开启真实调度或 `--process`。
 
-### 15.7 登录三个 Chrome
+访问本机审校台及 `/api/health`，核对 `deployment_ready=true`、运行 SHA、前后端指纹和实例 ID。控制器自身及 CLI 的入口始终在 `controller`，不要跳到某个旧版本目录运行。
 
-**不搬开发机的 profile，三个账号在服务机上重新人工登录。** 对平台来说这是"新浏览器 + 新出口"两个变量同时变，撞 checkpoint 的概率比拷 profile 高一档，所以按风险从低到高来，把最不能丢的放最后：
+### 15.5 受管业务命令与人工登录
 
-1. **9224 探测号**（`scripts\start_chrome_detect.bat`）。它本来就有 429 停机史，最不值钱，拿它试这台新机器和新出口会不会立刻触发验证
-2. **9222 回填号**（`scripts\start_chrome.bat`）
-3. **9223 发布号**（`scripts\start_chrome_publish.bat`）。持德国站资产权限，丢了最贵
-
-每个的判据一样：能正常打开目标主页、没有 checkpoint、没有挂起的二次验证。任一步撞上验证就停下来按[第 3 节](#3-登录三个专用-chrome)处理，不要连续重试。
-
-9223 还有一步，但**等阶段一验收完再做**：`[publish].ui_probe_dump` 指向的控件证据不进版本库，换机器之后 `--submit` 永久失效（[FUNCTIONALITY §7.2](FUNCTIONALITY.md)）。要在这台机器上按[第 8 节](#8-录制单渠道-business-suite-证据)重录一次，开发机上录过的不算。这是"全部跑通"路上的一块，不是阶段一的前置。
-
-### 15.8 只读预检
+既有手册中的 Python 命令通过控制器 `exec` 执行，例如：
 
 ```powershell
-scripts\run_pipeline.bat preflight --json
+.venv\Scripts\python.exe -m deployment exec --root D:\FacebookScraperService -- -m pipeline preflight --json
+.venv\Scripts\python.exe -m deployment exec --root D:\FacebookScraperService -- -m tools.start_chrome_detect
+.venv\Scripts\python.exe -m deployment exec --root D:\FacebookScraperService -- -m tools.start_chrome
+.venv\Scripts\python.exe -m deployment exec --root D:\FacebookScraperService -- -m tools.start_chrome_publish
 ```
 
-逐项核对[第 14 节 A 段](#a-准备与访问初始化)那份清单。这台机器上额外要看两条：
+`exec` 使用实际当前版本、同一业务绑定，并将完整命令生命周期登记为在途工作。三个 Chrome 仍须人工登录，不搬开发机 profile、不混用 9222/9223/9224。Chrome 不属于更新时退出的进程树。`preflight` 返回 0 只表示状态查询完成，仍须逐项看业务前置。
 
-- [ ] `monitoring` 的 `state`/`status` 是这台机器自己的初始化结果，`quota` 与 `next_due` 都是空的起点——**看到开发机那边的数字就说明绑错了 `archive/state`**
-- [ ] `outbox` 的四个机器人 `configured=true`、`valid=true` 且 `duplicate_bot_targets=false`。地址是从这台机器的 `.env` 读的，不是从开发机继承的
+飞书自检、访问初始化、真实采集、模型和发布照各节的人工授权要求进行。例如 `exec ... -- -m pipeline notifications --self-test` 会真实发送消息，不属于部署健康检查。
 
-### 15.9 四机器人自检
+### 15.6 授权调度与内容处理
+
+完成[阶段一验收](#14-阶段一真实验收监测与原帖抓取)后，显式设置模式：
 
 ```powershell
-scripts\run_python.bat -m pipeline notifications --self-test
+.venv\Scripts\python.exe -m deployment mode --root D:\FacebookScraperService --scheduler on
 ```
 
-**这一条在开发机上做过不算。** 它证明的是"这台机器发得出去"，换机器就要重做。
-
-- [ ] 同一业务群收到四张「通道自检」卡片
-- [ ] 逐张核对实际发送者与卡片上写的机器人名称一致
-
-### 15.10 前台跑一次调度器
-
-先别装常驻任务。在终端里前台跑，看得见输出：
+只有另行满足[第 14.1 节](#141-打开内容处理抓到就翻译和出图)的付费许可、预算和激活要求后，才执行：
 
 ```powershell
-scripts\run_scheduler.bat --preview
-scripts\run_scheduler.bat --run --once
+.venv\Scripts\python.exe -m deployment mode --root D:\FacebookScraperService --scheduler on --process on
 ```
 
-- [ ] `--preview` 打印出各平台的下次触发时刻，且落在[第 14 节 C 段](#c-预览扫描与-72-小时试运行)写的区间里
-- [ ] `--run --once` 之后 `state\scheduler.json` 的 `last_tick` 在往前走
+模式变化同样等待空闲并经过维护切换；控制器不会随代码更新自动加上 `--process`。关闭处理可用 `--process off`；关闭调度同时指定 `--scheduler off --process off`。保留模式指令与实际运行模式分别展示，失败模式须核对后显式重试。
 
-到这里[第 14 节](#14-阶段一真实验收监测与原帖抓取)就可以从 A 段开始走了——访问初始化、回填基线、72 小时试运行。
+### 15.7 日常自动更新
 
-### 15.11 装常驻任务
+服务机每 60 秒核对当前 main 的成功工作流与制品身份。下载、哈希校验、依赖安装和隔离预检发生在旧版本运行期间。候选准备好后等待后台工作及编辑结束，页面预告 60 秒；运营可点击“延后 30 分钟”。持续等待超过 30 分钟通知一次。
 
-⛔ **这一步之后，这台机器每天会真的去访问 Facebook 和 Instagram。** 按[第 11 节](#11-安装当前调度器)的规矩：真实依赖验收完成才装。
+未保存草稿、上传和正在执行或排队的任务都会阻止切换。失联的脏会话不会因超时自动忽略；先恢复原标签页保存或明确放弃内容。确认原编辑确已不存在后，技术人员才能用 `clear-session` 解除其阻塞。
+
+维护期间旧进程自行退出，新版本使用同一数据启动；部署验证最长默认 90 秒，检查通过才恢复业务。正常切换约 1–2 分钟是目标，须在服务机实测；长模型请求没有强杀截止。旧页面的写请求会收到明确版本冲突并保留草稿。
+
+只改文档/测试且运行指纹相同的提交记录为已检查，无需重启；“实际运行 SHA”与“已检查 SHA”不能混写。网络错误、CI 失败、过期包或摘要不符保留当前服务；失败候选不循环安装，须新版本或显式 `retry`。
+
+开发变更若涉及真相源格式，必须同步改变发布包兼容声明，交由技术维护进行备份、迁移与验收；不能保留旧 `truth_contract` 来让迁移混入自动更新。固定控制器及其依赖代码指纹变化也会拒绝自动切换。单纯兼容的派生索引变化仍需离线重建验证。
+
+### 15.8 状态、暂停、重试与回退
 
 ```powershell
-scripts\run_python.bat -m tools.schedule scheduler-xml
-scripts\run_python.bat -m tools.schedule scheduler-install --dry-run
-scripts\run_python.bat -m tools.schedule scheduler-install
-scripts\run_python.bat -m tools.schedule scheduler-status
+.venv\Scripts\python.exe -m deployment status --root D:\FacebookScraperService
+.venv\Scripts\python.exe -m deployment pause --root D:\FacebookScraperService
+.venv\Scripts\python.exe -m deployment resume --root D:\FacebookScraperService
+.venv\Scripts\python.exe -m deployment retry --root D:\FacebookScraperService
+.venv\Scripts\python.exe -m deployment rollback --root D:\FacebookScraperService --sha <已保留的完整成功SHA>
+.venv\Scripts\python.exe -m deployment clear-session --root D:\FacebookScraperService --session <已核对的会话ID>
 ```
 
-- [ ] XML 里的 `UserId` 是**运营那个账户**，`WorkingDirectory` 是仓库根目录
-- [ ] `scheduler-status` 显示已注册且已启用
+`pause` 暂停发现和安装自动更新，保留业务进程。`rollback` 仍经过空闲协调；不能直接杀掉可能正在提交的业务。旧代码、环境和版本配置保留在本机，恢复不依赖联网。
 
-### 15.12 每天要看的那一眼
+自动回退**不恢复旧业务数据**：发布防重、付费记录、人工稿、审校决定、激活边界和访问额度始终使用最新共享数据。真相源格式变化或需要新控制器的版本交技术维护。控制器切换中断时读取持久记录核对进程；无法确认身份时保持阻塞，不能按窗口标题结束进程。
 
-⚠️ **这台机器重启之后不会自己把服务起回来。** 常驻任务是 `BootTrigger` + `LogonTrigger` + `InteractiveToken`，没有人登录进桌面它就不触发。而且四个机器人都是本机发的——机器停了，告警也跟着停；`[heartbeat]` 没启用，`[pipeline].dead_man_days` 量的是业务连续未成功，不是进程存活。所以**没有任何东西会主动告诉你服务停了**。
+已启用的新版本若进程退出，恢复旧版后仍会阻止故障 SHA 自动重装；不会在“新版故障—回退—再次安装”之间循环。普通 Windows/控制器重启则恢复最后已确认的版本和模式，不擅自退到更早版本。
 
-每天上班第一件事：
+### 15.9 故障与通知
 
-- [ ] `state\scheduler.json` 的 `last_tick` 比昨天新
-- [ ] 审校台 `/runtime` 页面打得开
+运行页展示实际版本、候选、阶段、阻塞与最近结果；详细进程日志在 `logs`，部署事务在 `control\deployment.json`，维护与会话在 `control\maintenance.json`。不要删除这些记录来“解锁”。端口被无关进程占用时不会结束它。
 
-### 15.13 维护窗口更新
+飞书 `alert` 机器人通知完成、失败、回退及长期等待，并链接审校台。部署通知使用独立发件箱，发送失败或结果不确定不改变已经提交的部署结果，也不自动重放不确定通知。卡片链接默认只供运营在服务机桌面打开；手机或其他电脑打不开 `127.0.0.1`。
 
-固定一个窗口，人在跟前做，不要挂自动拉取。调度器是常驻进程，改了代码不重启不生效；`web/api/app.py` 的 `DIST` 在 import 时就定死，前端更新必须重启服务。
+GitHub 构建成功不代表服务机已更新。缺少 Chrome 登录、业务未激活或历史费用待核对属于业务状态；部署检查不自动抓取、付费、自检飞书或排期。
 
-在服务机上依次执行：
+### 15.10 受控验收与持续运行
+
+开发机可先执行版本化本机演练（Python 3.12.9、现有前端依赖及已下载的锁定 wheel）：
 
 ```powershell
-scripts\run_python.bat -m tools.schedule scheduler-disable
-git pull
-scripts\setup.bat
-npm.cmd --prefix web/ui ci
-npm.cmd --prefix web/ui run build
-scripts\run_python.bat -m tools.test_offline
-scripts\run_python.bat -m tools.schedule scheduler-enable
+scripts\run_python.bat tests\windows_deployment_rehearsal.py --wheelhouse state\release-wheelhouse --out state\deployment-implementation\windows-rehearsal
 ```
 
-- [ ] `test_offline` 全绿之后才 `scheduler-enable`。不绿就 `git checkout` 回上一个提交，把现场留给开发机查
-- [ ] 审校台也要重启：关掉原来那个 `run_web.bat` 窗口再开一次
+`--out` 必须是新目录。演练复制源码构建两个明确标为夹具的版本，在最终路径创建虚拟环境，启动真实本机 Web 进程，验证更新、健康失败回退和控制器重建后的恢复；最后按进程身份协作退出并保留日志、文件哈希与报告。远端版本、通知与时间推进为替身，调度和付费始终关闭，不注册计划任务、不使用 Chrome 业务 profile。这不能代替下一步的 GitHub 和服务机验收。
 
-配置改动一律走这套停-改-起，别只看文件时间判断有没有生效：等长改写（例如 `["10:00","17:00"]→["11:30","18:00"]`）`st_size` 不变、多数情况下 `st_mtime_ns` 也相同，长跑进程会继续用旧值。
+先用另一套**隔离实例、空凭据与假外部服务**演练：真实 GitHub 制品获取、成功切换、错误版本/绑定拒绝、候选启动失败回退、控制器在停止/启动/验证阶段中断后恢复、端口冲突、失联草稿、多标签页及旧页面提交。逐项记录实际 SHA、实例 ID、进程创建时间、切换耗时、前后数据哈希和通知状态。
 
-### 15.14 开发机侧：把服务机的数据拉回来
+再在业务服务机核对已有人工登录、各阶段验收、共享数据、已授权模式及运营体验。部署演练只能升级部署能力证据；不能升级抓取、模型账单或 Business Suite 发布证据。
 
-⛔ **云盘镜像本轮延期，所以这是唯一的备份手段，没有任何代码会替你做。** `state/published.jsonl` 不可重建，丢了会让已发过的帖子被再发一遍。
+每日核对审校台 `/runtime`、部署状态与调度实际心跳；机器无人登录时不报“业务正常”。本地告警不能发现本机断电，既有外部心跳仍按配置单独验收。
 
-从**开发机**主动去拉——拉的方向不需要服务机持有开发机的任何凭据。整个 `archive/` 与 `state/` 一起拷，每次按[第 1 节](#1-接续运行数据前先备份和核验)记下时间、文件数、字节数和哈希。
+### 15.11 备份与旧手工流程
 
-频率：现在 `archive/` 是空的，每周一次够；**第一次真实发布之后改成每天一次**。
+普通兼容更新不逐次复制整套图库；保留旧代码只提供代码回退能力。首次接续、数据迁移前完整备份核验；日常继续按第 1 节外拷整个 `shared/archive`、`shared/state` 及受保护凭据，备份须覆盖人工图片与设置。云盘镜像本轮延期；首次真实发布后每天异机备份，不能把制品保留期当作数据备份。
 
-### 15.15 这次决定留下的三个开口
-
-这三条是上面那些决定的代价，不是待办的缺陷。写在这里是为了出问题时能立刻认出来，不用再去别处查。
-
-| 开口 | 它长什么样 |
-|---|---|
-| **两份账本** | 两台机器各有 `archive/state`，`published.jsonl`、`paid_requests.jsonl`、`delta_state.json`、`feishu_outbox.json` 都是各算各的。防重因此按机器算——开发机提交过的发布，服务机的账本里没有记录；`[pipeline]` 那个月度预算实际也是两份，真正的上限只能设在模型供应商那一侧 |
-| **没有自动登录** | 重启、断电或 Windows Update 之后服务停在那里，直到有人登录进桌面。靠 15.12 那一眼发现 |
-| **三个账号换了机器** | 新浏览器 + 新出口重新登录，风控反馈是延迟的且只反馈一次。9224 本来就有 429 史 |
+受管实例停用原来的“scheduler-disable → git pull → setup → scheduler-enable”流程。开发检出仍可手动安装和测试；生产目录由控制器管理，不 stash、不原地 pull、不复制旧虚拟环境，不同时安装第二套调度计划任务。

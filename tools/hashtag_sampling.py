@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core import maintenance
 from core import hashtag_rank, hashtag_sampling, paid_model, trends_export
 from core.config import cfg
 from core.console import force_utf8
@@ -73,6 +74,7 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+@maintenance.guarded('sampling_cli')
 def main(argv=None) -> int:
     force_utf8()
     args = _parse_args(argv)

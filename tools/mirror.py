@@ -10,6 +10,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from core import maintenance
 from core.config import cfg  # noqa: E402
 from core.console import force_utf8  # noqa: E402
 from core.feishu import FeishuError  # noqa: E402
@@ -17,6 +18,7 @@ from core.mirror import DRIVE_ERROR_SUMMARIES, DriveClient, DriveError, MirrorEr
 from core.store import Archive, account_dirs, iter_post_dirs  # noqa: E402
 
 
+@maintenance.guarded('mirror_cli')
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='单向镜像归档原帖与 state；默认只读预览')
     parser.add_argument('command', nargs='?', choices=('status', 'preflight', 'run', 'resolve'), default='status')

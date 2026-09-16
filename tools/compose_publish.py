@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config import cfg                                # noqa: E402
+from core import maintenance
 from core.console import force_utf8                        # noqa: E402
 from core.store import Archive                             # noqa: E402
 from publish.compose import ComposeError, compose_post     # noqa: E402
@@ -78,6 +79,7 @@ def _print_post(post) -> None:
         print("    " + line)
 
 
+@maintenance.guarded('compose_cli')
 def main(argv=None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(

@@ -6,6 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core import maintenance
 from core import notify, review, translated
 from core.config import cfg
 from core.store import read_post_truth
@@ -57,6 +58,7 @@ def _freeze(post, source, expected_fingerprint):
         raise ApprovalConflict(str(exc)) from exc
 
 
+@maintenance.guarded('publication')
 async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text_sha256: str,
                   human_revision: str | None, review_revision: str | None, content_fingerprint: str,
                   now=None, inventory_reader=None, executor=None) -> dict:

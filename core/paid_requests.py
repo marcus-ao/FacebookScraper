@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.paid_model import FileLock
+from core import maintenance
 
 LEDGER_NAME = "paid_requests.jsonl"
 LOCK_NAME = "paid_requests.lock"
@@ -396,6 +397,7 @@ def ledger_month_snapshot(state_dir: Path, *, month: str,
 
 # 人工核对后结转未决请求。
 
+@maintenance.guarded('paid_ledger_cli')
 def _cli(argv=None) -> int:
     import argparse
 

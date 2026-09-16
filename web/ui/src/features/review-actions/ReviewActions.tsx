@@ -7,6 +7,8 @@ import { useReviewDecision } from '@/hooks/useTasks'
 import { isConflict } from '@/services/http'
 import type { DecisionAction, DecisionForm, ReviewContext } from '@/services/review'
 import type { TaskDetail } from '@/types/domain'
+import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
+import { deploymentStore } from '@/app/deployment-store'
 
 const titles: Record<DecisionAction, string> = {
   snoozed: '稍后再审', woke: '恢复审校', skipped: '这篇不发',
@@ -18,6 +20,7 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
   detail: ReviewContext; compact?: boolean; onChanged?: (detail: TaskDetail) => void
 }) {
   const [form, setForm] = useState<DecisionForm | null>(null)
+  useDeploymentDraft(form !== null)
   const [fresh, setFresh] = useState<TaskDetail | null>(null)
   const [refreshError, setRefreshError] = useState('')
   const trigger = useRef<HTMLButtonElement>(null)
@@ -33,6 +36,7 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
     handed_off: '我已自行处理', handoff_link: '补充发布链接' }
   const items: MenuProps['items'] = actions.map(action => ({ key: action, label: labels[action], danger: action === 'skipped' }))
   function open(action: DecisionAction) {
+    if (!deploymentStore.canStartEditing()) return
     mutation.reset(); setFresh(null); setRefreshError('')
     setForm({ action, reason: '', wakeAt: '', handoffUrl: detail.review.handoff_url || '' })
   }

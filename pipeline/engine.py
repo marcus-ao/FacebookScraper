@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from core import maintenance
 from core.config import cfg
 from core.store import Archive, post_directory
 from publish import journal
@@ -1253,6 +1254,7 @@ def _run_unlocked(*, account_dirs: list[Path], state_dir: Path,
     return 0
 
 
+@maintenance.guarded('processing')
 def run(*, account_dirs: list[Path], state_dir: Path,
         settings: Mapping[str, Any], if_stale: bool = False,
         detect_updates: bool = True,

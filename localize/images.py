@@ -24,6 +24,7 @@ from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 
+from core import maintenance
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
 from core import paid_model                        # noqa: E402
@@ -2168,6 +2169,7 @@ def run_show_prompt(settings: Settings,
 
 # ---------------------------------------------------------------------------
 
+@maintenance.guarded('images_cli')
 def main(argv=None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(

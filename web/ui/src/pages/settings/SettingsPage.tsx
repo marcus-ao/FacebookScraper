@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Alert, App, Button, Card, Collapse, Form, Input, InputNumber, Space, Spin, Tooltip, Typography } from 'antd'
 import { PageTitle } from '@/app/PageTitle'
 import { useSettings } from '@/hooks/useSettings'
-import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
+import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
 import { getSettings, saveSettings } from '@/services/settings'
 import { isConflict } from '@/services/http'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
@@ -31,7 +31,7 @@ function SettingsForm({ initial }: { initial: OperatingSettings }) {
   const { modal } = App.useApp()
   const values = { default_times: times.split(/[,，\s]+/).filter(Boolean), snooze_default_days: days ?? 0 }
   const dirty = JSON.stringify(values) !== JSON.stringify(base.editable), invalid = validateSettings(values)
-  useUnsavedChangesGuard({ dirty, message: 'settings' })
+  useDeploymentDraft(dirty)
   const apply = (data: OperatingSettings) => { setBase(data); setTimes(data.editable.default_times.join(', ')); setDays(data.editable.snooze_default_days) }
   const recover = async (keep: boolean) => {
     setBusy(true)

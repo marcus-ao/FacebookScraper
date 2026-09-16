@@ -9,6 +9,7 @@ import { PaidActionButton } from '@/components/PaidActionButton'
 import { initialTranslationDisabledReason, refinementDisabledReason, textCandidateDisabledReason } from '@/lib/action-reasons'
 import { isConflict } from '@/services/http'
 import { displayLinks } from '@/features/localization/model'
+import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
 import styles from './ContentJobs.module.css'
 
 const labels: Record<string, string> = { pending: '已受理，等待处理', running: '正在生成', succeeded: '本轮处理完成', failed: '处理尚未完成', interrupted: '处理已中断，待核对' }
@@ -26,6 +27,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   const capabilities = useQuery({ queryKey: ['refinement-capabilities', detail.id], queryFn: () => refinementCapabilities(detail.id) })
   const [consent, setConsent] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null)
   const [kind, setKind] = useState<'text' | 'image'>('text'), [media, setMedia] = useState(0), [instruction, setInstruction] = useState('')
+  const [submittedInstruction, setSubmittedInstruction] = useState('')
+  useDeploymentDraft(instruction !== submittedInstruction)
   const [templateOpen, setTemplateOpen] = useState(false)
   const template = useQuery({ queryKey: ['template', kind], queryFn: () => getTemplate(kind), enabled: templateOpen })
   const first = useContentJob('initial-translation', initial.data?.job, job => {
@@ -46,7 +49,7 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   const act = async (family: 'initial' | 'refine') => {
     setBusy(true); setError(null)
     try { if (family === 'initial' && initial.data) { first.accept(await initialTranslate(detail, initial.data, consent)); setConsent(false); await initial.refetch() }
-      else { next.accept(await refine(detail, kind, instruction, media)); await capabilities.refetch() } }
+      else { next.accept(await refine(detail, kind, instruction, media)); setSubmittedInstruction(instruction); await capabilities.refetch() } }
     catch (cause) { setError(cause); if (isConflict(cause) && !editing) { setConsent(false); await refresh(); await initial.refetch() } }
     finally { setBusy(false) }
   }

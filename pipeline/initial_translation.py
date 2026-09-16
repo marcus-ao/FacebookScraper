@@ -9,6 +9,7 @@ from uuid import uuid4
 from localize import images as image_de
 from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review
+from core import maintenance
 from core.config import cfg
 from core.store import read_post_truth
 from pipeline import engine, refinement, risk_scan
@@ -66,6 +67,7 @@ def capabilities(account_dir: Path, indexed: dict) -> dict:
     return result
 
 
+@maintenance.guarded('initial_translation')
 def submit(account_dir: Path, indexed: dict, *, source_fingerprint: str, source_text_sha256: str,
            review_revision: str | None, human_revision: str | None, executor=None) -> dict:
     account_dir = Path(account_dir)
@@ -85,7 +87,7 @@ def submit(account_dir: Path, indexed: dict, *, source_fingerprint: str, source_
         row.update(worker=refinement.current_worker(), operation_tracked=True)
         refinement._append(row)
     try:
-        (executor or refinement._executor).submit(execute, row, source)
+        maintenance.submit(executor or refinement._executor, 'initial_translation', execute, row, source)
     except Exception:
         refinement._append(dict(row, status='failed', error='executor_unavailable', message='处理线程未启动，请重新受理'))
         raise review.ReviewConflict('处理线程未启动，本次未调用模型')

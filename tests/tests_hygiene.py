@@ -25,7 +25,7 @@ def check(cond, msg):
 
 
 # 受检代码（不含测试、不含一次性脚手架）
-PROD_DIRS = ("core", "routes", "localize", "publish", "pipeline")
+PROD_DIRS = ("core", "routes", "localize", "publish", "pipeline", "deployment")
 
 
 def python_files(*, include_tests: bool, include_scaffolding: bool) -> list[Path]:

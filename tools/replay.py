@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from core import maintenance
 from core import integrity                                   # noqa: E402
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
@@ -382,6 +383,7 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
     return 0
 
 
+@maintenance.guarded('replay_cli')
 def main(argv=None) -> int:
     force_utf8()
     ap = argparse.ArgumentParser(

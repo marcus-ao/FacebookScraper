@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from core import maintenance
 from core.chrome import attach
 from core.config import cfg
 from core.translated import source_text_sha256
@@ -299,6 +300,7 @@ async def _execute_unlocked(
                 pass
 
 
+@maintenance.guarded('publication')
 async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
                   stamp: str, submit_enabled: bool,
                   source_refs: tuple[str, ...] = (),

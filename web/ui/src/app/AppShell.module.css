@@ -126,3 +126,11 @@
 .pageTitle {
   margin: 0 0 var(--rc-space-4);
 }
+
+.deployment {
+  padding: var(--rc-space-2) var(--rc-space-5);
+  background: var(--rc-surface-sunken);
+  border-bottom: 1px solid var(--rc-border);
+  font-size: var(--rc-font-secondary);
+  overflow-wrap: anywhere;
+}

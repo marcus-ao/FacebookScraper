@@ -6,13 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.chrome import attach
-from core.config import cfg
+from core import config, maintenance
 from core.console import force_utf8
 from publish.channel_evidence import SURFACE, capture
 
 
+@maintenance.guarded('channel_probe')
 async def run(channel):
-    c = cfg()
+    c = config.cfg()
     c.assert_chrome_profiles_isolated()
     pw, _browser, context = await attach(port=c.publish_debug_port, profile=c.publish_profile_dir,
         start_script=r'scripts\start_chrome_publish.bat', login_hint='DE 发布账号')

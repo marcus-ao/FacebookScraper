@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from core import maintenance
 from core.capture import (Collector, atomic_write_json, download_media,
                           prune_captures_days, MediaRateLimited)
 from core.capture_state import CaptureState, verified_images
@@ -848,6 +849,7 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
     return run_rc if run_rc else (2 if blocked_by_budget else 0)
 
 
+@maintenance.guarded('capture')
 def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     args = _parse_args(argv)
     # 由 Python 写 UTF-8 运行分隔线，避免 cmd 向日志混入 GBK。

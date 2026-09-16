@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
 
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
-from web.api import reader, writer, jobs, approval, calendar, settings, runtime                     # noqa: E402
+from web.api import reader, writer, jobs, approval, calendar, settings, runtime, deployment         # noqa: E402
+from core.maintenance import MaintenanceBlocked        # noqa: E402
 from localize import images                            # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
 from core import review, translated, localization                     # noqa: E402
@@ -30,6 +31,8 @@ from publish.compose import ComposeError               # noqa: E402
 force_utf8()
 
 app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
+app.add_middleware(deployment.AdmissionMiddleware)
+app.include_router(deployment.router)
 
 app.include_router(jobs.router)
 app.include_router(approval.router)
@@ -59,6 +62,11 @@ DIST = _dist_dir()
 @app.exception_handler(ArchivePathError)
 async def archive_error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": "源内容无法安全读取，请检查归档后重试"})
+
+
+@app.exception_handler(MaintenanceBlocked)
+async def maintenance_error(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=503, content={'code': 'maintenance', 'detail': str(exc)})
 
 
 @app.exception_handler(BudgetStopped)

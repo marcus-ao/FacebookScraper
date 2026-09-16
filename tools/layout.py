@@ -13,6 +13,7 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from core import maintenance
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from core import index_db, paid_model                       # noqa: E402
@@ -227,6 +228,7 @@ def build_index(base: Path, account: str, dry_run: bool) -> int:
     return 0
 
 
+@maintenance.guarded('layout_cli')
 def main(argv=None) -> int:
     force_utf8()
     ap = argparse.ArgumentParser(description="归档布局工具（J 组）")

@@ -5,18 +5,21 @@ import { Link, Outlet, useLocation, useMatches, useSearchParams } from 'react-ro
 
 import { Navigation } from './Navigation'
 import { RuntimeIndicator } from './RuntimeIndicator'
+import { DeploymentBanner } from './DeploymentBanner'
 import { LIST_SOURCE_LABEL, resolvePageMeta } from './page-meta'
 import { buildListSearch } from './search-params'
 import { tokens } from './theme'
 import { browserStore, readSiderCollapsed, writeSiderCollapsed } from './ui-preferences'
 import { cx } from '@/lib/css'
 import { useDialogTabLoop } from '@/hooks/useDialogTabLoop'
+import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard'
 import styles from './AppShell.module.css'
 
 const { Header, Sider, Content } = Layout
 
 export function AppShell() {
   useDialogTabLoop()
+  useUnsavedChangesGuard()
   const location = useLocation()
   const matches = useMatches()
   const [search] = useSearchParams()
@@ -68,7 +71,8 @@ export function AppShell() {
         </div>
       </Header>
 
-      <Layout>
+      <DeploymentBanner />
+      <Layout data-deployment-content>
         <Sider
           className={cx(styles.sider)}
           theme="light"

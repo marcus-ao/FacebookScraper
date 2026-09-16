@@ -6,6 +6,7 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from core import maintenance
 from core.chrome import attach
 from core.config import cfg
 from core.paid_model import atomic_write_json
@@ -18,6 +19,7 @@ from publish import business_suite as bs
 from publish import month_inventory
 
 
+@maintenance.guarded('planner_read')
 async def read_live_inventory() -> RemoteSlotInventory:
     """供已持发布锁的调用者读取；只新开并关闭自己的页，不启动/登录浏览器。"""
     bs.require_readback_evidence()
@@ -141,6 +143,7 @@ def read_cache(path: Path, *, now: datetime | None = None,
     return {**record, "status": status, "advisory_only": True, "age_seconds": age}
 
 
+@maintenance.guarded('planner_refresh')
 async def refresh_cache(path: Path, reader, *, state_dir: Path,
                         now: datetime | None = None, clock=None) -> dict:
     """低优先级尝试一次；reader 异常不损失之前的数据及观测时间。"""
