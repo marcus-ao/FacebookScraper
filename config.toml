@@ -241,3 +241,4 @@ stale_after_minutes = 45  # 外部心跳缺席阈值，不代表内容处理成�
 # 刷新前核验发布会话，读取与发布共用锁。
 enabled = false
 refresh_minutes = 60
+publish_grace_minutes = 60  # 排期时刻过后多久仍未观测到公开就告警；不据此断定未发布。

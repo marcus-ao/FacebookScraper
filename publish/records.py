@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -11,7 +12,7 @@ from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings, MirrorService
 from core.paid_model import atomic_write_json
 from core.process_identity import worker_alive
-from publish import journal, snapshots
+from publish import business_suite as bs, journal, planner_cache, snapshots
 
 
 def queue_mirror(source, stage, files, evidence, now):
@@ -105,6 +106,47 @@ def project(attempt, *, now=None) -> dict:
         done['errors'] = errors
         atomic_write_json(progress_path, progress)
         return {'status': row['status'], 'snapshot_id': row['snapshot_id'], 'projection': done}
+
+
+async def unschedule(account, indexed, *, reason: str, inventory_reader=None, now=None) -> dict:
+    """登记「我已在 Business Suite 手删了这条排期」。
+
+    系统不去自动删远端卡片：删错不可逆，而且当前没有删除控件的录证。它只负责核实——
+    实时读整月，确认这条的 remote ID 确实不在了，才解除防重。
+    ⛔ `published.jsonl` 的原始行保留不删，只追加一条撤销转移。
+    """
+    moment = now or datetime.now(timezone.utc)
+    if not isinstance(reason, str) or not reason.strip():
+        raise review.ReviewValidationError('请说明这条排期是怎么处理的')
+    with journal.PublishOperationLock(cfg().state_dir / 'publish.lock', allow_reentrant=True):
+        source, _ = store.read_post_truth(account, indexed)
+        ref = journal.source_ref(source['platform'], source['post_id'])
+        row = journal.scheduled_record_for_refs(cfg().state_dir, (ref,))
+        if row is None:
+            raise review.ReviewConflict('这篇没有可撤销的排期记录')
+        inventory = await (inventory_reader or planner_cache.read_live_inventory)()
+        if not isinstance(inventory, bs.RemoteSlotInventory) or not inventory.cards_loaded:
+            raise review.ReviewConflict('这次月历没有读完整，不能据此判定卡片已被删除')
+        at = datetime.fromisoformat(row['scheduled_at'])
+        if not inventory.covers((at,)):
+            raise review.ReviewConflict('这次月历没有覆盖该排期时刻，不能据此判定卡片已被删除')
+        wanted = {value for _, value in re.findall(r'(facebook|instagram)=(\d{6,})',
+                                                   row.get('remote_id') or '')}
+        if not wanted:
+            raise review.ReviewConflict('这条排期没有远端 ID，无法核实是否已删除；请人工核对发布账本')
+        present = {remote for card in inventory.cards for _, remote in card.remote_ids}
+        if wanted & present:
+            raise review.ReviewConflict('后台仍能读到这条排期卡片；请确认已在 Business Suite 删除后再登记')
+        cancelled = journal.transition(journal.attempt_from_row(row), journal.STATUS_CANCELLED_REMOTE,
+            recorded_at=moment.isoformat(), manual_evidence=True,
+            note='人工已在 Business Suite 删除；实时整月读取未见该 remote ID。' + reason.strip())
+        journal.append(cfg().state_dir, cancelled)
+        review.transition(account, source, 'unscheduled',
+            expected_revision=review.latest(account).get(source['post_id'], {}).get('revision'),
+            expected_source_sha256=translated.source_text_sha256(source['text']),
+            reason=reason.strip(), now=moment)
+        return {'status': 'pending_review', 'attempt_id': row['attempt_id'],
+                'remote_ids': sorted(wanted)}
 
 
 def recover(account, indexed) -> dict:

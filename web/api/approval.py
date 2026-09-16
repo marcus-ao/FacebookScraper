@@ -22,6 +22,24 @@ async def reconcile_publication(task_id: str):
     return await run_in_threadpool(records.recover, source.account_dir, dict(source.row))
 
 
+@router.post('/api/tasks/{task_id:path}/publication/unschedule')
+async def unschedule_publication(task_id: str, request: Request):
+    """人已在 Business Suite 手删之后来登记一次；系统实时读整月核实，不自己去删。"""
+    source = _source(task_id)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError('请求需要是对象')
+        if body.get('confirmed_deleted') is not True:
+            raise ValueError('请先在 Business Suite 删除这条排期，再回来登记')
+        return JSONResponse(await records.unschedule(
+            source.account_dir, dict(source.row), reason=body.get('reason', '')))
+    except (bs.PublishStepError, bs.ProbeRequired, review.ReviewConflict) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _source(task_id):
     source = reader.source_post(task_id)
     if source is None:

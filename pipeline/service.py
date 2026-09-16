@@ -18,7 +18,7 @@ from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
 from core.translated import source_text_sha256
 from pipeline import engine, notifications
-from publish import journal, planner_cache
+from publish import journal, observations, planner_cache
 
 
 class Runtime:
@@ -354,8 +354,24 @@ class Runtime:
                                                             state_dir=self.c.state_dir))
             if result.get('refresh_status') == 'failed':
                 self._system(f'calendar:{now.date()}', '发布月历刷新失败，页面保留上次成功的数据，请检查发布浏览器。', now)
+            elif result.get('refresh_status') == 'refreshed':
+                self.check_published(now)
         except Exception:
             self._system(f'calendar:{now.date()}', '发布月历暂未刷新，请检查本地日志和发布浏览器。', now)
+
+    def check_published(self, now: datetime):
+        """刚读完月历，顺带核一次到点的排期有没有真的公开。
+
+        ⛔ 措辞是「未观测到」不是「未发布」：没看到不等于没发出去，而这两句话会让人
+        做出完全不同的处置。
+        """
+        grace = float(self.c.get('calendar', 'publish_grace_minutes', 60))
+        for item in observations.overdue(self.c.state_dir, now=now, grace_minutes=grace):
+            self._system(
+                'unpublished:' + item['attempt_id'],
+                '这条排期的时刻已过，但月历上还没观测到它公开：%s %s（%s）。'
+                '请到 Business Suite 核对，不要直接重新提交。'
+                % (item['platform'], item['scheduled_at'], item['post_id']), now)
 
     def mirror_sources(self, now: datetime):
         for directory in engine.active_account_dirs(account_dirs(self.c.archive_dir)):

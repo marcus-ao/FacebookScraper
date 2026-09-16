@@ -49,6 +49,34 @@ class CalendarApiTests(unittest.TestCase):
         asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=ROWS),
                                                state_dir=self.state, now=NOW))
 
+    def test_local_layer_is_drawn_beside_the_remote_one_but_never_judges_slots(self):
+        """⛔ 本地记录只画给人看；拿它证明自己没冲突，等于不检查。"""
+        self.populate()
+        frozen = {"kind": "content_locked", "task_id": "fa_x/1", "platform": "facebook",
+                  "review_status": "content_locked", "at": None, "snapshot_id": "a" * 32,
+                  "remote_id": ""}
+        submitting = {**frozen, "kind": "submitting", "task_id": "fa_x/2",
+                      "review_status": "approved", "at": SLOT.isoformat()}
+        with patch.object(calendar.local_schedule, "entries",
+                          return_value=[frozen, submitting]):
+            data = self.client.get("/api/calendar").json()
+        self.assertEqual([item["kind"] for item in data["local"]],
+                         ["content_locked", "submitting"])
+        self.assertIsNone(data["local"][0]["at_business"])
+        self.assertEqual(data["local"][1]["at_business"], "2026-10-01T12:00:00+08:00")
+        self.assertIsNone(data["local_error"])
+        # 远端层不受影响：占用仍然只由读回来的卡片决定。
+        self.assertEqual(len(data["cards"]), 1)
+        self.assertEqual(data["cards"][0]["remote_ids"], {"facebook": "123456"})
+
+    def test_a_broken_review_ledger_is_reported_not_shown_as_an_empty_local_layer(self):
+        self.populate()
+        with patch.object(calendar.local_schedule, "entries",
+                          side_effect=ValueError("审校记录第 3 行损坏")):
+            data = self.client.get("/api/calendar").json()
+        self.assertEqual(data["local"], [])
+        self.assertIn("损坏", data["local_error"])
+
     def test_missing_is_explicit_and_get_does_not_create_state_or_open_browser(self):
         with patch("web.api.calendar.read_live_inventory", AsyncMock(side_effect=AssertionError("browser"))):
             result = self.client.get("/api/calendar")

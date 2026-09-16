@@ -21,6 +21,9 @@ STATUS_SUBMIT_AMBIGUOUS = "submit_ambiguous"
 STATUS_SUBMITTED_UNVERIFIED = "submitted_unverified"
 STATUS_SCHEDULED = "scheduled"
 STATUS_FAILED_PRE_SUBMIT = "failed_pre_submit"
+# 人在 Business Suite 手删了这条排期，且实时读整月核实过卡片确实不在了。
+# ⛔ 只有这个状态能解除 scheduled 的防重，所以它必须带实时读取证据，见 records.unschedule。
+STATUS_CANCELLED_REMOTE = "cancelled_remote"
 # 兼容旧调用方；新写盘不会再产生字面值 ``failed``。
 STATUS_FAILED = STATUS_FAILED_PRE_SUBMIT
 LEGACY_STATUS_FAILED = "failed"
@@ -31,6 +34,7 @@ _STATUSES = {
     STATUS_SUBMITTED_UNVERIFIED,
     STATUS_SCHEDULED,
     STATUS_FAILED_PRE_SUBMIT,
+    STATUS_CANCELLED_REMOTE,
 }
 BLOCKING_STATUSES = {
     STATUS_PREPARED,
@@ -330,12 +334,20 @@ def scheduled_record(state_dir: Path, post_id: str,
 
 def scheduled_record_for_refs(state_dir: Path,
                               refs: Iterable[str]) -> dict | None:
-    """任一来源曾被最终回读为 scheduled，就永久视为已发布。"""
+    """任一来源曾被最终回读为 scheduled，就永久视为已发布。
+
+    唯一的例外：那次尝试后来被 ``cancelled_remote`` 关掉——人已在 Business Suite 手删，
+    且系统实时读整月核实过卡片不在了。作废按 **attempt** 记，不按来源：同一来源另有
+    一次未撤销的 scheduled，照样拦住。
+    """
     wanted = {str(value).strip() for value in refs if str(value).strip()}
+    cancelled: set[str] = set()
     for row in reversed(load(state_dir)):
         if not (_row_refs(row) & wanted):
             continue
-        if row.get("status") == STATUS_SCHEDULED:
+        if row.get("status") == STATUS_CANCELLED_REMOTE:
+            cancelled.add(str(row.get("attempt_id")))
+        elif row.get("status") == STATUS_SCHEDULED and str(row.get("attempt_id")) not in cancelled:
             return row
     return None
 
@@ -380,10 +392,13 @@ def pending_record_for_refs(state_dir: Path,
 
 
 def scheduled_source_refs(state_dir: Path) -> set[str]:
-    """只把最终 scheduled 的 source_refs 视为已发布。"""
+    """只把最终 scheduled 的 source_refs 视为已发布；已撤销的那次尝试不算。"""
+    rows = load(state_dir)
+    cancelled = {str(row.get("attempt_id")) for row in rows
+                 if row.get("status") == STATUS_CANCELLED_REMOTE}
     out: set[str] = set()
-    for row in load(state_dir):
-        if row.get("status") == STATUS_SCHEDULED:
+    for row in rows:
+        if row.get("status") == STATUS_SCHEDULED and str(row.get("attempt_id")) not in cancelled:
             out.update(_row_refs(row))
     return out
 

@@ -18,7 +18,7 @@ STATUSES = frozenset({"pending_review", "edited", "content_locked", "snoozed",
 TERMINAL = frozenset({"skipped", "handed_off", "scheduled"})
 ACTIONS = frozenset({"edited", "content_locked", "unlocked", "snoozed", "woke",
                      "skipped", "handed_off", "handoff_link", "approved",
-                     "scheduled", "submit_failed"})
+                     "scheduled", "submit_failed", "unscheduled"})
 # 内容已冻结但尚未提交：四个编辑入口共用这个集合判闸。
 LOCKED = frozenset({"content_locked", "approved"})
 
@@ -170,8 +170,13 @@ class transaction:
         previous = current["status"]
         if previous in TERMINAL and not (
                 (previous == "handed_off" and action == "handoff_link")
-                or (previous == "scheduled" and action == "scheduled" and scheduled)):
+                or (previous == "scheduled" and action == "scheduled" and scheduled)
+                or (previous == "scheduled" and action == "unscheduled")):
             raise ReviewConflict("这篇已结束审校，不能直接改变其处理决定")
+        # 解除防重的证据在发布账本那边核（records.unschedule 实时读整月）；
+        # 这里只保证不是凭空把一篇没排期的帖子改回待审。
+        if action == "unscheduled" and previous != "scheduled":
+            raise ReviewConflict("只有已排期的帖子可以登记撤销")
         if previous == "approved" and action not in {"scheduled", "submit_failed"}:
             raise ReviewConflict("这篇正在提交，暂时不能修改审校决定")
         if previous == "content_locked" and action not in {
@@ -199,6 +204,8 @@ class transaction:
         reason = reason.strip()
         if action == "skipped" and not reason:
             raise ReviewValidationError("请填写这篇不发的理由")
+        if action == "unscheduled" and not reason:
+            raise ReviewValidationError("请说明这条排期是怎么处理的")
         if not isinstance(handoff_url, str) or len(handoff_url) > 2048:
             raise ReviewValidationError("手工发布链接无效")
         handoff_url = handoff_url.strip()
@@ -207,7 +214,8 @@ class transaction:
             if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username:
                 raise ReviewValidationError("请填写 http 或 https 开头的帖子链接")
         status = {"woke": "pending_review", "submit_failed": "pending_review",
-                  "unlocked": "edited", "handoff_link": "handed_off"}.get(action, action)
+                  "unscheduled": "pending_review", "unlocked": "edited",
+                  "handoff_link": "handed_off"}.get(action, action)
         deadline = None
         if action == "snoozed":
             deadline = _moment(wake_at) if wake_at is not None else business_day_wakeup(moment, snooze_days)
