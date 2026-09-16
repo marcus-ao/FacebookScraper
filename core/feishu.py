@@ -282,6 +282,10 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings,
         if actions:
             elements.append({'tag': 'action', 'actions': actions})
     title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
+    # 两个平台是独立的审校入口，标题里说清是哪一边，运营才知道该开哪个队列。
+    channels = {str(p['platform']) for p in payloads if p.get('platform')}
+    if kind in {'ready', 'backlog'} and len(channels) == 1:
+        title += ' · ' + channels.pop()
     if kind == 'monitor_saved' and len(payloads) == 1 and payloads[0].get('capture_status'):
         title += '：' + payloads[0]['capture_status']
     bot_name = BOT_LABELS.get(role or KIND_ROLES.get(kind))

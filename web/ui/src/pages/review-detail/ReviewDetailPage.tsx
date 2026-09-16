@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { PageTitle } from '@/app/PageTitle'
 import { buildDetailSearch, buildListSearch, parseHistoryListQuery, parseReviewListQuery } from '@/app/search-params'
+import { reviewPath } from '@/app/nav-model'
 import type { ListSource } from '@/app/search-params'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { historyListOptions, reviewListOptions } from '@/hooks/useTasks'
@@ -70,7 +71,17 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     if (loc.dirty) modal.confirm({ title: '采用候选将替换编辑区中的正文，继续吗？', okText: '采用候选', cancelText: '保留修改', onOk: adopt })
     else adopt()
   }
-  const back = `/${source}?${buildListSearch(search, source)}`
+  // 审校台按平台分了入口，返回要回到这一篇所属的那个，不能一律回 Facebook。
+  const back = source === 'review'
+    ? `${reviewPath(detail.platform)}?${buildListSearch(search, source)}`
+    : `/${source}?${buildListSearch(search, source)}`
+  useEffect(() => {
+    // 旧飞书卡片、书签和 ?task= 跳转都不带平台。这里补回去，导航选中项与面包屑才落对入口。
+    if (source !== 'review' || search.get('platform') === detail.platform) return
+    const next = new URLSearchParams(search)
+    next.set('platform', detail.platform)
+    setSearch(next, { replace: true })
+  }, [source, detail.platform, search.get('platform')])
   const adjacent = (delta: number) => { const row = rows[index + delta]; if (index >= 0 && row) void navigate(`/${source}/${idPath(row.id)}?${buildDetailSearch(search, source, { tab })}`) }
   useEffect(() => {
     const key = (event: KeyboardEvent) => {

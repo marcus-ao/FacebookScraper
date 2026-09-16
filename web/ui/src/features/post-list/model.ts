@@ -1,6 +1,6 @@
 import { bucketOf, QUEUE_BUCKETS, QUEUE_BUCKET_STATUSES } from '@/app/search-params'
 import type { ReviewListQuery } from '@/app/search-params'
-import type { QueueBucket, ReviewListItem, ReviewListResponse, TaskDetail } from '@/types/domain'
+import type { DisplayStatus, Platform, QueueBucket, ReviewListItem, ReviewListResponse, TaskDetail } from '@/types/domain'
 
 export function filterReviewRows(rows: readonly ReviewListItem[], filters: ReviewListQuery) {
   return rows.filter(row => bucketOf(row.status) === filters.queue
@@ -10,9 +10,13 @@ export function filterReviewRows(rows: readonly ReviewListItem[], filters: Revie
     && (!filters.alerts || row.hard_alerts.length > 0))
 }
 
-export function queueCounts(summary: ReviewListResponse['summary']): Record<QueueBucket, number> {
+/** platform 给定时只数那个平台：两个入口各自独立，角标不能互相串。 */
+export function queueCounts(summary: ReviewListResponse['summary'],
+                            platform?: Platform): Record<QueueBucket, number> {
+  const byStatus: Partial<Record<DisplayStatus, number>> =
+    (platform ? summary.by_platform_status?.[platform] : summary.by_status) ?? summary.by_status
   return Object.fromEntries(QUEUE_BUCKETS.map(bucket => [bucket,
-    QUEUE_BUCKET_STATUSES[bucket].reduce((count, status) => count + (summary.by_status[status] ?? 0), 0),
+    QUEUE_BUCKET_STATUSES[bucket].reduce((count, status) => count + (byStatus[status] ?? 0), 0),
   ])) as Record<QueueBucket, number>
 }
 

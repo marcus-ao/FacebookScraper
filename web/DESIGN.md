@@ -63,6 +63,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `POST /api/tasks/{id}/check` | 只计算；接收 localization、text_de/body_only，返回 caption、caption_length、hashtag_count、warnings、issues。`caption` 是 `localization.render()` 的成品，供审校台复制；前端不另拼一份 |
 | `POST /api/refinements/task/{id}` | `kind` 为 `text`、`image` 或 `suggest`。`suggest` 不需要 `instruction`，产出只读建议清单，不写任何译文 |
 | `GET /api/tasks/{id}` 的 `text_suggestions` | 最近一次建议及其时效：`items`、`dropped`、`current`、`generated_at`、新旧 prompt 版本。`current=false` 表示译文或源文已变，建议不能再采用 |
+| `GET /api/tasks` 的 `summary.by_platform_status` | 两平台各自的状态计数。审校台按平台分了入口，角标要按平台数，且不能由当前页重算 |
 | `POST /api/tasks/{id}/review` | 挂起、恢复、不发或人工接管；理由与 revision 按动作校验 |
 | `POST /api/tasks/{id}/export` | 完整生成 ZIP 后记录人工接管 |
 | `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at，锁内复核并创建单渠道排期 |

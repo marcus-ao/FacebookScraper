@@ -343,8 +343,12 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         return (0, at, "") if at else (1, "", item["id"])
 
     tasks.sort(key=sort_key)
-    counts = {state: sum(item["status"] == state for item in tasks)
-              for state in review.STATUSES | {STATUS_NOT_READY}}
+    states_seen = review.STATUSES | {STATUS_NOT_READY}
+    counts = {state: sum(item["status"] == state for item in tasks) for state in states_seen}
+    # 两个平台各自成为独立入口，角标要按平台分开数——列表可能只加载了其中一边。
+    by_platform = {name: {state: sum(item["status"] == state and item["platform"] == name
+                                     for item in tasks) for state in states_seen}
+                   for name in ("facebook", "instagram")}
     available_tags = sorted({value for item in tasks for value in item["tags"]})
     tasks = [item for item in tasks if (not status or item["status"] == status)
              and (not tag or (not item["tags"] if tag == "__untagged__" else tag in item["tags"]))
@@ -361,6 +365,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "total": len(tasks),
             "with_hard_alerts": sum(1 for t in tasks if t["hard_alerts"]),
             "by_status": counts,
+            "by_platform_status": by_platform,
             "tags": available_tags,
         },
     }

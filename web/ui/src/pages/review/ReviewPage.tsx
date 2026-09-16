@@ -9,14 +9,15 @@ import { filterReviewRows, queueCounts } from '@/features/post-list/model'
 import { ListFilters } from '@/features/post-list/ListFilters'
 import { PostTable } from '@/features/post-list/PostTable'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
-import type { ReviewListItem } from '@/types/domain'
+import type { Platform, ReviewListItem } from '@/types/domain'
 import { idPath } from '@/services/http'
 import styles from '@/features/post-list/PostTable.module.css'
 
-export function ReviewPage() {
+export function ReviewPage({ platform }: { platform: Platform }) {
   const query = useReviewList()
   const [search, setSearch] = useSearchParams()
-  const filters = parseReviewListQuery(search)
+  // 平台来自路由，不是筛选项——这个入口只看这一个平台。
+  const filters = { ...parseReviewListQuery(search), platform }
   const location = useLocation()
   const navigationType = useNavigationType()
   useEffect(() => {
@@ -24,10 +25,17 @@ export function ReviewPage() {
     if (navigationType === 'PUSH' && location.state?.refreshReview && query.data) void query.refetch()
   }, [location.key])
   const rows = filterReviewRows(query.data?.tasks ?? [], filters)
-  const counts = query.data ? queueCounts(query.data.summary) : null
-  const href = (row: ReviewListItem) => `/review/${idPath(row.id)}?${buildDetailSearch(search, 'review')}`
+  const counts = query.data ? queueCounts(query.data.summary, platform) : null
+  // 详情要带上平台，返回时才知道回哪个入口。
+  const detailSearch = () => {
+    const params = new URLSearchParams(search)
+    params.set('platform', platform)
+    return buildDetailSearch(params, 'review')
+  }
+  const href = (row: ReviewListItem) => `/review/${idPath(row.id)}?${detailSearch()}`
   const columns = createPostColumns<ReviewListItem>({
-    columns: ['problem', 'thumbnail', 'summary', 'status', 'time', 'platform', 'tags', 'actions'],
+    // 不带 platform 列：这个入口里每一行都是同一个平台，显示出来是噪声。
+    columns: ['problem', 'thumbnail', 'summary', 'status', 'time', 'tags', 'actions'],
     summaryHref: href,
     summaryNote: row => row.hard_alerts.some(alert => alert.code === 'unknown_collaborator')
       ? <span className={styles.thirdParty}>第三方作者 · 需授权初翻</span> : null,
@@ -55,8 +63,9 @@ export function ReviewPage() {
         <Tabs activeKey={filters.queue} onChange={value => change('queue', value)} items={QUEUE_BUCKETS.map(key => ({
           key, label: `${QUEUE_BUCKET_LABEL[key]} ${counts?.[key] ?? 0}`,
         }))} />
+        {/* 平台不在这里筛：它是入口本身。历史页仍然保留跨平台检索。 */}
         <ListFilters filters={filters} months={query.data?.tasks.map(row => row.month) ?? []}
-          tags={query.data?.summary.tags ?? []} onChange={change} />
+          tags={query.data?.summary.tags ?? []} onChange={change} platformFilter={false} />
       </div>
     </div>
     {query.error && <div className={styles.error}><Alert type="error" showIcon title="暂时无法读取审校队列"

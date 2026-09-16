@@ -2,20 +2,28 @@ import { describe, expect, it } from 'vitest'
 
 import { NAV_ITEMS, navKeyForPath, selectedNavKeys } from './nav-model'
 
-describe('主导航只有四项业务界面', () => {
-  it('就是这四项，顺序也是这个', () => {
+describe('主导航只有五项业务界面', () => {
+  it('就是这五项，顺序也是这个', () => {
     expect(NAV_ITEMS.map((item) => item.key)).toEqual([
-      'review',
+      'review-facebook',
+      'review-instagram',
       'history',
       'calendar',
       'settings',
     ])
     expect(NAV_ITEMS.map((item) => item.label)).toEqual([
-      '审校队列',
+      'Facebook 待审',
+      'Instagram 待审',
       '历史归档',
       '发布月历',
       '运营设置',
     ])
+  })
+
+  it('两个平台是并列入口，不是同一个列表的筛选项', () => {
+    expect(NAV_ITEMS.map((item) => item.path)).toContain('/review/facebook')
+    expect(NAV_ITEMS.map((item) => item.path)).toContain('/review/instagram')
+    expect(NAV_ITEMS.map((item) => item.path)).not.toContain('/review')
   })
 
   it('⛔ 不包含「运行状态」', () => {
@@ -27,7 +35,8 @@ describe('主导航只有四项业务界面', () => {
 
 describe('navKeyForPath：选中项由路由算，不另存 state', () => {
   it.each([
-    ['/review', 'review'],
+    ['/review/facebook', 'review-facebook'],
+    ['/review/instagram', 'review-instagram'],
     ['/history', 'history'],
     ['/calendar', 'calendar'],
     ['/settings', 'settings'],
@@ -35,16 +44,24 @@ describe('navKeyForPath：选中项由路由算，不另存 state', () => {
     expect(navKeyForPath(path)).toBe(expected)
   })
 
-  it.each([
-    ['/review/fa_neakasaofficial/122100548013379375', 'review'],
-    ['/history/in_neakasa.tech/3975547640610092585', 'history'],
-  ])('详情页仍然亮着它所属的列表：%s → %s', (path, expected) => {
-    expect(navKeyForPath(path)).toBe(expected)
+  it('历史详情仍然亮着历史归档', () => {
+    expect(navKeyForPath('/history/in_neakasa.tech/3975547640610092585')).toBe('history')
   })
 
-  it('带查询串不影响判断', () => {
-    expect(navKeyForPath('/review')).toBe('review')
-    expect(selectedNavKeys('/review')).toEqual(['review'])
+  it('审校详情按链接带的平台亮对应入口', () => {
+    const path = '/review/fa_neakasaofficial/122100548013379375'
+    expect(navKeyForPath(path, '?platform=facebook')).toBe('review-facebook')
+    expect(navKeyForPath(path, '?queue=review&platform=instagram')).toBe('review-instagram')
+  })
+
+  it('⛔ 不从账号目录前缀猜平台 —— 那是归档层的约定，不归导航解析', () => {
+    expect(navKeyForPath('/review/fa_neakasaofficial/122100548013379375')).toBeNull()
+    expect(navKeyForPath('/review/fa_x/1', '?platform=nonsense')).toBeNull()
+  })
+
+  it('selectedNavKeys 同样认查询串里的平台', () => {
+    expect(selectedNavKeys('/review/facebook')).toEqual(['review-facebook'])
+    expect(selectedNavKeys('/review/fa_x/1', '?platform=instagram')).toEqual(['review-instagram'])
   })
 
   it.each([

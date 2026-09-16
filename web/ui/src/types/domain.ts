@@ -162,6 +162,8 @@ export interface ReviewListResponse {
     readonly with_hard_alerts: number
     /** 页签计数由服务端提供，不能以当前页重算。 */
     readonly by_status: Readonly<Record<DisplayStatus, number>>
+    /** 两个平台各自的页签计数；旧后端未提供时角标退回全量口径。 */
+    readonly by_platform_status?: Readonly<Record<Platform, Readonly<Record<DisplayStatus, number>>>>
     readonly tags: readonly string[]
   }
 }
