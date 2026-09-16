@@ -25,9 +25,19 @@ export function patchReviewList(data: ReviewListResponse, detail: TaskDetail): R
   if (!previous) return data
   const text = (detail.text.de_human || detail.text.de_machine || '').replace(/\s+/g, ' ').trim()
   const byStatus = { ...data.summary.by_status }
+  // 角标读的是 by_platform_status，两份都得跟着动，否则审完一篇页签数字原地不动。
+  const byPlatform = data.summary.by_platform_status
+    ? { ...data.summary.by_platform_status,
+        [detail.platform]: { ...data.summary.by_platform_status[detail.platform] } }
+    : undefined
   if (previous.status !== detail.status) {
     byStatus[previous.status] = Math.max(0, (byStatus[previous.status] ?? 0) - 1)
     byStatus[detail.status] = (byStatus[detail.status] ?? 0) + 1
+    const lane = byPlatform?.[detail.platform] as Record<string, number> | undefined
+    if (lane) {
+      lane[previous.status] = Math.max(0, (lane[previous.status] ?? 0) - 1)
+      lane[detail.status] = (lane[detail.status] ?? 0) + 1
+    }
   }
   return {
     ...data,
@@ -37,6 +47,7 @@ export function patchReviewList(data: ReviewListResponse, detail: TaskDetail): R
       text_de_excerpt: text.length > 90 ? text.slice(0, 90) + ' …' : text,
     }),
     summary: { ...data.summary, by_status: byStatus,
+      ...(byPlatform ? { by_platform_status: byPlatform } : {}),
       tags: [...new Set(data.tasks.flatMap(row => row.id === detail.id ? detail.tags : row.tags))].sort(),
     },
   }

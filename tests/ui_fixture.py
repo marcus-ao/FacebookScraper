@@ -78,7 +78,12 @@ class UIFixture:
             if status == "not_ready":
                 row["text_de_excerpt"] = ""
             data["tasks"].append(row)
-        data["summary"].update(total=8, with_hard_alerts=1, by_status={status:1 for status in statuses}, tags=["Riko"])
+        # 两个计数要一起改：审校台按平台分了入口，角标读的是 by_platform_status。
+        # 只改 by_status 会让页签停在旧数字上，而行数已经换成新的了。
+        counts = {status: 1 for status in statuses}
+        data["summary"].update(total=8, with_hard_alerts=1, by_status=counts, tags=["Riko"],
+                               by_platform_status={"facebook": counts,
+                                                   "instagram": {status: 0 for status in statuses}})
         self.overrides[("GET", "/api/tasks")] = (200, data)
         return data
 

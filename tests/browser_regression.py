@@ -29,7 +29,9 @@ def stage_c(page, ui):
     page.get_by_role("tab",name="未就绪 1",exact=True).click()
     expect(page.get_by_text("第三方作者 · 需授权初翻")).to_be_visible()
     expect(page.locator('[data-problem="hard_alert"]')).to_be_visible()
-    choose(page,"筛选平台","Facebook")
+    # 审校台按平台分了入口，平台不再是筛选项；历史页仍然保留跨平台检索。
+    expect(page.get_by_role("combobox", name="筛选平台")).to_have_count(0)
+    expect(page.get_by_role("link", name="Instagram 待审", exact=True)).to_be_visible()
     choose(page,"筛选月份","2026-09")
     choose(page,"筛选分类","Riko")
     page.get_by_role("button", name="硬闸 1", exact=True).click()
@@ -58,7 +60,7 @@ def stage_c(page, ui):
     assert ui.count_list_gets() == 1
     write=[entry for entry in ui.requests if entry["method"]=="POST"][-1]
     assert write["body"] == {"source_text_sha256":row["source_text_sha256"],"review_revision":row["review"]["revision"],"action":"skipped","reason":"暂不发布","handoff_url":""}
-    page.get_by_role("link",name="审校队列",exact=True).click()
+    page.get_by_role("link",name="Facebook 待审",exact=True).click()
     expect(page.locator("tr[data-task-id]")).to_have_count(2)
     assert ui.count_list_gets() == 2
     ui.overrides.pop(("GET", "/api/tasks"))
@@ -441,7 +443,8 @@ def stage_h(page, ui):
 
 def stage_i(page, ui):
     task_id=ui.fx.fb_id
-    for path,title in [('/','审校队列'),('/?task='+task_id,'单篇审核'),('/?view=history','历史归档'),('/?view=calendar','发布月历'),('/?view=settings','运营设置'),('/?view=runtime','运行状态')]:
+    # 旧入口落到 Facebook 待审：`/` 与 `?view=review` 都不带平台，取第一个入口。
+    for path,title in [('/','Facebook 待审'),('/?task='+task_id,'单篇审核'),('/?view=history','历史归档'),('/?view=calendar','发布月历'),('/?view=settings','运营设置'),('/?view=runtime','运行状态')]:
         page.goto(ui.fx.base_url+path,wait_until='networkidle');expect(page.get_by_role('heading',level=1,name=title,exact=True)).to_be_visible()
     page.goto(ui.fx.base_url+'/review',wait_until='networkidle')
     for view in ['历史归档','发布月历','运营设置']:
