@@ -1,6 +1,6 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化及整体复审同步至 2026-09-16（§1.4–1.7），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化及整体复审同步至 2026-09-16（§1.4–1.8），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
@@ -201,7 +201,7 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 
 ### 1.8 Windows 自动部署实施（2026-09-16）
 
-从 `4ecc564` 建立独立 `.worktrees/service-auto-update`，分支 `codex/service-auto-update`；archive/state/.env 均为隔离绑定，只复用主检出 Python。实现 Actions 部署包、维护协议、受管进程、轮询回退与页面协调；主检出未改动，未推送或注册真实服务机任务。
+从 `4ecc564` 建立独立 `.worktrees/service-auto-update`，分支 `codex/service-auto-update`；archive/state/.env 均为隔离绑定，只复用主检出 Python。实现提交 `ab560c7` 已快进并入 `main`，包含 Actions 部署包、维护协议、受管进程、轮询回退与页面协调；未注册真实服务机任务。
 
 固定控制器、各版本及共享数据分开。代码回退不恢复旧账本和人工稿；两个运营偏好保存在共享状态。
 原子登记涵盖排队及执行生命周期；调度与 Web 自行退出，维护验证不触发真实抓取、模型、飞书或排期。
@@ -209,17 +209,22 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 
 独立复查中复现并关闭：调度心跳先于初始化、偏好 CAS 快照竞态、预告期间回退/模式变更竞态、普通重启恢复错误版本、失败候选每秒重试、旧 CLI 跨切换受理、故障版回退后重装循环，以及横幅跳转丢稿和确认框被维护冻结。实际安装还复现 Windows 目录重命名占用；仅重试本地重命名最多 3 秒，仍拒绝覆盖既有版本。
 
-证据保存在此 worktree 的 `state/`，不随 Git 提交：
+原实施证据已迁入主检出 `state/service-auto-update/worktree/state/`，不随 Git 提交：
 
-- [完整 Python 隔离回归：88/88](../state/offline-validation-20260916T104828Z/results.json)。
-- [最终前端单测：31 文件 / 566 项](../state/deployment-implementation/frontend-final-tests.log)、[TypeScript/Vite 构建](../state/deployment-implementation/frontend-final-build.log)。
-- [版本化浏览器：12/12 组](../state/deployment-implementation/browser-all-final.log)、[部署页面：6/6 场景](../state/deployment-implementation/frontend-browser.json)。
-- [发布包、安装入口与 hygiene 定向复验](../state/offline-validation-20260916T110734Z/results.json)、[控制器回退 25 项](../state/offline-validation-20260916T111226Z/tests_deployment_controller.log)。
-- [本机 Windows 完整部署演练：4/4](../state/deployment-implementation/wr-20260916-04/report.json)、[逐阶段日志](../state/deployment-implementation/windows-rehearsal-04.log)：实际离线安装 61.94 秒，A→B 切换 3.031 秒，健康失败恢复 6.094 秒，中断恢复 7.110 秒。预告及失败截止时间由夹具加速，测量不代表正式服务机停顿保证；11 份共享数据哈希不变，9 个受管启动确认退出，3 个独立最终路径环境的导入与 `pip check` 通过。
-- [图片操作完整浏览器复验：10/10](../state/offline-validation-20260916T111007Z/tests_browser_workflow.log)、[最终静态路由与资源检查](../state/deployment-implementation/static-cutover.json)。
-- [最终独立复查](../state/deployment-implementation/final-integration-review.md)；保留失败及修复后的证据，不把重试前的失败报告改写为成功。
+- [完整 Python 隔离回归：88/88](../state/service-auto-update/worktree/state/offline-validation-20260916T104828Z/results.json)。
+- [最终前端单测：31 文件 / 566 项](../state/service-auto-update/worktree/state/deployment-implementation/frontend-final-tests.log)、[TypeScript/Vite 构建](../state/service-auto-update/worktree/state/deployment-implementation/frontend-final-build.log)。
+- [版本化浏览器：12/12 组](../state/service-auto-update/worktree/state/deployment-implementation/browser-all-final.log)、[部署页面：6/6 场景](../state/service-auto-update/worktree/state/deployment-implementation/frontend-browser.json)。
+- [发布包、安装入口与 hygiene 定向复验](../state/service-auto-update/worktree/state/offline-validation-20260916T110734Z/results.json)、[控制器回退 25 项](../state/service-auto-update/worktree/state/offline-validation-20260916T111226Z/tests_deployment_controller.log)。
+- [本机 Windows 完整部署演练：4/4](../state/service-auto-update/worktree/state/deployment-implementation/wr-20260916-04/report.json)、[逐阶段日志](../state/service-auto-update/worktree/state/deployment-implementation/windows-rehearsal-04.log)：实际离线安装 61.94 秒，A→B 切换 3.031 秒，健康失败恢复 6.094 秒，中断恢复 7.110 秒。预告及失败截止时间由夹具加速，测量不代表正式服务机停顿保证；11 份共享数据哈希不变，9 个受管启动确认退出，3 个独立最终路径环境的导入与 `pip check` 通过。
+- [图片操作完整浏览器复验：10/10](../state/service-auto-update/worktree/state/offline-validation-20260916T111007Z/tests_browser_workflow.log)、[最终静态路由与资源检查](../state/service-auto-update/worktree/state/deployment-implementation/static-cutover.json)。
+- [最终独立复查](../state/service-auto-update/worktree/state/deployment-implementation/final-integration-review.md)；保留失败及修复后的证据，不把重试前的失败报告改写为成功。
 
 上述代码和隔离场景为 **离线通过**；GitHub 托管工作流、正式服务机计划任务/登录重启、真实飞书与业务仍为 **待真实联调**。前端保留已有大 chunk 提示；一次临时 HTTP 退出超时和图片提示等待失败的记录保留，定向及浏览器分组复验通过。没有真实通知、抓取、模型付费或发布操作。
+
+交付前在最终实现提交上重新完成 **88/88 Python 脚本**和前端 **566 项**；[最终全量结果](../state/service-auto-update/worktree/state/offline-validation-20260916T112659Z/results.json)保留。快进合并后按锁文件重装主检出前端依赖，[566 项单测](../state/service-auto-update/main-ui-tests.log)、[生产构建](../state/service-auto-update/main-ui-build-final.log)、[静态路由演练](../state/service-auto-update/main-static-cutover.json)和[6 项部署页面场景](../state/deployment-implementation/frontend-browser.json)均通过；首次构建缺依赖的失败日志保留。
+
+清理前已核对 **83,603 个文件的 SHA-256**，原 `state/`、本机配置、构建产物与依赖完整保全至 `state/service-auto-update/worktree/`，7 个目录联接改指向同一保全目录内的依赖。原报告绝对路径不改写，旧 worktree 根路径按[保全记录](../state/service-auto-update/preservation.json)映射；迁移后的虚拟环境仅作证据，不作为可搬移环境启动。
+[交付核验记录](../state/service-auto-update/validation.json)保存最终提交、远端状态和本次分支/worktree 清理结果；其余排期 worktree 保留。
 
 ## 2. 红线
 
