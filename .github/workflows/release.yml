@@ -16,8 +16,11 @@ jobs:
         shell: pwsh
     env:
       PYTHONIOENCODING: utf-8
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}\fbscraper-playwright
     steps:
+      - name: Configure isolated browser location
+        run: |
+          $browserCachePath = Join-Path $env:RUNNER_TEMP 'fbscraper-playwright'
+          "PLAYWRIGHT_BROWSERS_PATH=$browserCachePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false

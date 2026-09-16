@@ -226,6 +226,8 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 清理前已核对 **83,603 个文件的 SHA-256**，原 `state/`、本机配置、构建产物与依赖完整保全至 `state/service-auto-update/worktree/`，7 个目录联接改指向同一保全目录内的依赖。原报告绝对路径不改写，旧 worktree 根路径按[保全记录](../state/service-auto-update/preservation.json)映射；迁移后的虚拟环境仅作证据，不作为可搬移环境启动。
 [交付核验记录](../state/service-auto-update/validation.json)保存最终提交、远端状态和本次分支/worktree 清理结果；其余排期 worktree 保留。
 
+[首次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091541154)在构建前拒绝 job 级 `runner.temp` 表达式；修正为 runner 启动后的 PowerShell 步骤写入 `GITHUB_ENV`。`actionlint 1.7.12` 已[复现原错误](../state/service-auto-update/workflow-lint-before.log)，[修正后通过](../state/service-auto-update/workflow-lint-after.log)，实际步骤也在隔离环境文件上验证。托管测试与制品产出仍以对应提交的工作流结果为准。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
