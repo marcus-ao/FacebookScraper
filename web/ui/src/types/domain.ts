@@ -263,6 +263,8 @@ export interface LocalizationValidation {
   readonly issues: readonly ValidationIssue[]
   readonly warnings: readonly ValidationIssue[]
   readonly ready: boolean
+  /** 服务端拼好的成品文案：正文 + 链接或引导话术 + 话题标签。复制用它，不在前端重拼。 */
+  readonly caption?: string
   /** 替换链接占位符之后的最终发布文案长度。 */
   readonly char_count: number
   readonly body_char_count: number
@@ -423,6 +425,8 @@ export interface ApprovalConflictPayload {
 
 export interface CheckResult {
   readonly highlights: readonly Highlight[]
+  /** 与 caption_length 出自同一次计算的成品文案；只有分区草稿路径会返回。 */
+  readonly caption?: string
   readonly caption_length: number
   readonly hashtag_count: number
   readonly warnings: readonly ValidationIssue[]

@@ -272,7 +272,9 @@ def validate(draft: dict) -> dict:
     else:
         issue("unsupported_platform", "不支持这个目标平台")
     caption = render(draft)
-    counts = {"char_count": len(caption), "body_char_count": len(draft.get("body_de") or ""),
+    # 一并回传成品文案：审校台的复制按钮要给出的就是这一份，不能在前端另拼一遍。
+    counts = {"caption": caption, "char_count": len(caption),
+              "body_char_count": len(draft.get("body_de") or ""),
               "hashtag_count": len(tags)}
     if draft.get("platform") == "instagram":
         if counts["char_count"] >= 1980:

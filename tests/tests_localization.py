@@ -98,6 +98,17 @@ class LocalizationTests(unittest.TestCase):
         self.assertEqual(draft["ig_bio_url"], "")
         self.assertTrue(loc.validate(draft)["ready"])
 
+    def test_validation_hands_back_the_exact_caption_that_render_produces(self):
+        # 复制按钮拿的就是这一份；前端不得另拼一版，否则贴进 Business Suite 的会是别的东西。
+        draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
+        draft.update(hashtags_confirmed=True, body_de="Sauber jetzt {{link1}} täglich.")
+        draft["links"][0].update(target_url="https://de.example/p", confirmed=True)
+        result = loc.validate(draft)
+        self.assertEqual(result["caption"], loc.render(draft))
+        self.assertEqual(len(result["caption"]), result["char_count"])
+        self.assertIn("https://de.example/p", result["caption"])
+        self.assertNotIn("{{link1}}", result["caption"])
+
     def test_instagram_body_keeping_a_profile_hint_warns_but_never_blocks(self):
         self.source["platform"] = "instagram"
         draft = self.draft()

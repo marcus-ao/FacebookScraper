@@ -203,7 +203,8 @@ async def post_check(task_id: str, request: Request) -> JSONResponse:
         return JSONResponse(dict(result, caption_length=len(text_de),
                                  hashtag_count=len(translated.extract_hashtags(text_de)), warnings=[], issues=[]))
     validation = localization.validate(draft)
-    return JSONResponse(dict(result, caption_length=validation['char_count'],
+    return JSONResponse(dict(result, caption=validation['caption'],
+                             caption_length=validation['char_count'],
                              hashtag_count=validation['hashtag_count'], warnings=validation['warnings'],
                              issues=validation['issues']))
 

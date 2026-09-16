@@ -10,5 +10,6 @@
 .body:has([data-initial-translation]) { --rc-initial-space: var(--rc-initial-panel-h); }
 .source { display: flex; gap: var(--rc-space-4); margin-block: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
 .storage { display: flex; flex-wrap: wrap; gap: var(--rc-space-2) var(--rc-space-4); margin-block: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
-.counter { text-align: right; color: var(--rc-fg-muted); font-size: var(--rc-font-meta); margin: var(--rc-space-2) 0; }
+.counter { display: flex; align-items: center; justify-content: flex-end; gap: var(--rc-space-2);
+  color: var(--rc-fg-muted); font-size: var(--rc-font-meta); margin: var(--rc-space-2) 0; }
 @media (max-width: 1279px) { .markCount { display: none; } }

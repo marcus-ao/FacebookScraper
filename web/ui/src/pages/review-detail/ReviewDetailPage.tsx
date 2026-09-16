@@ -22,6 +22,7 @@ import { ContentJobs } from '@/features/content-jobs/ContentJobs'
 import { DetailDrawers } from '@/features/diagnostics/DetailDrawers'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
+import { CopyButton } from '@/components/CopyButton'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
@@ -113,7 +114,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
       }} /></div>}
       {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images} onProgress={setUnseen} /></div>}
-      <div className={styles.counter}>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</div>
+      <div className={styles.counter}>
+        <span>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</span>
+        <CopyButton text={loc.caption} label="复制发布文案"
+          {...(loc.approximate ? { disabledReason: '正在校验，请稍候取准确文案' } : {})} />
+      </div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
       <CategoryEditor detail={detail} disabled={loc.editing} apply={apply} refresh={refresh} />
