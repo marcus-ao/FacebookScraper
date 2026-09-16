@@ -149,7 +149,8 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 已补严格审校账本读取、模型恢复、源图内容指纹、冻结快照/恢复投影、历史分页/旧详情、SQLite 实际一致性和 runtime binding；原历史/索引读取另有真实证据，最终全量加相关补跑已通过。
 - scheduler 已有 install/status/disable/enable；月度样本/覆盖不足保留、双平台整批截止预算、模型/标签周采样/远端 I/O 独立执行器已有定向证据。批次 operation_id 与付费成本关联，CAS 恢复不重发付费请求。实际安装/停用/恢复未验收。
 - 处理 P50/P95 和晨间就绪率、源发帖至首次待审的 source_created_at/post_content_ready 关联已通过 6 项 runtime_status 测试，源发帖指标含发现等待，不为旧数据补造事实。
-- 风险路径与三类采样已有离线验证。IG 采样遵守 C7 持久停机、仅接受明确同名 hashtag 容器的累计 count。Trends 新增 CSV 专属被动控件、完整摘要上下文、BOM/CRLF/周月解析；恢复共享锁并要求 `trends-status` 的 revision。新增 4 项审查修复的 11 项导出测试通过，T1–T4 复审已关闭；真实 CSV/模型/平台采样仍未验收。
+- 风险路径与三类采样已有离线验证。IG 采样遵守 C7 持久停机、仅接受明确同名 hashtag 容器的累计 count。Trends 新增 CSV 专属被动控件、完整摘要上下文、BOM/CRLF/周月解析；恢复共享锁并要求 `trends-status` 的 revision。新增 4 项审查修复的 11 项导出测试通过，T1–T4 复审已关闭；真实 CSV/模型/平台采样仍未验收。⛔ **标签热度推荐 2026-09-15 起明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)），`[hashtags].enabled = false` 是决定不是缺口，采集器代码保留不删。
+- 阶段二本轮补上：翻译提示词按渠道渲染（IG 删掉原文的 bio 引导句，见第 8 节）、审校台按平台分成两个入口、一键复制服务端算好的成品文案、模型给只读优化建议交人逐条决定。**法语明确延期**，本轮不做 locale 抽象。
 - 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了临时真实后端验证。旧 FB 机器译文 prompt 5、当前 prompt 7（按渠道渲染，第 8 节）；当前无可接受德语图，原 FB 目录未发现 media_de。找到的 3 张历史德语图均属冻结 `.tech`，不作 FB 或新 `.global` 素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
 - 飞书按帖聚合/阶段路由/晨报/有效首图状态与摘要、原卡冻结/人工 resolve、多收件人部分失效漏发和镜像周期包/大证据独立版本已有离线验证。当前角色有效原卡补送保留投递 ID；旧角色结转及部分失效保留旧 cancelled 卡，只给漏收者生成仍有效的新提醒。企业投递和恢复仍待权限。
 - 完整月历实际读取本次已真实通过，公开观察按 remote ID，不按时钟；业务层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
