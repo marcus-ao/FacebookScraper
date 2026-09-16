@@ -255,6 +255,8 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F3-1 FB 正文链接/实时计数 | 离线通过 | 光标插入 `{{linkN}}`，按已选 URL 替换；未插入末尾追加，非法编号/目标/token 拒绝，IG 不支持；`/check` 按最终草稿计数 | 真实落地页另验 | `tests_localization`/`tests_web_review`/浏览器回归：插入位置、最终字符数、无重复、失效拒绝 |
 | F3-2 IG CTA/稳定 bio | 待真实联调 | 链接移出正文、稳定聚合页只读；不自动改 bio | 业务确认聚合页 | 一篇 IG 最终 CTA 与当前 bio 对应 |
 | F3-3/F3-4 优化/付费边界 | 离线通过 | 单篇指令追加、模板只读、每图最多受理 3 次、统一预算/许可 | 真实模型账单另验 | `tests_refinement`/`tests_paid_requests`：并发第 4 次拒绝、人工图不变 |
+| F3-3 优化建议（新） | 离线通过 | 模型逐条给 `{quote, replacement, kind, why}`，人逐条决定；与两种优化共用账本/锁/付费执行器，作为第三种 kind | 真实模型账单另验 | `tests_suggestions` 16 项：定位唯一、越界逐条丢弃、译文变化失效、生成后两份译文字节不变 |
+| F3-3 一键复制发布文案（新） | 离线通过 | `validate()` 回传 `caption`，/check 与详情共用；服务端结果未到时按钮禁用 | 无 | `tests_localization`：`caption` 逐字符等于 `render()`；`CopyButton` 四项前端用例 |
 | F3-4 模型任务恢复/旧候选 | 离线通过 | 按进程/job/request/source/prompt 对账，恢复不发新付费请求 | 不确定项人工核账 | `tests_content_recovery`/`tests_refinement`：执行中不抢占、未请求收敛、不确定阻塞、源变候选不可应用 |
 | F3-4 恢复 UI/费用呈现 | 离线通过 | job 与批次 `operation_id` 关联 paid request、费用、CAS 版本；人工核对恢复不重新付费 | 真实供应商核账另验 | runtime/content recovery 后端定向；浏览器用明确 UI 夹具验证中断/费用/取消恢复 |
 | F3-8 风险扫描代码 | 离线通过 | 翻译前真实调用路径，pun/ambiguous/us_only，源文/提示词绑定 | 无 | `tests_risk_scan`：未扫/失败/成功零风险/stale，缺钥匙不造 paid started，费用入账 |

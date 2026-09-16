@@ -14,6 +14,7 @@ import { canEditTask } from '@/features/localization/model'
 import { TextWorkspace } from '@/features/localization/TextWorkspace'
 import type { TextWorkspaceHandle } from '@/features/localization/TextWorkspace'
 import { LocalizationEditor } from '@/features/localization/LocalizationEditor'
+import { SuggestionPanel } from '@/features/localization/SuggestionPanel'
 import { CategoryEditor } from '@/features/localization/CategoryEditor'
 import { ImageWorkspace } from '@/features/images/ImageWorkspace'
 import { ApprovalAction, DecisionPanel } from '@/features/approval/DecisionPanel'
@@ -109,7 +110,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <Tabs activeKey={tab} onChange={changeTab} items={[{ key: 'text', label: '正文对照' }, { key: 'images', label: `图片 ${detail.images.length}` }, { key: 'localization', label: '话题标签与链接' }]} />
       <div hidden={tab !== 'text'}><TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
         active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
-        onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} /></div>
+        onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
+        <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
+          onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} /></div>
       {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
       }} /></div>}

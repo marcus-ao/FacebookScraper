@@ -49,7 +49,7 @@ export type LinkOrigin = 'mapping' | 'manual' | 'missing'
 
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted'
 
-export type ContentJobKind = 'text' | 'image'
+export type ContentJobKind = 'text' | 'image' | 'suggest'
 export type TemplateKind = 'text' | 'image'
 
 export type QueueBucket = 'review' | 'not_ready' | 'snoozed' | 'processed'
@@ -378,6 +378,8 @@ export interface TaskDetail {
   readonly localization_validation: LocalizationValidation
   /** 本轮标签热度推荐是否启用；关闭时标签只由人工选取。旧详情未提供时按启用处理。 */
   readonly hashtag_suggestions_enabled?: boolean
+  /** 最近一次的只读优化建议；从未生成过时为 null。 */
+  readonly text_suggestions?: TextSuggestions | null
   /** 正文分区版，用于编辑对照。 */
   readonly body_highlights: readonly Highlight[]
   readonly body_risks: readonly BodyRisk[]
@@ -450,6 +452,29 @@ export interface ContentJob {
   /** 仅 text 任务成功时提供正文分区。 */
   readonly body_de?: string
   readonly text_de?: string
+  /** 仅 suggest 任务成功时提供。 */
+  readonly suggestions?: readonly TextSuggestion[]
+  readonly dropped?: readonly string[]
+}
+
+export type SuggestionKind = 'grammar' | 'wording' | 'register' | 'terminology' | 'fluency'
+export interface TextSuggestion {
+  /** 当前德语正文里的原样片段，保证只出现一次，所以「采用」不会改错地方。 */
+  readonly quote: string
+  readonly replacement: string
+  readonly kind: SuggestionKind
+  /** 中文写的理由，读的人是中国运营。 */
+  readonly why: string
+}
+export interface TextSuggestions {
+  readonly items: readonly TextSuggestion[]
+  /** 越界被丢弃的条数说明，不静默吞掉。 */
+  readonly dropped: readonly string[]
+  /** 译文或源文改过之后为 false：quote 可能已经定位不到。 */
+  readonly current: boolean
+  readonly generated_at: string
+  readonly prompt_version: number
+  readonly current_prompt_version: number
 }
 
 export interface InitialTranslationCapabilities {
