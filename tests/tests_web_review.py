@@ -248,16 +248,55 @@ class WebReviewTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 404, response.text)
         self.assertFalse((self.account / "translated_human.jsonl").exists())
 
-    def test_approval_without_verified_browser_fails_without_success_record(self):
+    def lock(self):
+        options = self.client.get(self.url + "/approval-options").json()
+        return self.client.post(self.url + "/content-lock", json={
+            **self.action_body(), "content_fingerprint": options["fingerprint"]})
+
+    def test_missing_german_image_blocks_the_freeze_and_says_how_to_fix_it(self):
+        """缺德语图的帖子根本发不出去，也就没有「确认无误」可言。"""
+        options = self.client.get(self.url + "/approval-options").json()
+        self.assertFalse(options["lockable"])
+        self.assertIn("缺少德语图", options["lock_reason"])
+        self.assertIsNone(options["fingerprint"])
+        refused = self.client.post(self.url + "/content-lock", json={
+            **self.action_body(), "content_fingerprint": "not-a-real-fingerprint"})
+        self.assertIn(refused.status_code, {400, 409}, refused.text)
+        self.assertEqual(review.history(self.account), [])
+
+    def test_content_can_be_frozen_and_released_without_a_verified_browser(self):
+        """录证缺失让排期不可用，但不该挡住人确认文案和图片。"""
+        self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
         options = self.client.get(self.url + "/approval-options")
         self.assertEqual(options.status_code, 200, options.text)
         self.assertFalse(options.json()["available"])
-        self.assertTrue(options.json()["reason"])
+        self.assertTrue(options.json()["lockable"])
+        locked = self.lock()
+        self.assertEqual(locked.status_code, 200, locked.text)
+        self.assertEqual(locked.json()["status"], "content_locked")
+        # 冻结期间编辑入口一律拒绝。
+        frozen_localization = self.localization_body(body_de="Neu")
+        self.assertEqual(self.client.put(self.url + "/text_de", json={
+            **self.action_body(), "text_de": "Neu", "human_revision": None}).status_code, 409)
+        self.assertEqual(self.client.put(
+            self.url + "/localization", json=frozen_localization).status_code, 409)
+        self.assertEqual(self.client.post(self.url.replace("/api/tasks/", "/api/refinements/task/"),
+            json={**self.action_body(), "kind": "text", "instruction": "kürzer"}).status_code, 409)
+        released = self.client.request("DELETE", self.url + "/content-lock", json=self.action_body())
+        self.assertEqual(released.status_code, 200, released.text)
+        self.assertEqual(released.json()["status"], "edited")
+        self.assertEqual(self.client.put(self.url + "/text_de", json={
+            **self.action_body(), "text_de": "Neu", "human_revision": None}).status_code, 200)
+
+    def test_approval_without_verified_browser_fails_without_success_record(self):
+        self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        self.assertEqual(self.lock().status_code, 200)
         body = {**self.action_body(), "human_revision": None,
                 "scheduled_at": "2026-09-20T10:00", "content_fingerprint": "not-a-real-fingerprint"}
         response = self.client.post(self.url + "/approve", json=body)
         self.assertIn(response.status_code, {400, 409}, response.text)
-        self.assertEqual(review.history(self.account), [])
+        # 冻结留下一条记录；排期一条都不能有。
+        self.assertEqual([row["status"] for row in review.history(self.account)], ["content_locked"])
 
     def action_body(self, **extra):
         detail = self.client.get(self.url).json()

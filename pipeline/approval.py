@@ -110,7 +110,7 @@ def _bind(post, snapshot_id, source, account_dir):
 
 async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text_sha256: str,
                   human_revision: str | None, review_revision: str | None, content_fingerprint: str,
-                  now=None, inventory_reader=None, executor=None) -> dict:
+                  now=None, inventory_reader=None, executor=None, report=None) -> dict:
     c = cfg()
     moment, target = now or datetime.now(timezone.utc), _moment(scheduled_at)
     if account_dir.name not in c.active_accounts():
@@ -160,9 +160,11 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                                       expected_source_sha256=source_text_sha256, now=moment, snapshot_id=snapshot_id)
         records.queue_approved(snapshot_id, now=moment)
         try:
+            extra = {} if executor is not None else {'report': report or workflow.print_progress}
             outcome = await (executor or workflow.execute)(frozen, target, ui_timezone=window.ui_timezone,
                 timeout=float(c.get('publish', 'ui_timeout_seconds', bs.DEFAULT_UI_TIMEOUT)),
-                stamp=approved['revision'], submit_enabled=True, source_refs=(ref,), target_channels=(source['platform'],))
+                stamp=approved['revision'], submit_enabled=True, source_refs=(ref,),
+                target_channels=(source['platform'],), **extra)
             attempt = asdict(outcome.attempt)
         except Exception:
             # 无回执时保留快照；下面只恢复审校状态，绝不声称远端已经排期。

@@ -91,11 +91,16 @@ async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeo
                                   % (decision.reason, alternatives or '当前可见范围内暂无可用时刻'))
 
 
+def print_progress(index: int, text: str) -> None:
+    print("[%d/7] %s" % (index, text))
+
+
 async def _execute_unlocked(
         post, when: datetime, *, ui_timezone: str, timeout: float,
         stamp: str, submit_enabled: bool,
         source_refs: tuple[str, ...] = (),
-        target_channels: tuple[str, ...] | None = None
+        target_channels: tuple[str, ...] | None = None,
+        report=print_progress
         ) -> AttemptOutcome:
     """核验目标、填写内容并提交；保留人工会话和其他远端内容。"""
     c = cfg()
@@ -125,7 +130,7 @@ async def _execute_unlocked(
 
         if submit_enabled:
             step = "G6 提交前 Planner 基线"
-            print("[0/7] 提交前确认远端没有同槽/同文案/同素材卡片 …")
+            report(0, "提交前确认远端没有同槽/同文案/同素材卡片 …")
             planner_page = await context.new_page()
             pre_submit_baseline = await month_readback.baseline(
                 planner_page, when, post.text_de, ui_timezone=ui_timezone,
@@ -138,17 +143,17 @@ async def _execute_unlocked(
                     % pre_submit_baseline.match_count)
 
         step = "G1-1 打开 composer"
-        print("[1/7] 新开标签页进 composer …")
+        report(1, "新开标签页进 composer …")
         page = await bs.open_composer(context,
             asset_context=channel_evidence.require(post.platform)['context_ids'], timeout=timeout)
 
         step = "G2 登录态与目标主页"
-        print("[2/7] 核对登录态与目标主页 …")
+        report(2, "核对登录态与目标主页 …")
         selection = await channels.select(page, target_channels, timeout=timeout)
         notes.append('已核对单渠道目标：' + selection['channel'] + ' / ' + selection['account'])
 
         step = "G3 图片上传"
-        print("[3/7] 交图（%d 张）…" % len(post.image_paths))
+        report(3, "交图（%d 张）…" % len(post.image_paths))
         upload_notes = await bs.upload_images(page, list(post.image_paths), timeout=timeout)
         media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
         notes.extend(upload_notes[:1])
@@ -157,11 +162,11 @@ async def _execute_unlocked(
             print("    " + note)
 
         step = "G4 文案填写"
-        print("[4/7] 填正文并逐字符回读 …")
+        report(4, "填正文并逐字符回读 …")
         await bs.fill_caption(page, post.text_de, timeout=timeout)
 
         step = "G5 定时设置"
-        print("[5/7] 设排期并回读 …")
+        report(5, "设排期并回读 …")
         ui_readback = await bs.set_schedule(
             page, when, ui_timezone=ui_timezone, timeout=timeout, target_channels=target_channels)
         await channels.verify_before_submit(page, target_channels)
@@ -195,7 +200,7 @@ async def _execute_unlocked(
                              "人工确认远端状态，禁止自动重试"))
         journal.append(c.state_dir, armed)
         current = armed
-        print("[6/7] 点击一次提交并等待已录证的成功信号 …")
+        report(6, "点击一次提交并等待已录证的成功信号 …")
         result = await bs.submit(page, timeout=timeout)
         submitted_shot = await _screenshot(
             page, base.attempt_id, "submitted", state_dir=c.state_dir,
@@ -225,7 +230,7 @@ async def _execute_unlocked(
         journal.append(c.state_dir, unverified)
 
         step = "G6c 内容日历回读"
-        print("[7/7] 重新进入内容日历并回读排期卡片 …")
+        report(7, "重新进入内容日历并回读排期卡片 …")
         readback_path = (Path(c.state_dir) / "publish_attempts" /
                          ("%s_scheduled.png" % base.attempt_id))
         readback = await month_readback.verify(
@@ -303,7 +308,7 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
                   stamp: str, submit_enabled: bool,
                   source_refs: tuple[str, ...] = (),
                   target_channels: tuple[str, ...] | None = None,
-                  force: bool = False) -> AttemptOutcome:
+                  force: bool = False, report=print_progress) -> AttemptOutcome:
     """在全局发布锁内重查 journal，再执行一次浏览器尝试。"""
     c = cfg()
     target_channels = target_channels or (post.platform,)
@@ -330,7 +335,7 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
         outcome = await _execute_unlocked(
             post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
             submit_enabled=submit_enabled, source_refs=refs,
-            target_channels=target_channels)
+            target_channels=target_channels, report=report)
         try:
             records.project(outcome.attempt)
         except Exception:
