@@ -6,3 +6,4 @@
 .candidate { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28vh; overflow: auto; font-family: var(--rc-font-sans); font-size: var(--rc-font-prose); line-height: var(--rc-line-height-prose); padding: var(--rc-space-3); background: var(--rc-surface-sunken); }
 .diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
 .help { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.presets { display: grid; gap: var(--rc-space-2); margin-bottom: var(--rc-space-3); }

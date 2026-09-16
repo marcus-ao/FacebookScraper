@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,7 +41,7 @@ from core import imagehash                          # noqa: E402
 
 TEMPLATE_PATH = ROOT / "prompts" / "image_de.md"
 INFERERA_API_URL = "https://api.inferera.com/v1"
-IMAGE_PROMPT_VERSION = 2
+IMAGE_PROMPT_VERSION = 3
 
 # GPT-Image-2 的 size 线级契约。它们不是业务旋钮，不能被配置成网关不接受的值。
 SIZE_STEP = 16
@@ -50,6 +50,9 @@ MAX_PIXELS = 8_294_400
 MAX_EDGE = 3_840
 MAX_ASPECT_RATIO = 3.0
 MAX_LATEST_POSTS = 3
+# ⚠️ 上面这组 size 契约是按 gpt-image-2 标定的，2.5 没有实测。切模型后先跑一次
+# `--check`：它请求 816x816 并核对返回尺寸，契约变了会当场露出来。
+SUPPORTED_MODELS = ("gpt-image-2", "gpt-image-2.5")
 
 IMAGE_CONFIG_KEYS = frozenset({
     "provider",
@@ -66,6 +69,8 @@ IMAGE_CONFIG_KEYS = frozenset({
     "dhash_max_distance",
     "aspect_drift_warn_percent",
     "scale_warn_factor",
+    "preferred_aspect_band",
+    "change_ratio_warn",
     "failure_budget",
     "max_refine_per_media",
 })
@@ -139,13 +144,35 @@ class Settings:
         self.dhash_max_distance = self._integer(raw, "dhash_max_distance")
         self.aspect_drift_warn_percent = self._number(raw, "aspect_drift_warn_percent")
         self.scale_warn_factor = self._number(raw, "scale_warn_factor")
+        self.change_ratio_warn = self._number(raw, "change_ratio_warn")
+        band = raw["preferred_aspect_band"]
+        if (not isinstance(band, list) or len(band) != 2
+                or any(not _non_bool_number(v) or not math.isfinite(float(v)) for v in band)):
+            raise SystemExit("[image].preferred_aspect_band 必须是两个数字的数组")
+        self.preferred_aspect_band = (float(band[0]), float(band[1]))
         self.failure_budget = self._integer(raw, "failure_budget")
         self.max_refine_per_media = self._integer(raw, "max_refine_per_media")
 
         rates = raw["cost_rates_usd_per_million"]
         if not isinstance(rates, Mapping):
             raise SystemExit("[image].cost_rates_usd_per_million 必须是 TOML 内联表")
-        self.cost_rates = dict(rates)
+        # 按模型分表。用一张平表的话，换了模型之后账本里的估算会一直是错的，
+        # 而且错得无声——每笔都记下来了，只是数字不对。
+        missing_rates = sorted(set(SUPPORTED_MODELS) - set(rates))
+        extra_rates = sorted(set(rates) - set(SUPPORTED_MODELS))
+        if missing_rates or extra_rates:
+            details = []
+            if missing_rates:
+                details.append("缺少模型费率：" + "、".join(missing_rates))
+            if extra_rates:
+                details.append("费率表有未支持的模型：" + "、".join(extra_rates))
+            raise SystemExit(
+                "[image].cost_rates_usd_per_million 必须按模型分表；" + "；".join(details))
+        self.cost_rates_by_model = {name: dict(rates[name]) for name in SUPPORTED_MODELS
+                                    if isinstance(rates[name], Mapping)}
+        if len(self.cost_rates_by_model) != len(SUPPORTED_MODELS):
+            raise SystemExit(
+                "[image].cost_rates_usd_per_million 的每个模型都必须是 TOML 内联表")
 
         self.keep_verbatim: dict[str, tuple[str, ...]] = {}
         for category in sorted(KEEP_VERBATIM_KEYS):
@@ -189,8 +216,10 @@ class Settings:
         if self.base_url != INFERERA_API_URL:
             raise SystemExit(
                 "provider=inferera 时 [image].base_url 必须是 " + INFERERA_API_URL)
-        if self.model != "gpt-image-2":
-            raise SystemExit("[image].model 必须是 gpt-image-2；不得静默使用 free/其它模型")
+        if self.model not in SUPPORTED_MODELS:
+            raise SystemExit(
+                "[image].model 必须是 " + " 或 ".join(SUPPORTED_MODELS)
+                + "；不得静默使用 free/其它模型")
         if self.quality not in {"low", "medium", "high"}:
             raise SystemExit("[image].quality 可选值：low, medium, high（不得使用 auto）")
         if self.output_format not in {"jpeg", "png", "webp"}:
@@ -214,14 +243,30 @@ class Settings:
             raise SystemExit(
                 "[image].scale_warn_factor 必须 >= 1.0（它是放大倍数的告警线，"
                 "不是缩小线）")
+        low, high = self.preferred_aspect_band
+        if not 0 < low <= high:
+            raise SystemExit("[image].preferred_aspect_band 必须是 [低, 高] 且 0 < 低 <= 高")
+        if high > MAX_ASPECT_RATIO or 1 / low > MAX_ASPECT_RATIO:
+            raise SystemExit(
+                "[image].preferred_aspect_band 超出模型本身的 3:1 上限；"
+                "带外的比值本来就生成不出来")
+        if self.change_ratio_warn != -1.0 and not 0 <= self.change_ratio_warn <= 1:
+            raise SystemExit(
+                "[image].change_ratio_warn 必须是 -1（关闭）或 0..1 的比例")
         if self.failure_budget < 1:
             raise SystemExit("[image].failure_budget 必须 >= 1")
         if self.max_refine_per_media < 1:
             raise SystemExit("[image].max_refine_per_media 必须 >= 1")
-        paid_model.validate_cost_rates("image", self.cost_rates, IMAGE_RATE_KEYS)
+        for name, rates in sorted(self.cost_rates_by_model.items()):
+            paid_model.validate_cost_rates("image." + name, rates, IMAGE_RATE_KEYS)
         if any(not isinstance(k, str) or not isinstance(v, str)
                or not k.strip() or not v.strip() for k, v in self.glossary.items()):
             raise SystemExit("[translate.glossary] 的键和值都必须是非空字符串")
+
+    @property
+    def cost_rates(self) -> dict[str, Any]:
+        """当前 `model` 的费率。换模型就换一套，不存在"通用费率"。"""
+        return self.cost_rates_by_model[self.model]
 
     @property
     def credentials(self) -> paid_model.ModelCredentials:
@@ -611,12 +656,34 @@ def scale_factor(source_width: int, source_height: int,
                      / (source_width * source_height))
 
 
-def legal_size(width: int, height: int) -> tuple[int, int]:
-    """按原比例缩放并量化到 16 像素；不裁剪或填充，原比例超 3:1 时拒绝。"""
+def within_aspect_band(width: int, height: int,
+                       band: tuple[float, float] | None) -> bool:
+    """宽高比落在 [低, 高] 之内。band 为 None 时一律算在带内，即不参与排序。"""
+    if band is None:
+        return True
+    low, high = band
+    return low - 1e-9 <= width / height <= high + 1e-9
+
+
+def legal_size(width: int, height: int, *,
+               aspect_band: tuple[float, float] | None = None) -> tuple[int, int]:
+    """按原比例缩放并量化到 16 像素；不裁剪或填充，原比例超 3:1 时拒绝。
+
+    ⚠️ `aspect_band` 是发布侧画幅窗口。16 像素量化会把正好压线的原图推出窗口——实测
+    1440x1800（正好 4:5）会变成 1440x1808，比值 0.7965 < 0.8，原帖发得出去而德语版发不出去；
+    偏差 0.442% 又在 aspect_drift_warn_percent=2.0 以下，告警也不会响。所以带内候选优先。
+    ⛔ 它只重排候选，从不拒绝，也从不修正**原图本身**就在带外的比值——那是擅自改画面。
+    """
     if (not isinstance(width, int) or isinstance(width, bool)
             or not isinstance(height, int) or isinstance(height, bool)
             or width <= 0 or height <= 0):
         raise ValueError("原图宽高必须是正整数")
+    if aspect_band is not None:
+        low, high = aspect_band
+        if not (0 < low <= high):
+            raise ValueError("画幅带必须满足 0 < 低 <= 高")
+    # 原图已经在带外时整条逻辑失效：没有"更靠带内"这回事，按原有规则选最接近的。
+    source_in_band = within_aspect_band(width, height, aspect_band)
     source_aspect = max(width / height, height / width)
     if source_aspect > MAX_ASPECT_RATIO + 1e-12:
         raise ValueError(
@@ -659,16 +726,19 @@ def legal_size(width: int, height: int) -> tuple[int, int]:
             f"无法把 {width}x{height} 合法化：没有同时满足 16 倍数、像素范围、"
             "最大边长与 3:1 的候选")
 
-    def rank(size: tuple[int, int]) -> tuple[int, float, float, int, int]:
+    def rank(size: tuple[int, int]) -> tuple[int, int, float, float, int, int]:
         candidate_width, candidate_height = size
         drift = aspect_drift_percent(width, height, candidate_width, candidate_height)
         target_error = (abs(candidate_width - target_width) / max(target_width, 1.0)
                         + abs(candidate_height - target_height) / max(target_height, 1.0))
         width_rounding_error = abs(candidate_width - rounded_width)
         height_rounding_error = abs(candidate_height - rounded_height)
-        # 先选最接近的宽度，平局取较大值，再用高度修正比例。
-        return (width_rounding_error, drift, target_error, height_rounding_error,
-                -(candidate_width * candidate_height))
+        # 带内优先于取整误差；原图在带外时这一位恒为 0，排序退回原来的规则。
+        leaves_band = int(source_in_band and not within_aspect_band(
+            candidate_width, candidate_height, aspect_band))
+        # 其余：先选最接近的宽度，平局取较大值，再用高度修正比例。
+        return (leaves_band, width_rounding_error, drift, target_error,
+                height_rounding_error, -(candidate_width * candidate_height))
 
     chosen = min(set(candidates), key=rank)
     if not _is_legal_size(*chosen):
@@ -756,6 +826,7 @@ class ValidatedImage:
     height: int
     image_format: str
     dhash_distance: int
+    changed_pixel_ratio: float
 
 
 def _open_loaded_image(data: bytes) -> Image.Image:
@@ -771,6 +842,33 @@ def dhash_distance(left: Image.Image, right: Image.Image) -> int:
     """两张已打开的图之间的 dHash 距离。实现在 core/imagehash，与配对侧共用。"""
     return imagehash.hamming(
         imagehash.dhash_value(left), imagehash.dhash_value(right))
+
+
+#: 逐像素通道差超过这个值才算"改动过"。取 24 是为了吸收 JPEG 重编码噪声，
+#: 让"原图原样退回来"落到 0.0，而真的改过字的图落在明显大于 0 的地方。
+CHANGE_TOLERANCE = 24
+
+
+def changed_pixel_ratio(source: Image.Image, output: Image.Image) -> float:
+    """改动像素占比。原图先缩到产出尺寸再比，所以放大/量化本身不算改动。
+
+    ⚠️ 这是"模型到底改没改图"的唯一本地依据。dHash 在这里没用——它是 8x8 梯度，
+    换几行字几乎不动，而**原样退回的距离正好是 0，看起来还是最好的那一档**。
+    """
+    left = source.convert("RGB")
+    if left.size != output.size:
+        left = left.resize(output.size, Image.Resampling.LANCZOS)
+    right = output.convert("RGB")
+    differences = ImageChops.difference(left, right)
+    # 逐像素取三通道的最大差：平均会把只改了一个通道的局部文字改动摊平。
+    bands = differences.split()
+    peak = bands[0]
+    for band in bands[1:]:
+        peak = ImageChops.lighter(peak, band)
+    histogram = peak.histogram()
+    changed = sum(histogram[CHANGE_TOLERANCE + 1:])
+    total = output.width * output.height
+    return changed / total if total else 0.0
 
 
 def _reject_placeholder(image: Image.Image) -> None:
@@ -794,6 +892,13 @@ def validate_output(payload: str, source_path: Path,
                     dhash_max_distance: int) -> ValidatedImage:
     """写盘前硬闸；任一失败都不返回可写字节。"""
     data = decode_image_payload(payload)
+    try:
+        # 模型总会重编码，逐字节相同只可能是网关把请求原样回显。这不是"无需改动"，
+        # 是链路坏了；放行会把它当成一张有效德语图存进去。
+        if data == source_path.read_bytes():
+            raise ValueError("产出与原图逐字节相同；这是网关回显而不是模型产物，产出未写盘")
+    except OSError as exc:
+        raise ValueError(f"原图无法读取：{source_path}") from exc
     output = _open_loaded_image(data)
     try:
         if output.size != requested_size:
@@ -809,6 +914,7 @@ def validate_output(payload: str, source_path: Path,
             with Image.open(source_path) as source:
                 source.load()
                 distance = dhash_distance(source, output)
+                changed = changed_pixel_ratio(source, output)
         except ValueError:
             raise
         except Exception as exc:
@@ -817,7 +923,12 @@ def validate_output(payload: str, source_path: Path,
             raise ValueError(
                 f"dHash 距离 {distance} 超过阈值 {dhash_max_distance}；"
                 "模型可能整张重画，产出未写盘")
-        return ValidatedImage(data, output.width, output.height, actual_format, distance)
+        # ⚠️ 像素一个没动**不拒绝**。它有两种成因，本地分不开：图里本来就没有要译的英文
+        # （此时原样返回是对的），或者模型没照做（此时钱白花了）。人在审校台一眼能分开，
+        # 代码不能。而 [publish].require_all_media_de=true 要求每张都有德语图，在这里拒绝会让
+        # 前一种情况的帖子永远发不出去。所以只把占比记下来并在 CLI/审校台显著标出。
+        return ValidatedImage(data, output.width, output.height, actual_format,
+                              distance, changed)
     finally:
         output.close()
 
@@ -1176,7 +1287,8 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                         source_size = source_image.size
                 except Exception as exc:
                     raise ValueError(f"原图无法解码：{source_rel}") from exc
-                requested = legal_size(*source_size)
+                requested = legal_size(
+                    *source_size, aspect_band=settings.preferred_aspect_band)
             except (ValueError, ArchivePathError) as exc:
                 stats.skipped_bad_source += 1
                 message = (f"  ! {post_id}[{media_index}] 跳过（素材问题）："
@@ -1384,6 +1496,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                 "aspect_drift_percent": round(job.aspect_drift_percent, 6),
                 "scale_factor": round(job.scale_factor, 6),
                 "dhash_distance": validated.dhash_distance,
+                "changed_pixel_ratio": round(validated.changed_pixel_ratio, 6),
                 "elapsed_seconds": round(elapsed, 3),
                 "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "usage": result.usage,
@@ -1400,9 +1513,19 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             consecutive_failures = 0
             drift_mark = ("  !形变告警" if job.aspect_drift_percent
                           > settings.aspect_drift_warn_percent else "")
+            change_mark = ""
+            if validated.changed_pixel_ratio <= 0:
+                change_mark = ("  !模型一个像素都没改 —— 要么图里没有要译的英文，"
+                               "要么这次白花钱了，请在审校台人眼确认")
+            elif (settings.change_ratio_warn >= 0
+                  and validated.changed_pixel_ratio <= settings.change_ratio_warn):
+                change_mark = (f"  !改动占比 {validated.changed_pixel_ratio:.4%}"
+                               f"（低于 change_ratio_warn="
+                               f"{settings.change_ratio_warn:.4%}，请人眼确认图内文字是否真的译了）")
             print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] OK  "
-                  f"dHash={validated.dhash_distance} / {elapsed:.1f}s"
-                  f"{drift_mark}{scale_mark}")
+                  f"dHash={validated.dhash_distance} / "
+                  f"改动 {validated.changed_pixel_ratio:.2%} / {elapsed:.1f}s"
+                  f"{drift_mark}{scale_mark}{change_mark}")
         except Exception as exc:
             if editor is not None and hasattr(editor, "finalize_paid"):
                 editor.finalize_paid(False, "localized image output rejected")
@@ -1487,6 +1610,255 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
             manual=manual,
         ))
     return pairs
+
+
+# 历史版本：看、比、换回去
+
+def _ledger_rows(arc_base: Path, post_id: str, media_index: int) -> list[dict[str, Any]]:
+    """同一张图的全部有效所有权记录，按落盘顺序。`load_image_state` 只留最后一条。"""
+    path = arc_base / "images_de.jsonl"
+    if not path.exists():
+        return []
+    assert_physical_direct_path(path.parent, path, kind="file", label="images_de.jsonl")
+    rows: list[dict[str, Any]] = []
+    with path.open("rb") as handle:
+        for raw_line in handle:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                row = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if (not isinstance(row, dict) or row.get("post_id") != post_id
+                    or row.get("media_index") != media_index):
+                continue
+            out_rel = _safe_rel_string(row.get("out_path"))
+            if out_rel is None or not _record_path_matches_key(
+                    post_id, media_index, out_rel, row.get("folder_name")):
+                continue
+            row["out_path"] = out_rel
+            rows.append(row)
+    return rows
+
+
+def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
+                   text_de_sha: str) -> list[dict[str, Any]]:
+    """这一张图生成过的每一版，供业务比较后换回去。
+
+    3 次优化预算的前提是"上一版还找得回来"；否则第二次生成比第一次差就只剩下载改图一条路。
+    """
+    post_id = str(row.get("post_id") or "")
+    source_sha = ""
+    media_list = row.get("media")
+    if isinstance(media_list, list) and 0 <= media_index < len(media_list):
+        media = media_list[media_index]
+        if isinstance(media, Mapping) and media.get("kind") == "image":
+            try:
+                source_path, _ = _source_from_manifest(arc_base, row, media)
+                source_sha = sha256_file(source_path)
+            except (ValueError, ArchivePathError):
+                source_sha = ""
+    ledger = _ledger_rows(arc_base, post_id, media_index)
+    current = ledger[-1]["out_path"] if ledger else None
+
+    seen: dict[str, dict[str, Any]] = {}
+    for record in ledger:
+        out_rel = record["out_path"]
+        available = _record_output_exists(arc_base, record)
+        reasons = []
+        if not available:
+            reasons.append("文件已不在归档里")
+        if record.get("prompt_version") != IMAGE_PROMPT_VERSION:
+            reasons.append("按更早版本的提示词生成")
+        if source_sha and record.get("source_sha256") != source_sha:
+            reasons.append("绑定的是更早版本的原图")
+        if text_de_sha and record.get("text_de_sha256") != text_de_sha:
+            reasons.append("绑定的是更早版本的德语正文")
+        # 同一路径被写过多次时只保留最后一条，和 load_image_state 的后写胜出一致。
+        seen[out_rel] = {
+            "out_path": out_rel,
+            "created_at": record.get("created_at"),
+            "refine_id": record.get("refine_id"),
+            "refine_instruction": record.get("refine_instruction"),
+            "model": record.get("model"),
+            "available": available,
+            "current": out_rel == current,
+            "usable": available and not reasons,
+            "unusable_reasons": reasons,
+            "metrics": {
+                "dhash_distance": record.get("dhash_distance"),
+                "changed_pixel_ratio": record.get("changed_pixel_ratio"),
+                "aspect_drift": record.get("aspect_drift_percent"),
+                "scale_ratio": record.get("scale_factor"),
+                "elapsed_s": record.get("elapsed_seconds"),
+            },
+        }
+    return list(seen.values())
+
+
+def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: int,
+                         out_path: str, text_de_sha: str) -> dict[str, Any]:
+    """把某一历史版本重新设为当前版。零模型调用、零费用——只追加一条所有权记录。"""
+    post_id = str(row.get("post_id") or "")
+    wanted = _safe_rel_string(out_path)
+    if wanted is None:
+        raise ValueError("版本路径无效")
+    chosen = next((item for item in image_versions(arc_base, row, media_index, text_de_sha)
+                   if item["out_path"] == wanted), None)
+    if chosen is None:
+        raise ValueError("这一版不在本张图的生成记录里")
+    # 可用性先判：当前版的文件被删掉时，"它已经是当前版了"不是成功，是坏掉了。
+    if not chosen["usable"]:
+        raise ValueError("这一版不能采用：" + "；".join(chosen["unusable_reasons"]))
+    if chosen["current"]:
+        return chosen
+    record = next(item for item in reversed(_ledger_rows(arc_base, post_id, media_index))
+                  if item["out_path"] == wanted)
+    restored = dict(record)
+    restored["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 标明这一行不是新的付费产出，否则费用统计会把同一张图重复计一次。
+    restored["selected_from"] = record.get("created_at")
+    restored.pop("paid_request_id", None)
+    append_image_jsonl(arc_base / "images_de.jsonl", restored)
+    return dict(chosen, current=True)
+
+
+# 人工上传替换
+
+MAX_UPLOAD_BYTES = 32 * 1024 * 1024
+_UPLOAD_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+SUPERSEDED_DIRNAME = "superseded"
+
+
+def _validated_upload(data: bytes) -> tuple[Image.Image, str, str]:
+    """按实际字节判定格式，不采信上传的文件名。"""
+    if not data:
+        raise ValueError("上传的图片是空文件")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError(
+            f"上传的图片 {len(data) / 1048576:.1f} MB 超过上限 "
+            f"{MAX_UPLOAD_BYTES // 1048576} MB")
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            probe.verify()
+    except Exception as exc:
+        raise ValueError("上传的不是可识别的图片") from exc
+    image = _open_loaded_image(data)
+    image_format = str(image.format or "").upper()
+    if image_format not in _UPLOAD_FORMATS:
+        image.close()
+        raise ValueError(
+            f"上传格式 {image_format or '?'} 不支持；只接受 JPEG、PNG、WEBP")
+    if getattr(image, "n_frames", 1) > 1:
+        image.close()
+        raise ValueError("上传的是动图；发布只支持静态图片")
+    if image.width <= 0 or image.height <= 0:
+        image.close()
+        raise ValueError("上传图片的尺寸无效")
+    return image, image_format, _UPLOAD_FORMATS[image_format]
+
+
+def replace_localized(arc_base: Path, row: Mapping[str, Any], media_index: int,
+                      data: bytes, filename: str = "") -> dict[str, Any]:
+    """把业务自己处理好的图片放进 ``media_de/``，替换这一张的德语图。
+
+    ⛔ **不写 `images_de.jsonl`。** 那是程序产出的所有权账本；把人工图写进去会让
+    `manual_override_paths()` 把它判成程序产出，从此被重生成覆盖，而且不报任何错。
+    "`media_de/NN.<ext>` 里没有所有权记录的文件就是人工图"是既有契约，这里沿用它。
+    """
+    readonly_archive(arc_base)
+    media_list = row.get("media")
+    if not isinstance(media_list, list):
+        raise ValueError("post.json 的 media 不是数组")
+    if (not isinstance(media_index, int) or isinstance(media_index, bool)
+            or not 0 <= media_index < len(media_list)):
+        raise ValueError("图片序号超出这篇帖子的媒体范围")
+    media = media_list[media_index]
+    if not isinstance(media, Mapping) or media.get("kind") != "image":
+        raise ValueError("这一项不是静态图片，不能替换")
+
+    image, image_format, extension = _validated_upload(data)
+    try:
+        upload_size = (image.width, image.height)
+    finally:
+        image.close()
+
+    source_path, _source_rel = _source_from_manifest(arc_base, row, media)
+    try:
+        with Image.open(source_path) as source_image:
+            source_image.load()
+            source_size = source_image.size
+    except Exception as exc:
+        raise ValueError("原图无法解码，无法核对替换图的画幅") from exc
+
+    post_dir = post_directory(arc_base, row)
+    media_de = post_dir / "media_de"
+    assert_physical_direct_path(post_dir, media_de, kind="directory", label="media_de 目录")
+    media_de.mkdir(parents=True, exist_ok=True)
+    assert_physical_direct_path(post_dir, media_de, kind="directory", label="media_de 目录")
+    target = media_de / f"{media_index + 1:02d}{extension}"
+    assert_physical_direct_path(media_de, target, kind="file", label="人工德语图")
+
+    # 同序号的旧文件全部移走，替换之后只剩一个候选——publish 侧遇到多个人工候选会
+    # 拒绝提交（"分不清该发哪张"），留着旧格式那张等于把这篇卡在发布前。
+    superseded: list[str] = []
+    archive_dir = media_de / SUPERSEDED_DIRNAME
+    for existing in sorted(media_de.glob(f"{media_index + 1:02d}.*")):
+        assert_physical_direct_path(media_de, existing, kind="file", label="旧德语图")
+        assert_physical_direct_path(
+            media_de, archive_dir, kind="directory", label="德语图历史版本目录")
+        archive_dir.mkdir(exist_ok=True)
+        assert_physical_direct_path(
+            media_de, archive_dir, kind="directory", label="德语图历史版本目录")
+        digest = sha256_file(existing)[:8]
+        kept = archive_dir / f"{existing.stem}_{digest}{existing.suffix}"
+        assert_physical_direct_path(archive_dir, kept, kind="file", label="德语图历史版本")
+        # 付费产出不销毁：这一张可能是花过钱的，业务反悔时要能拿回来。
+        os.replace(existing, kept)
+        superseded.append(kept.relative_to(arc_base).as_posix())
+
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="wb", dir=media_de, prefix=f".{target.name}.",
+                suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            assert_physical_direct_path(
+                media_de, temporary, kind="file", label="人工德语图临时文件")
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    drift = aspect_drift_percent(*source_size, *upload_size)
+    warnings: list[str] = []
+    if drift > 0:
+        warnings.append(
+            f"替换图的宽高比与原图相差 {drift:.2f}%"
+            f"（原图 {source_size[0]}x{source_size[1]}，"
+            f"替换图 {upload_size[0]}x{upload_size[1]}）")
+    return {
+        "media_index": media_index,
+        "out_path": target.relative_to(arc_base).as_posix(),
+        "width": upload_size[0],
+        "height": upload_size[1],
+        "format": image_format,
+        "byte_size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "source_size": f"{source_size[0]}x{source_size[1]}",
+        "aspect_drift_percent": round(drift, 6),
+        "superseded": superseded,
+        "warnings": warnings,
+        "uploaded_filename": str(filename or "")[:200],
+    }
 
 
 # 作用域、预算与 CLI

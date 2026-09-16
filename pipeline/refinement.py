@@ -16,7 +16,7 @@ from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review, translated
 from core.process_identity import current_worker, worker_alive
 from core.config import cfg
-from core.store import account_dirs, read_post_truth
+from core.store import ArchivePathError, account_dirs, read_post_truth
 from pipeline import engine
 from publish import journal
 
@@ -126,7 +126,7 @@ def recover(job_id: str, *, expected_updated_at: str) -> dict:
         return public_job(event)
 
 
-def capabilities(account_dir: Path, post_id: str) -> dict:
+def capabilities(account_dir: Path, post_id: str, indexed: dict | None = None) -> dict:
     """费用为当前有效样本中位数；无样本时明确使用业务测量参考，绝非预算上界。"""
     settings = image_de.Settings()
     costs = []
@@ -147,7 +147,56 @@ def capabilities(account_dir: Path, post_id: str) -> dict:
     return {'max_refine_per_media': settings.max_refine_per_media, 'image_attempts': counts,
             'estimated_image_usd': round(statistics.median(costs), 4) if costs else 0.211,
             'estimate_basis': '本地 usage 样本中位数' if costs else '业务测量参考，暂无本地 usage 样本',
-            'estimate_samples': len(costs), 'jobs': [public_job(row) for row in jobs]}
+            'estimate_samples': len(costs), 'jobs': [public_job(row) for row in jobs],
+            'image_versions': image_versions(account_dir, indexed) if indexed else {}}
+
+
+def _current_basis(account_dir: Path, source: dict) -> str:
+    """当前有效德语正文的哈希；历史版本要按它判断还能不能采用。"""
+    entry = translated.image_translation(
+        source,
+        translated.load_translated(account_dir / 'translated.jsonl').get(source['post_id']),
+        translated.load_human_translated(account_dir / 'translated_human.jsonl').get(source['post_id']))
+    return image_de.text_de_sha256(entry['text_de']) if entry else ''
+
+
+def image_versions(account_dir: Path, indexed: dict) -> dict[str, list]:
+    """每张图生成过的历史版本，按媒体序号分组；只读，不产生费用。"""
+    source, _ = read_post_truth(account_dir, indexed)
+    basis = _current_basis(account_dir, source)
+    grouped: dict[str, list] = {}
+    for index, media in enumerate(source.get('media') or []):
+        if not isinstance(media, dict) or media.get('kind') != 'image':
+            continue
+        try:
+            found = image_de.image_versions(account_dir, source, index, basis)
+        except (OSError, ValueError, ArchivePathError):
+            found = []
+        if found:
+            grouped[str(index)] = found
+    return grouped
+
+
+def select_version(account_dir: Path, indexed: dict, *, media_index: int, out_path: str,
+                   source_text_sha256: str, review_revision: str | None) -> dict:
+    """采用某个历史版本。**不调用模型、不产生费用**，只改"当前是哪一版"。"""
+    account_dir = Path(account_dir)
+    with review.transaction(account_dir) as session:
+        source, state = session.validate(
+            dict(indexed), expected_revision=review_revision,
+            expected_source_sha256=source_text_sha256,
+            scheduled=journal.source_ref(
+                indexed.get('platform'), indexed.get('post_id')) in journal.scheduled_source_refs(cfg().state_dir))
+        if state['status'] in review.TERMINAL | {'approved'}:
+            raise review.ReviewConflict('这篇已结束审校或正在提交，不能更换图片版本')
+        try:
+            chosen = image_de.select_image_version(
+                account_dir, source, media_index, out_path, _current_basis(account_dir, source))
+        except (OSError, ValueError) as exc:
+            raise review.ReviewValidationError('未能采用这一版：%s' % exc) from exc
+        session.change(source, 'edited', expected_revision=review_revision,
+                       expected_source_sha256=source_text_sha256)
+    return chosen
 
 
 def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_revision=None,

@@ -79,7 +79,24 @@ def initial_result(job_id: str):
 @router.get("/api/refinements/task/{task_id:path}")
 def get_capabilities(task_id: str):
     source = _source(task_id)
-    return refinement.capabilities(source.account_dir, source.post_id)
+    return refinement.capabilities(source.account_dir, source.post_id, dict(source.row))
+
+
+@router.post("/api/image-versions/task/{task_id:path}")
+async def select_image_version(task_id: str, request: Request):
+    """换回某个历史版本。零模型调用、零费用，所以不走付费闸也不占优化次数。"""
+    body = await _body(request)
+    media_index = body.get("media_index")
+    if not isinstance(media_index, int) or isinstance(media_index, bool) or media_index < 0:
+        raise review.ReviewValidationError("请指定有效的图片序号")
+    if not isinstance(body.get("out_path"), str) or not body["out_path"].strip():
+        raise review.ReviewValidationError("请指定要采用的版本")
+    source = _source(task_id)
+    return await run_in_threadpool(
+        refinement.select_version, source.account_dir, dict(source.row),
+        media_index=media_index, out_path=body["out_path"].strip(),
+        source_text_sha256=body["source_text_sha256"],
+        review_revision=body.get("review_revision"))
 
 
 @router.post("/api/refinements/task/{task_id:path}")

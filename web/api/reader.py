@@ -424,6 +424,8 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
                 task_id, index, source_version),
             "de_url": "/api/tasks/%s/image/%d?variant=de&v=%s" % (task_id, index, version),
             "de_present": bool(pair is not None and pair.localized_rel),
+            # 人工图不能被模型重生成覆盖（红线 6），所以这一张的优化入口要禁用。
+            "manual": bool(pair is not None and pair.manual),
             "metrics": _metrics(record),
         })
     return out
@@ -517,6 +519,8 @@ def _metrics(record: Mapping[str, Any] | None) -> dict | None:
         "aspect_drift": record.get("aspect_drift_percent"),
         "scale_ratio": record.get("scale_factor"),
         "elapsed_s": record.get("elapsed_seconds"),
+        # 旧记录没有这一项；null 表示"没量过"，不是"没改动"。
+        "changed_pixel_ratio": record.get("changed_pixel_ratio"),
     }
 
 

@@ -110,7 +110,7 @@ class RefinementTests(unittest.TestCase):
         ImageDraw.Draw(image).rectangle((100, 100, 900, 900), fill='white')
         buffer = io.BytesIO()
         image.save(buffer, 'JPEG')
-        validated = images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 1)
+        validated = images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 1, 0.02)
         editor.edit.return_value = images.EditResult('', 'gpt-image-2', {}, 'response')
         editor.paid_request_id = ''
         with patch.object(images, 'validate_output', return_value=validated):

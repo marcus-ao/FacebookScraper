@@ -274,6 +274,21 @@ export interface ImageMetrics {
   readonly aspect_drift: number | null
   readonly scale_ratio: number | null
   readonly elapsed_s: number | null
+  /** 改动像素占比。0 表示模型一个像素都没动，须人眼判断是无需改动还是白花钱。 */
+  readonly changed_pixel_ratio?: number | null
+}
+
+export interface ImageVersion {
+  readonly out_path: string
+  readonly created_at: string | null
+  readonly refine_id: string | null
+  readonly refine_instruction: string | null
+  readonly model: string | null
+  readonly available: boolean
+  readonly current: boolean
+  readonly usable: boolean
+  readonly unusable_reasons: readonly string[]
+  readonly metrics: ImageMetrics
 }
 
 export interface ImageAsset {
@@ -282,6 +297,8 @@ export interface ImageAsset {
   readonly de_url: string
   /** false 表示缺德语图，当前为原图回退。 */
   readonly de_present: boolean
+  /** 当前用的是人工放置或上传的图；模型优化不会被采用，入口须禁用。 */
+  readonly manual?: boolean
   /** 没有程序生成记录时为 null（人工放的图，或没跑过德语图）。 */
   readonly metrics: ImageMetrics | null
 }
@@ -463,6 +480,8 @@ export interface RefinementCapabilities {
   readonly estimate_basis: string
   readonly estimate_samples: number
   readonly jobs: readonly ContentJob[]
+  /** 键为媒体下标的字符串形式；每张图生成过的历史版本，按落盘顺序。 */
+  readonly image_versions?: Readonly<Record<string, readonly ImageVersion[]>>
 }
 
 

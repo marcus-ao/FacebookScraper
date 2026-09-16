@@ -199,7 +199,35 @@ def stage_d3(page, ui):
     other=next(item for item in ui.list_data['tasks'] if item['image_count']>=2 and item['id']!=task_id)
     page.goto(ui.fx.base_url+'/review/'+other['id'],wait_until='networkidle')
     expect(page.get_by_role('button',name=f"图片 1/{other['image_count']}",exact=True)).to_be_visible()
-    return {'D3':'PASS','initial_seen_zero':True,'fallback_visible':True,'reset_on_task_change':True,'zoom_escape_focus_return':True}
+
+    # 改动占比为 0 是"模型没干活"和"图里本来没英文"共用的信号，必须自己冒出来。
+    zero=ui.fx.detail(task_id)
+    zero['images'][0]['metrics']=dict(zero['images'][0].get('metrics') or {},changed_pixel_ratio=0)
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,zero)
+    page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
+    page.get_by_role('button',name=f"图片 1/{len(zero['images'])}",exact=True).click()
+    expect(page.get_by_text('模型一个像素都没改动',exact=True)).to_be_visible()
+    expect(page.get_by_role('button',name=re.compile('上传图片替换第 1 张'))).to_be_visible()
+
+    # 历史版本不折叠：换回上一版是动作，折起来她就不知道有这条路。
+    versions=[{'out_path':'posts/p/media_de/01.jpg','created_at':'2026-09-15T02:00:00Z','refine_id':None,
+               'refine_instruction':None,'model':'gpt-image-2','available':True,'current':False,'usable':True,
+               'unusable_reasons':[],'metrics':{'dhash_distance':1,'aspect_drift':0,'scale_ratio':1,
+                                                'elapsed_s':9,'changed_pixel_ratio':0.012}},
+              {'out_path':'posts/p/media_de/01_vab.jpg','created_at':'2026-09-15T03:00:00Z','refine_id':'ab',
+               'refine_instruction':'把 CTA 换成更短的说法','model':'gpt-image-2','available':True,'current':True,
+               'usable':True,'unusable_reasons':[],'metrics':{'dhash_distance':2,'aspect_drift':0,'scale_ratio':1,
+                                                              'elapsed_s':11,'changed_pixel_ratio':0.031}}]
+    ui.overrides[('GET',f'/api/refinements/task/{task_id}')]=(200,{
+        'max_refine_per_media':3,'image_attempts':{'0':2},'estimated_image_usd':0.211,
+        'estimate_basis':'本地 usage 样本中位数','estimate_samples':4,'jobs':[],'image_versions':{'0':versions}})
+    page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
+    page.get_by_role('button',name=f"图片 1/{len(zero['images'])}",exact=True).click()
+    expect(page.get_by_text('这一张生成过 2 版',exact=True)).to_be_visible()
+    expect(page.get_by_text('指令：把 CTA 换成更短的说法',exact=True)).to_be_visible()
+    expect(page.get_by_role('button',name='采用这一版')).to_have_count(1)
+    return {'D3':'PASS','initial_seen_zero':True,'fallback_visible':True,'reset_on_task_change':True,
+            'zoom_escape_focus_return':True,'zero_change_alert':True,'upload_entry':True,'versions_not_collapsed':True}
 
 
 def stage_d4(page, ui):

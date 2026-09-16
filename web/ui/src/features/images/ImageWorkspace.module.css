@@ -11,3 +11,8 @@
 .thumb img { width: var(--rc-thumb-size); height: var(--rc-thumb-size); object-fit: cover; }
 .metrics { display: flex; gap: var(--rc-space-5); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
 .metrics dd { margin: 0; }
+.replace { display: flex; align-items: center; gap: var(--rc-space-3); flex-wrap: wrap; padding-block: var(--rc-space-2); }
+.help { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
+.versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--rc-space-2); }
+.versionBox { padding: var(--rc-space-3); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); background: var(--rc-surface); }
+.versionTitle { margin: 0 0 var(--rc-space-2); font-size: var(--rc-font-secondary); }

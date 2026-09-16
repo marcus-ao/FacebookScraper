@@ -25,6 +25,7 @@ import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
+import { refinementCapabilities } from '@/services/jobs'
 import { AUTHOR_KIND_LABEL, formatDate, formatTrailTime } from '@/lib/format'
 import type { ContentJob, MirrorStatus, TaskDetail, TaskStorage } from '@/types/domain'
 import styles from './ReviewDetailPage.module.css'
@@ -53,6 +54,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
   const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
+  // 历史版本随图片页一起用；只读查询，不触发模型也不产生费用。
+  const imageVersions = useQuery({
+    queryKey: ['refinement-capabilities', detail.id],
+    queryFn: () => refinementCapabilities(detail.id),
+  })
   const tab = ['text', 'images', 'localization'].includes(search.get('tab') ?? '') ? search.get('tab')! : 'text'
   const changeTab = (value: string) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
   // 标签页首次打开才挂载，之后保留结果；切换任务时由 Outlet key 重建。
@@ -112,7 +118,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
       }} /></div>}
-      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images} onProgress={setUnseen} /></div>}
+      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images}
+        detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing}
+        onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={setUnseen} /></div>}
       <div className={styles.counter}>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}

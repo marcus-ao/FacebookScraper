@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Alert, Button, Checkbox, Collapse, Drawer, Input, Select, Space, Typography } from 'antd'
+import { Alert, Button, Checkbox, Collapse, Drawer, Input, Select, Space, Tooltip, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import type { ContentJob, TaskDetail } from '@/types/domain'
 import { initialCapabilities, initialTranslate, refinementCapabilities, refine, jobRunning, getTemplate } from '@/services/jobs'
@@ -12,6 +12,15 @@ import { displayLinks } from '@/features/localization/model'
 import styles from './ContentJobs.module.css'
 
 const labels: Record<string, string> = { pending: '已受理，等待处理', running: '正在生成', succeeded: '本轮处理完成', failed: '处理尚未完成', interrupted: '处理已中断，待核对' }
+
+/** 点一下追加到输入框。每条对应一种实际出现过的失败，`why` 解释为什么这么说管用。 */
+const IMAGE_PRESETS: readonly { readonly text: string; readonly why: string }[] = [
+  { text: '这一段德语太长把版面挤了，请用更短的说法重排，不要缩小其它文字。', why: '模板要求先换更短的说法，再动版面' },
+  { text: '文字压到产品上了，请在原来的文字框范围内重新断行。', why: '把问题指到具体位置，比“排版不好看”有用' },
+  { text: '第 __ 行的译法不对，请改成「__」。', why: '填上你要的词，模型不用猜' },
+  { text: '保持原图不动，只把 CTA 按钮上的文字换成德语。', why: '限定改动范围，避免模型顺手重画别处' },
+  { text: '型号 / 优惠码被改了，请逐字符还原成「__」。', why: '这类字符串长得像单词，最容易被当成文案翻掉' },
+]
 export function ContentJobs({ detail, editing, refresh, onCandidate, initialContainer }: { detail: TaskDetail; editing: boolean; refresh: () => Promise<TaskDetail>; onCandidate: (job: ContentJob) => void; initialContainer: HTMLDivElement | null }) {
   const initial = useQuery({ queryKey: ['initial-capabilities', detail.id, detail.text.source_text_sha256, detail.review.revision], queryFn: () => initialCapabilities(detail.id) })
   const capabilities = useQuery({ queryKey: ['refinement-capabilities', detail.id], queryFn: () => refinementCapabilities(detail.id) })
@@ -32,7 +41,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   const firstReason = initialTranslationDisabledReason({ editing, busy, running: jobRunning(first.job),
     interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: consent })
   const nextReason = refinementDisabledReason({ editing, busy, eligible, running: jobRunning(next.job),
-    interrupted: next.job?.status === 'interrupted', instruction, capabilitiesLoaded: !!capabilities.data, kind, remaining })
+    interrupted: next.job?.status === 'interrupted', instruction, capabilitiesLoaded: !!capabilities.data, kind, remaining,
+    manualImage: !!detail.images[media]?.manual })
   const act = async (family: 'initial' | 'refine') => {
     setBusy(true); setError(null)
     try { if (family === 'initial' && initial.data) { first.accept(await initialTranslate(detail, initial.data, consent)); setConsent(false); await initial.refetch() }
@@ -66,8 +76,15 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
         {kind === 'image' && <Select aria-label="选择图片" value={media} disabled={busy || jobRunning(next.job)} onChange={setMedia} options={detail.images.map((_, index) => ({ value: index, label: `第 ${index + 1} 张` }))} />}
         <Button type="text" onClick={() => setTemplateOpen(true)}>查看模板（只读）</Button></Space>
       <label className={styles.field}>这一次希望怎样调整<Input.TextArea aria-label="这一次希望怎样调整" rows={2} maxLength={4000} value={instruction} disabled={busy || jobRunning(next.job)} onChange={event => setInstruction(event.target.value)} /></label>
+      {kind === 'image' && <div className={styles.presets}>
+        <span className={styles.help}>常用说法（点一下追加，再按实际情况改）：</span>
+        <Space wrap size={[4, 4]}>{IMAGE_PRESETS.map(preset => <Tooltip key={preset.text} title={preset.why}>
+          <Button size="small" type="dashed" disabled={busy || jobRunning(next.job)}
+            onClick={() => setInstruction(current => current.trim() ? `${current.trim()}\n${preset.text}` : preset.text)}>{preset.text}</Button>
+        </Tooltip>)}</Space>
+      </div>}
       <PaidActionButton label={kind === 'image' ? '生成图片' : '生成文案候选'} amount={kind === 'image' && capabilities.data ? `约 US$${capabilities.data.estimated_image_usd.toFixed(3)}` : '按实际用量计费'} {...(nextReason ? { disabledReason: nextReason } : {})} {...(kind === 'image' ? { remaining } : {})} loading={busy} onClick={() => void act('refine')} />
-      {kind === 'image' && <Typography.Paragraph type="secondary">{capabilities.data?.estimate_basis}；费用以实际记录为准。</Typography.Paragraph>}
+      {kind === 'image' && <Typography.Paragraph type="secondary">{capabilities.data?.estimate_basis}；费用以实际记录为准。每张图最多受理 {capabilities.data?.max_refine_per_media ?? 3} 次，<strong>失败的那次也算一次</strong>；生成过的版本可以在图片页比较后换回去。</Typography.Paragraph>}
       {status(next, false)}<Button type="text" onClick={() => { void capabilities.refetch(); void next.refresh() }}>刷新任务状态</Button>
     </> }]} />
     <Drawer title="生成模板（只读）" open={templateOpen} onClose={() => setTemplateOpen(false)} size="large"><pre className={styles.diagnostic}>{template.isPending ? '正在读取模板…' : template.data?.content ?? '模板暂时不可读'}</pre></Drawer>

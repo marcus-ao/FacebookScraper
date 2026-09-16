@@ -62,7 +62,9 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `PUT /api/tasks/{id}/tags` | 独立保存分类，不提交其他区域草稿 |
 | `POST /api/tasks/{id}/check` | 只计算；接收 localization、text_de/body_only，返回 caption_length、hashtag_count、warnings、issues |
 | `POST /api/tasks/{id}/review` | 挂起、恢复、不发或人工接管；理由与 revision 按动作校验 |
-| `POST /api/tasks/{id}/export` | 完整生成 ZIP 后记录人工接管 |
+| `POST /api/tasks/{id}/export` | 完整生成 ZIP；`mode=handoff`（默认）才记录人工接管，`mode=download` 只下载不改状态 |
+| `POST /api/tasks/{id}/image/{index}/upload` | JSON + base64 上传人工图替换该张；校验格式/动图/体积，旧文件移入 `media_de/superseded/`，**不写 `images_de.jsonl`**，状态保持不变 |
+| `POST /api/image-versions/task/{id}` | 采用某历史版本为当前版；零模型调用、零费用、不占优化次数 |
 | `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at，锁内复核并创建单渠道排期 |
 | `POST /api/tasks/{id}/publication/reconcile` | 按已有回执和冻结版补本地状态、镜像、通知，不重复提交 |
 | `POST /api/calendar/refresh` | 持发布锁重新读取远端，失败时保留可用卡片与错误状态 |
@@ -83,7 +85,9 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 
 FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，未插入链接追加末尾，已插入的不重复。IG 使用 bio CTA。缺目标、未知编号或损坏 token 阻止通过；金额等可人工解释的差异仅提示。即时检查只应用于对应草稿，字符数按最终完整正文计算。
 
-每张图片最多受理三次人工优化；来源、源图或提示词变化使旧候选失效，人工版本保留。费用区分初次处理、优化、风险扫描和不确定金额。`text.stale` 只表示原文变化，提示词版本另看 machine_current 等字段。
+每张图片最多受理三次人工优化，失败的那次也算；来源、源图或提示词变化使旧候选失效，人工版本保留。费用区分初次处理、优化、风险扫描和不确定金额。`text.stale` 只表示原文变化，提示词版本另看 machine_current 等字段。
+
+图片详情带 `manual`（当前是人工图，模型优化入口须停用）与 `metrics.changed_pixel_ratio`（改动像素占比；`null` 表示旧记录没量过，**不等于没改动**，占比 0 才是没改动且须显著提示）。`GET /api/refinements/task/{id}` 附 `image_versions`，按媒体下标分组给出每版的时间、当次指令、指标、是否当前及不可用原因。
 
 设置仅开放 default_times（1–12 个不重复柏林 HH:MM）和 snooze_default_days（1–30 个上海工作日）。只影响后续预填，不移动既有排期；CAS 改写保留无关值、注释和换行，不安全的格式拒绝改写。
 

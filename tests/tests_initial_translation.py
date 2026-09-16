@@ -81,7 +81,7 @@ class InitialTranslationTests(ConsentFixture):
             return {'status': 'completed', 'risks': []}
         buffer = io.BytesIO()
         Image.new('RGB', (1088, 1088), 'blue').save(buffer, 'JPEG')
-        validated = image_de.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 0)
+        validated = image_de.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 0, 0.02)
         editor = Mock()
         editor.edit.return_value = image_de.EditResult('', 'gpt-image-2', {}, 'response')
         editor.paid_request_id = ''
