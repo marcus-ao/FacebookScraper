@@ -72,6 +72,17 @@ describe('历史版本：3 次预算的前提是上一版还找得回来', () =>
     expect(markup).not.toContain('生成过')
   })
 
+  it('人工替换后仍可预览唯一的生成版本，并解释不能采用的原因', () => {
+    const markup = html([asset({ manual: true })], { 0: [version({
+      preview_url: '/api/image-versions/task/acme/1/preview?media_index=0', usable: false,
+      unusable_reasons: ['这一张已采用人工图片；历史版本仅供查看'],
+    })] })
+    expect(markup).toContain('这一张生成过 1 版')
+    expect(markup).toContain('预览第 1 版')
+    expect(markup).toContain('历史版本仅供查看')
+    expect(markup).not.toContain('采用这一版')
+  })
+
   it('多版时列出每一版，当前版标出来且不给采用按钮', () => {
     const markup = html([asset()], {
       0: [

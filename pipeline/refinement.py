@@ -75,8 +75,15 @@ def job_result(job_id: str) -> dict | None:
     return public_job(row) if row else None
 
 
+def _text_prompt_current(row: dict) -> bool:
+    return type(row.get('prompt_version')) is int and row['prompt_version'] == translated.PROMPT_VERSION
+
+
 def public_job(row: dict) -> dict:
     result = dict(row)
+    if row.get('kind') == 'text':
+        result.update(current_prompt_version=translated.PROMPT_VERSION,
+                      prompt_current=_text_prompt_current(row))
     events = [event for event in paid_requests.load_events(cfg().state_dir)
               if event.get('operation_id') == row['job_id']]
     result['paid_request_ids'] = list(dict.fromkeys(event['request_id'] for event in events))
@@ -126,7 +133,8 @@ def recover(job_id: str, *, expected_updated_at: str) -> dict:
         elif row['kind'] == 'text':
             result = translated.load_translated(directory / 'translated.jsonl').get(row['post_id'])
             if result and result.get('refine_id') == job_id and result.get('text_de'):
-                event.update(status='succeeded', error=None, text_de=result['text_de'], message='已找回本次保存的文案')
+                event.update(status='succeeded', error=None, text_de=result['text_de'],
+                             prompt_version=result.get('prompt_version'), message='已找回本次保存的文案')
         elif row['kind'] == 'image':
             result = image_de.load_image_state(directory / 'images_de.jsonl').latest.get(
                 (row['post_id'], row['media_index']))
@@ -200,6 +208,8 @@ def select_version(account_dir: Path, indexed: dict, *, media_index: int, out_pa
                    source_text_sha256: str, review_revision: str | None) -> dict:
     """采用某个历史版本。**不调用模型、不产生费用**，只改"当前是哪一版"。"""
     account_dir = Path(account_dir)
+    if account_dir.name not in cfg().active_accounts():
+        raise review.ReviewValidationError('此账号已冻结或未配置，不能更换图片版本')
     with paid_model.FileLock(cfg().state_dir / 'images.lock',
             busy_message='图片正在生成，请完成后再采用版本'), review.transaction(account_dir) as session:
         source, state = session.validate(
@@ -290,6 +300,8 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
                'source_text_sha256': source_text_sha256, 'kind': kind, 'instruction': instruction.strip(),
                'media_index': media_index, 'status': 'pending', 'recorded_at': now, 'actor': None}
         row['review_revision'] = review_revision
+        if kind == 'text':
+            row['prompt_version'] = translated.PROMPT_VERSION
         row.update(worker=current_worker(), operation_tracked=True,
                    source_fingerprint=paid_consent.fingerprint(source, account_dir))
         if kind == 'suggest':
@@ -316,6 +328,8 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
         _append(event)
     try:
         def preflight():
+            if row['kind'] == 'text' and not _text_prompt_current(row):
+                raise review.ReviewConflict('翻译提示词已更新或任务缺少版本依据，请重新受理优化')
             source, current_translation = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
             if row['kind'] == 'image':
                 _require_model_image(account_dir, source, current_translation, row['media_index'])
@@ -369,6 +383,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
                 raise ValueError('文案优化未通过产出检查；已有人工稿保持原样')
             result = translated.load_translated(account_dir / 'translated.jsonl')[source['post_id']]
             event['text_de'] = result['text_de']
+            event['prompt_version'] = result['prompt_version']
         else:
             settings = image_de.Settings()
             editor = editor or image_de.ImageEditor(settings, paid_controller=controller)

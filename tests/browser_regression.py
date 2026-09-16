@@ -273,6 +273,7 @@ def stage_d5(page, ui):
     ui.overrides[('GET',refine_path)]=(200,caps)
     initial_job={'job_id':'fixture-initial','status':'pending','recorded_at':'2026-09-13T00:00:00Z'}
     refine_job={'job_id':'fixture-refine','status':'pending','kind':'text','source_text_sha256':detail['text']['source_text_sha256'],'recorded_at':'2026-09-13T00:00:00Z'}
+    refine_job['prompt_current'] = True
     ui.overrides[('POST',initial_path)]=(202,initial_job);ui.overrides[('POST',refine_path)]=(202,refine_job)
     polls={'initial':0,'refine':0}
     def result(name,job):
@@ -298,6 +299,12 @@ def stage_d5(page, ui):
     page.get_by_role('button',name='采用到正文编辑区',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible()
     page.get_by_role('button',name='采用候选',exact=True).click();expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Neue Kandidatin 😀')
     page.get_by_role('button',name='放弃修改').click()
+    for expired in (dict(refine_job, status='succeeded', body_de='Neue Kandidatin 😀', prompt_current=False),
+                    {key: value for key, value in dict(refine_job, status='succeeded', body_de='Neue Kandidatin 😀').items() if key != 'prompt_current'}):
+        ui.overrides[('GET','/api/refinements/jobs/fixture-refine')] = (200, expired)
+        page.get_by_role('button', name='刷新任务状态', exact=True).click()
+        expect(page.get_by_role('button', name='采用到正文编辑区', exact=True)).to_be_disabled()
+        expect(page.get_by_text(re.compile('提示词已更新或任务缺少版本依据'))).to_be_visible()
     page.get_by_role('button',name='处理记录',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape')
     expect(page.get_by_role('button',name='处理记录',exact=True)).to_be_focused()
     interrupted={**initial_job,'status':'interrupted'};cap['job']=interrupted
@@ -308,7 +315,7 @@ def stage_d5(page, ui):
     recovery=[r for r in ui.requests if r['path'].endswith('/recover')][-1]
     assert recovery['body']=={'expected_updated_at':initial_job['recorded_at']}
     assert len([r for r in ui.requests if r['method']=='POST' and r['path']==initial_path])==1
-    return {'D5':'PASS','consent_and_versions':True,'polls_stop_at_terminal':True,'candidate_dirty_confirmation':True,'recovery_only_no_model_repeat':True,'drawer_escape_focus':True,'poll_counts':polls}
+    return {'D5':'PASS','consent_and_versions':True,'polls_stop_at_terminal':True,'candidate_dirty_confirmation':True,'expired_or_unversioned_candidate_disabled':True,'recovery_only_no_model_repeat':True,'drawer_escape_focus':True,'poll_counts':polls}
 
 
 def stage_d(page, ui):

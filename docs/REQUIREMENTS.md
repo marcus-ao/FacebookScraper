@@ -255,11 +255,15 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 
 文案分支 `a8f4a6e` 与图片主干 `ec4621e` 的独立回归记录分别见
 [HANDOFF §1.5](HANDOFF.md#15-阶段二分平台本地化复审2026-09-15证据-utc-2026-09-16) 与上述图片复审记录。
-两边证据按原提交保留。**2026-09-16 合并后的代码验证：Python 79/79 脚本，前端 29 个文件、542 项及
+两边证据按原提交保留。**合并提交 `35da19b` 的验证：Python 79/79 脚本，前端 29 个文件、542 项及
 TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文案交互 5 项。处理预览新增的三项整合回归
 覆盖画幅带、强制优化仍保留人工图及跨模型费用未知。全部使用隔离夹具，状态为 **离线通过**。
-[当前全量证据](../state/stage2-platform-split/offline-validation-20260916T074332Z/results.json)与
+[原合并全量证据](../state/stage2-platform-split/offline-validation-20260916T074332Z/results.json)与
 [整合核验汇总](../state/stage2-platform-split/merge-validation-20260916.json)已在主检出按独立目录保留。
+
+**后续整体复审的最终结果：80/80 Python 脚本、29 个前端文件/547 项、生产构建及 16 个最终构建浏览器场景全部通过。**
+另有 D5 候选与恢复场景；均为隔离夹具，没有真实付费或社媒操作。九项衔接缺陷、证据及分支收尾见
+[HANDOFF §1.7](HANDOFF.md#17-阶段二整体复审与分支收尾2026-09-16)，代码状态为 **离线通过**。
 
 本轮改动：翻译提示词按渠道渲染并递增到版本 7；IG bio 引导独立保留并提示重复；复制后端最终 `caption`；
 建议提示词版本 2，冻结当前编辑正文、保留人工决定；审校列表、计数和积压提醒按平台一致；
@@ -271,6 +275,7 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 | F3-9 审校台按平台分入口 | 离线通过 | `/review/facebook` 与 `/review/instagram` 两条并列入口；角标按 `summary.by_platform_status` 分别计数；详情路由不变，缺平台参数由详情页补回 | 运营实际使用另验 | `AppShell`/`nav-model` 用例：两入口选中、详情按 `?platform=` 亮对应项、不从目录前缀猜平台 |
 | F3 自动处理作用域预览 | 离线通过 | `processing-preview` 逐帖显示激活/许可/审校/发布/预算筛选、文案动作、风险预扫与预计新图；共享画幅带及人工图保护，当前产物保留；切换图片模型不沿用其它模型历史单价 | 当前凭据、供应商费用与真实新帖另验 | `tests_processing_preview` 16 项；[隔离 CLI 输出](../state/stage2-platform-split/stage2-processing-preview.json)：旧帖排除，新帖 1 次翻译、1 次风险预扫、2 张图片，预览前后文件字节不变 |
 | F3 单轮内容处理与通知 | 离线通过 | `--run --process --once` 等待本批次处理及结果通知后退出；保留静默时间，连续模式仍异步 | 真实模型、飞书与新帖另验 | `tests_scheduler` 5 项：实际 Runtime、假处理/飞书，待审卡在关闭前送达，不新增扫描或后台任务 |
+| F3 采集与内容处理衔接 | 离线通过 | 完整采集结果独立触发处理，兼容同轮部分失败、人工恢复和重启；回执随批次原子保存，已受理结果不重放 | 真实自然新帖与人工恢复另验 | `tests_pipeline_service` 与 `tests_runtime_recovery`：完整帖入队、未完整帖保留人工状态、恢复后一次受理、跨批次及中断去重；假处理器零模型调用 |
 | F3 三区块编辑/人工优先 | 离线通过 | 正文/hashtags/链接分区，人工稿/图优先 | 当前来源 | `tests_localization`/`tests_web_review` 回归，刷新/重建不覆盖 |
 | F3-1 FB 链接 | 待真实联调 | 未映射进人工队列；单篇覆盖不改全局；链接不进翻译输入 | 德国落地页确认 | 一篇 FB 最终链接/目标正确，长文回读保留链接 |
 | F3-1 FB 正文链接/实时计数 | 离线通过 | 光标插入 `{{linkN}}`，按已选 URL 替换；未插入末尾追加，非法编号/目标/token 拒绝，IG 不支持；`/check` 按最终草稿计数 | 真实落地页另验 | `tests_localization`/`tests_web_review`/浏览器回归：插入位置、最终字符数、无重复、失效拒绝 |
@@ -285,6 +290,8 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 | F3-4 模型未改动可见 | 离线通过 | 逐字节相同判回显硬拒；`changed_pixel_ratio` 只计最大通道差 >24 的像素，占比 0 提示“未检测到明显像素变化”，不等于完全相同或未翻译，不拒绝无英文图片 | `change_ratio_warn` 待真实产出标定 | `tests_localize_images` K5、前端 `ImageWorkspace.test.tsx`、浏览器 D3 |
 | F3-4 图片模型白名单 | 离线通过 | `gpt-image-2` / `gpt-image-2.5` 可切；费率按模型分表，历史用量按记录模型计价；估算只取同模型样本，2.5 无样本时不显示虚构单价；审校台只读展示模型 | **2.5 的真实费率与 size 契约均未实测**，切换前须核费率并跑 `--check` | `tests_localize_images` K2c、`tests_image_workflow_review`：白名单/费率缺项/跨模型历史费用与估算 |
 | F3-4 历史版本可回退 | 离线通过 | 独立预览各版（含上传前备份）不改审校状态；采用旧版零调用、零次数且不重复计预算，兼容按人工正文生成的历史图；人工替换后历史图仍可预览，采用入口禁用并说明原因 | 无 | `tests_image_workflow_review`/`tests_browser_workflow`：预览→采用、源/正文版本核验、日/月预算计算值不变、生成锁冲突 |
+| F3 文案与图片连续审校 | 离线通过 | 未采用文案候选保留已有有效德语图；图片写入失败恢复上一选择、费用和次数保留；审校与发布对失效图片判据一致 | 真实模型质量另验 | `tests_image_basis` 7 项：实际本地任务/审校/图片规划/compose 串联，模型替身；源文与 prompt 更新仍使旧依据失效 |
+| F3 人工编辑与交付一致性 | 离线通过 | 保存等待期间新输入保留；单版历史图也能预览；冻结账号不可换版；下载文案包含最终本地标签和平台链接/CTA | 业务实际编辑与远端采用另验 | `tests_stage2_review_ui` 保存竞态场景、`tests_web_review` 下载与服务端渲染逐字符相同、`tests_image_workflow_review` 冻结写入拒绝、前端历史入口回归 |
 | F3-4 上传替换与下载拆分 | 离线通过 | 上传落 `media_de/NN.<ext>`，人工选择单独追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；旧件先备份，失败保留原选择，同字节旧生成图也按人工选择采用；审校记为 `edited` 继续排期。下载按钮及 ZIP 说明不触发交接，转交人工仍需独立确认 | 业务真实换图走完排期 | `tests_web_review`/`tests_image_workflow_review`/浏览器第 10 场景：连续跨格式上传、发布素材选择、错误与 Windows 占用恢复、人工标记/时间/偏差提示/禁用优化；下载不转态 |
 | F3-4 模型任务恢复/旧候选 | 离线通过 | 按进程/job/request/source/prompt 对账，恢复不发新付费请求 | 不确定项人工核账 | `tests_content_recovery`/`tests_refinement`：执行中不抢占、未请求收敛、不确定阻塞、源变候选不可应用 |
 | F3-4 恢复 UI/费用呈现 | 离线通过 | job 与批次 `operation_id` 关联 paid request、费用、CAS 版本；人工核对恢复不重新付费 | 真实供应商核账另验 | runtime/content recovery 后端定向；浏览器用明确 UI 夹具验证中断/费用/取消恢复 |

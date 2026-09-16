@@ -473,6 +473,10 @@ export interface ContentJob {
   readonly paid_request_ids?: readonly string[]
   readonly worker_state?: string
   readonly source_text_sha256?: Sha256
+  /** 文案候选的模板版本；旧任务缺少版本时不可采用。 */
+  readonly prompt_version?: number | null
+  readonly current_prompt_version?: number
+  readonly prompt_current?: boolean
   /** 仅 text 任务成功时提供正文分区。 */
   readonly body_de?: string
   readonly text_de?: string

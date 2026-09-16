@@ -1,12 +1,12 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化及整合验收同步至 2026-09-16（§1.4–1.6），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化及整体复审同步至 2026-09-16（§1.4–1.7），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
 **2026-09-14 运行数据已整库清空，项目处在"从零逐阶段打磨"的起点。** 下面描述的是清空之后的真实状态，不是历史记录。
 
-**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。两个目录**当前都是空的**：归档、审校账本、付费账本、发布账本、激活边界、probe dump 与截图全部删除，不做备份。副本工作区可能用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
+**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。2026-09-16 复核：归档仍为 0 篇，审校、付费、发布、采集与处理批次的业务账本及激活边界均未建立；`state/` 已保存后续各轮离线测试证据，不能再按“空目录”删除。副本工作区可能用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
 
 **这意味着什么：**
 
@@ -128,14 +128,14 @@
 
 [修复前 11 项失败证据](../state/offline-validation-20260916T063724Z/results.json)保留，用于核对缺陷是否真实复现。
 [首轮整库 74/75](../state/offline-validation-20260916T065120Z/results.json)暴露 Windows 预览占用旧图阻止跨格式上传，
-修复仅对共享冲突 32/33 限时重试，最终整库及定向失败注入均通过。证据已保存在原图片 worktree 与主检出的 `state/`，不随 Git 提交。
+修复仅对共享冲突 32/33 限时重试，最终整库及定向失败注入均通过。证据保存在主检出的 `state/`，不随 Git 提交；原 worktree 的本机文件保全见 §1.7。
 所有测试使用临时归档、合成图片或假服务；本 worktree 无真实帖子，没有模型付费、平台登录、抓取、消息或发布操作。
 本轮只支持 **离线通过**：两模型的真实契约与费率、德语图版面及语义、业务上传图在远端排期中的采用仍为 **待真实联调**，
 按 [MANUAL_STEPS §5](MANUAL_STEPS.md#5-付费模型操作) 与发布确认流程执行；浏览器夹具不升级这些结论。
 
 ### 1.5 阶段二分平台本地化复审（2026-09-15；证据 UTC 2026-09-16）
 
-复审与修复位于 `stage2-platform-split-translation`，独立 worktree 为 `.worktrees/stage2-platform-split`。
+复审与修复使用 `stage2-platform-split-translation`，原独立 worktree 为 `.worktrees/stage2-platform-split`。
 接手时提交为 `301a00b`、工作树干净；与 `7d9b875` 比较原有八个实施提交。该 worktree 的
 `config.local.toml` 只复用主检出解释器，归档与状态独立，测试进一步使用临时数据。
 
@@ -167,9 +167,37 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 [全量结果与逐脚本日志](../state/stage2-platform-split/offline-validation-20260916T074332Z/results.json)、
 [基础及图片浏览器记录](../state/stage2-platform-split/offline-browser-20260916T074335Z-17524/report.json)、
 [文案浏览器记录](../state/stage2-platform-split/offline-browser-20260916T074807Z-21648/report.json)与
-[整合及 Git 交付汇总](../state/stage2-platform-split/merge-validation-20260916.json)保存在主检出与本 worktree 的
+[整合及 Git 交付汇总](../state/stage2-platform-split/merge-validation-20260916.json)保存在主检出的
 `state/stage2-platform-split/`，不随 Git 提交。按文件哈希复制，未覆盖图片分支已有的同名日志；
 原报告里的绝对路径保持原样，副本中保留同目录日志与截图，主检出可独立复核。
+
+### 1.7 阶段二整体复审与分支收尾（2026-09-16）
+
+按用户要求，以 `35da19b` 中已整合的文案与图片实现为整体复审；范围是抓取结果进入处理、
+正文编辑/建议/重写、图片生成/换版/上传、下载及发布素材衔接。没有启动真实抓取、模型、消息或发布。
+
+本轮复现并修复：完整抓取结果在部分失败/人工恢复后漏入队；未采用文案候选使已选图片失效并要求再次
+付费；审校判过期图片仍被发布组装采用；图片优化写盘失败丢失当前选择；保存等待期间新编辑被清空；
+唯一历史版本入口隐藏；冻结账号仍可换版；下载包遗漏最终平台链接/CTA；旧提示词文案候选仍可采用。
+
+完整采集结果与入队回执原子关联，重启不重新受理；中断恢复仍只结转、不隐含重放。图片保留同源有效
+生成依据，显式优化仍用当前正文，源文/原图/prompt 变更仍需复核。失败图片请求保留费用及次数，上一
+选择继续有效。保存只确认已提交快照；下载、复制及发布使用相同的文案渲染规则。
+
+**最终验证：离线通过。** Python **80/80 脚本**，包含新增图片连续操作 7 项、抓取→处理与去重恢复回归；
+前端 **29 个文件、547 项**，TypeScript/Vite 构建通过。最终构建下基础/图片浏览器 **10/10**、文案编辑
+浏览器 **6/6** 通过，另有 D5 对旧/缺 prompt 候选禁用及恢复不重发的定向浏览器证据。
+所有来源、图片和账本均为隔离夹具，模型/剪贴板异常/外部回执为替身；这不证明真实德语质量、图片效果、
+供应商用量或业务账号发布可用。真实联调仍按 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图) 执行。
+
+证据集中在主检出 `state/stage2-integrated-audit/`，不随 Git 提交：
+
+- [全量 Python 结果](../state/stage2-integrated-audit/offline-validation-20260916T084710Z/results.json)、[前端单测](../state/stage2-integrated-audit/ui-tests.log)、[构建日志](../state/stage2-integrated-audit/spec-ui-build.log)。
+- [基础/图片浏览器](../state/stage2-integrated-audit/offline-browser-20260916T084717Z-9668/report.json)、[文案编辑浏览器](../state/stage2-integrated-audit/offline-browser-20260916T085221Z-31384/report.json)、[D5 定向浏览器](../state/stage2-integrated-audit/spec-ui/browser-stage-d5.json)。
+- [交付与保全汇总](../state/stage2-integrated-audit/validation.json)记录最终提交、推送、分支/worktree 清理及文件哈希。`worktrees/text/` 与 `worktrees/image/` 保留两个 worktree 的完整 state、归档目录及本机配置；原报告生成路径不改写，按汇总内路径映射定位现存副本。
+
+只清理用户指定的 `stage2-platform-split-translation`、`claude/social-post-image-generation-e10530`。
+清理前核对主干包含其提交、工作树无未提交改动，并逐文件核对备份哈希；其它排期 worktree 保留。
 
 ## 2. 红线
 
@@ -216,7 +244,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 - 处理 P50/P95 和晨间就绪率、源发帖至首次待审的 source_created_at/post_content_ready 关联已通过 6 项 runtime_status 测试，源发帖指标含发现等待，不为旧数据补造事实。
 - 风险路径与三类采样已有离线验证。IG 采样遵守 C7 持久停机、仅接受明确同名 hashtag 容器的累计 count。Trends 新增 CSV 专属被动控件、完整摘要上下文、BOM/CRLF/周月解析；恢复共享锁并要求 `trends-status` 的 revision。新增 4 项审查修复的 11 项导出测试通过，T1–T4 复审已关闭；真实 CSV/模型/平台采样仍未验收。⛔ **标签热度推荐 2026-09-15 起明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)），`[hashtags].enabled = false` 是决定不是缺口，采集器代码保留不删。
 - 阶段二本轮补上：翻译提示词按渠道渲染（IG 删掉原文的 bio 引导句，见第 8 节）、审校台按平台分成两个入口、一键复制服务端算好的成品文案、模型给只读优化建议交人逐条决定。**法语明确延期**，本轮不做 locale 抽象。
-- 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了临时真实后端验证。旧 FB 机器译文 prompt 5、当前 prompt 7（按渠道渲染，第 8 节）；当前无可接受德语图，原 FB 目录未发现 media_de。找到的 3 张历史德语图均属冻结 `.tech`，不作 FB 或新 `.global` 素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
+- 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了隔离本地后端验证。当前翻译 prompt 7、图片 prompt 3；2026-09-16 业务归档仍为空，历史样本不作当前可发布素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
 - 飞书按帖聚合/阶段路由/晨报/有效首图状态与摘要、原卡冻结/人工 resolve、多收件人部分失效漏发和镜像周期包/大证据独立版本已有离线验证。当前角色有效原卡补送保留投递 ID；旧角色结转及部分失效保留旧 cancelled 卡，只给漏收者生成仍有效的新提醒。企业投递和恢复仍待权限。
 - 完整月历实际读取本次已真实通过，公开观察按 remote ID，不按时钟；业务层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
 - 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。

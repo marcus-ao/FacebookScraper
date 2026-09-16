@@ -78,6 +78,29 @@ class RefinementTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         translator.translate.assert_not_called()
 
+    def test_prompt_change_while_queued_stops_before_model_call(self):
+        row = self.submit()
+        self.assertEqual(row['prompt_version'], translated.PROMPT_VERSION)
+        before = (self.account / 'translated.jsonl').read_bytes()
+        translator = Mock()
+        with patch.object(translated, 'PROMPT_VERSION', translated.PROMPT_VERSION + 1):
+            result = refinement.execute(row, self.source, translator=translator)
+            public = refinement.job_result(row['job_id'])
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(public['prompt_current'])
+        translator.translate.assert_not_called()
+        self.assertEqual((self.account / 'translated.jsonl').read_bytes(), before)
+        self.assertFalse((cfg().state_dir / 'paid_requests.jsonl').exists())
+
+    def test_legacy_job_without_prompt_version_is_not_current_or_replayed(self):
+        row = self.submit()
+        row.pop('prompt_version')
+        refinement._append(row)
+        self.assertFalse(refinement.job_result(row['job_id'])['prompt_current'])
+        translator = Mock()
+        self.assertEqual(refinement.execute(row, self.source, translator=translator)['status'], 'failed')
+        translator.translate.assert_not_called()
+
     def test_text_refinement_is_machine_candidate_and_keeps_human_version(self):
         human = translated.append_human_translation(self.account / 'translated_human.jsonl', self.source,
             'Von Hand. #Neakasa', expected_revision=None)
@@ -87,6 +110,15 @@ class RefinementTests(unittest.TestCase):
         translator = SimpleNamespace(translate=lambda text, system: 'Modell. #Neakasa')
         result = refinement.execute(row, self.source, translator=translator)
         self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['prompt_version'], row['prompt_version'])
+        self.assertTrue(refinement.job_result(row['job_id'])['prompt_current'])
+        human_before = (self.account / 'translated_human.jsonl').read_bytes()
+        with patch.object(translated, 'PROMPT_VERSION', translated.PROMPT_VERSION + 1):
+            polled = self.fixture.client.get('/api/refinements/jobs/' + row['job_id']).json()
+            self.assertFalse(polled['prompt_current'])
+            self.assertEqual(polled['prompt_version'] + 1, polled['current_prompt_version'])
+            self.assertEqual(polled['body_de'], 'Modell.')
+        self.assertEqual((self.account / 'translated_human.jsonl').read_bytes(), human_before)
         machine = translated.load_translated(self.account / 'translated.jsonl')[self.source['post_id']]
         self.assertEqual(machine['refine_instruction'], '语气轻松')
         self.assertEqual(translated.load_human_translated(self.account / 'translated_human.jsonl')[

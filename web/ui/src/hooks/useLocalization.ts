@@ -38,12 +38,20 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
   const save = async () => {
     if (!draft || saving) return
     setSaving(true); setError(null)
-    try { apply(await saveLocalization(detail, draft)); discard(); void message.success('人工修改已保存') }
+    try {
+      const saved = await saveLocalization(detail, draft)
+      apply(saved)
+      // 保存只确认点击时的版本；等待响应期间的新输入仍需留在编辑区。
+      setDraft(current => current && JSON.stringify(editableFields(current)) !== JSON.stringify(editableFields(draft))
+        ? recoverDraft(detail, saved, current) : null)
+      setValidation(null); setActive(-1)
+      void message.success('本次提交已保存')
+    }
     catch (cause) { setError(cause) } finally { setSaving(false) }
   }
   const recover = async () => {
     setRecovering(true)
-    try { const latest = await refresh(); if (draft) setDraft(recoverDraft(detail, latest, draft)); setError(null) }
+    try { const latest = await refresh(); setDraft(current => current ? recoverDraft(detail, latest, current) : null); setError(null) }
     catch (cause) { setError(cause) } finally { setRecovering(false) }
   }
   const tail = shown.platform === 'instagram' ? shown.ig_cta : shown.links.map(link => link.target_url).filter(url => /^https?:\/\//.test(url)).join('\n')

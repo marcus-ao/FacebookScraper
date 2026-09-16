@@ -43,6 +43,23 @@ class ImageWorkflowReviewTests(unittest.TestCase):
         after = engine.budget_snapshot([self.account], now=datetime.now(timezone.utc))
         self.assertEqual(after, before)
 
+    def test_frozen_account_cannot_select_an_image_version(self):
+        self.fx.write_generated_image(self.text)
+        self.fx.write_refined_image(self.text, 'a' * 32)
+        wanted = self.fx.versions()[0]['out_path']
+        cfg()._d['targets']['facebook'] = 'anotherbrand'
+        before = self.fx.client.get(self.fx.url).json()
+        self.assertTrue(before['read_only'])
+        ledger = self.account / 'images_de.jsonl'
+        images_before = ledger.read_bytes()
+        result = self.fx.select(wanted)
+        self.assertEqual(result.status_code, 400, result.text)
+        self.assertIn('冻结', result.text)
+        self.assertEqual(ledger.read_bytes(), images_before)
+        after = self.fx.client.get(self.fx.url).json()
+        self.assertEqual(after['review'], before['review'])
+        self.assertEqual(after['images'][0]['de_url'], before['images'][0]['de_url'])
+
     def test_manual_image_refinement_rejected_before_attempt_is_counted(self):
         self.assertEqual(self.fx.upload().status_code, 200)
         detail = self.fx.client.get(self.fx.url).json()

@@ -45,6 +45,23 @@ class RecoveryTests(unittest.TestCase):
             refinement.recover(job['job_id'], expected_updated_at=job['recorded_at'])
         self.assertEqual(refinement.latest()[job['job_id']]['status'], 'pending')
 
+    def test_recovered_text_preserves_its_prompt_version_and_stays_expired(self):
+        job = self.queue()
+        path = self.fixture.account / 'translated.jsonl'
+        machine = translated.load_translated(path)[self.fixture.post_id]
+        translated.append_translated(path, dict(machine, refine_id=job['job_id']))
+        before = path.read_bytes()
+        with patch('pipeline.refinement.worker_alive', return_value=False), \
+                patch.object(translated, 'PROMPT_VERSION', translated.PROMPT_VERSION + 1):
+            recovered = refinement.recover(job['job_id'], expected_updated_at=job['recorded_at'])
+            polled = self.fixture.client.get('/api/refinements/jobs/' + job['job_id']).json()
+        self.assertEqual(recovered['status'], 'succeeded')
+        self.assertEqual(recovered['prompt_version'], machine['prompt_version'])
+        self.assertFalse(recovered['prompt_current'])
+        self.assertEqual(polled['prompt_current'], recovered['prompt_current'])
+        self.assertEqual(path.read_bytes(), before)
+        self.executor.submit.assert_called_once()
+
     def test_unresolved_paid_call_blocks_recovery_after_crash(self):
         job = self.queue()
         event = {'schema_version': 1, 'request_id': 'paid-1', 'job_key': 'test', 'stage': 'translation',

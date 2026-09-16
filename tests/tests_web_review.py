@@ -324,7 +324,7 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text[:100] if result.status_code != 200 else "")
         self.assertEqual(result.headers["content-type"], "application/zip")
         with zipfile.ZipFile(io.BytesIO(result.content)) as package:
-            self.assertEqual(package.read("text_de.txt").decode("utf-8"), "Von Hand verbessert. #Neakasa")
+            self.assertEqual(package.read("text_de.txt").decode("utf-8"), "Von Hand verbessert.\n\n#Neakasa")
             metadata = json.loads(package.read("metadata.json"))
             self.assertTrue(metadata["images"][0]["used_original"])
             self.assertIn("原图", package.read("README.txt").decode("utf-8"))
@@ -343,6 +343,36 @@ class WebReviewTests(unittest.TestCase):
             meta = json.loads(package.read("metadata.json"))
             self.assertFalse(meta["images"][0]["used_original"])
             self.assertEqual(package.read(meta["images"][0]["file"]), generated)
+
+    def test_export_machine_caption_includes_facebook_localized_link(self):
+        self.source['text'] += ' https://us.example/product'
+        self.write_source()
+        self.write_machine('Ein sauberes Zuhause. #Neakasa')
+        config.cfg()._d['publish']['link_map'] = {'https://us.example/product': 'https://de.example/produkt'}
+        result = self.client.post(self.url + '/export', json=dict(self.action_body(), mode='download'))
+        self.assertEqual(result.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(result.content)) as package:
+            caption = package.read('text_de.txt').decode('utf-8')
+        self.assertEqual(caption, 'Ein sauberes Zuhause.\n\nhttps://de.example/produkt\n\n#Neakasa')
+        self.assertEqual(caption, self.client.get(self.url).json()['localization_validation']['caption'])
+
+    def test_export_machine_caption_includes_instagram_bio_cta_without_url(self):
+        relative = self.post_dir.relative_to(self.account)
+        self.account = self.account.rename(self.root / 'archive' / 'in_neakasa.global')
+        self.post_dir = self.account / relative
+        self.task_id = self.account.name + '/' + self.post_id
+        self.url = '/api/tasks/' + self.task_id
+        self.source.update(platform='instagram', account='neakasa.global', owner='neakasa.global',
+                           text='A clean home. Check the link in our bio. #Neakasa')
+        self.write_source()
+        (self.account / 'manifest.jsonl').write_text(json.dumps(self.source) + '\n', encoding='utf-8', newline='')
+        self.write_machine('Ein sauberes Zuhause. #Neakasa')
+        result = self.client.post(self.url + '/export', json=dict(self.action_body(), mode='download'))
+        self.assertEqual(result.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(result.content)) as package:
+            caption = package.read('text_de.txt').decode('utf-8')
+        self.assertEqual(caption, 'Ein sauberes Zuhause.\n\nLink in Bio 🔗\n\n#Neakasa')
+        self.assertEqual(caption, self.client.get(self.url).json()['localization_validation']['caption'])
 
     def test_export_rejects_missing_or_outside_media_without_changing_state(self):
         for path in ["../outside.jpg", "missing.jpg"]:

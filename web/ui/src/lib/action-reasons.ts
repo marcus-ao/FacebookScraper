@@ -1,6 +1,6 @@
 /** 禁用原因按分支顺序取最高优先级。 */
 
-import type { DisplayStatus } from '@/types/domain'
+import type { ContentJob, DisplayStatus } from '@/types/domain'
 
 export interface ApprovalGate {
   readonly editing: boolean
@@ -89,6 +89,14 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   // 人工图优先于程序产出，所以模型再生成一版也不会被采用——那笔钱是白花的。
   if (gate.kind === 'image' && gate.manualImage) return '这一张已换成人工图片，模型优化不会被采用'
   if (gate.kind === 'image' && !gate.remaining) return '这张图片的优化次数已用完'
+  return ''
+}
+
+export function textCandidateDisabledReason(job: ContentJob, sourceHash: string, eligible: boolean): string {
+  if (!eligible) return '请先恢复审校并复核原文变化'
+  if (job.source_text_sha256 !== sourceHash) return '原文已更新，此候选已失效。'
+  if (job.prompt_current !== true) return '提示词已更新或任务缺少版本依据，此候选已失效。'
+  if (job.body_de === undefined) return '正在读取候选正文，请稍后再采用。'
   return ''
 }
 

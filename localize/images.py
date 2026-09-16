@@ -33,7 +33,7 @@ from core.store import (Archive, ArchivePathError,  # noqa: E402
                         post_directory, post_folder_matches_id, read_post_truth)
 from core.store import post_dirname as post_dirname  # noqa: E402 旧脚本公开入口
 from core.translated import (effective_translation, image_translation, load_human_translated,  # noqa: E402
-                             load_human_translation_history, load_translated,
+                             load_image_translation_history, load_translated,
                              render_glossary)
 from core.paid_model import FileLock                # noqa: E402
 from core import imagehash                          # noqa: E402
@@ -1223,16 +1223,18 @@ def readonly_archive(arc_base: Path) -> Archive:
 
 def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[str, Any],
                        record: Mapping[str, Any] | None, source_sha: str,
-                       human_history: list[dict]) -> Mapping[str, Any]:
-    """一张现有图沿用同源人工旧稿的生成依据；普通改正文不触发再次付费。"""
+                       translation_history: list[dict]) -> Mapping[str, Any]:
+    """人工改稿、文案候选或选图沿用同源依据；显式出图仍使用当前正文。"""
     if (not isinstance(record, Mapping)
-            or not (current.get("is_human") or record.get("refine_id"))
+            or not (current.get("is_human") or current.get("refine_id")
+                    or record.get("refine_id") or record.get("selected_from"))
             or record.get("source_sha256") != source_sha
             or record.get("prompt_version") != IMAGE_PROMPT_VERSION
             or not _record_output_exists(arc_base, record)):
         return current
-    for historical in reversed(human_history):
-        candidate = image_translation(row, None, historical)
+    for historical in reversed(translation_history):
+        candidate = (image_translation(row, None, historical) if historical.get("is_human")
+                     else image_translation(row, historical, None))
         if (candidate is not None
                 and text_de_sha256(candidate["text_de"]) == record.get("text_de_sha256")):
             return candidate
@@ -1241,7 +1243,7 @@ def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[s
 
 def image_jobs_for_translation(settings: Settings, arc_base: Path, row: dict,
                                trans: Mapping[str, Any], state: ImageState,
-                               human_history: list[dict], stats: RunStats, *,
+                               translation_history: list[dict], stats: RunStats, *,
                                force: bool = False,
                                media_index_filter: int | None = None,
                                report: Any = None) -> list[ImageJob]:
@@ -1283,7 +1285,7 @@ def image_jobs_for_translation(settings: Settings, arc_base: Path, row: dict,
         source_sha = sha256_file(source_path)
         # force 是显式重生成，用当前稿；普通对账逐张保留已经付费完成的依据。
         basis = (trans if force else _image_text_basis(
-            arc_base, row, trans, record, source_sha, human_history))
+            arc_base, row, trans, record, source_sha, translation_history))
         text_de = basis["text_de"].strip()
         job = ImageJob(
             account=arc_base.name,
@@ -1327,8 +1329,8 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
     # 只读边界校验；不新建任何目录。
     readonly_archive(arc_base)
     translated = load_translated(arc_base / "translated.jsonl")
-    human_history = load_human_translation_history(arc_base / "translated_human.jsonl")
-    human = {pid: revisions[-1] for pid, revisions in human_history.items()}
+    human = load_human_translated(arc_base / "translated_human.jsonl")
+    translation_history = load_image_translation_history(arc_base)
     state = load_image_state(arc_base / "images_de.jsonl")
     stats = RunStats()
     jobs: list[ImageJob] = []
@@ -1354,7 +1356,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
             stats.skipped_no_translation += image_count
             continue
         jobs.extend(image_jobs_for_translation(
-            settings, arc_base, row, trans, state, human_history.get(post_id, []),
+            settings, arc_base, row, trans, state, translation_history.get(post_id, []),
             stats, force=force, media_index_filter=media_index_filter,
             report=report))
     jobs.sort(key=lambda job: (job.account, job.post_id, job.media_index))
@@ -1376,6 +1378,7 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
     assert_physical_direct_path(post_dir, media_de, kind="directory", label="media_de 目录")
     assert_physical_direct_path(media_de, job.out_path, kind="file", label="德语图")
 
+    previous = state.latest.get(job.key)
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1410,6 +1413,12 @@ def _write_output(job: ImageJob, validated: ValidatedImage,
         else:
             os.replace(temporary, job.out_path)
         temporary = None
+    except Exception:
+        if (state.latest.get(job.key) is record and previous is not None
+                and _record_output_exists(job.arc_base, previous)):
+            # 所有权意图已留账但落图失败；保留这次费用，只恢复仍存在的上一版选择。
+            state.latest[job.key] = _record_image_selection(job.arc_base, previous)
+        raise
     finally:
         if temporary is not None:
             try:
@@ -1587,7 +1596,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         return []
 
     pairs: list[ReviewImagePair] = []
-    human_history = load_human_translation_history(arc_base / "translated_human.jsonl")
+    translation_history = load_image_translation_history(arc_base)
     for media_index, media in enumerate(media_list):
         if not isinstance(media, Mapping) or media.get("kind") != "image":
             continue
@@ -1599,7 +1608,7 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
         source_sha = sha256_file(source_path)
         record = state.latest.get((post_id, media_index))
         basis = _image_text_basis(arc_base, row, translated, record, source_sha,
-                                  human_history.get(post_id, []))
+                                  translation_history.get(post_id, []))
         text_sha = text_de_sha256(basis["text_de"])
         localized_rel: str | None = None
         current_record: dict[str, Any] | None = None
@@ -1688,8 +1697,7 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
                 source_sha = ""
     ledger = _ledger_rows(arc_base, post_id, media_index)
     current = ledger[-1]["out_path"] if ledger else None
-    human_history = load_human_translation_history(
-        arc_base / "translated_human.jsonl").get(post_id, [])
+    translation_history = load_image_translation_history(arc_base).get(post_id, [])
     manual = False
     media_de = post_directory(arc_base, row) / "media_de"
     state = load_image_state(arc_base / "images_de.jsonl")
@@ -1713,7 +1721,7 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
             reasons.append("按更早版本的提示词生成")
         if not source_sha or record.get("source_sha256") != source_sha:
             reasons.append("绑定的是更早版本的原图")
-        basis = (_image_text_basis(arc_base, row, translation_entry, record, source_sha, human_history)
+        basis = (_image_text_basis(arc_base, row, translation_entry, record, source_sha, translation_history)
                  if translation_entry else None)
         expected_text = text_de_sha256(basis["text_de"]) if basis else text_de_sha
         if not expected_text or record.get("text_de_sha256") != expected_text:
@@ -1744,6 +1752,15 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
     return list(seen.values())
 
 
+def _record_image_selection(arc_base: Path, record: dict[str, Any]) -> dict[str, Any]:
+    restored = dict(record)
+    restored["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 标明这一行不是新的付费产出，否则费用统计会把同一张图重复计一次。
+    restored["selected_from"] = record.get("selected_from") or record.get("created_at")
+    append_image_jsonl(arc_base / "images_de.jsonl", restored)
+    return restored
+
+
 def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: int,
                          out_path: str, text_de_sha: str, *,
                          translation_entry: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -1764,11 +1781,7 @@ def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: in
         return chosen
     record = next(item for item in reversed(_ledger_rows(arc_base, post_id, media_index))
                   if item["out_path"] == wanted)
-    restored = dict(record)
-    restored["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # 标明这一行不是新的付费产出，否则费用统计会把同一张图重复计一次。
-    restored["selected_from"] = record.get("selected_from") or record.get("created_at")
-    append_image_jsonl(arc_base / "images_de.jsonl", restored)
+    _record_image_selection(arc_base, record)
     return dict(chosen, current=True)
 
 

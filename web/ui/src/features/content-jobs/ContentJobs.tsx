@@ -6,7 +6,7 @@ import type { ContentJob, TaskDetail } from '@/types/domain'
 import { initialCapabilities, initialTranslate, refinementCapabilities, refine, jobRunning, getTemplate } from '@/services/jobs'
 import { useContentJob } from '@/hooks/useContentJob'
 import { PaidActionButton } from '@/components/PaidActionButton'
-import { initialTranslationDisabledReason, refinementDisabledReason } from '@/lib/action-reasons'
+import { initialTranslationDisabledReason, refinementDisabledReason, textCandidateDisabledReason } from '@/lib/action-reasons'
 import { isConflict } from '@/services/http'
 import { displayLinks } from '@/features/localization/model'
 import styles from './ContentJobs.module.css'
@@ -56,8 +56,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     {flow.job.worker_state === 'unknown' && <p>旧任务缺少进程依据，需要人工核对。</p>}
     {!initialFlow && flow.job.kind === 'text' && flow.job.status === 'succeeded' && <>
       <pre className={styles.candidate}>{displayLinks(flow.job.body_de ?? '')}</pre>
-      <Button disabled={!eligible || flow.job.source_text_sha256 !== detail.text.source_text_sha256 || flow.job.body_de === undefined} onClick={() => { if (flow.job) onCandidate(flow.job) }}>采用到正文编辑区</Button>
-      <p className={styles.help}>标签与链接选择保留，确认后请保存。{flow.job.source_text_sha256 !== detail.text.source_text_sha256 && '原文已更新，此候选已失效。'}</p>
+      <Button disabled={!!textCandidateDisabledReason(flow.job, detail.text.source_text_sha256, eligible)} onClick={() => { if (flow.job) onCandidate(flow.job) }}>采用到正文编辑区</Button>
+      <p className={styles.help}>标签与链接选择保留，确认后请保存。{textCandidateDisabledReason(flow.job, detail.text.source_text_sha256, eligible)}</p>
     </>}
     {!initialFlow && flow.job.kind === 'image' && flow.job.status === 'succeeded' && <p>新版图片已生成；已有人工图片时继续优先使用人工图片。</p>}
     <Collapse ghost items={[{ key: 'job', label: '查看处理依据', children: <pre className={styles.diagnostic}>{JSON.stringify(flow.job, null, 2)}</pre> }]} />

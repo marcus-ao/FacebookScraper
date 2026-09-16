@@ -12,6 +12,7 @@ from core.config import MonitorSchedule, cfg
 from core.capture_state import CaptureState, CaptureStateError
 from core.feishu import FeishuSettings, Outbox, WebhookBot
 from core.heartbeat import Heartbeat, HeartbeatSettings
+from core.integrity import parse_ts
 from core.mirror import DriveClient, MirrorService, MirrorSettings
 from core.monitoring import MonitoringJournal, SKIP_LABELS, SKIP_REASONS
 from core import notify, review, paid_consent, paid_requests
@@ -94,6 +95,7 @@ class Runtime:
         # 先读观测再分支：抓取中途失败也可能已经落了几篇，播报不能因为退出码非零就整段消失。
         observation = self._scan_observation(kind, platform, before, before_archive)
         self._scan_cards(kind, platform, started, now, int(code or 0), observation['skipped'])
+        capture_tracked = self._request_captured_content(now) if self.process else False
         if code:
             self.processing.fact('scan_finished', now, kind=kind, platform=platform,
                                  exit_code=int(code), discovered=0,
@@ -106,10 +108,34 @@ class Runtime:
                                  count=observation['discovered'])
         self.processing.fact('scan_finished', now, kind=kind, platform=platform, exit_code=0,
                              discovered=observation['discovered'], skipped=observation['skipped'])
-        if self.process and observation['discovered']:
+        if self.process and not capture_tracked and observation['discovered']:
             self.processing.request(now, platform, kind, observation['discovered'],
                                     observation['skipped'], image_count=observation['image_count'])
         return code
+
+    def _request_captured_content(self, now: datetime) -> bool:
+        """完整采集结果独立入队；扫描部分失败、人工恢复与飞书状态不影响受理。"""
+        ledger = CaptureState(self.c.state_dir)
+        if not ledger.path.exists():
+            return False
+        snapshot = ledger.status()
+        activated = engine.activation_time(self.c.state_dir)
+        if activated is None:
+            return True
+        for event in snapshot['events'].values():
+            source = event['source']
+            item = snapshot['items'].get(event.get('key'), {})
+            created = parse_ts(source.get('created_at'))
+            if (event['status'] != 'complete' or not event['eligible']
+                    or item.get('status') != 'complete'
+                    or item.get('last_result') != event.get('last_result')
+                    or source.get('account', '').lower() != self.c['targets'][source['platform']].lower()
+                    or created is None or not activated <= created <= now):
+                continue
+            self.processing.request(now, source['platform'], event['classification'], 1, {},
+                                    image_count=event['saved_images'],
+                                    capture_event_id=event['event_id'])
+        return True
 
     def _scan_cards(self, kind, platform, started, now, code, skipped):
         """先持久入队；抓取已完成后由投递线程发送，失败不改变采集事实。"""
@@ -263,6 +289,8 @@ class Runtime:
         if self.process:
             self.refresh_hashtags(now)
         try:
+            if self.process:
+                self._request_captured_content(now)
             directories = engine.active_account_dirs(account_dirs(self.c.archive_dir))
             scheduled = journal.scheduled_source_refs(self.c.state_dir)
             awakened = review.wake_due(directories, now=now, scheduled_refs=scheduled) if self.process else []

@@ -76,7 +76,7 @@ export function ImageWorkspace({ images, detail, versions, editing, maxImageCoun
       <span className={styles.help}>下载不改变排期状态。替换后这一张按人工图优先使用，这篇仍然留在系统里继续排期发布。支持 JPEG / PNG / WebP，最大 32 MB。</span></>}
     </div>
     {/* 不折叠：换回上一版是个动作，不是可选的技术细节。折起来她就不知道有这条路。 */}
-    {history.length > 1 && <section className={styles.versionBox} aria-label="这一张的历史版本">
+    {(history.length > 1 || history.some(version => !version.current)) && <section className={styles.versionBox} aria-label="这一张的历史版本">
       <h3 className={styles.versionTitle}>这一张生成过 {history.length} 版</h3>
       <ul className={styles.versions}>
         {history.map((version, index) => <li key={version.out_path}>

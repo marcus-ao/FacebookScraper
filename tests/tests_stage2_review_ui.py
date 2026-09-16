@@ -33,6 +33,8 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         self.expected_puts = 0
         self.held_checks = []
         self.hold_checks = False
+        self.held_saves = []
+        self.hold_saves = False
         self.model_requests = []
         self.ledger_before = {
             directory / filename: self.bytes_or_none(directory / filename)
@@ -40,6 +42,7 @@ class Stage2ReviewTests(BrowserWorkflowTests):
             for filename in ("paid_requests.jsonl", "published.jsonl")}
         self.addCleanup(self.assert_mutations)
         self.addCleanup(self.release_checks)
+        self.addCleanup(self.release_saves)
         number = int(self._testMethodName.split("_")[2])
         self.task_id = self.fixtures.add_post("fa_neakasaofficial", str(3234567890 + number), "facebook")
         self.fixtures.write_machine(self.task_id,
@@ -60,9 +63,21 @@ class Stage2ReviewTests(BrowserWorkflowTests):
             route.fulfill(status=response.status_code, json=response.json())
         self.held_checks.clear()
 
+    def release_saves(self):
+        for route, response in self.held_saves:
+            route.fulfill(status=response.status_code, json=response.json())
+        self.held_saves.clear()
+
     def route(self, route):
         request = route.request
         path = urlsplit(request.url).path
+        if self.hold_saves and request.method == 'PUT' and path.endswith('/localization'):
+            self.assertEqual(urlsplit(request.url).netloc, urlsplit(self.fixtures.base_url).netloc)
+            self.writes.append((request.method, path))
+            response = self.fixtures.client.put(path, json=request.post_data_json)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.held_saves.append((route, response))
+            return
         if self.hold_checks and request.method == "POST" and path.endswith("/check"):
             self.assertEqual(urlsplit(request.url).netloc, urlsplit(self.fixtures.base_url).netloc)
             self.writes.append((request.method, path))
@@ -276,6 +291,35 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         expect(dialog.get_by_role("textbox", name="完整发布文案")).to_have_value(expected)
         expect(dialog.get_by_role("textbox", name="完整发布文案")).to_have_attribute("readonly", "")
         self.assertEqual(self.page.evaluate("window.stage2Copies"), [])
+
+    def test_stage2_06_edits_while_saving_remain_draft_and_can_be_saved_again(self):
+        body = self.enter_edit()
+        self.localized_link()
+        body.fill('Erste Bearbeitung.')
+        self.expected_puts = 2
+        self.hold_saves = True
+        self.page.get_by_role('button', name='保存', exact=True).click()
+        deadline = time.monotonic() + 5
+        while not self.held_saves and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+        self.assertEqual(len(self.held_saves), 1)
+        body.fill('Neue Bearbeitung waehrend Speichern.')
+        self.localized_link(target='https://de.example.invalid/new-edit')
+        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        self.page.get_by_role('textbox', name='本篇语义标签').fill('#Katzenzuhause')
+        self.release_saves()
+        self.hold_saves = False
+        expect(self.page.get_by_role('button', name='保存', exact=True)).to_be_enabled()
+        self.assertEqual(self.fixtures.detail(self.task_id)['localization']['body_de'], 'Erste Bearbeitung.')
+        expect(self.page.get_by_role('textbox', name='本篇语义标签')).to_have_value('#Katzenzuhause')
+        expect(self.page.get_by_role('textbox', name='链接 1 德语落地页')).to_have_value('https://de.example.invalid/new-edit')
+        self.page.get_by_role('tab', name='正文对照', exact=True).click()
+        expect(body).to_have_value('Neue Bearbeitung waehrend Speichern.')
+        self.save_draft()
+        saved = self.fixtures.detail(self.task_id)['localization']
+        self.assertEqual(saved['body_de'], 'Neue Bearbeitung waehrend Speichern.')
+        self.assertEqual(saved['tags'], ['#Neakasa', '#Katzenzuhause'])
+        self.assertEqual(saved['links'][0]['target_url'], 'https://de.example.invalid/new-edit')
 
 
 def load_tests(_loader, _tests, _pattern):

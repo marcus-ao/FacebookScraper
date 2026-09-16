@@ -4,8 +4,35 @@ import {
   approvalDisabledReason,
   initialTranslationDisabledReason,
   refinementDisabledReason,
+  textCandidateDisabledReason,
   seedScheduleTime,
 } from './action-reasons'
+import type { ContentJob } from '@/types/domain'
+import type { Sha256 } from '@/types/brands'
+
+describe('文案候选采用资格', () => {
+  const sourceHash = 'a'.repeat(64) as Sha256
+  const job: ContentJob = { job_id: 'candidate', status: 'succeeded', kind: 'text',
+    source_text_sha256: sourceHash, prompt_current: true, body_de: 'Aktueller Vorschlag.' }
+
+  it('同源且当前模板的候选可以采用', () => {
+    expect(textCandidateDisabledReason(job, sourceHash, true)).toBe('')
+  })
+
+  it('模板升级使旧候选失效', () => {
+    expect(textCandidateDisabledReason({ ...job, prompt_current: false }, sourceHash, true)).toContain('提示词')
+  })
+
+  it('旧任务缺少模板依据时不能默认当成当前候选', () => {
+    const { prompt_current: _, ...legacy } = job
+    expect(textCandidateDisabledReason(legacy, sourceHash, true)).toContain('版本依据')
+  })
+
+  it('当前模板仍不能绕过来源或审校状态的限制', () => {
+    expect(textCandidateDisabledReason(job, 'updated-source', true)).toContain('原文已更新')
+    expect(textCandidateDisabledReason(job, sourceHash, false)).toContain('恢复审校')
+  })
+})
 
 
 const approvalOk = {
