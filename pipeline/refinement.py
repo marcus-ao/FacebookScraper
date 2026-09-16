@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from localize import images as image_de
+from localize import suggest as text_suggestions
 from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review, translated
 from core.process_identity import current_worker, worker_alive
@@ -22,6 +23,12 @@ from publish import journal
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='content-refine')
 _event_threads = RLock()
+
+SUGGESTIONS_FILE = 'translation_suggestions.jsonl'
+
+#: 三种单篇任务共用这一份账本、这一把锁和同一个付费执行器。
+#: `suggest` 只产出建议清单交给人挑，不动任何译文；`text`/`image` 才写产物。
+KINDS = ('text', 'image', 'suggest')
 
 
 def _rows() -> list[dict]:
@@ -110,7 +117,13 @@ def recover(job_id: str, *, expected_updated_at: str) -> dict:
                      message='中断任务已关闭；已保存的内容和费用保留，可另行受理未完成的工作',
                      recorded_at=datetime.now(timezone.utc).isoformat())
         directory = cfg().archive_dir / row['account']
-        if row['kind'] == 'text':
+        if row['kind'] == 'suggest':
+            stored = text_suggestions.latest_for(cfg().state_dir / SUGGESTIONS_FILE,
+                                                 account=row['account'], post_id=row['post_id'])
+            if stored and stored.get('job_id') == job_id:
+                event.update(status='succeeded', error=None, suggestions=stored['items'],
+                             dropped=stored['dropped'], message='已找回本次生成的建议')
+        elif row['kind'] == 'text':
             result = translated.load_translated(directory / 'translated.jsonl').get(row['post_id'])
             if result and result.get('refine_id') == job_id and result.get('text_de'):
                 event.update(status='succeeded', error=None, text_de=result['text_de'], message='已找回本次保存的文案')
@@ -138,7 +151,7 @@ def capabilities(account_dir: Path, post_id: str) -> dict:
                 if cost is not None:
                     costs.append(cost)
     jobs = [row for row in latest().values()
-            if row['account'] == Path(account_dir).name and row['post_id'] == post_id and row['kind'] in {'text', 'image'}]
+            if row['account'] == Path(account_dir).name and row['post_id'] == post_id and row['kind'] in KINDS]
     counts = {}
     for row in jobs:
         if row['kind'] == 'image':
@@ -182,8 +195,12 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
            source_text_sha256: str, human_revision: str | None,
            review_revision: str | None, media_index: int | None = None,
            executor=None) -> dict:
-    if kind not in {'text', 'image'} or not isinstance(instruction, str) or not instruction.strip():
-        raise review.ReviewValidationError('请选择文案或图片，并填写本次优化要求')
+    if kind not in KINDS:
+        raise review.ReviewValidationError('请选择文案优化、图片优化或优化建议')
+    if kind == 'suggest':
+        instruction = ''          # 建议是模型先开口，人不给指令
+    elif not isinstance(instruction, str) or not instruction.strip():
+        raise review.ReviewValidationError('请填写本次优化要求')
     if len(instruction) > 4000:
         raise review.ReviewValidationError('优化要求请控制在 4000 字内')
     account_dir = Path(account_dir)
@@ -240,7 +257,36 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
         preflight()
         source, effective = _eligible(account_dir, indexed, source_hash=row['source_text_sha256'])
         controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight, operation_id=row['job_id'])
-        if row['kind'] == 'text':
+        if row['kind'] == 'suggest':
+            settings = translation.Settings()
+            text_de = (effective or {}).get('text_de') or ''
+            if not text_de.strip():
+                raise ValueError('这篇还没有德语文案，先生成或填写译文再要建议')
+            caller = translator or translation.Translator(settings, paid_controller=controller)
+            with translation.TranslationRunLock(cfg().state_dir / 'translation.lock'):
+                preflight()
+                caller.set_paid_context('suggest:' + row['job_id'],
+                                        source['platform'] + ':' + source['post_id'])
+                try:
+                    parsed = text_suggestions.parse_suggestions(
+                        caller.translate(text_suggestions.build_request(source['text'], text_de),
+                                         text_suggestions.build_prompt(settings)),
+                        source_en=source['text'], text_de=text_de)
+                    stored = text_suggestions.append_suggestions(
+                        cfg().state_dir / SUGGESTIONS_FILE,
+                        text_suggestions.record(
+                            job_id=row['job_id'], account=account_dir.name,
+                            post_id=source['post_id'],
+                            source_text_sha256_value=row['source_text_sha256'],
+                            text_de=text_de, parsed=parsed,
+                            paid_request_id=getattr(caller, 'paid_request_id', None)))
+                    caller.finalize_paid(True, 'text suggestions fsynced')
+                except Exception:
+                    caller.finalize_paid(False, 'text suggestion contract failed')
+                    raise
+            # ⛔ 只回传清单。译文由人在编辑区改，后台任务不碰 translated_human.jsonl。
+            event.update(suggestions=stored['items'], dropped=stored['dropped'])
+        elif row['kind'] == 'text':
             settings = translation.Settings()
             translator = translator or translation.Translator(settings, paid_controller=controller)
             with translation.TranslationRunLock(cfg().state_dir / 'translation.lock'):

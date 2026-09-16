@@ -16,13 +16,14 @@ if str(ROOT) not in sys.path:                          # 支持 `python -m web.a
     sys.path.insert(0, str(ROOT))
 
 from localize import images as image_de  # noqa: E402
+from localize import suggest as text_suggestions  # noqa: E402
 from core import store, review, localization                         # noqa: E402
 from core.mirror import MirrorService, MirrorSettings                # noqa: E402
 from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
-from pipeline import engine, hashtag_suggestions, risk_scan  # noqa: E402
+from pipeline import engine, hashtag_suggestions, refinement, risk_scan  # noqa: E402
 from publish import compose, journal                   # noqa: E402
 from web.api import query_index                   # noqa: E402
 
@@ -536,6 +537,22 @@ def _compose_warnings(source: engine.SourcePost,
     return [line for line in post.warnings if "G1 实测值" not in line]
 
 
+def _text_suggestions(state_dir: Path, source, localized: dict) -> dict | None:
+    """最近一次的只读建议清单。刷新页面不该让已经付过费的结果消失。"""
+    row = text_suggestions.latest_for(Path(state_dir) / refinement.SUGGESTIONS_FILE,
+                                      account=source.account_dir.name, post_id=source.post_id)
+    if row is None:
+        return None
+    # 译文改过之后 quote 可能定位不到，所以只标过期，不隐藏也不自动重做。
+    current = text_suggestions.is_current(
+        row, source_text_sha256_value=localized["source_text_sha256"],
+        text_de=localized["body_de"])
+    return {"items": row["items"], "dropped": row["dropped"], "current": current,
+            "generated_at": row["recorded_at"],
+            "prompt_version": row["prompt_version"],
+            "current_prompt_version": text_suggestions.SUGGEST_PROMPT_VERSION}
+
+
 def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
                 now: datetime | None = None) -> dict | None:
     """一条任务的完整详情；找不到返回 ``None``。契约见第 6 节。"""
@@ -606,6 +623,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "localization": localized,
         "localization_validation": localization.validate(localized),
         "hashtag_suggestions_enabled": hashtag_suggestions.suggestions_enabled(),
+        "text_suggestions": _text_suggestions(ctx.state_dir, source, localized),
         "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),
         "body_risks": body_risks,
         "risk_scan": ctx.risk_scans[task_id],

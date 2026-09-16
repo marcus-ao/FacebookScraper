@@ -107,7 +107,9 @@ def valid_url(value: str) -> bool:
         return False
 
 
-def _text_hash(value):
+def text_de_digest(value: str) -> str:
+    """`text_de_sha256` 字段的唯一算法。⚠️ 别再写第二份：同名字段两套摘要，
+    绑定关系会静默对不上，而对不上的表现只是"页面说内容变了"。"""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -121,7 +123,7 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
     source_hash = translated.source_text_sha256(source["text"])
     is_human = entry.get("is_human") is True
     bound = bool(record and record.get("source_text_sha256") == source_hash
-                 and record.get("text_de_sha256") == _text_hash(text_de)
+                 and record.get("text_de_sha256") == text_de_digest(text_de)
                  and is_human and record.get("human_revision") == entry.get("revision"))
     links = []
     for index, url in enumerate(original["links"]):
@@ -340,7 +342,7 @@ def append_localization(account_dir: Path, source: dict, draft: dict, *, human_r
         row = {"post_id": truth["post_id"], "platform": truth["platform"], **fields,
                "revision": str(uuid4()), "previous_revision": expected_revision,
                "source_text_sha256": expected_source_sha256, "human_revision": human_revision,
-               "text_de_sha256": _text_hash(human["text_de"]), "recorded_at": moment.astimezone(timezone.utc).isoformat(),
+               "text_de_sha256": text_de_digest(human["text_de"]), "recorded_at": moment.astimezone(timezone.utc).isoformat(),
                "actor": None}
         paid_model.append_jsonl(path, row, guard=lambda p: _ledger(p.parent))
     return row

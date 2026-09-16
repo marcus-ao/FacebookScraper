@@ -85,8 +85,8 @@ def get_capabilities(task_id: str):
 @router.post("/api/refinements/task/{task_id:path}")
 async def create_refinement(task_id: str, request: Request):
     body = await _body(request)
-    if not isinstance(body.get("kind"), str) or body["kind"] not in {"text", "image"}:
-        raise review.ReviewValidationError("请选择文案或图片优化")
+    if not isinstance(body.get("kind"), str) or body["kind"] not in refinement.KINDS:
+        raise review.ReviewValidationError("请选择文案优化、图片优化或优化建议")
     source = _source(task_id)
     job = refinement.submit(source.account_dir, dict(source.row), kind=body["kind"],
         instruction=body.get("instruction"), source_text_sha256=body["source_text_sha256"],
