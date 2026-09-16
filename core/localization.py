@@ -24,7 +24,8 @@ _PROFILE_HINT = re.compile(
     r"(?:bio|profil)\w*[-\s]?link"
     # bio/profil 必须是独立的词：跟着连字符或别的字母就是 Bio-Qualität、biologisch
     # 这类复合词，属于正常文案。
-    r"|(?:in|im)\s+(?:der\s+|die\s+|unserer\s+|unserem\s+|our\s+|the\s+)?(?:bio|profil)\b(?![-\w])"
+    r"|(?:in|im)\s+(?:der\s+|die\s+|unserer\s+|unserem\s+|our\s+|the\s+)?(?:bio|profile?)\b(?![-\w])"
+    r"|\b(?:see|check|visit)\s+(?:our\s+|the\s+|my\s+|your\s+)?(?:bio|profile)\b(?![-\w])"
     r"|swipe\s+up", re.IGNORECASE)
 
 
@@ -140,10 +141,14 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
         links = [{"source_url": "", "target_url": url, "mapped_url": "",
                   "confirmed": False, "origin": "manual"} for url in current["links"]]
     tags = current["tags"] if text_de.strip() else list(original["tags"])
+    # IG 原帖通常只写 link in bio，没有 URL；提示词删掉正文里的引导后，在独立区保留它。
+    # 已绑定的人工决定在下面完整还原，包括运营明确选定的空 CTA。
+    ig_cta = (CTA_PRESETS[0] if source["platform"] == "instagram"
+              and (original["links"] or mentions_profile_link(original["body"])) else "")
     draft = {"platform": source["platform"], "body_de": current["body"], "source_body": original["body"],
              "source_tags": original["tags"], "protected_tags": protected, "tags": tags,
              "hashtags_confirmed": not bool([tag for tag in original["tags"] if tag not in protected]),
-             "links": links, "ig_cta": CTA_PRESETS[0] if source["platform"] == "instagram" and original["links"] else "",
+             "links": links, "ig_cta": ig_cta,
              "ig_bio_url": ig_bio_url, "cta_presets": list(CTA_PRESETS),
              "revision": record.get("revision") if record else None,
              "source_stale": bool(text_de and not translated.translation_is_current(source, entry)),

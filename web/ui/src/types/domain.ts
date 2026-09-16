@@ -164,6 +164,7 @@ export interface ReviewListResponse {
     readonly by_status: Readonly<Record<DisplayStatus, number>>
     /** 两个平台各自的页签计数；旧后端未提供时角标退回全量口径。 */
     readonly by_platform_status?: Readonly<Record<Platform, Readonly<Record<DisplayStatus, number>>>>
+    readonly by_platform_hard_alerts?: Readonly<Record<Platform, number>>
     readonly tags: readonly string[]
   }
 }
@@ -376,6 +377,7 @@ export interface TaskDetail {
   readonly review: ReviewStateRecord
   readonly tags: readonly string[]
   readonly tags_revision: Sha256
+  readonly hard_alerts?: readonly HardAlert[]
   readonly localization: LocalizationDraft
   readonly localization_validation: LocalizationValidation
   /** 本轮标签热度推荐是否启用；关闭时标签只由人工选取。旧详情未提供时按启用处理。 */
@@ -469,10 +471,15 @@ export interface TextSuggestion {
   readonly why: string
 }
 export interface TextSuggestions {
+  readonly job_id: string
+  /** 点击生成时的正文快照，供尚未保存的编辑区逐字符核对。旧记录可能没有。 */
+  readonly body_de: string | null
+  readonly source_text_sha256: Sha256
+  readonly text_de_sha256: Sha256
   readonly items: readonly TextSuggestion[]
   /** 越界被丢弃的条数说明，不静默吞掉。 */
   readonly dropped: readonly string[]
-  /** 译文或源文改过之后为 false：quote 可能已经定位不到。 */
+  /** 相对已保存正文是否有效；编辑区另与本次正文快照核对。 */
   readonly current: boolean
   readonly generated_at: string
   readonly prompt_version: number

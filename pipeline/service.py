@@ -444,12 +444,17 @@ class Runtime:
         # 只在当前 14/18 点小时内补发当次提醒，重启不会追着补昨天的两轮。
         local = MonitorSchedule.local(now)
         if pending and local.hour in {14, 18} and self.outbox.schedule.is_on_duty(now):
-            earliest = min(datetime.fromisoformat(item['recorded_at'].replace('Z', '+00:00')) for item in pending.values())
-            hours = max(0, int((now - earliest).total_seconds() // 3600))
-            backlog_id = f'backlog:{local.date()}:{local.hour}'
-            valid_ready.add(backlog_id)
-            self.outbox.enqueue(backlog_id, 'backlog',
-                                {'text': f'当前 {len(pending)} 篇待审，最早一篇已等待 {hours} 小时。'}, now)
+            for platform in ('facebook', 'instagram'):
+                lane = [item for item in pending.values() if item['source']['platform'] == platform]
+                if not lane:
+                    continue
+                earliest = min(datetime.fromisoformat(item['recorded_at'].replace('Z', '+00:00')) for item in lane)
+                hours = max(0, int((now - earliest).total_seconds() // 3600))
+                backlog_id = f'backlog:{platform}:{local.date()}:{local.hour}'
+                valid_ready.add(backlog_id)
+                self.outbox.enqueue(backlog_id, 'backlog',
+                    {'platform': platform,
+                     'text': f'当前 {len(lane)} 篇待审，最早一篇已等待 {hours} 小时。'}, now)
 
         if local.hour == 8 and self.outbox.schedule.is_on_duty(now):
             activity = self.activity_summary(now)

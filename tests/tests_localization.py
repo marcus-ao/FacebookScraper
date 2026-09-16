@@ -146,6 +146,42 @@ class LocalizationTests(unittest.TestCase):
         self.assertFalse(result['ready'])
         self.assertIn('placeholder_not_supported', {item['code'] for item in result['issues']})
 
+    def test_instagram_source_profile_hint_without_url_gets_separate_cta(self):
+        self.source['platform'] = 'instagram'
+        for hint in ('Please check the link in our bio for more information.',
+                     'Tap the link in our profile.', 'See our profile for details.'):
+            with self.subTest(hint=hint):
+                self.source['text'] = 'Discover Neakasa M1 Pro. ' + hint
+                self.machine.update(text_de='Entdecke Neakasa M1 Pro.',
+                    source_text_sha256=translated.source_text_sha256(self.source['text']))
+                draft = self.draft()
+                self.assertEqual(draft['links'], [])
+                self.assertEqual(draft['ig_cta'], loc.CTA_PRESETS[0])
+                self.assertEqual(loc.render(draft), 'Entdecke Neakasa M1 Pro.\n\n' + loc.CTA_PRESETS[0])
+                self.assertTrue(loc.validate(draft)['ready'])
+
+    def test_facebook_source_profile_hint_does_not_add_instagram_cta(self):
+        self.source['text'] = 'Discover Neakasa M1 Pro. Check the link in our bio.'
+        self.machine.update(text_de='Entdecke Neakasa M1 Pro. Mehr dazu in unserer Bio.',
+            source_text_sha256=translated.source_text_sha256(self.source['text']))
+        draft = self.draft()
+        self.assertEqual(draft['ig_cta'], '')
+        self.assertEqual(loc.render(draft), self.machine['text_de'])
+
+    def test_bound_human_can_keep_source_profile_cta_empty(self):
+        self.source.update(platform='instagram',
+            text='Discover Neakasa M1 Pro. Check the link in our bio.')
+        self.machine.update(text_de='Entdecke Neakasa M1 Pro.',
+            source_text_sha256=translated.source_text_sha256(self.source['text']))
+        self.write_source()
+        draft = self.draft()
+        draft['ig_cta'] = ''
+        saved = self.save_local(draft)
+        current = self.draft(record=saved)
+        self.assertTrue(current['has_record'])
+        self.assertEqual(current['ig_cta'], '')
+        self.assertEqual(loc.render(current), self.machine['text_de'])
+
     def test_counts_use_codepoints_and_limits_only_warn(self):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
         draft.update(platform="instagram", body_de="😀" * 2201,

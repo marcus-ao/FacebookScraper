@@ -10,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+from openai import OpenAI
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import config, paid_requests
@@ -107,6 +110,36 @@ class RiskScanTests(unittest.TestCase):
             caller=MissingLocalKeyCaller('{"risks": []}'), prompt_path=self.prompt, now=NOW)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(paid_requests.load_events(self.root), [])
+
+    def test_outer_risk_accounting_disables_internal_sdk_retry(self):
+        settings = risk_scan.translation.Settings()
+        settings.gap = 0
+        attempts = []
+
+        def respond(request):
+            attempts.append(request.url.path)
+            if len(attempts) == 1:
+                raise httpx.ReadTimeout('offline response lost', request=request)
+            return httpx.Response(200, request=request, json={
+                'id': 'offline', 'object': 'chat.completion', 'created': 1,
+                'model': settings.model,
+                'choices': [{'index': 0, 'finish_reason': 'stop',
+                             'message': {'role': 'assistant', 'content': '{"risks": []}'}}],
+                'usage': {'prompt_tokens': 100, 'completion_tokens': 10, 'total_tokens': 110}})
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+            with OpenAI(api_key='offline', base_url='https://offline.invalid',
+                        http_client=transport, max_retries=2) as sdk:
+                caller = risk_scan.translation.Translator(settings, client=sdk)
+                with patch.object(OpenAI, '_sleep_for_retry', return_value=None):
+                    result = risk_scan.scan_source(
+                        self.root, task_id='fa_brand/sdk', source_ref='facebook:sdk',
+                        source_text='Ordinary caption', controller=self.controller,
+                        caller=caller, prompt_path=self.prompt, now=NOW)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual([row['event'] for row in paid_requests.load_events(self.root)],
+                         [paid_requests.EVENT_STARTED, paid_requests.EVENT_UNCERTAIN])
 
     def test_risk_scan_cost_is_part_of_monthly_text_model_cost(self):
         caller = FakeCaller('{"risks": []}')

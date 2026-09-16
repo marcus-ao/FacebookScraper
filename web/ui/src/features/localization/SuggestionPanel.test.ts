@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { adopt } from './SuggestionPanel'
-import type { TextSuggestion } from '@/types/domain'
+import { adopt, suggestionsCurrent } from './SuggestionPanel'
+import type { TextSuggestion, TextSuggestions } from '@/types/domain'
+import type { Sha256 } from '@/types/brands'
 
 const item = (quote: string, replacement: string): TextSuggestion =>
   ({ quote, replacement, kind: 'grammar', why: '词尾错了' })
@@ -30,5 +31,27 @@ describe('采用一条建议', () => {
   it('替换内容里的正则元字符按字面处理', () => {
     expect(adopt('Preis (ab) heute', item('(ab)', '$& ab')))
       .toBe('Preis $& ab heute')
+  })
+})
+
+describe('建议与当前编辑区绑定', () => {
+  const body = 'Kostenlose Versand. Noch ein Satz.'
+  const stored: TextSuggestions = {
+    job_id: 'job1', body_de: body, source_text_sha256: 'source' as Sha256, text_de_sha256: 'body' as Sha256,
+    items: [], dropped: [], current: false, generated_at: '', prompt_version: 2, current_prompt_version: 2,
+  }
+
+  it('建议针对尚未保存的正文时仍可采用', () => {
+    expect(suggestionsCurrent(stored, 'source', body)).toBe(true)
+  })
+
+  it('即使建议片段没变，其他句子的编辑也立即使旧建议失效', () => {
+    expect(suggestionsCurrent(stored, 'source', body + ' Neu.')).toBe(false)
+  })
+
+  it('源文或模板版本变动，以及旧记录缺少正文快照时都失效', () => {
+    expect(suggestionsCurrent(stored, 'changed', body)).toBe(false)
+    expect(suggestionsCurrent({ ...stored, current_prompt_version: 3 }, 'source', body)).toBe(false)
+    expect(suggestionsCurrent({ ...stored, body_de: null }, 'source', body)).toBe(false)
   })
 })

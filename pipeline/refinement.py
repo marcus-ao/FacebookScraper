@@ -194,11 +194,13 @@ def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_
 def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
            source_text_sha256: str, human_revision: str | None,
            review_revision: str | None, media_index: int | None = None,
-           executor=None) -> dict:
+           body_de: str | None = None, executor=None) -> dict:
     if kind not in KINDS:
         raise review.ReviewValidationError('请选择文案优化、图片优化或优化建议')
     if kind == 'suggest':
         instruction = ''          # 建议是模型先开口，人不给指令
+        if not isinstance(body_de, str) or not body_de.strip():
+            raise review.ReviewValidationError('请提供本次要审校的德语正文')
     elif not isinstance(instruction, str) or not instruction.strip():
         raise review.ReviewValidationError('请填写本次优化要求')
     if len(instruction) > 4000:
@@ -229,6 +231,9 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
                'media_index': media_index, 'status': 'pending', 'recorded_at': now, 'actor': None}
         row.update(worker=current_worker(), operation_tracked=True,
                    source_fingerprint=paid_consent.fingerprint(source, account_dir))
+        if kind == 'suggest':
+            # 固定点击时的编辑区正文；任务排队期间不能改用磁盘上的另一个版本。
+            row['body_de'] = body_de
         _append(row)
     try:
         (executor or _executor).submit(execute, row, source)
@@ -259,7 +264,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
         controller = paid_requests.RequestController(cfg().state_dir, preflight=preflight, operation_id=row['job_id'])
         if row['kind'] == 'suggest':
             settings = translation.Settings()
-            text_de = (effective or {}).get('text_de') or ''
+            text_de = row.get('body_de') or ''
             if not text_de.strip():
                 raise ValueError('这篇还没有德语文案，先生成或填写译文再要建议')
             caller = translator or translation.Translator(settings, paid_controller=controller)
@@ -271,7 +276,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
                     parsed = text_suggestions.parse_suggestions(
                         caller.translate(text_suggestions.build_request(source['text'], text_de),
                                          text_suggestions.build_prompt(settings)),
-                        source_en=source['text'], text_de=text_de)
+                        text_de=text_de)
                     stored = text_suggestions.append_suggestions(
                         cfg().state_dir / SUGGESTIONS_FILE,
                         text_suggestions.record(

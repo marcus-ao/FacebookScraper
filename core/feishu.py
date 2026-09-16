@@ -274,6 +274,10 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings,
             url = settings.base_url.rstrip('/') + '/?task=' + quote(str(payload['task_id']), safe='')
             actions.append({'tag': 'button', 'type': 'primary',
                             'text': {'tag': 'plain_text', 'content': '去审校'}, 'url': url})
+        elif kind == 'backlog' and payload.get('platform') in {'facebook', 'instagram'}:
+            actions.append({'tag': 'button', 'type': 'primary',
+                'text': {'tag': 'plain_text', 'content': '查看待审列表'},
+                'url': settings.base_url.rstrip('/') + '/review/' + payload['platform']})
         # 原帖按钮不依赖 task_id：监测与抓取卡片发生在有审校任务之前。
         original = urlsplit(str(payload.get('permalink') or ''))
         if original.scheme == 'https' and original.hostname and not original.username and not original.password:
@@ -284,8 +288,8 @@ def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings,
     title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
     # 两个平台是独立的审校入口，标题里说清是哪一边，运营才知道该开哪个队列。
     channels = {str(p['platform']) for p in payloads if p.get('platform')}
-    if kind in {'ready', 'backlog'} and len(channels) == 1:
-        title += ' · ' + channels.pop()
+    if kind in {'ready', 'backlog'} and channels:
+        title += ' · ' + ' / '.join(sorted(channels))
     if kind == 'monitor_saved' and len(payloads) == 1 and payloads[0].get('capture_status'):
         title += '：' + payloads[0]['capture_status']
     bot_name = BOT_LABELS.get(role or KIND_ROLES.get(kind))

@@ -1,4 +1,5 @@
 """德语文案的只读优化建议：严格解析、越界丢弃与"绝不改人工稿"。不调用网络。"""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -29,7 +30,7 @@ def _json(value):
 
 class ParseTests(unittest.TestCase):
     def parse(self, payload, *, text_de=DE):
-        return suggest.parse_suggestions(payload, source_en=EN, text_de=text_de)
+        return suggest.parse_suggestions(payload, text_de=text_de)
 
     def test_empty_list_is_a_real_answer_not_a_failure(self):
         # 挑不出毛病是正常结果，不能当成模型出错。
@@ -89,6 +90,17 @@ class ParseTests(unittest.TestCase):
         self.assertIn("金额与货币符号", prompt)
         self.assertIn("话题标签", prompt)
 
+    def test_human_localized_prices_and_tags_do_not_discard_grammar_advice(self):
+        body = 'Kostenlose Versand ab 49,99 €. Jetzt kaufen! #Katzenliebe'
+        result = self.parse(one('Kostenlose Versand', 'Kostenloser Versand'), text_de=body)
+        self.assertEqual(len(result['items']), 1)
+        self.assertEqual(result['dropped'], [])
+
+    def test_request_excludes_urls_from_both_language_inputs(self):
+        request = json.loads(suggest.build_request(
+            'Shop https://example.invalid/en', 'Hier https://example.invalid/de'))
+        self.assertNotIn('https://', json.dumps(request))
+
 
 class BindingTests(unittest.TestCase):
     def test_suggestions_expire_when_the_translation_changes(self):
@@ -120,9 +132,10 @@ class JobTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
 
     def submit(self):
+        body = self.fixture.client.get(self.fixture.url).json()['localization']['body_de']
         return refinement.submit(self.account, self.source, kind='suggest', instruction='',
             source_text_sha256=translated.source_text_sha256(self.source['text']),
-            human_revision=None, review_revision=None, executor=self.executor)
+            human_revision=None, review_revision=None, body_de=body, executor=self.executor)
 
     def test_suggest_needs_no_instruction_unlike_the_other_two_kinds(self):
         self.assertEqual(self.submit()['kind'], 'suggest')
@@ -141,7 +154,8 @@ class JobTests(unittest.TestCase):
 
         row = refinement.submit(self.account, self.source, kind='suggest', instruction='',
             source_text_sha256=translated.source_text_sha256(self.source['text']),
-            human_revision=human['revision'], review_revision=None, executor=self.executor)
+            human_revision=human['revision'], review_revision=None, body_de='Von Hand formuliert.',
+            executor=self.executor)
         caller = SimpleNamespace(
             translate=lambda text, system: one('Von Hand', 'Handgeschrieben'),
             set_paid_context=lambda *a: None, finalize_paid=lambda *a: None,
@@ -157,11 +171,9 @@ class JobTests(unittest.TestCase):
     def test_without_a_german_draft_there_is_nothing_to_advise_on(self):
         # 夹具默认带一版机器译文；这里模拟"还没翻过"的帖子。
         (self.account / 'translated.jsonl').unlink()
-        row = self.submit()
-        caller = Mock()
-        result = refinement.execute(row, self.source, translator=caller)
-        self.assertEqual(result['status'], 'failed')
-        caller.translate.assert_not_called()
+        with self.assertRaisesRegex(Exception, '德语正文'):
+            self.submit()
+        self.executor.submit.assert_not_called()
 
     def test_a_broken_model_reply_closes_the_paid_request_as_failed(self):
         row = self.submit()
@@ -175,6 +187,58 @@ class JobTests(unittest.TestCase):
         self.assertFalse(finalize.call_args[0][0])
         self.assertEqual(suggest.load_suggestions(
             cfg().state_dir / refinement.SUGGESTIONS_FILE), [])
+
+    def test_new_advice_for_a_tagged_post_is_current_in_the_detail_api(self):
+        row = self.submit()
+        caller = SimpleNamespace(
+            translate=lambda *a: one('Ein sauberes', 'Ein gepflegtes'),
+            set_paid_context=lambda *a: None, finalize_paid=lambda *a: None)
+        result = refinement.execute(row, self.source, translator=caller)
+        self.assertEqual(result['status'], 'succeeded')
+        stored = self.fixture.client.get(self.fixture.url).json()['text_suggestions']
+        self.assertTrue(stored['current'])
+
+    def test_api_freezes_the_unsaved_editor_body_and_never_saves_it(self):
+        detail = self.fixture.client.get(self.fixture.url).json()
+        body = 'Kostenlose Versand. Ungespeichert.'
+        before = (self.account / 'translated.jsonl').read_bytes()
+        with patch.object(refinement, '_executor', self.executor):
+            response = self.fixture.client.post('/api/refinements/task/' + self.fixture.task_id,
+                json={'kind': 'suggest', 'body_de': body, 'instruction': '',
+                      'source_text_sha256': detail['text']['source_text_sha256'],
+                      'human_revision': None, 'review_revision': None})
+        self.assertEqual(response.status_code, 202, response.text)
+        caller = SimpleNamespace(
+            translate=Mock(return_value=one('Kostenlose Versand', 'Kostenloser Versand')),
+            set_paid_context=lambda *a: None, finalize_paid=lambda *a: None)
+        result = refinement.execute(response.json(), self.source, translator=caller)
+        self.assertEqual(result['status'], 'succeeded')
+        sent = json.loads(caller.translate.call_args.args[0])
+        self.assertEqual(sent['current_german'], body)
+        self.assertEqual(len(result['suggestions']), 1)
+        self.assertEqual((self.account / 'translated.jsonl').read_bytes(), before)
+        self.assertFalse((self.account / 'translated_human.jsonl').exists())
+        stored = self.fixture.client.get(self.fixture.url).json()['text_suggestions']
+        self.assertEqual(stored['body_de'], body)
+        self.assertFalse(stored['current'])  # 尚未保存；前端使用当前编辑区快照核对。
+
+    def test_a_missing_editor_snapshot_is_rejected_before_accepting_a_job(self):
+        with self.assertRaisesRegex(Exception, '德语正文'):
+            refinement.submit(self.account, self.source, kind='suggest', instruction='',
+                source_text_sha256=translated.source_text_sha256(self.source['text']),
+                human_revision=None, review_revision=None, executor=self.executor)
+        self.executor.submit.assert_not_called()
+
+    def test_a_later_saved_draft_cannot_change_the_queued_suggestion_input(self):
+        row = self.submit()
+        original = row['body_de']
+        self.fixture.save('Später von Hand gespeichert. #Neakasa')
+        caller = SimpleNamespace(translate=Mock(return_value='[]'),
+                                 set_paid_context=lambda *a: None, finalize_paid=lambda *a: None)
+        result = refinement.execute(row, self.source, translator=caller)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(json.loads(caller.translate.call_args.args[0])['current_german'], original)
+        self.assertFalse(self.fixture.client.get(self.fixture.url).json()['text_suggestions']['current'])
 
 
 if __name__ == '__main__':

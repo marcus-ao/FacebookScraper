@@ -243,6 +243,7 @@ class PaidCaller:
         self._client = client
         self._last_call = 0.0
         self._paid_controller = paid_controller
+        self._no_sdk_retries = paid_controller is not None
         self._paid_job_key = ""
         self._paid_source_ref = ""
         self._paid_media_index: int | None = None
@@ -254,6 +255,10 @@ class PaidCaller:
         self._paid_source_ref = str(source_ref)
         self._paid_media_index = (None if media_index is None
                                   else int(media_index))
+
+    def disable_sdk_retries(self) -> None:
+        """外层自行登记付费（如风险预扫）时，同样禁止 SDK 隐式再次发送。"""
+        self._no_sdk_retries = True
 
     @property
     def paid_request_id(self) -> str:
@@ -273,6 +278,12 @@ class PaidCaller:
             self._client = build_client(
                 api_key=self.s.api_key(), base_url=self.s.base_url,
                 timeout=self.s.timeout, max_retries=self.s.max_retries)
+        if self._no_sdk_retries:
+            from openai import OpenAI
+            # SDK 重试会把首次超时后的第二笔费用藏进同一请求；核账必须先于再次发送。
+            # 注入的 SDK 客户端也要遵守这条规则，复制选项不修改调用方的实例。
+            if isinstance(self._client, OpenAI) and self._client.max_retries != 0:
+                self._client = self._client.with_options(max_retries=0)
         return self._client
 
     def _pace(self) -> None:

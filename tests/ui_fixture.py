@@ -82,6 +82,7 @@ class UIFixture:
         # 只改 by_status 会让页签停在旧数字上，而行数已经换成新的了。
         counts = {status: 1 for status in statuses}
         data["summary"].update(total=8, with_hard_alerts=1, by_status=counts, tags=["Riko"],
+                               by_platform_hard_alerts={"facebook": 1, "instagram": 0},
                                by_platform_status={"facebook": counts,
                                                    "instagram": {status: 0 for status in statuses}})
         self.overrides[("GET", "/api/tasks")] = (200, data)

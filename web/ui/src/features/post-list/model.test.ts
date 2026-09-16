@@ -40,6 +40,20 @@ describe('review query 与行补丁', () => {
     expect(input.tasks[0]?.status).toBe('pending_review')
     expect(patchReviewList(next, changed).summary.by_status).toEqual(next.summary.by_status)
   })
+  it('重新复核后清除行的旧硬闸，只扣除所属平台的告警帖数', () => {
+    const previous = { ...data.tasks[0]!, id: detail.id, platform: 'facebook' as const,
+      hard_alerts: [{ code: 'human_translation_stale', label: '人工稿待重新复核' }] }
+    const input = { ...data, tasks: [previous], summary: { ...data.summary,
+      with_hard_alerts: 4, by_platform_hard_alerts: { facebook: 1, instagram: 3 } } }
+    const changed = { ...detail, platform: 'facebook' as const, hard_alerts: [] }
+    const next = patchReviewList(input, changed)
+    expect(next.tasks[0]?.hard_alerts).toEqual([])
+    expect(next.summary.with_hard_alerts).toBe(3)
+    expect(next.summary.by_platform_hard_alerts).toEqual({ facebook: 0, instagram: 3 })
+    expect(input.tasks[0]?.hard_alerts).toHaveLength(1)
+    expect(input.summary.by_platform_hard_alerts.facebook).toBe(1)
+    expect(patchReviewList(next, changed).summary.by_platform_hard_alerts).toEqual(next.summary.by_platform_hard_alerts)
+  })
   it('即使 staleTime=0，卸载后重新订阅 review query 也不发 GET', async () => {
     const client = createQueryClient()
     let calls = 0

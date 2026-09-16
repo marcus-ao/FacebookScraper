@@ -8,17 +8,21 @@ import { createQueryClient } from './queryClient'
 
 import { antdComponents, antdToken } from './theme'
 import { routes } from './router'
+import type { ReviewListResponse } from '@/types/domain'
+import listFixture from '@/types/__fixtures__/review-list.json'
 
 /** 使用真实路由与 SSR；浮层交互由浏览器测试覆盖。 */
-function render(path: string): string {
+function render(path: string, list?: ReviewListResponse): string {
   const router = createMemoryRouter(routes, { initialEntries: [path] })
+  const client = createQueryClient()
+  if (list) client.setQueryData(['tasks', 'review'], list)
   return renderToStaticMarkup(
     <ConfigProvider
       locale={zhCN}
       button={{ autoInsertSpace: false }}
       theme={{ token: antdToken, components: antdComponents, hashed: false }}
     >
-      <AntdApp><QueryClientProvider client={createQueryClient()}>
+      <AntdApp><QueryClientProvider client={client}>
         <RouterProvider router={router} />
       </QueryClientProvider></AntdApp>
     </ConfigProvider>,
@@ -39,6 +43,24 @@ function selectedMenuLabel(html: string): string | null {
 }
 
 describe('导航选中项来自路由', () => {
+  it('平台入口的总数和硬闸由该平台的完整 summary 提供', () => {
+    const states = { not_ready: 0, pending_review: 0, edited: 0, snoozed: 0,
+      approved: 0, scheduled: 0, skipped: 0, handed_off: 0 }
+    const list: ReviewListResponse = { ...(listFixture as unknown as ReviewListResponse), tasks: [],
+      summary: { total: 9, with_hard_alerts: 7, tags: [],
+        by_status: { ...states, pending_review: 9 },
+        by_platform_status: { facebook: { ...states, pending_review: 2 },
+          instagram: { ...states, pending_review: 7 } },
+        by_platform_hard_alerts: { facebook: 0, instagram: 7 } } }
+    const facebook = render('/review/facebook', list).replace(/<[^>]+>/g, '')
+    const instagram = render('/review/instagram', list).replace(/<[^>]+>/g, '')
+    expect(facebook).toContain('· 2 篇')
+    expect(facebook).not.toContain('硬闸')
+    expect(instagram).toContain('· 7 篇')
+    expect(instagram).toContain('硬闸 7')
+    expect(facebook).toContain('Facebook 当前筛选下没有帖子')
+    expect(instagram).toContain('Instagram 当前筛选下没有帖子')
+  })
   it.each([
     ['/review/facebook', 'Facebook 待审'],
     ['/review/instagram', 'Instagram 待审'],

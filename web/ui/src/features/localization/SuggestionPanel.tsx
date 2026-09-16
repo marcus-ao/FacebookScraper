@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Alert, Button, Empty, Space, Tag, Typography } from 'antd'
-import type { ContentJob, TaskDetail, TextSuggestion } from '@/types/domain'
-import { refine, jobRunning } from '@/services/jobs'
+import { useQuery } from '@tanstack/react-query'
+import type { TaskDetail, TextSuggestion, TextSuggestions } from '@/types/domain'
+import { refine, jobRunning, refinementCapabilities } from '@/services/jobs'
 import { useContentJob } from '@/hooks/useContentJob'
 import { PaidActionButton } from '@/components/PaidActionButton'
 import { ShanghaiTime } from '@/components/Time'
@@ -18,6 +19,12 @@ export function adopt(body: string, item: TextSuggestion): string | null {
   return body.replace(item.quote, () => item.replacement)
 }
 
+export function suggestionsCurrent(stored: TextSuggestions, sourceHash: string, body: string): boolean {
+  // 本次可能审的是未保存稿，因此不能只使用服务端相对磁盘正文计算的 current。
+  return stored.source_text_sha256 === sourceHash && stored.body_de === body
+    && stored.prompt_version === stored.current_prompt_version
+}
+
 export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }: {
   detail: TaskDetail
   body: string
@@ -28,18 +35,27 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
   const stored = detail.text_suggestions ?? null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
-  const [ignored, setIgnored] = useState<readonly string[]>([])
-  const flow = useContentJob('refinements', null, () => onRefreshed())
+  const [dismissed, setDismissed] = useState<{ jobId: string; quotes: readonly string[] } | null>(null)
+  const ignored = dismissed?.jobId === stored?.job_id ? dismissed?.quotes ?? [] : []
+  const ignore = (quote: string) => { if (stored) setDismissed({ jobId: stored.job_id, quotes: [...ignored, quote] }) }
+  const capabilities = useQuery({ queryKey: ['refinement-capabilities', detail.id], queryFn: () => refinementCapabilities(detail.id) })
+  const lastJob = capabilities.data?.jobs.find(job => jobRunning(job) || job.status === 'interrupted')
+    ?? capabilities.data?.jobs.filter(job => job.kind === 'suggest').at(-1)
+  const flow = useContentJob('refinements', lastJob, () => { void capabilities.refetch(); onRefreshed() })
   const running = busy || jobRunning(flow.job)
   const ask = async () => {
     setBusy(true); setError(null)
-    try { flow.accept(await refine(detail, 'suggest', '', 0) as ContentJob) }
+    try { flow.accept(await refine(detail, 'suggest', '', 0, body)); void capabilities.refetch() }
     catch (cause) { setError(cause) } finally { setBusy(false) }
   }
   const reason = detail.read_only ? '冻结账号只供查阅'
+    : !['pending_review', 'edited'].includes(detail.status) || detail.text.stale ? '请先恢复审校并核对原文'
     : !editing ? '请先进入编辑德语'
     : !body.trim() ? '还没有德语文案可以挑毛病'
-    : running ? '正在生成建议' : ''
+    : !capabilities.data ? '正在读取处理状态'
+    : flow.job?.status === 'interrupted' ? '请先在内容处理区核对中断任务'
+    : running ? '正在处理内容，请等待结果' : ''
+  const current = stored ? suggestionsCurrent(stored, detail.text.source_text_sha256, body) : false
   const items = (stored?.items ?? []).filter(item => !ignored.includes(item.quote))
   return <section className={styles.wrap} aria-label="德语文案优化建议">
     <div className={styles.head}>
@@ -47,15 +63,16 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
       <PaidActionButton label={stored ? '重新生成建议' : '让模型挑毛病'} amount="按实际用量计费"
         {...(reason ? { disabledReason: reason } : {})} loading={running} onClick={() => void ask()} />
     </div>
-    {error || flow.error ? <Alert type="warning" showIcon title="这次没能生成建议，文案不受影响，可稍后重试" /> : null}
-    {flow.job?.status === 'failed' && <Alert type="warning" showIcon title="模型没有给出可用的建议，请稍后重试；本次费用已记录在付费账本" />}
+    {error || flow.error ? <Alert type="warning" showIcon title="暂时无法确认建议状态，文案仍保留。请刷新状态并核对费用后再决定是否重试。" /> : null}
+    {flow.job?.kind === 'suggest' && flow.job.status === 'failed' && <Alert type="warning" showIcon
+      title={flow.job.message ?? '建议未完成，请核对模型配置与费用后再决定是否重试。'} />}
     {!stored && !flow.job && <Empty description="还没有生成过建议。这一步是可选的，不影响保存或通过。" />}
     {stored && <>
       <p className={styles.meta}>
         生成于 <ShanghaiTime at={stored.generated_at} />
         {stored.prompt_version !== stored.current_prompt_version && ` · 按旧版模板（v${stored.prompt_version}）生成`}
       </p>
-      {!stored.current && <Alert type="warning" showIcon
+      {!current && <Alert type="warning" showIcon
         title="文案或原文在这之后改过了，下面的建议可能已经对不上，「采用」已停用。需要的话重新生成。" />}
       {stored.dropped.length > 0 && <Typography.Paragraph type="secondary">
         另有 {stored.dropped.length} 条建议被丢弃：{[...new Set(stored.dropped)].join('；')}。
@@ -73,10 +90,10 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
             <p className={styles.why}>{item.why}</p>
             <Space size="small">
               <Button size="small" type="primary" ghost
-                disabled={!editing || !stored.current || next === null}
-                onClick={() => { if (next !== null) { onAdopt(next); setIgnored([...ignored, item.quote]) } }}>采用</Button>
-              <Button size="small" onClick={() => setIgnored([...ignored, item.quote])}>忽略</Button>
-              {next === null && stored.current && <Typography.Text type="secondary">这段已经改过，采用不了了</Typography.Text>}
+                disabled={!editing || !current || next === null}
+                onClick={() => { if (current && next !== null) { onAdopt(next); ignore(item.quote) } }}>采用</Button>
+              <Button size="small" onClick={() => ignore(item.quote)}>忽略</Button>
+              {next === null && current && <Typography.Text type="secondary">这段已经改过，采用不了了</Typography.Text>}
             </Space>
           </article>
         })}

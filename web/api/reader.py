@@ -349,6 +349,8 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
     by_platform = {name: {state: sum(item["status"] == state and item["platform"] == name
                                      for item in tasks) for state in states_seen}
                    for name in ("facebook", "instagram")}
+    platform_alerts = {name: sum(bool(item['hard_alerts']) and item['platform'] == name
+                                for item in tasks) for name in by_platform}
     available_tags = sorted({value for item in tasks for value in item["tags"]})
     tasks = [item for item in tasks if (not status or item["status"] == status)
              and (not tag or (not item["tags"] if tag == "__untagged__" else tag in item["tags"]))
@@ -366,6 +368,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "with_hard_alerts": sum(1 for t in tasks if t["hard_alerts"]),
             "by_status": counts,
             "by_platform_status": by_platform,
+            "by_platform_hard_alerts": platform_alerts,
             "tags": available_tags,
         },
     }
@@ -553,6 +556,9 @@ def _text_suggestions(state_dir: Path, source, localized: dict) -> dict | None:
         row, source_text_sha256_value=localized["source_text_sha256"],
         text_de=localized["body_de"])
     return {"items": row["items"], "dropped": row["dropped"], "current": current,
+            "job_id": row["job_id"], "body_de": row.get("body_de"),
+            "source_text_sha256": row["source_text_sha256"],
+            "text_de_sha256": row["text_de_sha256"],
             "generated_at": row["recorded_at"],
             "prompt_version": row["prompt_version"],
             "current_prompt_version": text_suggestions.SUGGEST_PROMPT_VERSION}
@@ -622,6 +628,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "platform": source.platform,
         "status": state["status"],
         "review": state,
+        "hard_alerts": alerts,
         "tags": tags,
         "tags_revision": tags_revision(tags),
         "storage": _storage_facts(source),

@@ -274,10 +274,18 @@ def main(argv=None) -> int:
                 for result in runner.tick():
                     print(json.dumps(result, ensure_ascii=False), flush=True)
                 now = datetime.now(timezone.utc)
-                runtime.start_processing(now)
+                processing = runtime.start_processing(now)
                 if args.once:
-                    # 投递在独立执行器上，不等它跑完就退出等于本轮什么都没发出去。
-                    runtime.await_delivery()
+                    if args.process and processing is not None:
+                        # 首轮投递早于翻译/出图；内容完成后再汇总一次，才会收到本轮待审卡。
+                        # 不再 tick/maintenance，避免额外扫描或唤醒；关闭执行器前完整排空投递。
+                        processing.result()
+                        runtime.await_delivery(timeout=None)
+                        runtime.delivery_future = runtime.delivery_executor.submit(
+                            runtime._deliver, datetime.now(timezone.utc))
+                        runtime.await_delivery(timeout=None)
+                    else:
+                        runtime.await_delivery()
                     return 0
                 time.sleep(30)
     except SchedulerAlreadyRunning as exc:

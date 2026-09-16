@@ -1123,6 +1123,85 @@ def _image_text_basis(arc_base: Path, row: Mapping[str, Any], current: Mapping[s
     return current
 
 
+def image_jobs_for_translation(settings: Settings, arc_base: Path, row: dict,
+                               trans: Mapping[str, Any], state: ImageState,
+                               human_history: list[dict], stats: RunStats, *,
+                               force: bool = False,
+                               media_index_filter: int | None = None,
+                               allow_manual_refine: bool = False,
+                               report: Any = None) -> list[ImageJob]:
+    """用给定文案依据规划单帖图片；只读文件，共享尺寸、已有产物与人工图判据。"""
+    post_id = row["post_id"].strip()
+    jobs: list[ImageJob] = []
+    media_list = row.get("media") or []
+    if not isinstance(media_list, list):
+        raise ValueError(f"帖子 {post_id} 的 media 不是数组")
+    for media_index, media in enumerate(media_list):
+        if (media_index_filter is not None
+                and media_index != media_index_filter):
+            continue
+        if not isinstance(media, dict) or media.get("kind") != "image":
+            continue
+        try:
+            source_path, source_rel = _source_from_manifest(
+                arc_base, row, media)
+            try:
+                with Image.open(source_path) as source_image:
+                    source_image.load()
+                    source_size = source_image.size
+            except Exception as exc:
+                raise ValueError(f"原图无法解码：{source_rel}") from exc
+            requested = legal_size(*source_size)
+        except (ValueError, ArchivePathError) as exc:
+            stats.skipped_bad_source += 1
+            message = (f"  ! {post_id}[{media_index}] 跳过（素材问题）："
+                       f"{type(exc).__name__}: {exc}")
+            if report is None:
+                print(message)
+            else:
+                report(message)
+            continue
+        out_path, out_rel = _target_for_job(
+            arc_base, row, media_index, settings.output_format)
+        record = state.latest.get((post_id, media_index))
+        source_sha = sha256_file(source_path)
+        # force 是显式重生成，用当前稿；普通对账逐张保留已经付费完成的依据。
+        basis = (trans if force else _image_text_basis(
+            arc_base, row, trans, record, source_sha, human_history))
+        text_de = basis["text_de"].strip()
+        job = ImageJob(
+            account=arc_base.name,
+            arc_base=arc_base,
+            post_id=post_id,
+            media_index=media_index,
+            source_path=source_path,
+            source_rel=source_rel,
+            source_sha256=source_sha,
+            source_size=source_size,
+            text_de=text_de,
+            text_de_sha256=text_de_sha256(text_de),
+            requested_size=requested,
+            aspect_drift_percent=aspect_drift_percent(
+                *source_size, *requested),
+            scale_factor=scale_factor(*source_size, *requested),
+            out_path=out_path,
+            out_rel=out_rel,
+        )
+        manual = manual_override_paths(job, state)
+        if manual and not allow_manual_refine:
+            stats.skipped_manual += 1
+            message = (f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
+                       + "、".join(path.name for path in manual))
+            (print if report is None else report)(message)
+            continue
+        if (not force and image_record_is_current(job, record)
+                and _record_output_exists(arc_base, record)):
+            stats.skipped_current += 1
+            continue
+        jobs.append(job)
+    return jobs
+
+
 def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                force: bool = False,
                media_index_filter: int | None = None,
@@ -1158,71 +1237,10 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 and isinstance(media, dict) and media.get("kind") == "image")
             stats.skipped_no_translation += image_count
             continue
-        media_list = row.get("media") or []
-        if not isinstance(media_list, list):
-            raise ValueError(f"帖子 {post_id} 的 media 不是数组")
-        for media_index, media in enumerate(media_list):
-            if (media_index_filter is not None
-                    and media_index != media_index_filter):
-                continue
-            if not isinstance(media, dict) or media.get("kind") != "image":
-                continue
-            try:
-                source_path, source_rel = _source_from_manifest(
-                    arc_base, row, media)
-                try:
-                    with Image.open(source_path) as source_image:
-                        source_image.load()
-                        source_size = source_image.size
-                except Exception as exc:
-                    raise ValueError(f"原图无法解码：{source_rel}") from exc
-                requested = legal_size(*source_size)
-            except (ValueError, ArchivePathError) as exc:
-                stats.skipped_bad_source += 1
-                message = (f"  ! {post_id}[{media_index}] 跳过（素材问题）："
-                           f"{type(exc).__name__}: {exc}")
-                if report is None:
-                    print(message)
-                else:
-                    report(message)
-                continue
-            out_path, out_rel = _target_for_job(
-                arc_base, row, media_index, settings.output_format)
-            record = state.latest.get((post_id, media_index))
-            source_sha = sha256_file(source_path)
-            # force 是显式重生成，用当前稿；普通对账逐张保留已经付费完成的依据。
-            basis = (trans if force else _image_text_basis(
-                arc_base, row, trans, record, source_sha, human_history.get(post_id, [])))
-            text_de = basis["text_de"].strip()
-            job = ImageJob(
-                account=arc_base.name,
-                arc_base=arc_base,
-                post_id=post_id,
-                media_index=media_index,
-                source_path=source_path,
-                source_rel=source_rel,
-                source_sha256=source_sha,
-                source_size=source_size,
-                text_de=text_de,
-                text_de_sha256=text_de_sha256(text_de),
-                requested_size=requested,
-                aspect_drift_percent=aspect_drift_percent(
-                    *source_size, *requested),
-                scale_factor=scale_factor(*source_size, *requested),
-                out_path=out_path,
-                out_rel=out_rel,
-            )
-            manual = manual_override_paths(job, state)
-            if manual and not allow_manual_refine:
-                stats.skipped_manual += 1
-                print(f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
-                      + "、".join(path.name for path in manual))
-                continue
-            if (not force and image_record_is_current(job, record)
-                    and _record_output_exists(arc_base, record)):
-                stats.skipped_current += 1
-                continue
-            jobs.append(job)
+        jobs.extend(image_jobs_for_translation(
+            settings, arc_base, row, trans, state, human_history.get(post_id, []),
+            stats, force=force, media_index_filter=media_index_filter,
+            allow_manual_refine=allow_manual_refine, report=report))
     jobs.sort(key=lambda job: (job.account, job.post_id, job.media_index))
     return jobs, state, stats
 

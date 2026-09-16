@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core import paid_model
-from core.localization import extract_urls, text_de_digest, without_urls
+from core.localization import LINK_PLACEHOLDER, extract_urls, text_de_digest, without_urls
 from core.translated import (extract_hashtags, hashtags_preserved, money_preserved,
                              render_glossary)
 from localize.text import _ADDRESS_FORM, _ANGLICISM, _GENDER_STYLE
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = ROOT / "prompts" / "suggest_de.md"
 
 #: 改动 prompts/suggest_de.md 的规则时递增；旧建议随之失效。
-SUGGEST_PROMPT_VERSION = 1
+SUGGEST_PROMPT_VERSION = 2
 
 #: 一次最多给几条。再多人就不看了（FUNCTIONALITY §3.2）。
 MAX_ITEMS = 8
@@ -67,7 +67,7 @@ def build_prompt(settings, *, max_items: int = MAX_ITEMS) -> str:
 
 def build_request(source_en: str, text_de: str) -> str:
     """模型输入。两份正文分开加标签，避免模型把英文当成要审校的对象。"""
-    return json.dumps({"english_source": source_en, "current_german": text_de},
+    return json.dumps({"english_source": without_urls(source_en), "current_german": without_urls(text_de)},
                       ensure_ascii=False, indent=2)
 
 
@@ -75,7 +75,7 @@ def _applied(text_de: str, item: dict) -> str:
     return text_de.replace(item["quote"], item["replacement"], 1)
 
 
-def parse_suggestions(value: str, *, source_en: str, text_de: str,
+def parse_suggestions(value: str, *, text_de: str,
                       max_items: int = MAX_ITEMS) -> dict:
     """严格解析，逐条校验可定位性与不可改内容。
 
@@ -114,12 +114,15 @@ def parse_suggestions(value: str, *, source_en: str, text_de: str,
         if extract_urls(item["replacement"]) or extract_hashtags(item["replacement"]):
             dropped.append("建议里出现了链接或话题标签，它们不归文案区管")
             continue
-        # 与机器翻译共用同一道确定性闸，源文同样先去掉 URL（译文里本来就没有链接）。
-        # ⚠️ 这两个函数返回的是**违规清单**，非空即越界。
+        # 人工稿可能已经换过定价和标签；建议只能相对本次稿件校验，不能要求退回英文。
+        # 这两个函数返回的是违规清单，非空即越界。
         candidate = _applied(text_de, item)
-        if (money_preserved(without_urls(source_en), candidate)
-                or hashtags_preserved(without_urls(source_en), candidate)):
+        if (money_preserved(text_de, candidate) or hashtags_preserved(text_de, candidate)):
             dropped.append("建议会改动金额或话题标签")
+            continue
+        if (extract_urls(text_de) != extract_urls(candidate)
+                or LINK_PLACEHOLDER.findall(text_de) != LINK_PLACEHOLDER.findall(candidate)):
+            dropped.append("建议会改动链接或链接位置")
             continue
         seen.add(item["quote"])
         items.append(item)
@@ -157,6 +160,7 @@ def record(*, job_id: str, account: str, post_id: str, source_text_sha256_value:
            text_de: str, parsed: dict, paid_request_id: str | None) -> dict:
     return {"job_id": job_id, "account": account, "post_id": post_id,
             "source_text_sha256": source_text_sha256_value,
+            "body_de": text_de,
             "text_de_sha256": text_de_digest(text_de),
             "prompt_version": SUGGEST_PROMPT_VERSION,
             "items": parsed["items"], "dropped": parsed["dropped"],

@@ -66,6 +66,27 @@ class WebReviewTests(unittest.TestCase):
         (self.post_dir / "post.json").write_text(
             json.dumps(self.source, ensure_ascii=False), encoding="utf-8")
 
+    def test_review_summary_keeps_platform_counts_before_pagination(self):
+        account = self.account.parent / 'in_neakasa.global'
+        source = dict(self.source, post_id='instagram-probe', platform='instagram',
+                      account='neakasa.global', owner='neakasa.global')
+        folder = 'posts/' + post_dirname(source['post_id'], source['created_at'])
+        source['media'] = [{'kind': 'image', 'local_path': folder + '/01.jpg'}]
+        post = account / folder
+        post.mkdir(parents=True)
+        (post / '01.jpg').write_bytes((self.post_dir / '01.jpg').read_bytes())
+        (post / 'post.json').write_text(json.dumps(source), encoding='utf-8', newline='')
+        (account / 'manifest.jsonl').write_text(json.dumps(source) + '\n', encoding='utf-8', newline='')
+        all_tasks = self.client.get('/api/tasks').json()['tasks']
+        self.assertEqual(len(all_tasks), 2)
+        payload = self.client.get('/api/tasks?platform=facebook&limit=1').json()
+        self.assertEqual(len(payload['tasks']), 1)
+        for platform in ('facebook', 'instagram'):
+            lane = [task for task in all_tasks if task['platform'] == platform]
+            self.assertEqual(sum(payload['summary']['by_platform_status'][platform].values()), len(lane))
+            self.assertEqual(payload['summary']['by_platform_hard_alerts'][platform],
+                             sum(bool(task['hard_alerts']) for task in lane))
+
     def write_machine(self, text):
         row = {
             "post_id": self.post_id, "text_de": text,
@@ -219,10 +240,13 @@ class WebReviewTests(unittest.TestCase):
         detail = self.client.get(self.url).json()
         self.assertEqual(detail["text"]["en"], "An updated source post. #Neakasa")
         self.assertTrue(detail["text"]["stale"])
+        self.assertEqual([item['code'] for item in detail['hard_alerts']], ['human_translation_stale'])
         self.assertEqual(detail["text"]["de_human"], "Von Hand verbessert. #Neakasa")
         self.assertEqual(detail["status"], "pending_review")
-        self.assertEqual(self.save("Nach erneuter Prüfung. #Neakasa").status_code, 200)
-        self.assertFalse(self.client.get(self.url).json()["text"]["stale"])
+        saved = self.save("Nach erneuter Prüfung. #Neakasa")
+        self.assertEqual(saved.status_code, 200)
+        self.assertFalse(saved.json()["text"]["stale"])
+        self.assertEqual(saved.json()['hard_alerts'], [])
 
     def test_advisory_content_checks_do_not_reject_human_save(self):
         response = self.save("Eigene Freigabe mit 42 EUR und #AnderesThema")

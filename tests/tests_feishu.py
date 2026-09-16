@@ -34,7 +34,8 @@ class FeishuTests(unittest.TestCase):
         night = at('2026-09-11T23:00:00+08:00')
         for i in range(3):
             self.assertTrue(outbox.enqueue(f'ready-{i}', 'ready',
-                                          {'task_id': f'account/{i}', 'text': f'Deutsch {i}'}, night))
+                                          {'task_id': f'account/{i}', 'text': f'Deutsch {i}',
+                                           'platform': 'facebook' if i % 2 else 'instagram'}, night))
         calls = []
         self.assertEqual(outbox.dispatch(night, lambda *args: calls.append(args)), 0)
         restarted = Outbox(self.path, self.settings)
@@ -44,6 +45,7 @@ class FeishuTests(unittest.TestCase):
         rendered = json.dumps(calls[0][1], ensure_ascii=False)
         self.assertTrue(all(f'Deutsch {i}' in rendered for i in range(3)))
         self.assertIn('task=account%2F0', rendered)
+        self.assertIn('facebook / instagram', calls[0][1]['header']['title']['content'])
         self.assertEqual(restarted.dispatch(at('2026-09-12T08:01:00+08:00'),
                                            lambda *args: self.fail('duplicate')), 0)
 

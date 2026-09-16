@@ -54,7 +54,7 @@ base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"  # 环境变量名，非密钥。
 model = "deepseek-v4-flash"
 timeout_seconds = 120
-max_retries = 2
+max_retries = 2  # 仅无付费账本的 SDK 客户端使用；受统一账本管理的调用固定为 0。
 request_gap_seconds = 1.0
 failure_budget = 3  # 连续失败次数，达到后停止本批。
 reasoning_effort = "high"  # low | high | max；显式开启 thinking。
@@ -92,7 +92,7 @@ model = "gpt-image-2"
 quality = "high"  # low | medium | high；不使用 auto。
 output_format = "jpeg"
 timeout_seconds = 720
-max_retries = 2
+max_retries = 2  # 仅无付费账本的 SDK 客户端使用；受统一账本管理的调用固定为 0。
 request_gap_seconds = 2.0
 incremental_since = "2026-08-31T00:00:00Z"  # 默认处理边界；补历史须显式确认费用。
 cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }  # 估算费率，实际费用以网关账单为准。

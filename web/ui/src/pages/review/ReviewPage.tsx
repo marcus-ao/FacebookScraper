@@ -26,6 +26,11 @@ export function ReviewPage({ platform }: { platform: Platform }) {
   }, [location.key])
   const rows = filterReviewRows(query.data?.tasks ?? [], filters)
   const counts = query.data ? queueCounts(query.data.summary, platform) : null
+  const platformRows = (query.data?.tasks ?? []).filter(row => row.platform === platform)
+  const total = counts ? Object.values(counts).reduce((sum, count) => sum + count, 0) : 0
+  const hardAlerts = query.data?.summary.by_platform_hard_alerts?.[platform]
+    ?? platformRows.filter(row => row.hard_alerts.length > 0).length
+  const platformLabel = platform === 'facebook' ? 'Facebook' : 'Instagram'
   // 详情要带上平台，返回时才知道回哪个入口。
   const detailSearch = () => {
     const params = new URLSearchParams(search)
@@ -51,27 +56,27 @@ export function ReviewPage({ platform }: { platform: Platform }) {
   return <section className={styles.page}>
     <div className={styles.head}>
       <div className={styles.heading}><PageTitle /><span className={styles.meta}>
-        {(query.data?.summary.with_hard_alerts ?? 0) > 0 && <Tag closable={filters.alerts}
+        {hardAlerts > 0 && <Tag closable={filters.alerts}
           onClose={event => { event.preventDefault(); change('alerts', undefined) }}
           onClick={() => change('alerts', filters.alerts ? undefined : '1')} role="button" tabIndex={0}
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); change('alerts', filters.alerts ? undefined : '1') } }}>
-          {filters.alerts ? '只看硬闸' : '硬闸'} {query.data?.summary.with_hard_alerts}
+          {filters.alerts ? '只看硬闸' : '硬闸'} {hardAlerts}
         </Tag>}
-        近 {query.data?.range.days ?? 90} 天 · {query.data?.summary.total ?? 0} 篇
+        近 {query.data?.range.days ?? 90} 天 · {total} 篇
       </span></div>
       <div className={styles.toolbar}>
         <Tabs activeKey={filters.queue} onChange={value => change('queue', value)} items={QUEUE_BUCKETS.map(key => ({
           key, label: `${QUEUE_BUCKET_LABEL[key]} ${counts?.[key] ?? 0}`,
         }))} />
         {/* 平台不在这里筛：它是入口本身。历史页仍然保留跨平台检索。 */}
-        <ListFilters filters={filters} months={query.data?.tasks.map(row => row.month) ?? []}
-          tags={query.data?.summary.tags ?? []} onChange={change} platformFilter={false} />
+        <ListFilters filters={filters} months={platformRows.map(row => row.month)}
+          tags={[...new Set(platformRows.flatMap(row => row.tags))].sort()} onChange={change} platformFilter={false} />
       </div>
     </div>
     {query.error && <div className={styles.error}><Alert type="error" showIcon title="暂时无法读取审校队列"
       description={query.error.message} action={<Button onClick={() => void query.refetch()}>重试</Button>} /></div>}
     {query.data?.index.stale && <Alert type="warning" banner title="列表更新暂有延迟，当前已从归档重新读取。" />}
     <PostTable rows={rows} columns={columns} loading={query.isFetching} href={href}
-      empty={<Empty description="当前筛选下没有帖子。"><Button onClick={() => setSearch({ queue: 'review' })}>清除筛选</Button></Empty>} />
+      empty={<Empty description={`${platformLabel} 当前筛选下没有帖子。`}><Button onClick={() => setSearch({ queue: 'review' })}>清除筛选</Button></Empty>} />
   </section>
 }

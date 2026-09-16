@@ -91,7 +91,7 @@ async def create_refinement(task_id: str, request: Request):
     job = refinement.submit(source.account_dir, dict(source.row), kind=body["kind"],
         instruction=body.get("instruction"), source_text_sha256=body["source_text_sha256"],
         human_revision=body.get("human_revision"), review_revision=body.get("review_revision"),
-        media_index=body.get("media_index"))
+        media_index=body.get("media_index"), body_de=body.get("body_de"))
     return JSONResponse(job, status_code=202)
 
 
