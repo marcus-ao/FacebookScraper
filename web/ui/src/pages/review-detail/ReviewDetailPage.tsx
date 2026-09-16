@@ -120,6 +120,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       }} /></div>}
       {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images}
         detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing}
+        maxImageCount={imageVersions.data?.max_image_count ?? null} imageModel={imageVersions.data?.image_model ?? ''}
         onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={setUnseen} /></div>}
       <div className={styles.counter}>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}

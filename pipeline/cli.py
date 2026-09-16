@@ -237,6 +237,8 @@ def month_spend(dirs: list[Path], month: str,
                 text_cost += cost
         if isettings is not None:
             for row in _jsonl_rows(arc_base / "images_de.jsonl"):
+                if "selected_from" in row:
+                    continue
                 paid_id = str(row.get("paid_request_id") or "")
                 if paid_id:
                     if paid_id not in paid_ids:
@@ -253,7 +255,7 @@ def month_spend(dirs: list[Path], month: str,
                         arc_base.name, row.get("post_id") or "?",
                         row.get("media_index") or "?"))
                     continue
-                cost = image_de.image_usage_cost(isettings, usage)
+                cost = image_de.image_usage_cost(isettings, usage, model=row.get("model"))
                 if cost is None or not math.isfinite(cost) or cost < 0:
                     problems.append("[image] %s/%s/%s 费用无法计算" % (
                         arc_base.name, row.get("post_id") or "?",

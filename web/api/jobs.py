@@ -1,10 +1,15 @@
 """人工单篇优化与只读模板接口；实际费用由内容执行器统一受理。"""
 from __future__ import annotations
 import re
+import mimetypes
+from urllib.parse import quote, urlencode
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from core import review, localization
+from core.store import ArchivePathError, read_post_truth
+from localize import images
+from publish import compose
 from pipeline import refinement, hashtag_suggestions, engine, initial_translation
 from web.api import reader
 
@@ -79,7 +84,33 @@ def initial_result(job_id: str):
 @router.get("/api/refinements/task/{task_id:path}")
 def get_capabilities(task_id: str):
     source = _source(task_id)
-    return refinement.capabilities(source.account_dir, source.post_id, dict(source.row))
+    result = refinement.capabilities(source.account_dir, source.post_id, dict(source.row))
+    result['max_image_count'] = None
+    if source.platform == 'instagram':
+        try:
+            limits, _ = compose.verified_constraints_from_config(platform='instagram')
+            result['max_image_count'] = limits.max_images
+        except compose.ComposeError:
+            pass
+    for index, versions in result['image_versions'].items():
+        for version in versions:
+            version['preview_url'] = (
+                '/api/image-versions/task/' + quote(task_id, safe='/') + '/preview?'
+                + urlencode({'media_index': index, 'out_path': version['out_path']})) if version['available'] else None
+    return result
+
+
+@router.get("/api/image-versions/task/{task_id:path}/preview")
+def preview_image_version(task_id: str, media_index: int, out_path: str):
+    source = _source(task_id)
+    truth, _ = read_post_truth(source.account_dir, dict(source.row))
+    try:
+        path = images.image_version_path(source.account_dir, truth, media_index, out_path)
+        data = path.read_bytes()
+    except (ValueError, OSError, ArchivePathError) as exc:
+        raise HTTPException(status_code=404, detail="这一版图片不可用") from exc
+    return Response(data, media_type=mimetypes.guess_type(path.name)[0] or 'application/octet-stream',
+                    headers={'Cache-Control': 'no-store'})
 
 
 @router.post("/api/image-versions/task/{task_id:path}")

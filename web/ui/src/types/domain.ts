@@ -279,6 +279,7 @@ export interface ImageMetrics {
 }
 
 export interface ImageVersion {
+  readonly preview_url?: string | null
   readonly out_path: string
   readonly created_at: string | null
   readonly refine_id: string | null
@@ -299,6 +300,8 @@ export interface ImageAsset {
   readonly de_present: boolean
   /** 当前用的是人工放置或上传的图；模型优化不会被采用，入口须禁用。 */
   readonly manual?: boolean
+  readonly replaced_at?: string | null
+  readonly warnings?: readonly string[]
   /** 没有程序生成记录时为 null（人工放的图，或没跑过德语图）。 */
   readonly metrics: ImageMetrics | null
 }
@@ -473,10 +476,12 @@ export interface InitialTranslationCapabilities {
 }
 
 export interface RefinementCapabilities {
+  readonly image_model?: string
+  readonly max_image_count?: number | null
   readonly max_refine_per_media: number
   /** 键为媒体下标的字符串形式。 */
   readonly image_attempts: Readonly<Record<string, number>>
-  readonly estimated_image_usd: number
+  readonly estimated_image_usd: number | null
   readonly estimate_basis: string
   readonly estimate_samples: number
   readonly jobs: readonly ContentJob[]

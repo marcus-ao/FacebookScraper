@@ -92,14 +92,9 @@ class RefinementTests(unittest.TestCase):
         self.assertEqual(translated.load_human_translated(self.account / 'translated_human.jsonl')[
             self.source['post_id']]['text_de'], 'Von Hand. #Neakasa')
 
-    def test_image_refinement_keeps_original_and_manual_and_uses_versioned_output(self):
+    def test_image_refinement_keeps_original_and_uses_human_text_with_versioned_output(self):
         human = translated.append_human_translation(self.account / 'translated_human.jsonl', self.source,
             'Ein von Hand bearbeiteter Text. #Neakasa', expected_revision=None)
-        folder = self.fixture.post_dir / 'media_de'
-        folder.mkdir()
-        manual = folder / '01.png'
-        Image.new('RGB', (1080, 1080), 'yellow').save(manual)
-        before = manual.read_bytes()
         source_before = (self.fixture.post_dir / '01.jpg').read_bytes()
         row = refinement.submit(self.account, self.source, kind='image', instruction='保留原图排版',
             source_text_sha256=translated.source_text_sha256(self.source['text']),
@@ -116,17 +111,10 @@ class RefinementTests(unittest.TestCase):
         with patch.object(images, 'validate_output', return_value=validated):
             result = refinement.execute(row, self.source, editor=editor)
         self.assertEqual(result['status'], 'succeeded')
-        self.assertEqual(manual.read_bytes(), before)
         self.assertEqual((self.fixture.post_dir / '01.jpg').read_bytes(), source_before)
         self.assertIn('_v' + row['job_id'], result['out_path'])
         output = self.account / result['out_path']
         self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), hashlib.sha256(validated.data).hexdigest())
-        post = compose.compose_post(self.source['post_id'], datetime.now(timezone.utc),
-                                    archive_root=cfg().archive_dir, account=self.account.name,
-                                    warning_sink=None)
-        self.assertEqual(post.image_paths[0], manual)
-        # 移除测试人工稿之后，最新模型版本可作为发布素材，旧版本字节仍留存。
-        manual.unlink()
         jobs, _, stats = images.build_jobs(images.Settings(), self.account, [self.source])
         self.assertFalse(jobs, '人工稿生成的图片不能被后台按旧机器稿再次付费生成')
         self.assertEqual(stats.skipped_current, 1)

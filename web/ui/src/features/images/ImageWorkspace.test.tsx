@@ -42,18 +42,18 @@ const html = (images: readonly ImageAsset[], versions: Record<string, readonly I
 describe('图片对照：模型没改动这件事必须自己冒出来', () => {
   it('改动占比为 0 时给出满宽提示，并说清两种可能', () => {
     const markup = html([asset({ metrics: metrics(0) })])
-    expect(markup).toContain('模型一个像素都没改动')
+    expect(markup).toContain('未检测到明显像素变化')
     // 两种成因本地分不开，提示必须同时给出，不能替她断言是哪一种。
     expect(markup).toContain('本来就没有需要本地化的英文')
     expect(markup).toContain('没有照做')
   })
 
   it('真的改过的图不弹这条提示', () => {
-    expect(html([asset()])).not.toContain('模型一个像素都没改动')
+    expect(html([asset()])).not.toContain('未检测到明显像素变化')
   })
 
   it('没量过（旧记录 null）不等于没改动，不能弹提示', () => {
-    expect(html([asset({ metrics: metrics(null) })])).not.toContain('模型一个像素都没改动')
+    expect(html([asset({ metrics: metrics(null) })])).not.toContain('未检测到明显像素变化')
   })
 
   it('改动占比在版本行上直接可读，不用展开折叠面板', () => {
@@ -103,5 +103,14 @@ describe('上传替换：是换素材，不是转交人工', () => {
     const markup = html([asset()])
     expect(markup).toContain('上传图片替换第 1 张')
     expect(markup).toContain('仍然留在系统里继续排期发布')
+    expect(markup).toContain('下载本篇素材')
+  })
+
+  it('人工选择及画幅提示在当前图片旁显示', () => {
+    const markup = html([asset({ manual: true, replaced_at: '2026-09-16T02:00:00Z',
+      warnings: ['替换图的宽高比与原图相差 20%'] })])
+    expect(markup).toContain('人工图片')
+    expect(markup).toContain('替换于')
+    expect(markup).toContain('宽高比与原图相差 20%')
   })
 })

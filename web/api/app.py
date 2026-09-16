@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 # StaticFiles 抛父类异常，FastAPI 的子类捕获不到。
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
@@ -145,7 +146,7 @@ async def post_export(task_id: str, request: Request) -> Response:
 
 @app.post("/api/tasks/{task_id:path}/image/{index}/upload")
 async def post_image_upload(task_id: str, index: int, request: Request) -> JSONResponse:
-    """用业务自己的图片替换第 index 张德语图；审校状态保持不变，这篇继续走系统发布。
+    """用业务自己的图片替换第 index 张德语图；记为 edited 后继续走系统发布。
 
     收 JSON + base64 而不是 multipart：后者要装 python-multipart，而本仓库对新依赖
     有明确约定，且 `decode_image_payload` 已经是经过验证的"不可信 base64 → 图片字节"入口。
@@ -162,11 +163,11 @@ async def post_image_upload(task_id: str, index: int, request: Request) -> JSONR
         data = images.decode_image_payload(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="上传内容不是可识别的图片：%s" % exc) from exc
-    revision = body.get("review_revision")
-    return JSONResponse(writer.replace_image(
+    revision = _state_revision(body)
+    return JSONResponse(await run_in_threadpool(writer.replace_image,
         task_id, index, data, str(body.get("filename") or ""),
         source_text_sha256=digest,
-        review_revision=revision if isinstance(revision, str) else None))
+        review_revision=revision))
 
 
 @app.put("/api/tasks/{task_id:path}/tags")

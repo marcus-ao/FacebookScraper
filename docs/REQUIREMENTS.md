@@ -246,20 +246,23 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 
 ### 10.3 阶段三：本地化、风险、标签与恢复
 
+用户本轮编号为阶段二；只完善德语文案及图片流程，正文仍用 DeepSeek。图片复审范围及当前证据见
+[HANDOFF §1.4](HANDOFF.md#14-图片阶段复审现场2026-09-16)，真实模型与远端发布验收另列，不从浏览器夹具推断通过。
+
 | 编号与验收单元 | 状态 | 代码缺口或下一步 | 外部依赖 | 验收入口 |
 |---|---|---|---|---|
 | F3 三区块编辑/人工优先 | 离线通过 | 正文/hashtags/链接分区，人工稿/图优先 | 当前来源 | `tests_localization`/`tests_web_review` 回归，刷新/重建不覆盖 |
 | F3-1 FB 链接 | 待真实联调 | 未映射进人工队列；单篇覆盖不改全局；链接不进翻译输入 | 德国落地页确认 | 一篇 FB 最终链接/目标正确，长文回读保留链接 |
 | F3-1 FB 正文链接/实时计数 | 离线通过 | 光标插入 `{{linkN}}`，按已选 URL 替换；未插入末尾追加，非法编号/目标/token 拒绝，IG 不支持；`/check` 按最终草稿计数 | 真实落地页另验 | `tests_localization`/`tests_web_review`/浏览器回归：插入位置、最终字符数、无重复、失效拒绝 |
 | F3-2 IG CTA/稳定 bio | 待真实联调 | 链接移出正文、稳定聚合页只读；不自动改 bio | 业务确认聚合页 | 一篇 IG 最终 CTA 与当前 bio 对应 |
-| F3-3/F3-4 优化/付费边界 | 离线通过 | 单篇指令追加、模板只读、每图最多受理 3 次、统一预算/许可 | 真实模型账单另验 | `tests_refinement`/`tests_paid_requests`：并发第 4 次拒绝、人工图不变 |
-| F3-3 图片提示词溢出阶梯 | 离线通过 | `IMAGE_PROMPT_VERSION` 3：修掉"保持行数"与"重新断行"的互斥；四级阶梯（换短说法→断行→缩字号→保留英文）+ 带理由的禁止清单 + 德语短写法表 + 输出前自检 | 真实出图验版面 | `tests_localize_images` K4：四级顺序、禁止项点名、自检在末尾、美国限定照译 |
+| F3-3/F3-4 优化/付费边界 | 离线通过 | 单篇指令追加、每图最多受理 3 次、失败占一次；人工图在受理及执行前均拒绝；排队期间换图或换版后停止旧任务 | 真实模型账单另验 | `tests_refinement`/`tests_image_workflow_review`：并发第 4 次拒绝、人工图不受理不付费、队列复核与图片锁 |
+| F3-3 图片提示词溢出阶梯 | 离线通过 | `IMAGE_PROMPT_VERSION` 3：四级阶梯（换短说法→断行→缩字号→保留英文）、禁止清单、短写法表、自检；短写示例不覆盖术语表，Emoji/品牌/专名保持 | 真实出图验版面及语义；旧版本图片判过期，重做仍须预算与许可 | `tests_localize_images` K4：四级顺序、禁止项点名、自检在末尾、美国限定照译；当前 worktree 无真实生成图 |
 | F3-3 优化指令预设 | 离线通过 | 五条常用说法点一下追加不替换，各带"为什么这么说管用"；覆盖溢出/压图/用词/范围/型号被改 | 业务实际使用反馈 | 前端单测与浏览器 D3 |
 | F3-4 画幅带感知的尺寸合法化 | 离线通过 | 16 像素量化不再把压线原图推出 4:5~1.91:1；只重排候选不拒绝，原图在带外时不干预 | 已签字 probe dump 后改用实测窗口 | `tests_localize_images` K2b：1440×1800 / 640×800 落回带内且形变仍低于告警线；1536×2048、1200×628 不变 |
-| F3-4 模型未改动可见 | 离线通过 | 逐字节相同判网关回显硬拒；逐像素相同不拒绝只显著标出（两种成因本地分不开，拒绝会让无英文的帖发不出去）；`changed_pixel_ratio` 入账本与审校台 | `change_ratio_warn` 待真实产出标定 | `tests_localize_images` K5、前端 `ImageWorkspace.test.tsx`、浏览器 D3 |
-| F3-4 图片模型白名单 | 离线通过 | `gpt-image-2` / `gpt-image-2.5` 可切；费率按模型分表，缺任一模型费率则加载失败 | **2.5 的真实费率与 size 契约均未实测**，切换前须跑 `--check` 并改费率 | `tests_localize_images` K2c：非白名单拒绝、切换后费率跟着换、费率表缺项在加载时失败 |
-| F3-4 历史版本可回退 | 离线通过 | 每版可见（时间/指令/改动占比/是否当前/不可用原因）；采用旧版只追加所有权记录，零调用零费用零次数 | 无 | `tests_web_review`：换回第一版、零付费记录、不可用版本拒绝并给原因 |
-| F3-4 上传替换与下载拆分 | 离线通过 | 上传落 `media_de/NN.<ext>` 且**不写 `images_de.jsonl`**，旧件移入 `superseded/`，状态不变继续排期；`mode=download` 只下载不转态，`handed_off` 仍由独立动作触发；该张 refine 入口停用 | 业务真实换图走完排期 | `tests_web_review` 8 项：人工图胜出、账本不变、旧件保留、非法内容拒绝且不动归档、终态拒绝 |
+| F3-4 模型未改动可见 | 离线通过 | 逐字节相同判回显硬拒；`changed_pixel_ratio` 只计最大通道差 >24 的像素，占比 0 提示“未检测到明显像素变化”，不等于完全相同或未翻译，不拒绝无英文图片 | `change_ratio_warn` 待真实产出标定 | `tests_localize_images` K5、前端 `ImageWorkspace.test.tsx`、浏览器 D3 |
+| F3-4 图片模型白名单 | 离线通过 | `gpt-image-2` / `gpt-image-2.5` 可切；费率按模型分表，历史用量按记录模型计价；估算只取同模型样本，2.5 无样本时不显示虚构单价；审校台只读展示模型 | **2.5 的真实费率与 size 契约均未实测**，切换前须核费率并跑 `--check` | `tests_localize_images` K2c、`tests_image_workflow_review`：白名单/费率缺项/跨模型历史费用与估算 |
+| F3-4 历史版本可回退 | 离线通过 | 独立预览各版（含上传前备份）不改审校状态；采用旧版零调用、零次数且不重复计预算，兼容按人工正文生成的历史图；人工替换后历史图仍可预览，采用入口禁用并说明原因 | 无 | `tests_image_workflow_review`/`tests_browser_workflow`：预览→采用、源/正文版本核验、日/月预算计算值不变、生成锁冲突 |
+| F3-4 上传替换与下载拆分 | 离线通过 | 上传落 `media_de/NN.<ext>`，人工选择单独追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；旧件先备份，失败保留原选择，同字节旧生成图也按人工选择采用；审校记为 `edited` 继续排期。下载按钮及 ZIP 说明不触发交接，转交人工仍需独立确认 | 业务真实换图走完排期 | `tests_web_review`/`tests_image_workflow_review`/浏览器第 10 场景：连续跨格式上传、发布素材选择、错误与 Windows 占用恢复、人工标记/时间/偏差提示/禁用优化；下载不转态 |
 | F3-4 模型任务恢复/旧候选 | 离线通过 | 按进程/job/request/source/prompt 对账，恢复不发新付费请求 | 不确定项人工核账 | `tests_content_recovery`/`tests_refinement`：执行中不抢占、未请求收敛、不确定阻塞、源变候选不可应用 |
 | F3-4 恢复 UI/费用呈现 | 离线通过 | job 与批次 `operation_id` 关联 paid request、费用、CAS 版本；人工核对恢复不重新付费 | 真实供应商核账另验 | runtime/content recovery 后端定向；浏览器用明确 UI 夹具验证中断/费用/取消恢复 |
 | F3-8 风险扫描代码 | 离线通过 | 翻译前真实调用路径，pun/ambiguous/us_only，源文/提示词绑定 | 无 | `tests_risk_scan`：未扫/失败/成功零风险/stale，缺钥匙不造 paid started，费用入账 |
@@ -329,11 +332,11 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 |---|---|---|---|
 | 历史/恢复/风险采样/设置 API | 离线通过 | range/page/total、`detail.meta` 来源指纹/`snapshot_id`、批次与消息恢复、风险/采样元信息和设置说明已接 | 现有接口/版本错误与只读回归 |
 | Web/CLI 五阶段只读状态 | 离线通过 | 共用 snapshot，含批次 `operation_id`/费用/版本、处理时效、Trends blocked 和独立投递状态 | `tests_runtime_status` + 浏览器 UI 夹具；只读 GET 零外部操作 |
-| 单一 React 审校台 | 离线通过 | `web/ui/` 是唯一源码目录，构建为 `web/ui/dist`；真实路由支持深链接刷新和分享 | React 26 文件 505 项测试；`tests/browser_regression.py --stage ALL` 12 组通过 |
+| 单一 React 审校台 | 离线通过 | `web/ui/` 是唯一源码目录，构建为 `web/ui/dist`；真实路由支持深链接刷新和分享 | 图片阶段复审 React 27 文件 523 项测试；`tests_browser_workflow` 10 场景通过；原 `browser_regression.py --stage ALL` 12 组证据仍只对应原运行代码 |
 | 前端静态部署契约 | 离线通过 | `SinglePageFiles` 提供 SPA 回落，且不吞 `/api` 404、带扩展名的缺失资源和非 HTML 客户端 | `tests/tests_spa_static.py` 14 项；退回裸 `StaticFiles` 会红 11 项 |
 | FastAPI 静态演练 | 离线通过 | `tests/cutover_rehearsal.py` 默认伺服 `web/ui/dist`；深链接、旧链接、真实资源、API/资源 404 和刷新均通过 | 实际 FastAPI、零外部写入；需先构建前端 |
 | 历史页缩略图成本 | 待真实联调 | React 默认 50 行。原归档（1,067 篇）实测单张中位 1.57s、最大 2.0s。当时无图的帖子也发请求，六连接下首屏约 12–13 秒；现在只有真有图的行才发，首屏要按有图行数重算 | `3718c0d` 实测 + 无图行不发请求（`tests_history`）；合并后的日常服务观察一个工作日，太慢先把每页改成 20 条 |
-| 当前 Python + 前端构建 + 浏览器回归 | 离线通过 | 清库后 Python 65/66；`tests_browser_workflow` 与 React 单测需先重建 `web/ui/dist` 和 `node_modules` | 产物落在已 gitignore 的 `state/`；浏览器夹具不算真实外部系统 |
+| 当前 Python + 前端构建 + 浏览器回归 | 离线通过 | 图片阶段复审 Python **75/75**、React **27 文件 523 项**、TypeScript/Vite 构建及浏览器 **10/10** 通过 | [HANDOFF §1.4](HANDOFF.md#14-图片阶段复审现场2026-09-16)；证据在当前 worktree 的 `state/`，浏览器夹具不算真实外部系统 |
 | 审校台日常启动与只读检查 | 待真实联调 | 清库前曾在真实数据上通过，但那次证据与数据已随清库删除。重建数据后按 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台) 重跑 | 需先 `npm --prefix web/ui ci` 与 `run build` |
 | 运营飞书到审校排期闭环 | 待真实联调 | 运营从真实卡片开帖、改审文图标签链接、选期确认、收到回执 | 两渠道排期证据 + 实际经过；两个独立 CLI 调用不算闭环 |
 

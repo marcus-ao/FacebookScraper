@@ -83,8 +83,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
             onClick={() => setInstruction(current => current.trim() ? `${current.trim()}\n${preset.text}` : preset.text)}>{preset.text}</Button>
         </Tooltip>)}</Space>
       </div>}
-      <PaidActionButton label={kind === 'image' ? '生成图片' : '生成文案候选'} amount={kind === 'image' && capabilities.data ? `约 US$${capabilities.data.estimated_image_usd.toFixed(3)}` : '按实际用量计费'} {...(nextReason ? { disabledReason: nextReason } : {})} {...(kind === 'image' ? { remaining } : {})} loading={busy} onClick={() => void act('refine')} />
-      {kind === 'image' && <Typography.Paragraph type="secondary">{capabilities.data?.estimate_basis}；费用以实际记录为准。每张图最多受理 {capabilities.data?.max_refine_per_media ?? 3} 次，<strong>失败的那次也算一次</strong>；生成过的版本可以在图片页比较后换回去。</Typography.Paragraph>}
+      <PaidActionButton label={kind === 'image' ? '生成图片' : '生成文案候选'} amount={kind === 'image' && capabilities.data?.estimated_image_usd != null ? `约 US$${capabilities.data.estimated_image_usd.toFixed(3)}` : '按实际用量计费'} {...(nextReason ? { disabledReason: nextReason } : {})} {...(kind === 'image' ? { remaining } : {})} loading={busy} onClick={() => void act('refine')} />
+      {kind === 'image' && <Typography.Paragraph type="secondary">当前模型：{capabilities.data?.image_model ?? '读取中'}。{capabilities.data?.estimate_basis}；费用以实际记录为准。每张图最多受理 {capabilities.data?.max_refine_per_media ?? 3} 次，<strong>失败的那次也算一次</strong>；生成过的版本可以在图片页比较后换回去。</Typography.Paragraph>}
       {status(next, false)}<Button type="text" onClick={() => { void capabilities.refetch(); void next.refresh() }}>刷新任务状态</Button>
     </> }]} />
     <Drawer title="生成模板（只读）" open={templateOpen} onClose={() => setTemplateOpen(false)} size="large"><pre className={styles.diagnostic}>{template.isPending ? '正在读取模板…' : template.data?.content ?? '模板暂时不可读'}</pre></Drawer>

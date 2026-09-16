@@ -416,8 +416,14 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
     for index in range(len(_image_media(source))):
         pair = by_index.get(index)
         record = pair.record if pair is not None else None
+        manual_record = None
+        output_digest = (record or {}).get("output_sha256") or "missing"
+        if pair and pair.manual and pair.localized_rel:
+            path = source.account_dir / pair.localized_rel
+            output_digest = image_de.sha256_file(path)
+            manual_record = image_de.manual_upload_record(path)
         version = "%s-%s-%s" % (
-            source_version, text_version, (record or {}).get("output_sha256") or "manual")
+            source_version, text_version, output_digest)
         out.append({
             "index": index,
             "original_url": "/api/tasks/%s/image/%d?variant=original&v=%s" % (
@@ -426,6 +432,8 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
             "de_present": bool(pair is not None and pair.localized_rel),
             # 人工图不能被模型重生成覆盖（红线 6），所以这一张的优化入口要禁用。
             "manual": bool(pair is not None and pair.manual),
+            "replaced_at": (manual_record or {}).get("replaced_at"),
+            "warnings": (manual_record or {}).get("warnings", []),
             "metrics": _metrics(record),
         })
     return out

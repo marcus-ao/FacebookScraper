@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -51,7 +51,7 @@ MAX_EDGE = 3_840
 MAX_ASPECT_RATIO = 3.0
 MAX_LATEST_POSTS = 3
 # ⚠️ 上面这组 size 契约是按 gpt-image-2 标定的，2.5 没有实测。切模型后先跑一次
-# `--check`：它请求 816x816 并核对返回尺寸，契约变了会当场露出来。
+# `--check` 验证 816x816 返回尺寸与 usage；通过不证明其它尺寸边界也兼容。
 SUPPORTED_MODELS = ("gpt-image-2", "gpt-image-2.5")
 
 IMAGE_CONFIG_KEYS = frozenset({
@@ -940,6 +940,7 @@ class ImageState:
     latest: dict[tuple[str, int], dict[str, Any]]
     owned_paths: set[str]
     owned_hashes: dict[str, set[str | None]]
+    records: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1036,6 +1037,7 @@ def load_image_state(path: Path) -> ImageState:
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     owned_paths: set[str] = set()
     owned_hashes: dict[str, set[str | None]] = {}
+    records: list[dict[str, Any]] = []
     if not path.exists():
         return ImageState(latest, owned_paths, owned_hashes)
     assert_physical_direct_path(path.parent, path, kind="file", label="images_de.jsonl")
@@ -1080,11 +1082,12 @@ def load_image_state(path: Path) -> ImageState:
                       % (post_id, media_index, out_rel))
                 continue
             row["out_path"] = out_rel
+            records.append(row)
             key = (post_id, media_index)
             latest[key] = row
             owned_paths.add(out_rel)
             owned_hashes.setdefault(out_rel, set()).add(output_sha)
-    return ImageState(latest, owned_paths, owned_hashes)
+    return ImageState(latest, owned_paths, owned_hashes, records)
 
 
 def append_image_jsonl(path: Path, row: Mapping[str, Any]) -> None:
@@ -1178,6 +1181,8 @@ def _record_output_exists(arc_base: Path, record: Mapping[str, Any]) -> bool:
 
 
 def _candidate_is_program_owned(candidate: Path, rel: str, state: ImageState) -> bool:
+    if manual_upload_record(candidate):
+        return False
     expected_hashes = state.owned_hashes.get(rel)
     if not expected_hashes:
         return False
@@ -1325,7 +1330,7 @@ def build_jobs(settings: Settings, arc_base: Path, rows: list[dict], *,
                 out_rel=out_rel,
             )
             manual = manual_override_paths(job, state)
-            if manual and not allow_manual_refine:
+            if manual:
                 stats.skipped_manual += 1
                 print(f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
                       + "、".join(path.name for path in manual))
@@ -1454,7 +1459,7 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
 
         try:
             manual = manual_override_paths(job, state)
-            if manual and not refine_instruction:
+            if manual:
                 stats.skipped_manual += 1
                 print(f"  [{index}/{len(jobs)}] {job.post_id}[{job.media_index}] "
                       "跳过：调用前发现人工德语图")
@@ -1515,8 +1520,8 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
                           > settings.aspect_drift_warn_percent else "")
             change_mark = ""
             if validated.changed_pixel_ratio <= 0:
-                change_mark = ("  !模型一个像素都没改 —— 要么图里没有要译的英文，"
-                               "要么这次白花钱了，请在审校台人眼确认")
+                change_mark = ("  !未检测到明显像素变化，请在审校台确认图内文字；"
+                               "该指标会忽略较小的颜色差异")
             elif (settings.change_ratio_warn >= 0
                   and validated.changed_pixel_ratio <= settings.change_ratio_warn):
                 change_mark = (f"  !改动占比 {validated.changed_pixel_ratio:.4%}"
@@ -1615,35 +1620,40 @@ def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
 # 历史版本：看、比、换回去
 
 def _ledger_rows(arc_base: Path, post_id: str, media_index: int) -> list[dict[str, Any]]:
-    """同一张图的全部有效所有权记录，按落盘顺序。`load_image_state` 只留最后一条。"""
-    path = arc_base / "images_de.jsonl"
-    if not path.exists():
-        return []
-    assert_physical_direct_path(path.parent, path, kind="file", label="images_de.jsonl")
-    rows: list[dict[str, Any]] = []
-    with path.open("rb") as handle:
-        for raw_line in handle:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            try:
-                row = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            if (not isinstance(row, dict) or row.get("post_id") != post_id
-                    or row.get("media_index") != media_index):
-                continue
-            out_rel = _safe_rel_string(row.get("out_path"))
-            if out_rel is None or not _record_path_matches_key(
-                    post_id, media_index, out_rel, row.get("folder_name")):
-                continue
-            row["out_path"] = out_rel
-            rows.append(row)
-    return rows
+    """复用所有权账本校验，按落盘顺序返回同一张图的全部有效记录。"""
+    return [record for record in load_image_state(arc_base / "images_de.jsonl").records
+            if record["post_id"] == post_id and record["media_index"] == media_index]
+
+
+def image_version_path(arc_base: Path, row: Mapping[str, Any], media_index: int,
+                       out_path: str) -> Path:
+    """只从本帖本张的生成记录找预览文件，包含人工替换时保留的旧件。"""
+    post_dir = post_directory(arc_base, row)
+    media_de = post_dir / "media_de"
+    assert_physical_direct_path(post_dir, media_de, kind="directory", label="德语图片目录")
+    record = next((item for item in reversed(_ledger_rows(
+        arc_base, str(row.get("post_id") or ""), media_index))
+        if item["out_path"] == out_path), None)
+    if record is None or arc_base / out_path != media_de / Path(out_path).name:
+        raise ValueError("这一版不属于本帖本张图片")
+    if _record_output_exists(arc_base, record):
+        return arc_base / out_path
+    digest = record.get("output_sha256")
+    if _valid_sha256(digest):
+        archive_dir = media_de / SUPERSEDED_DIRNAME
+        assert_physical_direct_path(media_de, archive_dir, kind="directory", label="历史图片目录")
+        original = Path(out_path)
+        for prefix in (digest, digest[:8]):
+            candidate = archive_dir / f"{original.stem}_{prefix}{original.suffix}"
+            assert_physical_direct_path(archive_dir, candidate, kind="file", label="历史图片")
+            if candidate.is_file() and sha256_file(candidate) == digest:
+                return candidate
+    raise ValueError("文件已不在归档里")
 
 
 def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
-                   text_de_sha: str) -> list[dict[str, Any]]:
+                   text_de_sha: str, *, translation_entry: Mapping[str, Any] | None = None
+                   ) -> list[dict[str, Any]]:
     """这一张图生成过的每一版，供业务比较后换回去。
 
     3 次优化预算的前提是"上一版还找得回来"；否则第二次生成比第一次差就只剩下载改图一条路。
@@ -1661,29 +1671,49 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
                 source_sha = ""
     ledger = _ledger_rows(arc_base, post_id, media_index)
     current = ledger[-1]["out_path"] if ledger else None
+    human_history = load_human_translation_history(
+        arc_base / "translated_human.jsonl").get(post_id, [])
+    manual = False
+    media_de = post_directory(arc_base, row) / "media_de"
+    state = load_image_state(arc_base / "images_de.jsonl")
+    if media_de.exists():
+        for path in media_de.glob(f"{media_index + 1:02d}.*"):
+            assert_physical_direct_path(media_de, path, kind="file", label="德语图")
+            manual |= not _candidate_is_program_owned(path, path.relative_to(arc_base).as_posix(), state)
 
     seen: dict[str, dict[str, Any]] = {}
     for record in ledger:
         out_rel = record["out_path"]
-        available = _record_output_exists(arc_base, record)
+        try:
+            preview_path = image_version_path(arc_base, row, media_index, out_rel)
+        except (ValueError, OSError, ArchivePathError):
+            preview_path = None
+        available = preview_path is not None
         reasons = []
         if not available:
             reasons.append("文件已不在归档里")
         if record.get("prompt_version") != IMAGE_PROMPT_VERSION:
             reasons.append("按更早版本的提示词生成")
-        if source_sha and record.get("source_sha256") != source_sha:
+        if not source_sha or record.get("source_sha256") != source_sha:
             reasons.append("绑定的是更早版本的原图")
-        if text_de_sha and record.get("text_de_sha256") != text_de_sha:
+        basis = (_image_text_basis(arc_base, row, translation_entry, record, source_sha, human_history)
+                 if translation_entry else None)
+        expected_text = text_de_sha256(basis["text_de"]) if basis else text_de_sha
+        if not expected_text or record.get("text_de_sha256") != expected_text:
             reasons.append("绑定的是更早版本的德语正文")
+        if manual:
+            reasons.append("这一张已采用人工图片；历史版本仅供查看")
+        elif available and preview_path != arc_base / out_rel:
+            reasons.append("原路径已被替换；历史文件仅供查看")
         # 同一路径被写过多次时只保留最后一条，和 load_image_state 的后写胜出一致。
         seen[out_rel] = {
             "out_path": out_rel,
-            "created_at": record.get("created_at"),
+            "created_at": record.get("selected_from") or record.get("created_at"),
             "refine_id": record.get("refine_id"),
             "refine_instruction": record.get("refine_instruction"),
             "model": record.get("model"),
             "available": available,
-            "current": out_rel == current,
+            "current": not manual and not reasons and out_rel == current,
             "usable": available and not reasons,
             "unusable_reasons": reasons,
             "metrics": {
@@ -1698,13 +1728,15 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
 
 
 def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: int,
-                         out_path: str, text_de_sha: str) -> dict[str, Any]:
+                         out_path: str, text_de_sha: str, *,
+                         translation_entry: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """把某一历史版本重新设为当前版。零模型调用、零费用——只追加一条所有权记录。"""
     post_id = str(row.get("post_id") or "")
     wanted = _safe_rel_string(out_path)
     if wanted is None:
         raise ValueError("版本路径无效")
-    chosen = next((item for item in image_versions(arc_base, row, media_index, text_de_sha)
+    chosen = next((item for item in image_versions(
+        arc_base, row, media_index, text_de_sha, translation_entry=translation_entry)
                    if item["out_path"] == wanted), None)
     if chosen is None:
         raise ValueError("这一版不在本张图的生成记录里")
@@ -1718,8 +1750,7 @@ def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: in
     restored = dict(record)
     restored["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # 标明这一行不是新的付费产出，否则费用统计会把同一张图重复计一次。
-    restored["selected_from"] = record.get("created_at")
-    restored.pop("paid_request_id", None)
+    restored["selected_from"] = record.get("selected_from") or record.get("created_at")
     append_image_jsonl(arc_base / "images_de.jsonl", restored)
     return dict(chosen, current=True)
 
@@ -1729,6 +1760,25 @@ def select_image_version(arc_base: Path, row: Mapping[str, Any], media_index: in
 MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 _UPLOAD_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 SUPERSEDED_DIRNAME = "superseded"
+
+
+def manual_upload_record(candidate: Path) -> dict[str, Any] | None:
+    """明确上传的选择按字节识别；重新上传历史付费图也必须保持人工优先。"""
+    path = candidate.parent / "manual_uploads.jsonl"
+    assert_physical_direct_path(path.parent, path, kind="file", label="人工图片选择记录")
+    if not path.exists():
+        return None
+    def corrupt(_path, number, _error):
+        return ValueError(f"人工图片选择记录第 {number} 行损坏")
+    records = paid_model.read_jsonl(path, on_corrupt=corrupt)
+    if any(not isinstance(item.get("filename"), str) or not _valid_sha256(item.get("sha256"))
+           for item in records):
+        raise ValueError("人工图片选择记录缺少文件名或哈希")
+    matched = [item for item in records if item.get("filename") == candidate.name]
+    if not matched or not candidate.is_file():
+        return None
+    digest = sha256_file(candidate)
+    return next((item for item in reversed(matched) if item.get("sha256") == digest), None)
 
 
 def _validated_upload(data: bytes) -> tuple[Image.Image, str, str]:
@@ -1759,13 +1809,25 @@ def _validated_upload(data: bytes) -> tuple[Image.Image, str, str]:
     return image, image_format, _UPLOAD_FORMATS[image_format]
 
 
+def _change_image_file(operation, *paths) -> None:
+    """Windows 预览读句柄会短暂阻止替换/删除；仅重试已知的共享冲突。"""
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            operation(*paths)
+            return
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in {32, 33} or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.025)
+
+
 def replace_localized(arc_base: Path, row: Mapping[str, Any], media_index: int,
                       data: bytes, filename: str = "") -> dict[str, Any]:
     """把业务自己处理好的图片放进 ``media_de/``，替换这一张的德语图。
 
-    ⛔ **不写 `images_de.jsonl`。** 那是程序产出的所有权账本；把人工图写进去会让
-    `manual_override_paths()` 把它判成程序产出，从此被重生成覆盖，而且不报任何错。
-    "`media_de/NN.<ext>` 里没有所有权记录的文件就是人工图"是既有契约，这里沿用它。
+    ⛔ 不写 images_de.jsonl。人工选择追加到 media_de/manual_uploads.jsonl，
+    用文件名及哈希识别；即便重传历史付费图，也不能再归为可覆盖的程序产物。
     """
     readonly_archive(arc_base)
     media_list = row.get("media")
@@ -1800,24 +1862,22 @@ def replace_localized(arc_base: Path, row: Mapping[str, Any], media_index: int,
     target = media_de / f"{media_index + 1:02d}{extension}"
     assert_physical_direct_path(media_de, target, kind="file", label="人工德语图")
 
-    # 同序号的旧文件全部移走，替换之后只剩一个候选——publish 侧遇到多个人工候选会
-    # 拒绝提交（"分不清该发哪张"），留着旧格式那张等于把这篇卡在发布前。
+    drift = aspect_drift_percent(*source_size, *upload_size)
+    warnings = []
+    if drift > Settings().aspect_drift_warn_percent:
+        warnings.append(
+            f"替换图的宽高比与原图相差 {drift:.2f}%"
+            f"（原图 {source_size[0]}x{source_size[1]}，"
+            f"替换图 {upload_size[0]}x{upload_size[1]}）")
+    upload_record = {
+        "filename": target.name, "sha256": hashlib.sha256(data).hexdigest(),
+        "replaced_at": datetime.now(timezone.utc).isoformat(), "warnings": warnings,
+    }
+    unchanged_target = target.is_file() and sha256_file(target) == upload_record["sha256"]
+    # 先写好新文件、复制旧件，再替换；磁盘写满时旧图仍在原位可用。
     superseded: list[str] = []
     archive_dir = media_de / SUPERSEDED_DIRNAME
-    for existing in sorted(media_de.glob(f"{media_index + 1:02d}.*")):
-        assert_physical_direct_path(media_de, existing, kind="file", label="旧德语图")
-        assert_physical_direct_path(
-            media_de, archive_dir, kind="directory", label="德语图历史版本目录")
-        archive_dir.mkdir(exist_ok=True)
-        assert_physical_direct_path(
-            media_de, archive_dir, kind="directory", label="德语图历史版本目录")
-        digest = sha256_file(existing)[:8]
-        kept = archive_dir / f"{existing.stem}_{digest}{existing.suffix}"
-        assert_physical_direct_path(archive_dir, kept, kind="file", label="德语图历史版本")
-        # 付费产出不销毁：这一张可能是花过钱的，业务反悔时要能拿回来。
-        os.replace(existing, kept)
-        superseded.append(kept.relative_to(arc_base).as_posix())
-
+    moved: list[tuple[Path, Path]] = []
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1829,8 +1889,50 @@ def replace_localized(arc_base: Path, row: Mapping[str, Any], media_index: int,
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, target)
-        temporary = None
+        for existing in sorted(media_de.glob(f"{media_index + 1:02d}.*")):
+            assert_physical_direct_path(media_de, existing, kind="file", label="旧德语图")
+            assert_physical_direct_path(
+                media_de, archive_dir, kind="directory", label="德语图历史版本目录")
+            archive_dir.mkdir(exist_ok=True)
+            digest = sha256_file(existing)
+            kept = archive_dir / f"{existing.stem}_{digest}{existing.suffix}"
+            assert_physical_direct_path(archive_dir, kept, kind="file", label="德语图历史版本")
+            if not kept.exists():
+                try:
+                    with kept.open("xb") as backup:
+                        backup.write(existing.read_bytes())
+                        backup.flush()
+                        os.fsync(backup.fileno())
+                except OSError:
+                    kept.unlink(missing_ok=True)
+                    raise
+            if sha256_file(kept) != digest:
+                raise ValueError("旧图片备份哈希不一致，替换已停止")
+            superseded.append(kept.relative_to(arc_base).as_posix())
+            if existing != target:
+                moved.append((existing, kept))
+        for existing, _kept in moved:
+            _change_image_file(Path.unlink, existing)
+        if unchanged_target:
+            # 重传已有字节只改变采用决定；清理完成后才登记，不做无意义的文件替换。
+            temporary.unlink()
+            temporary = None
+        # 不同字节的选择先 fsync，仅替换成功后与目标哈希匹配；相同字节在清理成功后登记。
+        paid_model.append_jsonl(media_de / "manual_uploads.jsonl", upload_record,
+            guard=lambda p: assert_physical_direct_path(
+                media_de, p, kind="file", label="人工图片选择记录"))
+        if temporary is not None:
+            _change_image_file(os.replace, temporary, target)
+            temporary = None
+    except Exception:
+        for existing, kept in moved:
+            if not existing.exists():
+                # 只还原本次移走的候选，不覆盖并发放入的文件。
+                with existing.open("xb") as restored:
+                    restored.write(kept.read_bytes())
+                    restored.flush()
+                    os.fsync(restored.fileno())
+        raise
     finally:
         if temporary is not None:
             try:
@@ -1838,13 +1940,6 @@ def replace_localized(arc_base: Path, row: Mapping[str, Any], media_index: int,
             except OSError:
                 pass
 
-    drift = aspect_drift_percent(*source_size, *upload_size)
-    warnings: list[str] = []
-    if drift > 0:
-        warnings.append(
-            f"替换图的宽高比与原图相差 {drift:.2f}%"
-            f"（原图 {source_size[0]}x{source_size[1]}，"
-            f"替换图 {upload_size[0]}x{upload_size[1]}）")
     return {
         "media_index": media_index,
         "out_path": target.relative_to(arc_base).as_posix(),
@@ -1919,15 +2014,19 @@ def select_rows(settings: Settings, dirs: list[Path], *,
     return selected
 
 
-def image_usage_cost(settings: Settings, usage: Mapping[str, Any]) -> float | None:
+def image_usage_cost(settings: Settings, usage: Mapping[str, Any], *,
+                     model: str | None = None) -> float | None:
     """按真实 token 和配置费率计算上游成本；不完整样本不编金额。"""
     if usage_contract_errors(usage):
         return None
+    rates = settings.cost_rates_by_model.get(model or settings.model)
+    if rates is None:
+        return None
     input_details = usage["input_tokens_details"]
     return (
-        int(input_details["text_tokens"]) * float(settings.cost_rates["text_input"])
-        + int(input_details["image_tokens"]) * float(settings.cost_rates["image_input"])
-        + int(usage["output_tokens"]) * float(settings.cost_rates["image_output"])
+        int(input_details["text_tokens"]) * float(rates["text_input"])
+        + int(input_details["image_tokens"]) * float(rates["image_input"])
+        + int(usage["output_tokens"]) * float(rates["image_output"])
     ) / 1_000_000
 
 
@@ -1954,6 +2053,7 @@ def run_estimate(settings: Settings, scoped_rows: Mapping[Path, list[dict]], *,
         current_records = []
         for record in state.latest.values():
             if (record.get("prompt_version") == IMAGE_PROMPT_VERSION
+                    and record.get("model") == settings.model
                     and isinstance(record.get("usage"), Mapping)
                     and image_usage_cost(settings, record["usage"]) is not None
                     and _record_output_exists(arc_base, record)):

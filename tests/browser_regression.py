@@ -206,7 +206,7 @@ def stage_d3(page, ui):
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,zero)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
     page.get_by_role('button',name=f"图片 1/{len(zero['images'])}",exact=True).click()
-    expect(page.get_by_text('模型一个像素都没改动',exact=True)).to_be_visible()
+    expect(page.get_by_text('未检测到明显像素变化',exact=True)).to_be_visible()
     expect(page.get_by_role('button',name=re.compile('上传图片替换第 1 张'))).to_be_visible()
 
     # 历史版本不折叠：换回上一版是动作，折起来她就不知道有这条路。

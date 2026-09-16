@@ -17,6 +17,7 @@ from PIL import Image, UnidentifiedImageError
 from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
 from core import localization
+from localize.images import manual_upload_record
 from publish import evidence
 from publish.business_suite import resolve_ui_timezone
 from core.store import (Archive, ArchivePathError, account_dirs,
@@ -605,6 +606,8 @@ def _program_owned_media_de(account_dir: Path) -> dict[str, set[str | None]]:
 
 def _is_program_output(account_dir: Path, candidate: Path,
                        owned: dict[str, set[str | None]]) -> bool:
+    if manual_upload_record(candidate):
+        return False
     try:
         rel = candidate.relative_to(account_dir).as_posix()
     except ValueError:
