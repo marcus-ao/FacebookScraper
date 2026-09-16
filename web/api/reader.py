@@ -22,7 +22,7 @@ from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
-from pipeline import engine, risk_scan                 # noqa: E402
+from pipeline import engine, hashtag_suggestions, risk_scan  # noqa: E402
 from publish import compose, journal                   # noqa: E402
 from web.api import query_index                   # noqa: E402
 
@@ -605,6 +605,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "storage": _storage_facts(source),
         "localization": localized,
         "localization_validation": localization.validate(localized),
+        "hashtag_suggestions_enabled": hashtag_suggestions.suggestions_enabled(),
         "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),
         "body_risks": body_risks,
         "risk_scan": ctx.risk_scans[task_id],

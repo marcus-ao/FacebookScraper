@@ -34,7 +34,11 @@ keep_captures_days = 7  # 仅清理增量转储，回填转储保留。
 min_own_posts = 3
 
 [hashtags]
-enabled = true
+# ⛔ enabled = false 是 2026-09-15 的业务决定（REQUIREMENTS §9），不是没做完：
+# 本轮标签只由业务手工选取与编辑。三个采集器（Trends / IG 累计 / 德语同类账号）都已离线
+# 验过，代码保留不删；恢复访问并给出同类账号名单后改回 true 即可。
+# 关闭时连德语候选词那次付费调用也不发，见 pipeline/hashtag_suggestions.suggestions_enabled。
+enabled = false
 peer_accounts = []  # 德国同类账号；空名单跳过采样。
 refresh_days = 7
 max_candidate_tags = 20

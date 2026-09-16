@@ -374,6 +374,8 @@ export interface TaskDetail {
   readonly tags_revision: Sha256
   readonly localization: LocalizationDraft
   readonly localization_validation: LocalizationValidation
+  /** 本轮标签热度推荐是否启用；关闭时标签只由人工选取。旧详情未提供时按启用处理。 */
+  readonly hashtag_suggestions_enabled?: boolean
   /** 正文分区版，用于编辑对照。 */
   readonly body_highlights: readonly Highlight[]
   readonly body_risks: readonly BodyRisk[]

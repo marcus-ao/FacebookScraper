@@ -7,17 +7,30 @@ from pathlib import Path
 from uuid import uuid4
 
 from localize import text as translation
-from core import hashtag_rank, hashtag_sampling, paid_model, paid_requests
+from core import hashtag_rank, hashtag_sampling, paid_model, paid_requests, review
 from core.config import cfg
 from pipeline import engine, refinement
 from routes import hashtags
 
 
+def suggestions_enabled(c=None) -> bool:
+    """标签热度推荐是否启用。
+
+    ⛔ 关闭时连德语候选词那次付费调用都不能发。`[hashtags].enabled` 原先只管采样
+    （`SamplingConfig.load()`），而候选生成排在采样之前——只关采样，业务点一次按钮
+    仍然会产生一笔 DeepSeek 账单。
+    """
+    return bool((c or cfg()).get('hashtags', 'enabled', True))
+
+
 def suggest(account_dir, source, *, source_text_sha256, human_revision, review_revision,
             translator=None, sampler=None) -> dict:
+    c = cfg()
+    if not suggestions_enabled(c):
+        raise review.ReviewConflict(
+            '本轮未启用标签热度推荐，请在标签区手工选取；这是业务决定，不是故障')
     truth, _ = refinement._eligible(account_dir, source, source_hash=source_text_sha256,
                                     review_revision=review_revision, human_revision=human_revision, initial=True)
-    c = cfg()
     keep = c.get('image', 'keep_verbatim', {})
     system, semantic = hashtag_rank.candidate_prompt(truth['text'], keep)
     request_id = uuid4().hex
@@ -88,6 +101,8 @@ def weekly_refresh_due(*, now: datetime | None = None, c=None) -> bool:
     c = c or cfg()
     moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     settings = hashtag_sampling.SamplingConfig.load(c)
+    if not settings.enabled:
+        return False          # 关闭时不排周更任务，避免每轮空转一次
     state = _read_weekly_state(c)
     if state.get('peer_config_sha256') != _peer_config_digest(settings):
         return True

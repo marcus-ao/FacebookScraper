@@ -5,11 +5,12 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
-from core import hashtag_rank as rank, translated
+from core import hashtag_rank as rank, review, translated
 from pipeline import engine, hashtag_suggestions
 from routes import hashtags
 
@@ -67,7 +68,9 @@ class RankTests(unittest.TestCase):
             caller = Mock()
             caller.translate.return_value = '{"#Cats":["#Katzen","#Hauskatzen","#Katzenliebe"]}'
             caller.paid_request_id = 'offline-test'
-            with patch.object(engine, 'budget_preflight', return_value=None):
+            # 本轮 [hashtags].enabled = false 是业务决定；这条测的是开着时的付费契约。
+            with (patch.object(engine, 'budget_preflight', return_value=None),
+                  patch.object(hashtag_suggestions, 'suggestions_enabled', return_value=True)):
                 result = hashtag_suggestions.suggest(fixture.account, fixture.source,
                     source_text_sha256=translated.source_text_sha256(fixture.source['text']),
                     human_revision=None, review_revision=None, translator=caller,
@@ -78,6 +81,33 @@ class RankTests(unittest.TestCase):
             caller.finalize_paid.assert_called_once_with(True, 'hashtag candidates fsynced')
         finally:
             fixture.doCleanups()
+
+    def test_disabled_suggestions_refuse_before_spending_anything(self):
+        fixture = fixtures.WebReviewTests()
+        fixture.setUp()
+        try:
+            fixture.source['text'] = 'Cats at home. #Cats #Neakasa'
+            fixture.write_source()
+            caller, preflight = Mock(), Mock()
+            with (patch.object(engine, 'budget_preflight', preflight),
+                  patch.object(hashtag_suggestions, 'suggestions_enabled', return_value=False),
+                  self.assertRaisesRegex(review.ReviewConflict, '手工选取')):
+                hashtag_suggestions.suggest(fixture.account, fixture.source,
+                    source_text_sha256=translated.source_text_sha256(fixture.source['text']),
+                    human_revision=None, review_revision=None, translator=caller,
+                    sampler=Mock())
+            # 候选生成排在采样之前，所以关掉之后这一次模型调用一次都不能发出去。
+            caller.translate.assert_not_called()
+            caller.set_paid_context.assert_not_called()
+            preflight.assert_not_called()
+        finally:
+            fixture.doCleanups()
+
+    def test_disabled_sampling_stops_scheduling_the_weekly_task(self):
+        c = SimpleNamespace(get=lambda section, key, default=None:
+                            False if key == 'enabled' else default,
+                            state_dir=Path('unused'))
+        self.assertFalse(hashtag_suggestions.weekly_refresh_due(now=NOW, c=c))
 
 
 if __name__ == '__main__':
