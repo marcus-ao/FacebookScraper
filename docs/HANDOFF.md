@@ -1,6 +1,6 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化及整体复审同步至 2026-09-16（§1.4–1.8），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化、整体复审与自动部署同步至 2026-09-16（§1.4–1.8），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
@@ -219,7 +219,7 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 - [图片操作完整浏览器复验：10/10](../state/service-auto-update/worktree/state/offline-validation-20260916T111007Z/tests_browser_workflow.log)、[最终静态路由与资源检查](../state/service-auto-update/worktree/state/deployment-implementation/static-cutover.json)。
 - [最终独立复查](../state/service-auto-update/worktree/state/deployment-implementation/final-integration-review.md)；保留失败及修复后的证据，不把重试前的失败报告改写为成功。
 
-上述代码和隔离场景为 **离线通过**；GitHub 托管工作流、正式服务机计划任务/登录重启、真实飞书与业务仍为 **待真实联调**。前端保留已有大 chunk 提示；一次临时 HTTP 退出超时和图片提示等待失败的记录保留，定向及浏览器分组复验通过。没有真实通知、抓取、模型付费或发布操作。
+上述代码和隔离场景为 **离线通过**；GitHub 托管工作流的实际结果以本节交付核验记录为准。正式服务机计划任务/登录重启、真实飞书与业务仍为 **待真实联调**。前端保留已有大 chunk 提示；一次临时 HTTP 退出超时和图片提示等待失败的记录保留，定向及浏览器分组复验通过。没有真实通知、抓取、模型付费或发布操作。
 
 交付前在最终实现提交上重新完成 **88/88 Python 脚本**和前端 **566 项**；[最终全量结果](../state/service-auto-update/worktree/state/offline-validation-20260916T112659Z/results.json)保留。快进合并后按锁文件重装主检出前端依赖，[566 项单测](../state/service-auto-update/main-ui-tests.log)、[生产构建](../state/service-auto-update/main-ui-build-final.log)、[静态路由演练](../state/service-auto-update/main-static-cutover.json)和[6 项部署页面场景](../state/deployment-implementation/frontend-browser.json)均通过；首次构建缺依赖的失败日志保留。
 
@@ -228,6 +228,7 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 
 [首次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091541154)在构建前拒绝 job 级 `runner.temp` 表达式；修正为 runner 启动后的 PowerShell 步骤写入 `GITHUB_ENV`。`actionlint 1.7.12` 已[复现原错误](../state/service-auto-update/workflow-lint-before.log)，[修正后通过](../state/service-auto-update/workflow-lint-after.log)，实际步骤也在隔离环境文件上验证。托管测试与制品产出仍以对应提交的工作流结果为准。
 [第二次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091838093)完成锁定依赖与浏览器安装后，复现 3 项单测因提前注入生产运行标识而进入维护状态的环境差异。工作流改为先运行普通模式单测，再为生产构建生成版本标识；[相同环境复现](../state/service-auto-update/ui-ci-environment-negative.log)和[修正后 566 项通过](../state/service-auto-update/ui-ci-environment-positive.log)均保留。受管模式继续由专门单测与实际构建浏览器场景覆盖。
+[第三次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35092261582)的前端检查和构建通过，Python 为 84/88：runner 的账户临时目录使用 `RUNNER~1` 短路径，影响三组采集夹具与安装路径断言。已用本机 8.3 别名[复现全部 4 组失败](../state/service-auto-update/short-temp-negative.log)，CI 改用 runner 下明确创建的临时目录，实际工作流步骤配置后[4/4 通过](../state/service-auto-update/short-temp-positive.log)。业务目录保护未放宽；托管环境与本机环境的原始日志均保留。
 
 ## 2. 红线
 
