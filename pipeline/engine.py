@@ -823,6 +823,8 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
             if when >= day_start:
                 daily += cost
         for row in _jsonl(account_dir / "images_de.jsonl"):
+            if "selected_from" in row:
+                continue
             paid_id = str(row.get("paid_request_id") or "")
             if paid_id:
                 if paid_id not in paid_ids:
@@ -841,7 +843,7 @@ def budget_snapshot(account_dirs: Iterable[Path], *, now: datetime,
             if when < month_start:
                 continue
             usage = row.get("usage")
-            cost = (image_de.image_usage_cost(image_settings, usage)
+            cost = (image_de.image_usage_cost(image_settings, usage, model=row.get("model"))
                     if isinstance(usage, Mapping) else None)
             if cost is None or not math.isfinite(cost) or cost < 0:
                 unknown.append("%s image:%s/%s" % (

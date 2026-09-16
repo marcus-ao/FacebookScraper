@@ -191,6 +191,9 @@ def snapshot(*, account_dirs: list[Path], state_dir: Path,
     max_images = sum(item["new_images_max"] for item in planned)
     unknown_text = [item["source_ref"] for item in planned if item["text_reference_usd"] is None]
     text_reference = (None if unknown_text else sum(item["text_reference_usd"] for item in planned))
+    image_unit = 0.211 if image_settings.model == "gpt-image-2" else None
+    image_min = 0.0 if not min_images else None if image_unit is None else min_images * image_unit
+    image_max = 0.0 if not max_images else None if image_unit is None else max_images * image_unit
     return {
         "mode": "local_processing_preview", "read_only": True,
         "activated_at": activated.isoformat() if activated else None,
@@ -207,15 +210,20 @@ def snapshot(*, account_dirs: list[Path], state_dir: Path,
         "cost": {
             "text_base_reference_usd": text_reference,
             "text_reference_unknown_refs": unknown_text,
-            "image_historical_unit_usd": 0.211,
-            "image_reference_min_usd": min_images * 0.211,
-            "image_reference_max_usd": max_images * 0.211,
-            "partial_reference_min_usd": None if text_reference is None else text_reference + min_images * 0.211,
-            "partial_reference_max_usd": None if text_reference is None else text_reference + max_images * 0.211,
+            "image_model": image_settings.model,
+            "image_historical_unit_usd": image_unit,
+            "image_reference_min_usd": image_min,
+            "image_reference_max_usd": image_max,
+            "partial_reference_min_usd": (None if text_reference is None or image_min is None
+                                          else text_reference + image_min),
+            "partial_reference_max_usd": (None if text_reference is None or image_max is None
+                                          else text_reference + image_max),
             "assumptions": [
                 "文案按现配费率、字符粗估 token、缓存全未命中、德语可见输出为英文 token 的 1.25 倍；不含 reasoning",
                 "英文风险预扫另走付费模型，费用未知，未计入参考小计",
-                "图片按 2026-09-11 历史 US$0.211/张参考；不是当前报价，也不是上界",
+                ("gpt-image-2 图片按 2026-09-11 历史 US$0.211/张参考；不是当前报价，也不是上界"
+                 if image_unit is not None else
+                 "%s 没有适用的图片历史估值，费用未知；不能沿用其它模型的单价" % image_settings.model),
                 "参考小计不是完整账单或预算上限；实际逐次请求按 usage 核账，预算或失败可使批次提前停止",
                 "只读当前本地归档；未访问浏览器，未包含下一次扫描才会发现的新帖，未验证凭据或外部服务",
             ],
@@ -245,10 +253,13 @@ def print_snapshot(value: dict) -> None:
         total["planned_posts"], total["translations"], total["risk_scans"],
         total["new_images_min"], total["new_images_max"], total["current_posts"],
         total["excluded_or_blocked"]))
-    if cost["text_reference_unknown_refs"]:
-        print("文案参考费用及小计未知：翻译费率不完整；涉及 " + "、".join(cost["text_reference_unknown_refs"]))
-        print("图片历史参考：US$%.4f–%.4f" % (
-            cost["image_reference_min_usd"], cost["image_reference_max_usd"]))
+    if cost["partial_reference_min_usd"] is None or cost["partial_reference_max_usd"] is None:
+        print("美元参考小计未知：部分文案或图片缺少适用估值")
+        if cost["text_reference_unknown_refs"]:
+            print("文案参考费用未知：翻译费率不完整；涉及 " + "、".join(cost["text_reference_unknown_refs"]))
+        if cost["image_reference_min_usd"] is not None and cost["image_reference_max_usd"] is not None:
+            print("图片历史参考：US$%.4f–%.4f" % (
+                cost["image_reference_min_usd"], cost["image_reference_max_usd"]))
     else:
         print("美元参考小计：US$%.4f–%.4f（文案基础 US$%.4f + 图片 US$%.4f–%.4f）" % (
             cost["partial_reference_min_usd"], cost["partial_reference_max_usd"],

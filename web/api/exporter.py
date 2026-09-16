@@ -14,7 +14,7 @@ from core.review import ReviewConflict
 from core.store import assert_physical_direct_path, read_post_truth
 
 
-def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
+def package_post(account_dir: Path, indexed: dict, *, handoff: bool = True) -> tuple[bytes, str]:
     source, post_dir = read_post_truth(account_dir, indexed)
     machine = translated.load_translated(account_dir / "translated.jsonl").get(source["post_id"])
     human = translated.load_human_translated(account_dir / "translated_human.jsonl").get(source["post_id"])
@@ -33,7 +33,9 @@ def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
                      "source_text_sha256": translated.source_text_sha256(source["text"]),
                      "human_revision": human["revision"] if human else None, "images": []})
     buffer = io.BytesIO()
-    notes = ["这份资源包已交由人工处理，系统不会代为发布。", "文案：text_de.txt；元信息：metadata.json。"]
+    notes = [("这份资源包已交由人工处理，系统不会代为发布。" if handoff else
+              "这是素材下载，帖子继续留在系统审校和排期；修改图片后可上传替换。"),
+             "文案：text_de.txt；元信息：metadata.json。"]
     with ZipFile(buffer, "w", ZIP_DEFLATED) as package:
         package.writestr("text_de.txt", effective["text_de"].encode("utf-8"))
         total = 0

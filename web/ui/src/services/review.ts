@@ -25,8 +25,15 @@ export async function applyDecision(context: ReviewContext, form: DecisionForm):
   const path = `/api/tasks/${idPath(context.id)}`
   const body = jsonBody(decisionBody(context, form))
   if (form.action === 'export') {
-    triggerDownload(await requestFile(`${path}/export`, body, 'post_de.zip'))
+    triggerDownload(await requestFile(`${path}/export`,
+      jsonBody({ ...decisionBody(context, form), mode: 'handoff' }), 'post_de.zip'))
     return request<TaskDetail>(path)
   }
   return request<TaskDetail>(`${path}/review`, body)
+}
+
+export async function downloadPost(detail: TaskDetail): Promise<void> {
+  triggerDownload(await requestFile(`/api/tasks/${idPath(detail.id)}/export`,
+    jsonBody({ mode: 'download', source_text_sha256: detail.text.source_text_sha256,
+      review_revision: detail.review.revision ?? null }), 'post_de.zip'))
 }

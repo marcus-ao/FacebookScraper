@@ -110,6 +110,20 @@ describe('单篇优化：七条原因，次数用完排在最后', () => {
     expect(refinementDisabledReason({ ...refineOk, kind: 'text', remaining: 0 })).toBe('')
   })
 
+  it('换成人工图之后不让再生成——人工图优先，模型那一版不会被采用，钱是白花的', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', manualImage: true }))
+      .toBe('这一张已换成人工图片，模型优化不会被采用')
+  })
+
+  it('人工图的原因排在次数之前：次数没用完也不该让她点', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', remaining: 0, manualImage: true }))
+      .toBe('这一张已换成人工图片，模型优化不会被采用')
+  })
+
+  it('人工图只影响图片：同一篇的文案优化照常可点', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'text', manualImage: true })).toBe('')
+  })
+
   it('只有空白的指令等于没填', () => {
     expect(refinementDisabledReason({ ...refineOk, instruction: '\n \t' }))
       .toBe('请填写本次希望怎样调整')

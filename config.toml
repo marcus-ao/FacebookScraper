@@ -87,7 +87,7 @@ max_refine_per_media = 3  # 每张图片可受理的人工优化次数上限。
 provider = "inferera"
 base_url = "https://api.inferera.com/v1"
 api_key_env = "IMAGE_API_KEY"  # 环境变量名，非密钥。
-model = "gpt-image-2"
+model = "gpt-image-2"  # gpt-image-2 | gpt-image-2.5。换之前先跑 --check：2.5 的 size 契约没有实测。
 
 quality = "high"  # low | medium | high；不使用 auto。
 output_format = "jpeg"
@@ -95,10 +95,16 @@ timeout_seconds = 720
 max_retries = 2  # 仅无付费账本的 SDK 客户端使用；受统一账本管理的调用固定为 0。
 request_gap_seconds = 2.0
 incremental_since = "2026-08-31T00:00:00Z"  # 默认处理边界；补历史须显式确认费用。
-cost_rates_usd_per_million = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }  # 估算费率，实际费用以网关账单为准。
+# 按模型分表的估算费率，实际费用以网关账单为准。⚠️ gpt-image-2.5 的三个值是照 2 抄的占位值，
+# 尚未核对网关价目表；切到 2.5 之前先按 MANUAL_STEPS §5.1 改成真实费率，否则账本里的估算会一直偏。
+cost_rates_usd_per_million = { "gpt-image-2" = { text_input = 5.0, image_input = 8.0, image_output = 30.0 }, "gpt-image-2.5" = { text_input = 5.0, image_input = 8.0, image_output = 30.0 } }
 dhash_max_distance = -1  # -1 只记录不拦截；启用阈值前须用业务样本标定，不许拍脑袋。
 aspect_drift_warn_percent = 2.0  # 宽高比偏差百分比；仅告警。按 818 张真实归档标定过。
 scale_warn_factor = 1.25  # 线性放大倍数；仅告警。
+change_ratio_warn = -1  # 图内改动像素占比的告警线；-1 关闭。同 dhash_max_distance，启用前须用真实产出标定。
+# 发布侧画幅窗口 [低, 高]。来自 2026-09-01 历史观察（4:5 ~ 1.91:1），该 probe dump 已删，所以它只
+# 重排 legal_size 的候选、从不拒绝；有已签字 probe dump 时以 probe 为准。不改原图本来就在带外的比值。
+preferred_aspect_band = [0.8, 1.91]
 failure_budget = 3  # 连续失败次数，达到后停止本批。
 
 # ⚠️ 同上：本子表必须是 [image] 的最后一段，[image] 的新标量键加在这一行之前。

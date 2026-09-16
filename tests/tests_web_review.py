@@ -1,6 +1,7 @@
 """审校台人工保存的真实归档集成测试；仅使用临时目录，无网络、付费或浏览器。"""
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import io
@@ -351,6 +352,198 @@ class WebReviewTests(unittest.TestCase):
                 result = self.client.post(self.url + "/export", json=self.action_body())
                 self.assertEqual(result.status_code, 409, result.text)
                 self.assertEqual(self.client.get(self.url).json()["status"], "pending_review")
+
+    # 历史版本：3 次优化预算的前提是上一版还找得回来。
+
+    def write_refined_image(self, text_de, refine_id, colour="purple"):
+        """再生成一版，落到 media_de/01_v<refine_id>.jpg，与 run_localize 的命名一致。"""
+        destination = self.post_dir / "media_de" / ("01_v%s.jpg" % refine_id)
+        destination.parent.mkdir(exist_ok=True)
+        Image.new("RGB", (1080, 1080), colour).save(destination)
+        data = destination.read_bytes()
+        row = {
+            "post_id": self.post_id, "media_index": 0,
+            "source_sha256": hashlib.sha256((self.post_dir / "01.jpg").read_bytes()).hexdigest(),
+            "text_de_sha256": hashlib.sha256(text_de.strip().encode("utf-8")).hexdigest(),
+            "prompt_version": image_de.IMAGE_PROMPT_VERSION,
+            "out_path": destination.relative_to(self.account).as_posix(),
+            "output_sha256": hashlib.sha256(data).hexdigest(),
+            "model": "offline-fixture", "size_requested": "1080x1080",
+            "size_returned": "1080x1080", "quality": "high",
+            "refine_id": refine_id, "refine_instruction": "把 CTA 换成更短的说法",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with (self.account / "images_de.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+        return data
+
+    def versions(self):
+        payload = self.client.get("/api/refinements/task/" + self.task_id).json()
+        return payload.get("image_versions", {}).get("0", [])
+
+    def select(self, out_path, **extra):
+        body = dict(self.action_body(), media_index=0, out_path=out_path, **extra)
+        return self.client.post("/api/image-versions/task/" + self.task_id, json=body)
+
+    def test_previous_version_can_be_restored_without_paying_again(self):
+        text = "Ein sauberes Zuhause. #Neakasa"
+        first = self.write_generated_image(text)
+        self.write_refined_image(text, "a" * 32)
+        listed = self.versions()
+        self.assertEqual(len(listed), 2, listed)
+        self.assertTrue(listed[-1]["current"], "最后写入的那一版是当前版")
+        self.assertEqual(listed[-1]["refine_instruction"], "把 CTA 换成更短的说法")
+        # 第二版更差时要能换回第一版，否则 3 次预算实际只有 1 次可用。
+        restored = self.select(listed[0]["out_path"])
+        self.assertEqual(restored.status_code, 200, restored.text[:300])
+        shown = self.client.get(self.client.get(self.url).json()["images"][0]["de_url"])
+        self.assertEqual(shown.content, first, "采用之后展示的应该是第一版")
+        self.assertTrue(self.versions()[0]["current"])
+
+    def test_restoring_a_version_costs_nothing(self):
+        text = "Ein sauberes Zuhause. #Neakasa"
+        self.write_generated_image(text)
+        self.write_refined_image(text, "b" * 32)
+        ledger = self.account.parent.parent / "state" / "paid_requests.jsonl"
+        before = ledger.read_text(encoding="utf-8") if ledger.exists() else ""
+        self.assertEqual(self.select(self.versions()[0]["out_path"]).status_code, 200)
+        after = ledger.read_text(encoding="utf-8") if ledger.exists() else ""
+        self.assertEqual(before, after, "换回旧版只是改指针，不得产生任何付费记录")
+
+    def test_unusable_versions_are_listed_with_a_reason_but_cannot_be_selected(self):
+        text = "Ein sauberes Zuhause. #Neakasa"
+        self.write_generated_image(text)
+        stale = self.write_refined_image(text, "c" * 32)
+        (self.post_dir / "media_de" / ("01_v%s.jpg" % ("c" * 32))).unlink()
+        listed = self.versions()
+        missing = [item for item in listed if not item["available"]]
+        self.assertEqual(len(missing), 1, listed)
+        self.assertIn("文件已不在归档里", missing[0]["unusable_reasons"])
+        rejected = self.select(missing[0]["out_path"])
+        self.assertEqual(rejected.status_code, 400, rejected.text[:200])
+        self.assertTrue(stale)
+
+    def test_selecting_an_unknown_version_is_rejected(self):
+        self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        for candidate in ("../../escape.jpg", "posts/other/media_de/01.jpg", ""):
+            with self.subTest(path=candidate):
+                self.assertIn(self.select(candidate).status_code, {400, 409})
+
+    # 上传替换素材与转交人工是两个决定：前者这篇继续走系统发布，后者是终态。
+
+    def upload_body(self, image=None, **extra):
+        detail = self.client.get(self.url).json()
+        buffer = io.BytesIO()
+        (image or Image.new("RGB", (1080, 1080), "orange")).save(buffer, format="JPEG")
+        body = {
+            "image_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "source_text_sha256": translated.source_text_sha256(self.source["text"]),
+            "review_revision": detail.get("review", {}).get("revision"),
+            "filename": "handmade.jpg",
+            **extra,
+        }
+        return body
+
+    def upload(self, index=0, **extra):
+        return self.client.post("%s/image/%d/upload" % (self.url, index),
+                                json=self.upload_body(**extra))
+
+    def test_download_only_does_not_hand_off_but_handoff_mode_still_does(self):
+        self.assertEqual(self.save().status_code, 200)
+        plain = self.client.post(self.url + "/export",
+                                 json=dict(self.action_body(), mode="download"))
+        self.assertEqual(plain.status_code, 200, plain.text[:200])
+        self.assertEqual(plain.headers["content-type"], "application/zip")
+        self.assertEqual(self.client.get(self.url).json()["status"], "edited",
+                         "只下载素材不能把这篇推进终态，否则业务改完图就发不出去了")
+        handoff = self.client.post(self.url + "/export",
+                                   json=dict(self.action_body(), mode="handoff"))
+        self.assertEqual(handoff.status_code, 200, handoff.text[:200])
+        self.assertEqual(self.client.get(self.url).json()["status"], "handed_off")
+
+    def test_export_rejects_unknown_mode(self):
+        result = self.client.post(self.url + "/export",
+                                  json=dict(self.action_body(), mode="whatever"))
+        self.assertEqual(result.status_code, 400, result.text)
+        self.assertEqual(self.client.get(self.url).json()["status"], "pending_review")
+
+    def test_uploaded_image_wins_and_post_stays_publishable(self):
+        generated = self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        result = self.upload()
+        self.assertEqual(result.status_code, 200, result.text[:300])
+        detail = result.json()
+        self.assertEqual(detail["status"], "edited",
+                         "替换素材不是交接，这篇要留在系统里继续走排期")
+        self.assertTrue(detail["images"][0]["de_present"])
+        shown = self.client.get(self.client.get(self.url).json()["images"][0]["de_url"])
+        self.assertEqual(shown.status_code, 200)
+        self.assertNotEqual(shown.content, generated, "展示的应该是人工图而不是旧的程序图")
+        with Image.open(io.BytesIO(shown.content)) as image:
+            self.assertEqual(image.size, (1080, 1080))
+
+    def test_upload_never_writes_the_program_ownership_ledger(self):
+        self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        before = (self.account / "images_de.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(self.upload().status_code, 200)
+        after = (self.account / "images_de.jsonl").read_text(encoding="utf-8")
+        # ⛔ 写进去会让 manual_override_paths 把人工图判成程序产出，从此被重生成覆盖。
+        self.assertEqual(before, after, "人工上传不得进入程序产出的所有权账本")
+        state = image_de.load_image_state(self.account / "images_de.jsonl")
+        job_dir = self.post_dir / "media_de"
+        uploaded = next(path for path in job_dir.glob("01.*") if path.is_file())
+        rel = uploaded.relative_to(self.account).as_posix()
+        self.assertFalse(image_de._candidate_is_program_owned(uploaded, rel, state),
+                         "上传的图必须被判成人工图，程序才不会重做它")
+
+    def test_upload_keeps_the_superseded_paid_artifact(self):
+        generated = self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        self.assertEqual(self.upload().status_code, 200)
+        kept = list((self.post_dir / "media_de" / image_de.SUPERSEDED_DIRNAME).glob("01_*"))
+        self.assertEqual(len(kept), 1, "花过钱的旧图要留着，业务反悔时能拿回来")
+        self.assertEqual(kept[0].read_bytes(), generated)
+        # 历史版本放在子目录里，publish 侧按 stem 取候选时不会把它算进去。
+        candidates = [p for p in (self.post_dir / "media_de").iterdir()
+                      if p.is_file() and p.stem == "01"]
+        self.assertEqual(len(candidates), 1, "同序号只能剩一个候选，否则发布侧会拒绝提交")
+
+    def test_upload_rejects_unusable_content_without_touching_the_archive(self):
+        self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        before = (self.post_dir / "media_de" / "01.jpg").read_bytes()
+        cases = {
+            "not-an-image": base64.b64encode(b"hello there").decode("ascii"),
+            "empty": "",
+            "broken-base64": "%%%not base64%%%",
+        }
+        for label, payload in cases.items():
+            with self.subTest(case=label):
+                result = self.client.post(
+                    self.url + "/image/0/upload",
+                    json=self.upload_body(image_base64=payload))
+                self.assertEqual(result.status_code, 400, result.text[:200])
+        self.assertEqual((self.post_dir / "media_de" / "01.jpg").read_bytes(), before)
+
+    def test_upload_rejects_bad_index_and_stale_source_version(self):
+        out_of_range = self.client.post(self.url + "/image/7/upload",
+                                        json=self.upload_body())
+        self.assertIn(out_of_range.status_code, {400, 409}, out_of_range.text[:200])
+        stale = self.client.post(self.url + "/image/0/upload",
+                                 json=self.upload_body(source_text_sha256="0" * 64))
+        self.assertIn(stale.status_code, {400, 409}, stale.text[:200])
+
+    def test_upload_reports_aspect_drift_but_still_accepts_the_human_decision(self):
+        narrow = Image.new("RGB", (1080, 608), "orange")
+        result = self.client.post(self.url + "/image/0/upload",
+                                  json=self.upload_body(image=narrow))
+        self.assertEqual(result.status_code, 200, result.text[:200])
+        with Image.open(io.BytesIO(self.client.get(
+                self.client.get(self.url).json()["images"][0]["de_url"]).content)) as image:
+            self.assertEqual(image.size, (1080, 608),
+                             "人工图是人的决定，画幅不同只提示不否决")
+
+    def test_terminal_post_cannot_have_images_replaced(self):
+        self.assertEqual(self.act("skipped", reason="不发这篇").status_code, 200)
+        result = self.upload()
+        self.assertEqual(result.status_code, 409, result.text[:200])
 
     def test_handoff_link_can_be_added_later(self):
         self.assertEqual(self.act("handed_off").status_code, 200)

@@ -46,7 +46,8 @@ class ProcessingPreviewTests(unittest.TestCase):
                      side_effect=AssertionError("no paid requests in preview")).start()
         (self.state / engine.STATE_NAME).write_text(json.dumps({"activated_at": ACTIVATED}), encoding="utf-8")
 
-    def post(self, pid, *, platform="instagram", when="2026-09-16T08:00:00Z", owner="acme", account="acme"):
+    def post(self, pid, *, platform="instagram", when="2026-09-16T08:00:00Z", owner="acme", account="acme",
+             size=(1024, 1024)):
         arc = Archive(self.root / "archive", platform[:2] + "_" + account)
         post = Post(pid, platform, account, "Meet our M1! " + pid, when,
                     owner=owner, coauthors=[account] if owner != account else [])
@@ -54,7 +55,7 @@ class ProcessingPreviewTests(unittest.TestCase):
         folder.mkdir(parents=True, exist_ok=True)
         for index in range(2):
             path = folder / ("%02d.png" % (index + 1))
-            Image.new("RGB", (1024, 1024), (100 + index, 140, 180)).save(path)
+            Image.new("RGB", size, (100 + index, 140, 180)).save(path)
             post.media.append(Media("https://example.invalid/%d.png" % index, "image",
                                     path.relative_to(arc.base).as_posix()))
         arc.append(post)
@@ -136,6 +137,49 @@ class ProcessingPreviewTests(unittest.TestCase):
         self.assertEqual(row["kept_current"], 2)
         self.assertEqual(value["totals"]["planned_posts"], 0)
         self.assertEqual(value["cost"]["partial_reference_max_usd"], 0)
+
+    def test_new_image_model_does_not_inherit_another_models_historical_price(self):
+        self.post("new-model")
+        self.config._d["image"]["model"] = "gpt-image-2.5"
+        value = self.preview()
+        self.assertEqual(value["totals"]["new_images_min"], 2)
+        self.assertIsNone(value["cost"]["image_historical_unit_usd"])
+        self.assertIsNone(value["cost"]["image_reference_max_usd"])
+        self.assertIsNone(value["cost"]["partial_reference_max_usd"])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            processing_preview.print_snapshot(value)
+        self.assertIn("gpt-image-2.5", output.getvalue())
+        self.assertIn("未知", output.getvalue())
+
+    def test_preview_and_processing_keep_boundary_images_inside_the_aspect_band(self):
+        arc, post = self.post("portrait", size=(1440, 1800))
+        planned = []
+        planner = images.image_jobs_for_translation
+
+        def record_plan(*args, **kwargs):
+            jobs = planner(*args, **kwargs)
+            planned.extend(jobs)
+            return jobs
+
+        with patch.object(images, "image_jobs_for_translation", side_effect=record_plan):
+            self.preview()
+        self.assertEqual([job.requested_size for job in planned], [(1440, 1792)] * 2)
+        self.machine(arc, post)
+        jobs, _, _ = images.build_jobs(images.Settings(), arc.base, [post.to_row()])
+        self.assertEqual([job.requested_size for job in jobs], [job.requested_size for job in planned])
+
+    def test_force_refine_still_preserves_manual_images_in_the_shared_planner(self):
+        arc, post = self.post("manual-refine")
+        self.machine(arc, post)
+        self.output(arc, post, 0, "", manual=True)
+        jobs, _, stats = images.build_jobs(images.Settings(), arc.base, [post.to_row()],
+            force=True, allow_manual_refine=True, media_index_filter=0)
+        self.assertEqual(jobs, [])
+        self.assertEqual(stats.skipped_manual, 1)
+        value = self.preview()
+        self.assertEqual(value["posts"][0]["required_indices"], [1])
+        self.assertEqual(value["posts"][0]["kept_manual"], 1)
 
     def test_missing_translation_keeps_manual_image_and_counts_remaining_image(self):
         arc, post = self.post("manual-image")
