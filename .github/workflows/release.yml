@@ -44,6 +44,10 @@ jobs:
           --require-hashes --only-binary=:all: -r requirements.lock
       - name: Install isolated browser
         run: python -m playwright install chromium
+      - name: Install frontend dependencies
+        run: npm ci --prefix web/ui
+      - name: Frontend tests
+        run: npm --prefix web/ui test
       - name: Record browser and runtime identity
         run: |
           $browser = python -c "from playwright.sync_api import sync_playwright; exec('with sync_playwright() as p:\n    browser = p.chromium.launch(headless=True)\n    print(p.chromium.executable_path)\n    browser.close()')"
@@ -52,10 +56,6 @@ jobs:
           $runtimeId = python -m deployment.release fingerprint
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VITE_FBSCRAPER_RUNTIME_ID=$runtimeId" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Install frontend dependencies
-        run: npm ci --prefix web/ui
-      - name: Frontend tests
-        run: npm --prefix web/ui test
       - name: Build frontend
         run: npm --prefix web/ui run build
       - name: All isolated offline scripts including browser workflows

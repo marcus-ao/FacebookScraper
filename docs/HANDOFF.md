@@ -227,6 +227,7 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 [交付核验记录](../state/service-auto-update/validation.json)保存最终提交、远端状态和本次分支/worktree 清理结果；其余排期 worktree 保留。
 
 [首次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091541154)在构建前拒绝 job 级 `runner.temp` 表达式；修正为 runner 启动后的 PowerShell 步骤写入 `GITHUB_ENV`。`actionlint 1.7.12` 已[复现原错误](../state/service-auto-update/workflow-lint-before.log)，[修正后通过](../state/service-auto-update/workflow-lint-after.log)，实际步骤也在隔离环境文件上验证。托管测试与制品产出仍以对应提交的工作流结果为准。
+[第二次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091838093)完成锁定依赖与浏览器安装后，复现 3 项单测因提前注入生产运行标识而进入维护状态的环境差异。工作流改为先运行普通模式单测，再为生产构建生成版本标识；[相同环境复现](../state/service-auto-update/ui-ci-environment-negative.log)和[修正后 566 项通过](../state/service-auto-update/ui-ci-environment-positive.log)均保留。受管模式继续由专门单测与实际构建浏览器场景覆盖。
 
 ## 2. 红线
 
