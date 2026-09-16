@@ -5,7 +5,7 @@ import { STATUS_LABEL } from '@/lib/format'
 import type { DisplayStatus } from '@/types/domain'
 import styles from './StatusTag.module.css'
 
-/** 七个审校状态与 not_ready 的展示标记，文案来自 STATUS_LABEL。 */
+/** 八个审校状态与 not_ready 的展示标记，文案来自 STATUS_LABEL。 */
 
 export type StatusTone = 'todo' | 'neutral' | 'done'
 
@@ -13,6 +13,8 @@ export const STATUS_TONE: Readonly<Record<DisplayStatus, StatusTone>> = {
   not_ready: 'neutral',
   pending_review: 'todo',
   edited: 'todo',
+  // 冻结之后还等着人选时刻，仍然是待办。
+  content_locked: 'todo',
   snoozed: 'neutral',
   approved: 'done',
   scheduled: 'done',

@@ -16,7 +16,12 @@
    "rendered": "This content has no text",
    "card_sha256": "0f0dfa6edfe272983c7c4224fc12ff107979e8d3a3845e8b3ff89f5c0cd0dbe6",
    "delivery": "published",
-   "at_business": "2026-09-04T12:39:00+02:00"
+   "at_business": "2026-09-04T18:39:00+08:00",
+   "audience": {
+    "timezone": "Europe/Berlin",
+    "at": "2026-09-04T12:39:00+02:00",
+    "quiet_hours": false
+   }
   },
   {
    "at": "2026-09-05T03:48:00+00:00",
@@ -29,7 +34,12 @@
    "rendered": "『文本 527 字』",
    "card_sha256": "3ccfea39ae2def0a63c3bac66b263378f1903ebb14c8efe50b29e23bfbb0668d",
    "delivery": "published",
-   "at_business": "2026-09-05T05:48:00+02:00"
+   "at_business": "2026-09-05T11:48:00+08:00",
+   "audience": {
+    "timezone": "Europe/Berlin",
+    "at": "2026-09-05T05:48:00+02:00",
+    "quiet_hours": true
+   }
   },
   {
    "at": "2026-09-05T18:09:00+00:00",
@@ -42,7 +52,12 @@
    "rendered": "『文本 406 字』",
    "card_sha256": "5fe45774f8b4d2872a701d40022ec5d6c1e0df7070a6e9ee46e2faca86402c08",
    "delivery": "published",
-   "at_business": "2026-09-05T20:09:00+02:00"
+   "at_business": "2026-09-06T02:09:00+08:00",
+   "audience": {
+    "timezone": "Europe/Berlin",
+    "at": "2026-09-05T20:09:00+02:00",
+    "quiet_hours": false
+   }
   },
   {
    "at": "2026-09-08T15:36:00+00:00",
@@ -55,7 +70,12 @@
    "rendered": "『文本 716 字』",
    "card_sha256": "cd70ee15ace2fce4ef6820f35a1081651132b12e79d36a1a453cd5fed648fe5d",
    "delivery": "published",
-   "at_business": "2026-09-08T17:36:00+02:00"
+   "at_business": "2026-09-08T23:36:00+08:00",
+   "audience": {
+    "timezone": "Europe/Berlin",
+    "at": "2026-09-08T17:36:00+02:00",
+    "quiet_hours": false
+   }
   }
  ],
  "coverage": {
@@ -88,7 +108,22 @@
  "advisory_only": true,
  "month_ui": "2026-09",
  "ui_timezone": "America/Los_Angeles",
- "business_timezone": "Europe/Berlin",
- "display_start": "2026-09-01T09:00:00+02:00",
- "display_end_exclusive": "2026-10-01T09:00:00+02:00"
+ "business_timezone": "Asia/Shanghai",
+ "display_start": "2026-09-01T15:00:00+08:00",
+ "display_end_exclusive": "2026-10-01T15:00:00+08:00",
+ "audience_timezone": "Europe/Berlin",
+ "local": [
+  {
+   "kind": "content_locked",
+   "task_id": "fa_neakasaofficial/1234567890",
+   "platform": "facebook",
+   "review_status": "content_locked",
+   "at": null,
+   "at_business": null,
+   "snapshot_id": "9f2c1d7e4b6a48f0b5c3e8d1a7420369",
+   "remote_id": "",
+   "audience": null
+  }
+ ],
+ "local_error": null
 }

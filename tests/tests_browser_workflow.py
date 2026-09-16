@@ -17,7 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from playwright.sync_api import expect, sync_playwright  # noqa: E402
-from browser_fixture import BrowserFixture, SETTINGS_NOTE, calendar_payload, runtime_payload  # noqa: E402
+from browser_fixture import (BrowserFixture, SETTINGS_NOTE, approval_options,  # noqa: E402
+                             calendar_payload, publish_operation, runtime_payload)
 
 
 class BrowserWorkflowTests(unittest.TestCase):
@@ -227,7 +228,7 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_04_settings_preserve_comments_and_reject_stale_version(self):
         """Real temporary TOML only: comments survive; stale save keeps form values."""
         self.page.goto(self.fixtures.base_url + "/settings")
-        time_input = self.page.get_by_label(re.compile("^默认排期时间（柏林）"))
+        time_input = self.page.get_by_label(re.compile("^默认排期时间（北京）"))
         time_input.fill("11:00, 18:00")
         self.page.get_by_label(re.compile("^默认挂起期限")).fill("4")
         self.page.get_by_role("button", name="保存设置", exact=True).click()
@@ -284,33 +285,37 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_06_schedule_receipt_is_not_a_publication_observation(self):
         """UI-only simulated approval receipt; no real approve endpoint is reached."""
         detail = self.fixtures.detail(self.fixtures.fb_id)
-        detail["status"] = "edited"
+        detail["status"] = "content_locked"
         endpoint = "/api/tasks/" + self.fixtures.fb_id
         posted = []
         self.responses[("GET", endpoint)] = {"body": detail}
-        self.responses[("GET", endpoint + "/approval-options")] = {"body": {
-            "available": True, "reason": "Offline UI fixture only", "fingerprint": "offline-fingerprint",
-            "earliest": "2026-09-13T08:00:00Z", "latest": "2026-10-01T08:00:00Z",
-            "default_times": ["10:00"], "business_timezone": "Europe/Berlin", "ui_timezone": "America/Los_Angeles"}}
+        self.responses[("GET", endpoint + "/approval-options")] = {"body": approval_options(
+            reason="Offline UI fixture only", fingerprint="offline-fingerprint",
+            earliest="2026-09-13T08:00:00Z", latest="2026-10-01T08:00:00Z",
+            default_times=["16:00"])}
 
         def approve(request):
             posted.append(request.post_data_json)
             detail["status"] = "scheduled"
             detail["publication"] = {"attempt_id": "offline-attempt", "status": "scheduled"}
             detail["delivery"] = {"status": "not_observed", "message": "尚无远端公开发布观测"}
-            return {"body": {"ok": True, "status": "scheduled", "publication": detail["publication"],
-                             "message": "离线浏览器替身回执，仅验证页面。"}}
+            return {"body": publish_operation(status="running", step_index=1, step="打开编辑器")}
 
         self.responses[("POST", endpoint + "/approve")] = approve
+        # 提交跑在请求之外；页面轮询到终态才算数。
+        self.responses[("GET", "/api/publish-operations/offline-operation")] = {
+            "body": publish_operation(status="succeeded", step_index=7, step="提交并回读月历",
+                                      message="自动提交并回读为 scheduled")}
         self.responses[("GET", "/api/calendar")] = {"body": calendar_payload()}
         self.open_task(self.fixtures.fb_id)
-        self.page.get_by_label("发布时间（柏林当地时间）").fill("2026-09-13T10:00")
-        self.page.get_by_role("button", name="通过并创建排期", exact=True).click()
-        self.page.get_by_role("button", name="确认通过并创建排期", exact=True).click()
+        self.page.get_by_label("发布时间（北京时间）").fill("2026-09-13T16:00")
+        self.page.get_by_role("button", name="确认发布时间并排期", exact=True).click()
+        self.page.get_by_role("button", name="确认并创建排期", exact=True).click()
+        expect(self.page.get_by_text("排期已创建并回读确认", exact=True)).to_be_visible(timeout=15000)
         expect(self.page.get_by_role("status")).to_contain_text("排期已确认。")
         expect(self.page.get_by_text("已排期", exact=True)).to_be_visible()
         self.assertEqual(len(posted), 1)
-        self.assertEqual(posted[0]["scheduled_at"], "2026-09-13T10:00")
+        self.assertEqual(posted[0]["scheduled_at"], "2026-09-13T16:00")
         self.assertEqual(posted[0]["content_fingerprint"], "offline-fingerprint")
         self.page.get_by_role("link", name="发布月历", exact=True).click()
         scheduled = self.page.get_by_role("button").filter(has_text="已创建定时任务")
@@ -354,23 +359,20 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_08_schedule_date_clear_and_default_time_keep_approval_safe(self):
         """UI-only gate: empty or invalid wall dates cannot reach the approve dialog."""
         detail = self.fixtures.detail(self.fixtures.fb_id)
-        detail["status"] = "edited"
+        detail["status"] = "content_locked"
         endpoint = "/api/tasks/" + self.fixtures.fb_id
         self.responses[("GET", endpoint)] = {"body": detail}
-        self.responses[("GET", endpoint + "/approval-options")] = {"body": {
-            "available": True, "reason": "", "fingerprint": "offline-date-gate",
-            "earliest": "2026-09-13T08:00:00+02:00", "latest": "2026-10-01T20:00:00+02:00",
-            "default_times": ["09:00", "17:00"], "business_timezone": "Europe/Berlin",
-            "ui_timezone": "America/Los_Angeles",
-        }}
+        self.responses[("GET", endpoint + "/approval-options")] = {"body": approval_options(
+            fingerprint="offline-date-gate", earliest="2026-09-13T08:00:00+08:00",
+            latest="2026-10-01T20:00:00+08:00", default_times=["09:00", "17:00"])}
         self.open_task(self.fixtures.fb_id)
-        field = self.page.get_by_role("textbox", name="发布时间（柏林当地时间）", exact=True)
-        approve = self.page.get_by_role("button", name="通过并创建排期", exact=True)
+        field = self.page.get_by_role("textbox", name="发布时间（北京时间）", exact=True)
+        approve = self.page.get_by_role("button", name="确认发布时间并排期", exact=True)
 
         field.fill("")
         expect(field).to_have_value("")
-        expect(self.page.get_by_role("button", name="09:00 柏林", exact=True)).to_be_disabled()
-        expect(self.page.get_by_role("button", name="17:00 柏林", exact=True)).to_be_disabled()
+        expect(self.page.get_by_role("button", name="09:00 北京", exact=True)).to_be_disabled()
+        expect(self.page.get_by_role("button", name="17:00 北京", exact=True)).to_be_disabled()
         expect(approve).to_be_disabled()
         approve.click(force=True)
         expect(self.page.get_by_role("dialog")).to_have_count(0)
@@ -378,21 +380,54 @@ class BrowserWorkflowTests(unittest.TestCase):
         # datetime-local permits seconds; this UI requires minute precision.
         field.fill("2026-09-15T10:30:15")
         expect(field).to_have_value("2026-09-15T10:30:15")
-        expect(self.page.get_by_text("请填写完整有效的柏林日期和时间", exact=True)).to_be_visible()
+        expect(self.page.get_by_text("请填写完整有效的日期和时间", exact=True)).to_be_visible()
         expect(approve).to_be_disabled()
-        expect(self.page.get_by_role("button", name="09:00 柏林", exact=True)).to_be_disabled()
+        expect(self.page.get_by_role("button", name="09:00 北京", exact=True)).to_be_disabled()
         approve.click(force=True)
         expect(self.page.get_by_role("dialog")).to_have_count(0)
 
         field.fill("2026-09-15T10:30")
-        self.page.get_by_role("button", name="09:00 柏林", exact=True).click()
+        self.page.get_by_role("button", name="09:00 北京", exact=True).click()
         expect(field).to_have_value("2026-09-15T09:00")
+        # 北京 09:00 是柏林凌晨 3 点：提示要出现，但不能挡住她。
+        expect(self.page.get_by_text("这个时刻德国还在凌晨，粉丝多半看不到")).to_be_visible()
         approve.click()
         dialog = self.page.get_by_role("dialog")
-        expect(dialog).to_contain_text("Facebook · 2026-09-15 09:00 柏林")
+        expect(dialog).to_contain_text("Facebook · 2026-09-15 09:00 北京")
+        expect(dialog).to_contain_text("德国 9/15 03:00 柏林")
         dialog.get_by_role("button", name="继续核对", exact=True).click()
         expect(dialog).to_have_count(0)
         self.assertNotIn(("POST", endpoint + "/approve"), self.writes)
+
+    def test_09_freezing_content_is_its_own_step_and_can_be_released(self):
+        """「编辑确认无误」把内容锁住；时刻选择框在冻结之后才出现。"""
+        detail = self.fixtures.detail(self.fixtures.fb_id)
+        detail["status"] = "edited"
+        endpoint = "/api/tasks/" + self.fixtures.fb_id
+        self.responses[("GET", endpoint)] = {"body": detail}
+        self.responses[("GET", endpoint + "/approval-options")] = {"body": approval_options(
+            available=False, reason="[publish].ui_constraints_verified 仍为 false")}
+
+        def lock(_request):
+            detail["status"] = "content_locked"
+            return {"body": detail}
+
+        def unlock(_request):
+            detail["status"] = "edited"
+            return {"body": detail}
+
+        self.responses[("POST", endpoint + "/content-lock")] = lock
+        self.responses[("DELETE", endpoint + "/content-lock")] = unlock
+        self.open_task(self.fixtures.fb_id)
+        # 录证缺失让排期不可用，但不该挡住人确认文案和图片。
+        field = self.page.get_by_role("textbox", name="发布时间（北京时间）", exact=True)
+        expect(field).to_have_count(0)
+        self.page.get_by_role("button", name="编辑确认无误", exact=True).click()
+        expect(self.page.get_by_text("正文与图片已按当前版本锁定")).to_be_visible()
+        expect(field).to_have_count(1)
+        self.page.get_by_role("button", name="解除冻结", exact=True).click()
+        expect(self.page.get_by_text("正文与图片已按当前版本锁定")).to_have_count(0)
+        expect(field).to_have_count(0)
 
     def test_09_capture_link_unknown_total_and_explicit_one_attempt_recovery(self):
         """UI-only recovery receipt: exact post, current revision, and a required human reason."""

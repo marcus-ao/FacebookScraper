@@ -205,32 +205,45 @@ def stage_d3(page, ui):
 def stage_d4(page, ui):
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
     task_id=row['id']; detail=ui.fx.detail(task_id)
+    # 时刻选择框只在冻结之后出现；这一档从「内容已冻结」开始验排期本身。
+    locked=copy.deepcopy(detail);locked['status']='content_locked'
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,locked)
     options=ui.fx.client.get(f'/api/tasks/{task_id}/approval-options').json()
-    options.update(available=True,reason='',fingerprint='fixture-fingerprint',earliest='2026-09-14T08:00:00+02:00',latest='2026-10-28T23:00:00+01:00',default_times=['09:00','17:00'])
+    options.update(available=True,reason='',fingerprint='fixture-fingerprint',lockable=True,lock_reason='',
+                   earliest='2026-09-14T08:00:00+08:00',latest='2026-10-28T23:00:00+08:00',default_times=['09:00','17:00'],
+                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6])
     ui.overrides[('GET',f'/api/tasks/{task_id}/approval-options')]=(200,options)
-    ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=(200,{'ok':False,'status':'approved','message':'not confirmed'})
+    running={'version':1,'operation_id':'regression-op','task_id':task_id,'platform':detail['platform'],
+             'snapshot_id':'regression-snapshot','scheduled_at':'2026-09-15T10:30:00+08:00','status':'running',
+             'step_index':0,'step_total':7,'step':'准备中','message':'','result':None,
+             'started_at':'2026-09-15T00:00:00Z','updated_at':'2026-09-15T00:00:00Z'}
+    ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=(202,running)
+    ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='failed',message='提交前时刻复核未通过'))
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('textbox',name='发布时间（柏林当地时间）',exact=True).fill('2026-09-15T10:30')
-    page.get_by_role('button',name='通过并创建排期',exact=True).click()
-    page.get_by_role('button',name='确认通过并创建排期',exact=True).click()
-    expect(page.get_by_text('排期尚未确认，请核对回执后再处理',exact=True)).to_be_visible()
+    field=page.get_by_role('textbox',name='发布时间（北京时间）',exact=True)
+    field.fill('2026-09-15T10:30')
+    page.get_by_role('button',name='确认发布时间并排期',exact=True).click()
+    page.get_by_role('button',name='确认并创建排期',exact=True).click()
+    expect(page.get_by_text('排期没有创建成功',exact=True)).to_be_visible(timeout=15000)
     body=[r['body'] for r in ui.requests if r['path'].endswith('/approve')][-1]
     assert body=={'scheduled_at':'2026-09-15T10:30','source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision'],'content_fingerprint':'fixture-fingerprint'}
     # 非严格成功回执也须重读详情，使本地回执恢复入口可见。
     order=[i for i,r in enumerate(ui.requests) if r['method']=='POST' and r['path'].endswith('/approve')]
     reread=[i for i,r in enumerate(ui.requests) if r['method']=='GET' and r['path']==f'/api/tasks/{task_id}' and i>order[-1]]
     assert reread, '提交失败之后没有重读这一篇，恢复入口不会出现'
-    ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=(409,{'detail':'occupied','suggestions':['2026-09-15T11:30:00+02:00']})
-    page.get_by_role('button',name='通过并创建排期',exact=True).click();page.get_by_role('button',name='确认通过并创建排期',exact=True).click()
-    page.get_by_role('button',name='2026-09-15 11:30 柏林',exact=True).click()
-    expect(page.get_by_role('textbox',name='发布时间（柏林当地时间）',exact=True)).to_have_value('2026-09-15T11:30')
-    ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=(200,{'ok':True,'status':'scheduled'})
-    scheduled=copy.deepcopy(detail);scheduled['status']='scheduled';scheduled['schedule']={'at':'2026-09-15T11:30:00+02:00','channel':detail['platform']}
+    # 冲突建议从失败的操作记录里读出来，点一下就填回选择框。
+    ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='failed',
+        message='这个时刻暂不能排期',result={'suggestions':['2026-09-15T11:30:00+08:00']}))
+    page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
+    page.get_by_role('button',name='2026-09-15 11:30 北京',exact=True).click(timeout=15000)
+    expect(field).to_have_value('2026-09-15T11:30')
+    ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='succeeded',step_index=7,message='自动提交并回读为 scheduled'))
+    scheduled=copy.deepcopy(detail);scheduled['status']='scheduled';scheduled['schedule']={'at':'2026-09-15T11:30:00+08:00','channel':detail['platform']}
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,scheduled)
-    page.get_by_role('button',name='通过并创建排期',exact=True).click();page.get_by_role('button',name='确认通过并创建排期',exact=True).click()
-    expect(page.get_by_text(re.compile('排期已确认。'))).to_be_visible()
+    page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
+    expect(page.get_by_text(re.compile('排期已确认。'))).to_be_visible(timeout=15000)
     assert ui.count_list_gets()==1
-    return {'D4':'PASS','strict_receipt':True,'exact_five_body_fields':True,'no_offset_submission':True,'clickable_409_suggestion':True,'list_GET_count':1}
+    return {'D4':'PASS','strict_receipt':True,'exact_five_body_fields':True,'no_offset_submission':True,'clickable_409_suggestion':True,'polled_operation':True,'list_GET_count':1}
 
 
 def stage_d5(page, ui):
@@ -285,24 +298,32 @@ def stage_d(page, ui):
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and row['image_count']>=3)
     task_id=row['id']; original=ui.fx.detail(task_id)
     options=ui.fx.client.get(f'/api/tasks/{task_id}/approval-options').json()
-    options.update(available=True,reason='',fingerprint='fixture',earliest='2026-03-01T08:00:00+01:00',latest='2026-11-01T20:00:00+01:00')
+    options.update(available=True,reason='',fingerprint='fixture',lockable=True,lock_reason='',
+                   earliest='2026-03-01T08:00:00+08:00',latest='2026-11-01T20:00:00+08:00',
+                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6])
     ui.overrides[('GET',f'/api/tasks/{task_id}/approval-options')]=(200,options)
     states={}
-    for status in ['not_ready','pending_review','edited','snoozed','approved','scheduled','skipped','handed_off']:
+    for status in ['not_ready','pending_review','edited','content_locked','snoozed','approved','scheduled','skipped','handed_off']:
         detail=copy.deepcopy(original);detail['status']=status;detail['review']['status']=status
         ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
         page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
+        # 冻结之后不能再编辑；这正是「编辑确认无误」要挡住的误触。
         editable=status in ['not_ready','pending_review','edited','snoozed']
         expect(page.get_by_role('button',name='编辑德语',exact=True)).to_have_count(int(editable))
         expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_have_count(int(editable or status=='handed_off'))
-        button=page.get_by_role('button',name='通过并创建排期',exact=True)
-        if status in ['pending_review','edited']: expect(button).to_be_enabled()
-        else: expect(button).to_be_disabled()
+        freeze=page.get_by_role('button',name='编辑确认无误',exact=True)
+        schedule=page.get_by_role('button',name='确认发布时间并排期',exact=True)
+        if status in ['pending_review','edited']:
+            expect(freeze).to_be_enabled();expect(schedule).to_have_count(0)
+        elif status=='content_locked':
+            expect(freeze).to_have_count(0);expect(schedule).to_be_enabled()
+        else:
+            expect(schedule).to_have_count(0);expect(freeze).to_be_disabled()
         states[status]='PASS'
     detail=copy.deepcopy(original);detail['read_only']=True
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
     page.goto(ui.fx.base_url+'/history/'+task_id,wait_until='networkidle')
-    for label in ['编辑德语','更多处理动作','通过并创建排期','编辑分类','翻译这篇','生成文案候选']:
+    for label in ['编辑德语','更多处理动作','编辑确认无误','确认发布时间并排期','编辑分类','翻译这篇','生成文案候选']:
         expect(page.get_by_role('button',name=label,exact=True)).to_have_count(0)
     detail=copy.deepcopy(original)
     prose='🚀 Anfang\n'+'Eine lange Zeile zum Prüfen.\n'*65+'$219.99 Ende'
@@ -318,17 +339,25 @@ def stage_d(page, ui):
     assert geometry['scroll']>0 and geometry['top']>=geometry['paneTop'] and geometry['bottom']<=geometry['paneBottom'],geometry
     assert page.evaluate('getComputedStyle(document.documentElement).scrollBehavior')=='auto'
     expect(page.get_by_role('button',name=f"图片 1/{len(detail['images'])}",exact=True)).to_be_visible()
-    expect(page.get_by_role('button',name='通过并创建排期',exact=True)).to_be_enabled()
-    from web.api.approval import berlin_time
+    # 这一段验的是界面怎么显示 DST 报错。北京没有夏令时，所以临时把业务时区切到柏林
+    # 才谈得上「不存在/出现两次」——不能因为当前时区没这问题就把这条删掉。
+    locked=copy.deepcopy(detail);locked['status']='content_locked'
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,locked)
+    page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
+    expect(page.get_by_role('button',name='确认发布时间并排期',exact=True)).to_be_enabled()
+    from unittest.mock import patch as _patch
+    from publish import business_suite as _bs
+    from web.api.approval import business_time
     def dst(body):
-        try: berlin_time(body['scheduled_at'])
-        except ValueError as exc: return 400,{'detail':str(exc)}
+        with _patch.object(_bs,'business_timezone',return_value='Europe/Berlin'):
+            try: business_time(body['scheduled_at'])
+            except ValueError as exc: return 400,{'detail':str(exc)}
         raise AssertionError('Expected DST rejection')
     ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=dst
     for value in ['2026-03-29T02:30','2026-10-25T02:30']:
-        page.get_by_role('textbox',name='发布时间（柏林当地时间）',exact=True).fill(value)
-        page.get_by_role('button',name='通过并创建排期',exact=True).click();page.get_by_role('button',name='确认通过并创建排期',exact=True).click()
-        expect(page.get_by_text('这个柏林时刻在夏令时切换中不存在或出现两次，请选择其他时刻',exact=True)).to_be_visible()
+        page.get_by_role('textbox',name='发布时间（北京时间）',exact=True).fill(value)
+        page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
+        expect(page.get_by_text('这个时刻在夏令时切换中不存在或出现两次，请选择其他时刻',exact=True)).to_be_visible()
     ui.overrides.pop(('GET',f'/api/tasks/{task_id}'))
     filtered=[item for item in ui.list_data['tasks'] if item['status'] in ['pending_review','edited'] and item['platform']=='facebook' and 'Riko' in item['tags']]
     assert len(filtered)>=2
@@ -370,7 +399,7 @@ def stage_f(page, ui):
 def stage_g(page, ui):
     base=ui.fx.client.get('/api/settings').json()
     page.goto(ui.fx.base_url+'/review',wait_until='networkidle');page.locator('aside').get_by_role('link',name='运营设置',exact=True).click()
-    field=page.get_by_role('textbox',name='默认排期时间（柏林）');field.fill('11:00, 18:30')
+    field=page.get_by_role('textbox',name='默认排期时间（北京）');field.fill('11:00, 18:30')
     page.get_by_role('spinbutton',name='默认挂起期限').fill('5')
     assert page.locator('main input:not([type="hidden"])').count()==2
     assert page.evaluate("()=>{const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented}")

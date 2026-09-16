@@ -182,8 +182,12 @@ export const APPROVAL_OPTIONS_SHAPE: ShapeSpec = {
   available: shape.boolean,
   reason: shape.string,
   fingerprint: shape.nullable(shape.string),
+  lockable: shape.boolean,
+  lock_reason: shape.string,
   platform: PLATFORM,
   business_timezone: shape.string,
+  audience_timezone: shape.string,
+  audience_quiet_hours: shape.array,
   default_times: shape.array,
   earliest: shape.string,
   latest: shape.string,
@@ -196,6 +200,8 @@ export const CALENDAR_SHAPE: ShapeSpec = {
   stale: shape.boolean,
   error: shape.nullable(shape.string),
   cards: shape.array,
+  local: shape.array,
+  local_error: shape.nullable(shape.string),
   coverage: shape.object,
   bounds: shape.object,
   gap_minutes: shape.number,
@@ -205,8 +211,35 @@ export const CALENDAR_SHAPE: ShapeSpec = {
   month_ui: shape.string,
   ui_timezone: shape.string,
   business_timezone: shape.string,
+  audience_timezone: shape.string,
   display_start: shape.string,
   display_end_exclusive: shape.string,
+}
+
+/** 本地图层：来源是审校账本与发布账本，未选时刻的条目 at/at_business 为 null。 */
+export const CALENDAR_LOCAL_SHAPE: ShapeSpec = {
+  kind: shape.string,
+  task_id: shape.string,
+  platform: PLATFORM,
+  review_status: shape.string,
+  at: shape.nullable(shape.string),
+  at_business: shape.nullable(shape.string),
+  snapshot_id: shape.string,
+  remote_id: shape.string,
+}
+
+export const PUBLISH_OPERATION_SHAPE: ShapeSpec = {
+  operation_id: shape.string,
+  task_id: shape.string,
+  platform: PLATFORM,
+  scheduled_at: shape.string,
+  status: shape.string,
+  step_index: shape.number,
+  step_total: shape.number,
+  step: shape.string,
+  message: shape.string,
+  started_at: shape.string,
+  updated_at: shape.string,
 }
 
 export const CALENDAR_CARD_SHAPE: ShapeSpec = {

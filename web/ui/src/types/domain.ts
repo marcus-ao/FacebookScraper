@@ -8,6 +8,7 @@ export type Platform = 'facebook' | 'instagram'
 export type ReviewStatus =
   | 'pending_review'
   | 'edited'
+  | 'content_locked'
   | 'snoozed'
   | 'approved'
   | 'scheduled'
@@ -19,6 +20,8 @@ export type DisplayStatus = ReviewStatus | 'not_ready'
 
 export type ReviewAction =
   | 'edited'
+  | 'content_locked'
+  | 'unlocked'
   | 'snoozed'
   | 'woke'
   | 'skipped'
@@ -27,6 +30,7 @@ export type ReviewAction =
   | 'approved'
   | 'scheduled'
   | 'submit_failed'
+  | 'unscheduled'
 
 /** trail 将账本动作 edited 映射为 text_edited。 */
 export type TrailAction = Exclude<ReviewAction, 'edited'> | 'text_edited'
@@ -397,8 +401,14 @@ export interface ApprovalOptions {
   readonly reason: string
   /** 批准时必须回传同一个值；available 为假时是 null。 */
   readonly fingerprint: string | null
+  /** 内容本身能否冻结；与 available 分开——缺录证不该挡住人确认文案和图片。 */
+  readonly lockable: boolean
+  readonly lock_reason: string
   readonly platform: Platform
   readonly business_timezone: string
+  readonly audience_timezone: string
+  /** [起, 止) 小时；落在区间内提示德国受众正在睡觉，但不阻断。 */
+  readonly audience_quiet_hours: readonly [number, number]
   readonly default_times: readonly string[]
   readonly earliest: string
   readonly latest: string
@@ -483,6 +493,43 @@ export interface CalendarCard {
   readonly delivery: string
   readonly rendered: string
   readonly remote_ids?: readonly string[]
+  readonly audience?: AudienceMoment | null
+}
+
+/** 业务时刻在德国受众那边是几点。 */
+export interface AudienceMoment {
+  readonly timezone: string
+  readonly at: string
+  readonly quiet_hours: boolean
+}
+
+/** 月历的本地图层：系统自己知道的排期，来源是审校账本与发布账本。 */
+export interface CalendarLocalEntry {
+  readonly kind: 'content_locked' | 'submitting' | 'scheduled'
+  readonly task_id: TaskId
+  readonly platform: Platform
+  readonly review_status: ReviewStatus
+  readonly at: string | null
+  readonly at_business: string | null
+  readonly snapshot_id: string
+  readonly remote_id: string
+  readonly audience?: AudienceMoment | null
+}
+
+/** 一次浏览器提交的可观察记录。 */
+export interface PublishOperation {
+  readonly operation_id: string
+  readonly task_id: TaskId
+  readonly platform: Platform
+  readonly scheduled_at: string
+  readonly status: 'running' | 'succeeded' | 'failed' | 'uncertain'
+  readonly step_index: number
+  readonly step_total: number
+  readonly step: string
+  readonly message: string
+  readonly result: { readonly suggestions?: readonly string[] } | null
+  readonly started_at: string
+  readonly updated_at: string
 }
 
 export interface CalendarBound {
@@ -502,6 +549,9 @@ export interface CalendarPayload {
   readonly refresh_status: string | null
   readonly age_seconds: number | null
   readonly cards: readonly CalendarCard[]
+  /** 本地图层只作展示；占用判定永远只看远端读到的 cards。 */
+  readonly local: readonly CalendarLocalEntry[]
+  readonly local_error: string | null
   readonly coverage: {
     readonly visible_start: string | null
     readonly visible_end: string | null
@@ -517,6 +567,7 @@ export interface CalendarPayload {
   readonly month_ui: string
   readonly ui_timezone: string
   readonly business_timezone: string
+  readonly audience_timezone: string
   readonly display_start: string
   readonly display_end_exclusive: string
 }

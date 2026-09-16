@@ -149,10 +149,10 @@ describe('队列与历史共用同一套列', () => {
 })
 
 describe('时刻列按各自的时区语义', () => {
-  it('队列用柏林时刻', () => {
+  it('队列用业务时刻', () => {
     const markup = cell(reviewColumns(), 'time', reviewRow)
-    expect(markup).toContain('data-zone="berlin"')
-    expect(markup).toContain('17:00 柏林')
+    expect(markup).toContain('data-zone="business"')
+    expect(markup).toContain('17:00 北京')
   })
 
   it('历史用上海时刻', () => {

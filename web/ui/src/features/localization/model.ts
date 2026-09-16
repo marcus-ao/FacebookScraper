@@ -27,5 +27,6 @@ export function recoverDraft(previous: TaskDetail, latest: TaskDetail, draft: Lo
 export const displayLinks = (text: string) => text.replace(/\{\{link(\d+)\}\}/g, '〔链接 $1〕')
 export const storeLinks = (text: string) => text.replace(/〔链接 (\d+)〕/g, '{{link$1}}')
 
+// content_locked 也在内：冻结之后不能再改内容，这正是「编辑确认无误」要挡住的误触。
 export const canEditTask = (detail: TaskDetail) => !detail.read_only
-  && !['approved', 'scheduled', 'skipped', 'handed_off'].includes(detail.status)
+  && !['content_locked', 'approved', 'scheduled', 'skipped', 'handed_off'].includes(detail.status)

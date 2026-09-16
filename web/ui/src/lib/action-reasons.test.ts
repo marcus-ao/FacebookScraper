@@ -20,8 +20,8 @@ describe('通过并创建排期：七个条件按她能动手的先后排', () =
 
   it.each(['T10:00', '2026-09-15', '2026-09-15T', '2026-02-29T10:00',
     '2026-04-31T10:00', '2026-00-15T10:00', '2026-09-15T24:00',
-    '2026-09-15T10:60', '2026-09-15T10:00+02:00'])('不完整或非法的柏林时刻不能批准：%s', when => {
-    expect(approvalDisabledReason({ ...approvalOk, when })).toBe('请填写完整有效的柏林日期和时间')
+    '2026-09-15T10:60', '2026-09-15T10:00+02:00'])('不完整或非法的时刻不能批准：%s', when => {
+    expect(approvalDisabledReason({ ...approvalOk, when })).toBe('请填写完整有效的日期和时间')
   })
 
   it('允许有效闰日，柏林夏令时语义继续由后端核对', () => {
@@ -33,11 +33,12 @@ describe('通过并创建排期：七个条件按她能动手的先后排', () =
     [{ editing: true }, '请先保存或放弃正在编辑的文案'],
     [{ busy: true }, '正在提交并核验，请等待'],
     [{ fetching: true }, '正在核对发布条件'],
-    [{ eligible: false }, '请先恢复审校并准备好内容'],
+    [{ eligible: false }, '请先点「编辑确认无误」冻结内容'],
+    [{ eligible: false, status: 'snoozed' as const }, '请先恢复审校并准备好内容'],
     [{ eligible: false, status: 'scheduled' as const }, '这篇已有已确认的排期'],
     [{ optionsFailed: true }, '发布条件读取失败，请重新核对'],
     [{ available: false }, '发布条件尚未满足，请查看下方提示'],
-    [{ when: '' }, '请先填写柏林发布时间'],
+    [{ when: '' }, '请先填写发布时间'],
   ])('%o → %s', (patch, expected) => {
     expect(approvalDisabledReason({ ...approvalOk, ...patch })).toBe(expected)
   })
