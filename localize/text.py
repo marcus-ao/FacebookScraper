@@ -177,6 +177,24 @@ _ANGLICISM = {
     "keep": "**英语借词：尽量保留。** 原文里的英语词优先不译，"
             "只翻译连接性的句子成分。",
 }
+# 渠道规则块。⚠️ Instagram 那一条对应真实缺口：原文的 bio 引导句若被照译，会和编辑区
+# 独立选定的引导话术叠成两句，而 localization.validate() 的确定性检查拦不住自然语言。
+_PLATFORM_RULES = {
+    "facebook":
+        "本篇发布到 **Facebook**。\n\n"
+        "链接已由系统摘出，最终正文里的链接位置由运营在编辑区决定。"
+        "你不要补写任何 URL，也不要自行添加“点击下方链接”“详见主页”这类原文没有的引导语；"
+        "原文本来就有的行动号召照常本地化。",
+    "instagram":
+        "本篇发布到 **Instagram**。\n\n"
+        "⚠️ **原文里引导读者去主页/bio 看链接的那一句，整句删掉，不要翻译。**\n"
+        "Instagram 的引导话术由运营在独立编辑区选定；你再写一遍，成品就会出现两句重复的引导。\n"
+        "典型说法（不限于这几种）：`link in bio`、`check the link in our bio`、"
+        "`more info in bio`、`tap the link in our profile`、`see our profile for details`、`swipe up`。\n\n"
+        "删掉之后不要补写替代说法，也不要在结尾加“详见主页”之类的话——那一栏不归你管。"
+        "原文除这一句之外的内容照常本地化。\n\n"
+        "正文上限 **2,200 字符**（按字符计，不是字节）。这不是硬性截断线，但接近时要写得更紧凑。",
+}
 
 
 def render_style_examples(examples: list[str]) -> str:
@@ -193,8 +211,12 @@ def render_style_examples(examples: list[str]) -> str:
         for i, ex in enumerate(encoded, 1))
 
 
-def build_system_prompt(s: Settings, examples: list[str]) -> str:
-    """渲染独立翻译模板；每账号复用相同系统提示词。"""
+def build_system_prompt(s: Settings, examples: list[str], platform: str) -> str:
+    """渲染独立翻译模板；platform 决定渠道规则块，其余部分每账号复用。
+
+    ⛔ platform 故意不给默认值：漏传时 Instagram 帖会静默套用 Facebook 规则，
+    正文里那句 bio 引导就会和编辑区的引导话术叠成两句，而且不报任何错。
+    """
     tpl = TEMPLATE_PATH.read_text(encoding="utf-8")
     # 剥掉给人看的 HTML 注释头，不发给模型
     while tpl.lstrip().startswith("<!--"):
@@ -212,12 +234,19 @@ def build_system_prompt(s: Settings, examples: list[str]) -> str:
                 f"可选值：{', '.join(sorted(table))}")
         return v
 
+    channel = (platform or "").strip().lower()
+    if channel not in _PLATFORM_RULES:
+        raise SystemExit(
+            f"翻译提示词需要明确目标渠道，收到 {platform!r}。"
+            f"可选值：{', '.join(sorted(_PLATFORM_RULES))}")
+
     subs = {
         "{{ADDRESS_FORM}}": pick(_ADDRESS_FORM, s.address_form, "address_form"),
         "{{GENDER_STYLE}}": pick(_GENDER_STYLE, s.gender_style, "gender_style"),
         "{{ANGLICISM_POLICY}}": pick(_ANGLICISM, s.anglicism_policy, "anglicism_policy"),
         "{{TONE}}": s.tone or "（无额外要求）",
         "{{GLOSSARY}}": render_glossary(s.glossary),
+        "{{PLATFORM_RULES}}": _PLATFORM_RULES[channel],
         "{{STYLE_EXAMPLES}}": render_style_examples(examples),
     }
     # 先校验模板占位符；外部样例中的字面占位符不属于模板。
@@ -558,16 +587,23 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
 
     account_owner = arc_base.name.split("_", 1)[-1].strip().lower()
     examples = pick_style_examples(rows, s.style_examples, owner=account_owner)
-    system = build_system_prompt(s, examples)
+    suffix = ""
     if refine_instruction:
         if not re.fullmatch(r"[0-9a-f]{32}", refine_id) or len(todo) != 1:
             raise ValueError("文案优化必须指定唯一帖子和版本 ID")
-        system += ("\n\n本篇运营优化指令；仍须遵守以上金额、品牌和标签规则：\n"
-                   + json.dumps(without_urls(refine_instruction), ensure_ascii=False))
+        suffix = ("\n\n本篇运营优化指令；仍须遵守以上金额、品牌和标签规则：\n"
+                  + json.dumps(without_urls(refine_instruction), ensure_ascii=False))
         if current_body:
-            system += "\n当前德语正文供优化参考：\n" + json.dumps(without_urls(current_body), ensure_ascii=False)
-    print(f"  提示词：{len(system)} 字符 / {len(examples)} 篇风格参照 / "
-          f"称呼 {s.address_form} / 术语表 {len(s.glossary)} 条")
+            suffix += "\n当前德语正文供优化参考：\n" + json.dumps(without_urls(current_body), ensure_ascii=False)
+    # 渠道规则逐帖不同（IG 要删掉原文的 bio 引导句），所以按平台各渲染一份。
+    # 本批用到的渠道全部先渲染出来：未知渠道必须在花钱之前失败，而不是翻到一半才炸。
+    systems: dict[str, str] = {}
+    for r in todo:
+        key = str(r.get("platform") or "").strip().lower()
+        if key not in systems:
+            systems[key] = build_system_prompt(s, examples, key) + suffix
+            print(f"  提示词（{key}）：{len(systems[key])} 字符 / {len(examples)} 篇风格参照 / "
+                  f"称呼 {s.address_form} / 术语表 {len(s.glossary)} 条")
 
     ok = bad = flagged = money_violated = hashtag_violated = 0
     consecutive_failures = 0
@@ -590,7 +626,9 @@ def run_translate(s: Settings, translator: Translator, arc_base: Path,
         if hasattr(translator, "set_paid_context"):
             translator.set_paid_context(paid_job_key, source_ref)
         try:
-            de = translator.translate(without_urls(text), system)
+            de = translator.translate(
+                without_urls(text),
+                systems[str(r.get("platform") or "").strip().lower()])
         except Exception as e:
             print(f"  [{i}/{len(todo)}] {pid}  失败：{type(e).__name__}: {e}")
             bad += 1
@@ -784,7 +822,9 @@ def run_estimate(s: Settings, dirs: list[Path], limit: int | None,
         per_account.append((arc_base.name, len(todo), seen_usage))
         owner = arc_base.name.split("_", 1)[-1].strip().lower()
         examples = pick_style_examples(rows, s.style_examples, owner=owner)
-        system_tokens = _approx_tokens(build_system_prompt(s, examples))
+        # 两个渠道的规则块长度不同；估算取较长的一份，保持这里一贯的上界口径。
+        system_tokens = max(_approx_tokens(build_system_prompt(s, examples, channel))
+                            for channel in _PLATFORM_RULES)
         text_tokens = sum(_approx_tokens((r.get("text") or "").strip()) for r in todo)
         n = len(todo)
         # DeepSeek 的磁盘缓存自动工作且要求相同前缀；按前两次构建缓存估一个乐观场景。
@@ -921,18 +961,23 @@ def main(argv=None) -> int:
 
     if a.show_prompt:
         # 没有归档也要能看：让人在回填之前就能审提示词本身
+        # 两个渠道的规则块不同，都打印出来——审提示词的人要看的正是这处差异。
         if dirs:
             for d in dirs:
                 arc = Archive(d.parent, d.name)
                 owner = d.name.split("_", 1)[-1].strip().lower()
                 examples = pick_style_examples(arc.rows(), s.style_examples, owner=owner)
-                print(f"\n{'=' * 72}\n账号：{d.name}（仅使用 @{owner} 自有正文，"
-                      f"{len(examples)} 篇风格参照）\n{'=' * 72}")
-                print(build_system_prompt(s, examples))
+                for channel in sorted(_PLATFORM_RULES):
+                    print(f"\n{'=' * 72}\n账号：{d.name} · 渠道：{channel}"
+                          f"（仅使用 @{owner} 自有正文，{len(examples)} 篇风格参照）\n{'=' * 72}")
+                    print(build_system_prompt(s, examples, channel))
         else:
             print("（尚无归档，风格参照为空；回填后重跑本命令可看到完整版）\n")
-            print("=" * 72)
-            print(build_system_prompt(s, []))
+            for channel in sorted(_PLATFORM_RULES):
+                print("=" * 72)
+                print(f"渠道：{channel}")
+                print("=" * 72)
+                print(build_system_prompt(s, [], channel))
             print("=" * 72)
         print(f"\n模板文件：{TEMPLATE_PATH}")
         print(f"提示词版本：{PROMPT_VERSION}　"

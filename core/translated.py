@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 from core import paid_model
 from core.store import assert_physical_direct_path, source_text_digest
 
-PROMPT_VERSION = 6
+PROMPT_VERSION = 7
 _UNSET_REVISION = object()
 
 

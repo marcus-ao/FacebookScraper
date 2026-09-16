@@ -98,6 +98,35 @@ class LocalizationTests(unittest.TestCase):
         self.assertEqual(draft["ig_bio_url"], "")
         self.assertTrue(loc.validate(draft)["ready"])
 
+    def test_instagram_body_keeping_a_profile_hint_warns_but_never_blocks(self):
+        self.source["platform"] = "instagram"
+        draft = self.draft()
+        draft.update(hashtags_confirmed=True, ig_cta="Link in Bio 🔗",
+                     body_de="Sauber jetzt. Den Link in unserer Bio findest du oben.")
+        result = loc.validate(draft)
+        # 黄色提醒而非硬闸：误杀的代价是拒绝一次已经付过钱的产出。
+        self.assertTrue(result["ready"])
+        self.assertIn("duplicate_profile_hint", {row["code"] for row in result["warnings"]})
+        draft["body_de"] = "Sauber jetzt."
+        self.assertNotIn("duplicate_profile_hint",
+                         {row["code"] for row in loc.validate(draft)["warnings"]})
+
+    def test_profile_hint_needs_a_direction_word_so_organic_wording_stays_quiet(self):
+        # 德语的 Bio 还有"有机"的意思，对这个品类（可降解废物袋）是会真出现的词。
+        for quiet in ["Biologisch abbaubare Müllbeutel.", "Jetzt mit Bio-Baumwolle.",
+                      "Alles in Bio-Qualität.", "Das Profil der Bürste ist neu."]:
+            self.assertFalse(loc.mentions_profile_link(quiet), quiet)
+        for hit in [*loc.CTA_PRESETS, "Der Link in unserer Bio", "Bio-Link oben",
+                    "Swipe up", "check the link in our bio"]:
+            self.assertTrue(loc.mentions_profile_link(hit), hit)
+
+    def test_facebook_body_mentioning_a_profile_is_not_warned(self):
+        draft = self.draft()
+        draft.update(hashtags_confirmed=True, body_de="Den Link in unserer Bio findest du oben.")
+        draft["links"][0].update(target_url="https://de.example/p", confirmed=True)
+        self.assertNotIn("duplicate_profile_hint",
+                         {row["code"] for row in loc.validate(draft)["warnings"]})
+
     def test_instagram_cta_cannot_leak_link_placeholders(self):
         self.source['platform'] = 'instagram'
         draft = self.draft()

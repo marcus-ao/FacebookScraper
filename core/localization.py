@@ -18,6 +18,20 @@ from core.store import assert_physical_direct_path, read_post_truth
 CTA_PRESETS = ("Link in Bio 🔗", "Mehr dazu im Profil 🔗", "Entdecke mehr über den Link in unserer Bio.")
 _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 
+# IG 正文里残留的主页引导句。⚠️ 必须出现"链接/去某处"的指向词才算命中：德语的 Bio 还有
+# "有机"的意思（Bio-Abfall、biologisch abbaubar），对这个品类是会真出现的词。
+_PROFILE_HINT = re.compile(
+    r"(?:bio|profil)\w*[-\s]?link"
+    # bio/profil 必须是独立的词：跟着连字符或别的字母就是 Bio-Qualität、biologisch
+    # 这类复合词，属于正常文案。
+    r"|(?:in|im)\s+(?:der\s+|die\s+|unserer\s+|unserem\s+|our\s+|the\s+)?(?:bio|profil)\b(?![-\w])"
+    r"|swipe\s+up", re.IGNORECASE)
+
+
+def mentions_profile_link(text: str) -> bool:
+    """正文里是否已经有一句去主页/bio 看链接的引导。"""
+    return bool(_PROFILE_HINT.search(text or ""))
+
 
 class LocalizationConflict(ValueError):
     """人工版本、源文或本地化选择已经改变。"""
@@ -249,6 +263,12 @@ def validate(draft: dict) -> dict:
             issue("invalid_cta", "bio 引导话术不应包含链接或话题标签")
         if draft.get("links") and not str(draft.get("ig_cta") or "").strip():
             issue("cta_missing", "原帖有链接，请选择或填写 bio 引导话术")
+        if (str(draft.get("ig_cta") or "").strip()
+                and mentions_profile_link(draft.get("body_de") or "")):
+            # 只提示不拦：自然语言判断误杀的代价是拒绝一次已经付过钱的产出。
+            warnings.append({"code": "duplicate_profile_hint",
+                             "message": "正文里可能还有一句主页引导，和下面的引导话术重复了；"
+                                        "确认后删掉其中一处"})
     else:
         issue("unsupported_platform", "不支持这个目标平台")
     caption = render(draft)
