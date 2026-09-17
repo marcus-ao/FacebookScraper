@@ -77,8 +77,9 @@ class WebAccess:
         networks = []
         for item in raw:
             network = ipaddress.ip_network(item, strict=True)
-            if (network.version != 4 or network.prefixlen == 0 or network.is_multicast
-                    or network.is_loopback or network.is_link_local):
+            # 只接受内网网段：`0.0.0.0/0` 之外，`128.0.0.0/1` 这类同样能放行半个公网。
+            if (network.version != 4 or network.prefixlen == 0 or not network.is_private
+                    or network.is_multicast or network.is_loopback or network.is_link_local):
                 raise ValueError('invalid_web_subnet')
             networks.append(str(network))
         if host == '0.0.0.0' and not networks:

@@ -2,7 +2,7 @@ name: Windows release
 
 on:
   push:
-    branches: [main, codex/lan-access]
+    branches: [main]
 
 permissions:
   contents: read
@@ -104,10 +104,3 @@ jobs:
             state/offline-lan-*/
           if-no-files-found: ignore
           retention-days: 14
-      - name: Upload separate service machine network settings
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: service-machine-network
-          path: ops/service-machine.network.json
-          if-no-files-found: error
-          retention-days: 30

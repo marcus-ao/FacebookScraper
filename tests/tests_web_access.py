@@ -34,7 +34,8 @@ class PolicyTests(unittest.TestCase):
             'http://user:password@name:8765', 'http://name:8765?', 'http://name:8765#',
             'http://name:8765/\\bad', 'https://name:8765', 'http://127.1:8765')]
         invalid += [dict(LAN, allowed_client_cidrs=value) for value in (
-            [], ['0.0.0.0/0'], ['::/0'], ['192.168.10.3/24'], ['224.0.0.0/4'], '192.168.10.0/24')]
+            [], ['0.0.0.0/0'], ['128.0.0.0/1'], ['8.8.8.0/24'], ['::/0'], ['192.168.10.3/24'],
+            ['224.0.0.0/4'], '192.168.10.0/24')]
         invalid += [dict(LAN, web_port=True), dict(LAN, web_host='::'),
                     dict(LAN, web_port=80, public_base_url='http://name:0')]
         for value in invalid:

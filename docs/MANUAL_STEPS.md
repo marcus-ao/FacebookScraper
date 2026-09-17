@@ -935,18 +935,20 @@ scripts\run_python.bat -m pipeline.cli preflight --json
 
 用户提供的服务机 `ipconfig`：有效网卡 **WLAN**，IPv4 **10.66.3.157**，掩码 **255.255.255.0**，网关 **10.66.3.254**。由此配置标准入口 **http://10.66.3.157:8765**、允许来源 **10.66.3.0/24**。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
 
-安装配置已写入 [ops/service-machine.network.json](../ops/service-machine.network.json)，仅含四个网络字段，通过 `--network-config` 读取并校验后写入 `control/host.json`。该文件独立于运行制品，不改变开发默认、不保存凭据、不覆盖业务运行模式。配置文件与逐项网络参数不可混用。
+安装配置已写入 [ops/service-machine.network.json](../ops/service-machine.network.json)，仅含四个网络字段，通过 `--network-config` 读取并校验后写入 `control/host.json`。该文件只在版本库里，不随运行制品发布，不改变开发默认、不保存凭据、不覆盖业务运行模式。配置文件与逐项网络参数不可混用。
 
 这份输出仅证明采样时的地址；DHCP 地址保留、WLAN 的 Domain/Private 网络类型、客户端同网段及 Wi-Fi 客户端隔离仍需现场核对。先由网络管理员保留该地址，再用于持续业务；应用配置不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
 
-正式安装按第 15 节选择 main 的成功制品；当前功能分支的隔离调试按第 17.6 节。网络值已填写为本机真实信息，下面仅下载和安装目录是示例：
+正式安装按第 15 节选择 main 的成功制品；当前功能分支的隔离调试按第 17.6 节。网络配置取服务机上已拉取的仓库副本（同第 17.6 节），网络值已填写为本机真实信息，下面仅下载、仓库和安装目录是示例：
 
 ```powershell
 Set-Location D:\Downloads\fbscraper-windows
-py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --network-config D:\Downloads\service-machine-network\service-machine.network.json
+py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --network-config D:\VSCodeWorkspace\Facebook\FacebookScraper\ops\service-machine.network.json
 ```
 
-`--allow-client-subnet` 可重复；只填已核定的办公 IPv4 CIDR，不填 `0.0.0.0/0`。默认端口为 8765，显式改变端口时 `--web-port` 与 URL 端口须一致。省略全部网络参数会安装为回环模式；局域网参数不完整或非法时，安装器在创建目标目录前拒绝。
+服务机上没有仓库副本时，改用等价的逐项参数 `--web-host 0.0.0.0 --public-base-url http://10.66.3.157:8765 --allow-client-subnet 10.66.3.0/24`，不要另行传递这份文件。
+
+`--allow-client-subnet` 可重复；只接受已核定的内网 IPv4 CIDR，公网网段与 `0.0.0.0/0`、`128.0.0.0/1` 这类全网放行一律拒绝。默认端口为 8765，显式改变端口时 `--web-port` 与 URL 端口须一致。省略全部网络参数会安装为回环模式；局域网参数不完整或非法时，安装器在创建目标目录前拒绝。
 
 首次安装直接使用包含局域网能力的完整制品。控制器指纹已经包含网络策略代码，旧控制器不会自动升级来接受本次新基线。若现场实际已存在安装，先核对其版本和实例，不覆盖安装目录或共享数据。
 
@@ -1043,7 +1045,7 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
    Get-Content $Network
    ```
 
-   在 GitHub Actions 的 **Windows release** 中选择 **main** 和 `$ExpectedSha` 对应的成功运行，下载 `fbscraper-windows`，解压到当前用户 Downloads 下的同名目录，根目录必须直接有 `release.json`。网络配置使用刚拉取的 `ops/service-machine.network.json`，无需再下载独立配置制品。不要选择合并前的旧包或失败运行；`git pull` 本身不会安装构建产物、更新固定控制器或改变受管实例的 `control/host.json`。
+   在 GitHub Actions 的 **Windows release** 中选择 **main** 和 `$ExpectedSha` 对应的成功运行，下载 `fbscraper-windows`，解压到当前用户 Downloads 下的同名目录，根目录必须直接有 `release.json`。网络配置使用刚拉取的 `ops/service-machine.network.json`；发布制品不含这份文件，也不再单独上传。不要选择合并前的旧包或失败运行；`git pull` 本身不会安装构建产物、更新固定控制器或改变受管实例的 `control/host.json`。
 
 3. 在运营账户普通 PowerShell 中安装；这些变量在后续同一窗口复用：
 
