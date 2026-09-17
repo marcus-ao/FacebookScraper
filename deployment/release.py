@@ -113,7 +113,7 @@ def controller_fingerprint(root: Path) -> str:
     paths = [path for path in (root / 'deployment').glob('*.py') if path.name != 'worker.py']
     paths += [root / 'core' / name for name in (
         '__init__.py', 'maintenance.py', 'process_identity.py', 'paid_model.py', 'config.py',
-        'runtime_identity.py', 'operator_preferences.py') if (root / 'core' / name).is_file()]
+        'runtime_identity.py', 'operator_preferences.py', 'web_access.py') if (root / 'core' / name).is_file()]
     return _fingerprint(root, paths)
 
 

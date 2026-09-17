@@ -213,7 +213,7 @@ snooze_default_days = 3  # 上海工作日，按周一至周五计。
 # 四个机器人地址与各自签名密钥只在本机 .env（见 MANUAL_STEPS 第 2 节）。
 # FEISHU_APP_ID / FEISHU_APP_SECRET 现在只给 [mirror] 的云盘用，不参与发消息。
 enabled = false
-base_url = ""  # 运营可访问的审校台地址；不接受带凭据、查询参数或锚点的 URL。
+base_url = ""  # 非受管入口；受管通知使用 host.json 的 public_base_url。URL 不含凭据、查询参数或锚点。
 scan_reports = true  # 每轮的发现与落档卡分别由检测、爬取机器人发送；无新帖不推。
 keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 

@@ -100,9 +100,9 @@ export function DeploymentBanner() {
     }
   }, [])
   const message = deploymentMessage(state)
-  if ((!state.status?.managed && !deploymentStore.runtimeId) || !message) return null
+  if ((!state.status?.managed && !deploymentStore.runtimeId && !state.accessDenied) || !message) return null
   const status = state.status
-  const defer = status?.maintenance?.phase !== 'quiesced'
+  const defer = !state.accessDenied && status?.maintenance?.phase !== 'quiesced'
     && (status?.maintenance?.phase === 'announcing' || status?.deployment.phase === 'waiting')
   return <aside data-deployment-controls className={styles.deployment} aria-label="系统更新">
     <Space wrap><span role="status">{message}</span>

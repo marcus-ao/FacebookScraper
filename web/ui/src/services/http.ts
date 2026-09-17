@@ -1,4 +1,4 @@
-import { deploymentStore } from '@/app/deployment-store'
+import { ACCESS_DENIED_NOTICE, deploymentStore } from '@/app/deployment-store'
 /** 保留 status 与 payload，供排期建议和月历失败回退使用。 */
 export class ApiError extends Error {
   readonly status: number
@@ -24,6 +24,9 @@ export function idPath(taskId: string): string {
 async function fetchResponse(url: string, options?: RequestInit): Promise<Response> {
   const mutation = !['GET', 'HEAD', 'OPTIONS'].includes((options?.method ?? 'GET').toUpperCase())
   if (mutation && !deploymentStore.mutationAllowed()) {
+    if (deploymentStore.getSnapshot().accessDenied) {
+      throw new ApiError(ACCESS_DENIED_NOTICE, 403, { code: 'access_denied' })
+    }
     throw new ApiError('系统正在协调更新，请保留当前内容，等待恢复连接后再操作。', 503, { code: 'maintenance' })
   }
   const headers = new Headers(options?.headers)
@@ -43,6 +46,7 @@ async function fetchResponse(url: string, options?: RequestInit): Promise<Respon
       /* 响应不是 JSON，就用状态码 */
     }
     deploymentStore.rejectBusiness(response.status, payload)
+    if (response.status === 403) detail = ACCESS_DENIED_NOTICE
     throw new ApiError(detail, response.status, payload)
   }
   return response

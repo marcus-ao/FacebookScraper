@@ -19,6 +19,7 @@ from xml.sax.saxutils import escape
 from core.maintenance import Gate
 from core.paid_model import FileLock, atomic_write_json
 from core.process_identity import process_identity, worker_alive
+from core.web_access import WebAccess, load_web_access
 from deployment.release import REPOSITORY, extract_release, verify_release
 from deployment.errors import DeploymentError
 
@@ -164,7 +165,14 @@ def _copy_verified(source: Path, destination: Path, *, expected_sha=None):
     return verify_release(destination, expected_sha=manifest['sha'])
 
 
-def install(root: Path, source: Path, *, task_query=query_task, environment=offline_environment, probe=None):
+def install(root: Path, source: Path, *, web_host='127.0.0.1', web_port=8765,
+            public_base_url=None, allowed_client_cidrs=(), task_query=query_task,
+            environment=offline_environment, probe=None):
+    network = {'web_host': web_host, 'web_port': web_port,
+               'allowed_client_cidrs': list(allowed_client_cidrs)}
+    if public_base_url is not None:
+        network['public_base_url'] = public_base_url
+    access = WebAccess.from_mapping(network)
     root, source = Path(root).resolve(), Path(source).resolve()
     if root.exists() and any(root.iterdir()):
         raise DeploymentError('install_root_not_empty')
@@ -199,7 +207,7 @@ def install(root: Path, source: Path, *, task_query=query_task, environment=offl
     gate.announce(delay=0)
     if not gate.try_quiesce():
         raise DeploymentError('initial_maintenance_failed')
-    config = dict(marker, root=str(root), repository=REPOSITORY, web_port=8765,
+    config = dict(marker, root=str(root), repository=REPOSITORY, **access.as_dict(),
                   paused=False, scheduler_enabled=False, process_enabled=False,
                   request=None, request_id='')
     write_json(root / 'control/host.json', config)
@@ -213,6 +221,7 @@ def install(root: Path, source: Path, *, task_query=query_task, environment=offl
     state['phase'] = 'booting'
     write_json(root / 'control/deployment.json', state)
     return {'root': str(root), 'sha': manifest['sha'], 'instance_id': marker['instance_id'],
+            **access.as_dict(),
             'scheduler_enabled': False, 'process_enabled': False}
 
 
@@ -274,12 +283,12 @@ class LocalBackend:
         bind_config(release / 'config.local.toml', release, self.root / 'shared')
         return manifest
 
-    def _port_free(self, port):
+    def _port_free(self, port, host='127.0.0.1'):
         with socket.socket() as sock:
             if os.name == 'nt':
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
-                sock.bind(('127.0.0.1', port))
+                sock.bind((host, port))
             except OSError:
                 return False
         return True
@@ -287,7 +296,7 @@ class LocalBackend:
     def _spawn(self, release, role, modes, row, *, control=None, config=None, isolated=False):
         command = [str(release / '.venv/Scripts/python.exe'), '-m', 'deployment.worker', '--role', role]
         if role == 'web':
-            command += ['--port', str(row['port'])]
+            command += ['--host', row['web_host'], '--port', str(row['web_port'])]
         elif modes['process_enabled']:
             command += ['--process']
         log = self.root / 'logs' / (row['launch_id'] + '.log')
@@ -321,14 +330,16 @@ class LocalBackend:
         manifest = self.manifest(sha)
         if self.gate.status()['phase'] != 'quiesced':
             raise DeploymentError('start_requires_maintenance')
-        port = read_json(self.control / 'host.json')['web_port']
-        if not self._port_free(port):
+        access = load_web_access(self.control)
+        if not self._port_free(access.web_port, access.web_host):
             raise DeploymentError('web_port_owned')
         rows = {}
         for role in ('web', 'scheduler') if modes['scheduler_enabled'] else ('web',):
             row = {'role': role, 'sha': sha, 'runtime_id': manifest['runtime_id'],
                    'instance_id': self.marker['instance_id'], 'launch_id': uuid4().hex,
-                   'port': port, 'spawn_pending': True, 'launcher': None, 'worker': None}
+                   'port': access.web_port, 'web_host': access.web_host, 'web_port': access.web_port,
+                   'public_base_url': access.public_base_url,
+                   'spawn_pending': True, 'launcher': None, 'worker': None}
             rows[role] = row
             persist(rows)  # Launch intent is durable before the child can exist.
             self._spawn(self.root / 'releases' / sha, role, modes, row)
@@ -391,7 +402,8 @@ class LocalBackend:
         web = workers['web']
         return (health.get('managed') is True and health.get('deployment_ready') is True
                 and all(health.get(key) == web.get(key) for key in
-                        ('sha', 'runtime_id', 'instance_id', 'worker', 'launch_id', 'role'))
+                        ('sha', 'runtime_id', 'instance_id', 'worker', 'launch_id', 'role',
+                         'web_host', 'web_port', 'public_base_url'))
                 and health.get('frontend_runtime_id') == web['runtime_id'])
 
     def probe(self, release: Path, manifest: dict):
@@ -433,8 +445,12 @@ class LocalBackend:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
+        access = WebAccess.from_mapping({'web_port': port})
+        write_json(control / 'host.json', access.as_dict())
         row = {'role': 'web', 'sha': manifest['sha'], 'runtime_id': manifest['runtime_id'],
                'instance_id': marker['instance_id'], 'launch_id': uuid4().hex,
+               'web_host': access.web_host, 'web_port': access.web_port,
+               'public_base_url': access.public_base_url,
                'port': port, 'worker': None, 'launcher': None}
         write_json(control / 'probe.json', row)
         self._spawn(release, 'web', {'process_enabled': False}, row,
@@ -448,7 +464,8 @@ class LocalBackend:
                 health = self._health(port)
                 ready = (health.get('managed') is True and health.get('deployment_ready') is True
                     and all(health.get(key) == row.get(key) for key in
-                            ('sha', 'runtime_id', 'instance_id', 'worker', 'launch_id', 'role'))
+                            ('sha', 'runtime_id', 'instance_id', 'worker', 'launch_id', 'role',
+                             'web_host', 'web_port', 'public_base_url'))
                     and health.get('frontend_runtime_id') == manifest['runtime_id'])
             except (OSError, ValueError):
                 pass

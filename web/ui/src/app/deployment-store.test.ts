@@ -11,7 +11,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 function fixture() {
-  let status: DeploymentStatus = { managed: true, sha: '1'.repeat(40), runtime_id: runtime,
+  let status: DeploymentStatus = { managed: true, sha: '1'.repeat(40), runtime_id: runtime, public_base_url: 'http://192.168.1.10:8765',
     maintenance: { phase: 'open', epoch: 'epoch-one', blockers: [], operations: [] }, deployment: {} }
   const reports: Record<string, unknown>[] = []
   const fetch = vi.fn(async (url: string, options?: RequestInit): Promise<Response> => {
@@ -24,9 +24,46 @@ function fixture() {
   return { store, fetch, reload, reports, setStatus: (value: Partial<DeploymentStatus>) => { status = { ...status, ...value } },
     announce: (epoch = 'epoch-one') => { status = { ...status, maintenance: { phase: 'announcing', epoch, blockers: [], operations: [] } } } }
 }
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('deployment session coordination', () => {
+  it('registers distinct per-tab IDs over HTTP when randomUUID is unavailable', async () => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto)
+    vi.stubGlobal('crypto', { getRandomValues })
+    const f = fixture()
+    const first = new DeploymentStore(runtime, f.fetch, f.reload)
+    const second = new DeploymentStore(runtime, f.fetch, f.reload)
+    await first.refresh(); await second.refresh(); await first.report()
+    const ids = f.reports.map(report => report.session_id)
+    expect(ids).toEqual([first.sessionId, second.sessionId, first.sessionId])
+    expect(first.sessionId).not.toBe(second.sessionId)
+    expect(first.sessionId).toMatch(/^[A-Za-z0-9_-]{1,80}$/)
+  })
+
+  it.each(['refresh', 'report', 'defer'] as const)('distinguishes a denied %s from disconnection and retains drafts', async (operation) => {
+    vi.useFakeTimers()
+    const f = fixture(); await f.store.refresh(); f.store.setDirty('editor', true)
+    f.fetch.mockResolvedValueOnce({ ...json({ code: 'access_denied' }, false), status: 403 } as Response)
+    await f.store[operation]()
+    expect(f.store.getSnapshot()).toMatchObject({ accessDenied: true, dirty: true, frozen: true,
+      registered: false, status: { managed: true } })
+    expect(deploymentMessage(f.store.getSnapshot())).toContain('访问被拒绝')
+    expect(deploymentMessage(f.store.getSnapshot())).not.toContain('重新连接')
+    expect(f.reload).not.toHaveBeenCalled()
+    f.store.uncertain()
+    expect(deploymentMessage(f.store.getSnapshot())).toContain('访问被拒绝')
+    await f.store.refresh()
+    expect(f.store.getSnapshot()).toMatchObject({ accessDenied: false, registered: true, dirty: true, frozen: false })
+  })
+
+  it('holds a denied unmanaged page and shows the policy notice', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ...json({ code: 'access_denied' }, false), status: 403 })
+    const store = new DeploymentStore('', fetch, vi.fn(), 'dev-tab')
+    await store.refresh()
+    expect(store.getSnapshot()).toMatchObject({ accessDenied: true, frozen: true })
+    expect(deploymentMessage(store.getSnapshot())).toContain('公布的审校台入口')
+  })
+
   it('holds a managed initial page until status AND session registration complete', async () => {
     const f = fixture(), response = deferred<Response>()
     f.fetch.mockImplementationOnce(async () => json({ managed: true, runtime_id: runtime, maintenance: { phase: 'open' }, deployment: {} }))

@@ -20,6 +20,7 @@ from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from web.api import reader, writer, jobs, approval, calendar, settings, runtime, deployment         # noqa: E402
 from core.maintenance import MaintenanceBlocked        # noqa: E402
+from web.api.access import AccessMiddleware             # noqa: E402
 from localize import images                            # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
 from core import review, translated, localization                     # noqa: E402
@@ -32,6 +33,7 @@ force_utf8()
 
 app = FastAPI(title="审校台", docs_url="/api/docs", redoc_url=None)
 app.add_middleware(deployment.AdmissionMiddleware)
+app.add_middleware(AccessMiddleware)
 app.include_router(deployment.router)
 
 app.include_router(jobs.router)

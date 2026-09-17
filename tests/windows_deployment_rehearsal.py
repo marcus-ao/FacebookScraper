@@ -233,7 +233,7 @@ def cooperate_cleanup(root, launches):
     return {'confirmed': True, 'workers': confirmed, 'all_artifacts_retained': True}
 
 
-def rehearse(out, wheelhouse, report):
+def rehearse(out, wheelhouse, report, *, lan=False):
     artifacts, manifests = build_artifacts(out, wheelhouse, report)
     remote = FixtureRemote(artifacts, manifests)
     root, launches, faults = out / 'instance', [], set()
@@ -247,12 +247,18 @@ def rehearse(out, wheelhouse, report):
 
         log('Installing actual offline A release/controller environments and running actual preflight')
         started = time.monotonic()
-        report['install'] = install(root, artifacts[A], task_query=lambda _: False, environment=environment)
-        report['install_seconds'] = time.monotonic() - started
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
-        update_settings(root, {'web_port': port})
+        network = {'web_port': port, 'public_base_url': f'http://127.0.0.1:{port}'}
+        if lan:
+            # Documentation-only subnet cannot admit ordinary office clients; data and credentials are fixtures.
+            network.update(web_host='0.0.0.0', public_base_url=f'http://review-lan.test:{port}',
+                           allowed_client_cidrs=['192.0.2.0/24'])
+        report['install'] = install(root, artifacts[A], task_query=lambda _: False, environment=environment, **network)
+        report['install_seconds'] = time.monotonic() - started
+        report['network_before'] = {key: read_json(root / 'control/host.json')[key] for key in (
+            'web_host', 'web_port', 'public_base_url', 'allowed_client_cidrs')}
         before = seed_sentinels(root / 'shared')
         report['sentinel_before'] = before
         backend = RehearsalBackend(root, remote, launches, faults)
@@ -378,6 +384,9 @@ def rehearse(out, wheelhouse, report):
         if 'sentinel_before' in report:
             report['sentinel_after'] = inventory(root / 'shared')
             assert report['sentinel_after'] == report['sentinel_before'], 'Shared bytes changed during rehearsal or cleanup'
+        if 'network_before' in report:
+            report['network_after'] = {key: read_json(root / 'control/host.json')[key] for key in report['network_before']}
+            assert report['network_after'] == report['network_before'], 'Network settings changed during cutover/rollback'
         assert all(row['role'] == 'web' for row in report['cleanup']['workers'])
         traffic = []
         for path in (root / 'logs').glob('*.log'):
@@ -394,6 +403,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--wheelhouse', type=Path, default=ROOT / 'state/release-wheelhouse')
     parser.add_argument('--out', type=Path, default=ROOT / 'state/deployment-implementation' / ('wr-' + uuid4().hex[:8]))
+    parser.add_argument('--lan', action='store_true', help='Exercise wildcard worker binding with an isolated documentation subnet')
     args = parser.parse_args()
     if os.name != 'nt' or sys.version_info[:3] != (3, 12, 9):
         parser.error('Use 64-bit Windows Python 3.12.9')
@@ -414,7 +424,7 @@ def main():
               'wheelhouse': {path.name: sha256(path) for path in sorted(args.wheelhouse.resolve().glob('*.whl'))}}
     code = 0
     try:
-        rehearse(out, args.wheelhouse.resolve(), report)
+        rehearse(out, args.wheelhouse.resolve(), report, lan=args.lan)
     except Exception:
         code = 1
         report['status'] = 'failed'

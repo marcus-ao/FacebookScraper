@@ -49,7 +49,7 @@
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
 
-**本轮还差的是运营机器能打开的审校地址**——当前审校台在 `127.0.0.1:8765`，卡片里的「去审校」她点不开，这条与消息通道无关。企业管理员那条路（应用 AppSecret、应用授权、云盘根目录权限）随云盘一起延期，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
+**运营地址仍须现场验收**——受管服务机使用持久的 `public_base_url`，按第 16 节从业务电脑实际打开飞书链接；消息通道可达不能替代这个检查。企业管理员那条路（应用 AppSecret、应用授权、云盘根目录权限）随云盘一起延期，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
 
 ### 2.1 配置同群四个机器人
 
@@ -490,7 +490,7 @@ npm --prefix web/ui run build
 
 - [ ] 把开发分支合并到原 `main`
 - [ ] 在原主工作区运行 `scripts\run_web.bat`
-- [ ] 确认服务监听 `127.0.0.1:8765`
+- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 16 节）
 
 只刷新浏览器不会重新读取构建目录：`DIST` 在 `web/api/app.py` import 时确定。
 
@@ -762,6 +762,8 @@ D:\FacebookScraperService\
 
 默认新建空业务实例，调度与付费处理均关闭。开发机和服务机各自的测试数据不能混入生产账本。若要接续已经存在的真实业务数据，先停止其写入，按[第 1 节](#1-接续运行数据前先备份和核验)完整备份核验，再由技术人员在新实例首次启动前接续完整 `archive/state` 与必要凭据；核对全部路径及实例归属。不得只搬部分 JSONL，不能覆盖已有运行中的 `shared`，也不自动合并两份账本。
 
+网络参数保存在 `control\host.json`：`web_host`、`web_port`、`public_base_url`、`allowed_client_cidrs`。受管通知的审校台地址以这里为准；独立开发仍读取 `[feishu].base_url`。首次局域网安装见第 16 节。
+
 两个运营可编辑偏好保存在 `shared\state\operator_preferences.json`：默认柏林排期时刻与挂起工作日数。其余配置、提示词和业务规则由已验证版本交付；不要在服务机直接改 `releases\<sha>\config.toml`。
 
 ### 15.4 注册控制器与首次启动
@@ -843,7 +845,7 @@ Set-Location D:\FacebookScraperService\controller
 
 运行页展示实际版本、候选、阶段、阻塞与最近结果；详细进程日志在 `logs`，部署事务在 `control\deployment.json`，维护与会话在 `control\maintenance.json`。不要删除这些记录来“解锁”。端口被无关进程占用时不会结束它。
 
-飞书 `alert` 机器人通知完成、失败、回退及长期等待，并链接审校台。部署通知使用独立发件箱，发送失败或结果不确定不改变已经提交的部署结果，也不自动重放不确定通知。卡片链接默认只供运营在服务机桌面打开；手机或其他电脑打不开 `127.0.0.1`。
+飞书 `alert` 机器人通知完成、失败、回退及长期等待，并链接审校台。部署通知使用独立发件箱，发送失败或结果不确定不改变已经提交的部署结果，也不自动重放不确定通知。受管卡片链接使用控制目录里的 `public_base_url`，与运行页显示的“审校台入口”一致；手机不在已允许办公网络中时不属于本轮可达性承诺。
 
 GitHub 构建成功不代表服务机已更新。缺少 Chrome 登录、业务未激活或历史费用待核对属于业务状态；部署检查不自动抓取、付费、自检飞书或排期。
 
@@ -868,3 +870,88 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --wheelhouse state\
 普通兼容更新不逐次复制整套图库；保留旧代码只提供代码回退能力。首次接续、数据迁移前完整备份核验；日常继续按第 1 节外拷整个 `shared/archive`、`shared/state` 及受保护凭据，备份须覆盖人工图片与设置。云盘镜像本轮延期；首次真实发布后每天异机备份，不能把制品保留期当作数据备份。
 
 受管实例停用原来的“scheduler-disable → git pull → setup → scheduler-enable”流程。开发检出仍可手动安装和测试；生产目录由控制器管理，不 stash、不原地 pull、不复制旧虚拟环境，不同时安装第二套调度计划任务。
+
+## 16. 办公局域网接入
+
+首版面向 2–5 人同权、受控办公局域网 HTTP。用户确认暂不登录和记录个人身份，`actor: null`；获准进入入口的电脑具有相同业务能力，HTTP 不加密。业务写入仍经过已有预算、来源许可、冻结确认和版本冲突检查。本节只解决访问，不授予抓取、模型或发布权限。
+
+### 16.1 固定入口和首次安装
+
+由技术人员与网络管理员核定服务机办公 IPv4、DHCP 地址保留、网卡名称及办公 CIDR。确认访客网络不包含在放行范围，检查 Wi-Fi 客户端隔离、VLAN 路由及公司组策略；不能拿开发机的 IP 或网段代填。业务访问地址为 `http://<固定办公IP>:8765`，`0.0.0.0` 只作为服务监听参数。
+
+按第 15 节下载通过发布门禁的制品，在运营账户下安装。下面 IP、网段及下载目录均为示例，替换成现场值：
+
+```powershell
+Set-Location D:\Downloads\fbscraper-windows
+py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --web-host 0.0.0.0 --public-base-url http://192.168.10.20:8765 --allow-client-subnet 192.168.10.0/24
+```
+
+`--allow-client-subnet` 可重复；只填已核定的办公 IPv4 CIDR，不填 `0.0.0.0/0`。默认端口为 8765，显式改变端口时 `--web-port` 与 URL 端口须一致。省略全部网络参数会安装为回环模式；局域网参数不完整或非法时，安装器在创建目标目录前拒绝。
+
+首次安装直接使用包含局域网能力的完整制品。控制器指纹已经包含网络策略代码，旧控制器不会自动升级来接受本次新基线。若现场实际已存在安装，先核对其版本和实例，不覆盖安装目录或共享数据。
+
+按第 15.4 节建立唯一控制器任务、启动默认仅 Web 的模式。本机检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/api/health
+Get-NetTCPConnection -LocalPort 8765 -State Listen
+```
+
+核对 `deployment_ready`、前后端指纹、实例、实际 `web_host`/`web_port` 与标准入口。健康信息来自匹配当前进程的心跳；配置文件和进程监听不一致会拒绝 readiness。候选预检继续绑定临时回环端口，不出现在办公入口。
+
+### 16.2 手动设置 Windows 防火墙
+
+在具备权限的技术账户 PowerShell 中使用已安装控制器的 `scripts\configure_lan_firewall.ps1`。先预览，再应用；实际办公网卡名称通过 `Get-NetIPConfiguration` 核对，不照抄示例：
+
+```powershell
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 192.168.10.20 -InterfaceAlias 'Ethernet' -WhatIf
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 192.168.10.20 -InterfaceAlias 'Ethernet'
+```
+
+脚本读取并校验本实例的持久网络配置，仅管理名称 `FBScraper-LAN-Web`、分组 `FBScraper Managed Access` 的专用规则：TCP Web 端口、指定本机 IPv4 与办公网卡、配置的办公来源网段、Domain/Private 配置文件。重复执行更新同一条规则，不按版本目录绑定 Python 路径，不关闭整个防火墙、不启用 Public 配置文件。业务控制器不自动调用此脚本，也不因此增加运行权限。
+
+人工检查现有 Python 或端口放行规则和生效的组策略，确认没有更宽规则绕过范围；脚本不会擅自删除其他软件规则。Chrome 9222/9223/9224 保留本机回环，Vite 5174 不作为业务入口。
+
+### 16.3 从业务电脑验收
+
+至少两台实际办公电脑分别运行 TCP 连通检查，然后用桌面 Chrome/Edge 打开标准入口：
+
+```powershell
+Test-NetConnection 192.168.10.20 -Port 8765
+```
+
+- 打开首页、深层任务链接并刷新，查看图片及下载素材；从运行页复制标准入口。
+- 在隔离业务数据上，两人修改同一篇并先后保存：后一个旧版本保存收到冲突，输入仍保留。再验证 5 个独立会话操作不同内容。
+- 保留一个未保存页面或在途上传，触发已准备的测试更新：其他电脑可见等待，不能越过该页面切换；所有页面完成后才能更新。核对暂缓 30 分钟、断网恢复、失联脏会话及旧页面写入冲突。
+- 对部署健康、本地 CLI 与未允许来源做拒绝检查；失败记录 TCP、HTTP 状态及所用地址，不粘贴业务凭据。
+- 按已有人工通知步骤取得验收消息，从业务电脑的飞书打开任务或运行链接；只看卡片正文不算链接验收。
+
+访问被拒提示时先核对标准 URL、实际来源网段、办公网卡/配置文件、规则及公司网络策略；无需更改浏览器安全设置或放宽所有来源。临时断线时保留原标签页和输入，连接恢复后先确认版本再继续，不重复提交结果不确定的付费或发布请求。
+
+### 16.4 跨夜、重启和日常变更
+
+机器持续供电联网，禁用会中断任务的自动睡眠，运营账户保持登录；可锁屏，不以注销代替锁屏。记录一次锁屏期间及跨夜的局域网访问、版本与业务模式。控制器任务仍是 `InteractiveToken`：重启后无人登录时不承诺业务恢复；运营登录后验证只启动一套正确实例。Chrome 三个 profile 仍按原流程人工登录和独立验收。
+
+普通代码更新/回退不覆盖 `control\host.json`，飞书与页面入口保持一致。本轮不提供运行中改址：需要更换 IP/网卡/网段时，先暂停自动更新，使用维护协调确认全部页面和任务空闲、受管进程退出，再由技术人员修改并校验网络设置及规则，重启并重复本机和远程验收。不能只改文件后把它当作进程已经切换监听。
+
+### 16.5 撤回入口与证据
+
+撤回远程入口先撤销本系统专用放行，核对实际可达性；已有任务依然按维护协议处理，不强杀业务进程：
+
+```powershell
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -Remove -WhatIf
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -Remove
+```
+
+应用回退使用第 15.8 节的控制器 CLI，仅回退已验证且兼容网络配置的版本，继续使用同一份共享数据。回退不能恢复旧发布/付费账本或人工稿。
+
+现场证据记录安装 SHA、控制器及应用指纹、实例、固定地址、规则范围、两台客户端、并发与更新结果、锁屏/跨夜/重启登录时间。TCP 通、完整页面可用、真实模型/发布分别验收；开发机上的假服务及 HTTP 浏览器回归只记离线证据。
+
+开发机的局域网专项离线复核命令如下；先按第 15.10 节准备前端及锁定 wheel，`--out` 使用新目录：
+
+```powershell
+scripts\run_python.bat tests\browser_lan.py
+scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse state\release-wheelhouse --out state\windows-lan-rehearsal
+```
+
+浏览器测试通过隔离域名映射验证非 localhost HTTP，断言 `isSecureContext === false`，不降低浏览器安全选项。Windows 演练使用临时端口、测试域名和文档保留网段，核对 `0.0.0.0` 监听及更新/回退前后的网络配置，隔离候选仍只绑定回环；不设置本机防火墙或注册业务任务。两者均使用隔离数据及假外部服务，不能代替实际办公网验收。

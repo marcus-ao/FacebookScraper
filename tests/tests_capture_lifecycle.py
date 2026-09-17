@@ -284,7 +284,7 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.include_router(router)
         attach = AsyncMock(side_effect=AssertionError('must not access the browser'))
-        with patch.object(config, '_cfg', c), patch.object(delta, 'attach', attach), TestClient(app) as client:
+        with patch.object(config, '_cfg', c), patch.object(delta, 'attach', attach), TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000)) as client:
             before = self.state.path.read_bytes()
             stale = client.post('/api/runtime/capture/recover', json={'key': key, 'version': revision - 1, 'reason': 'checked'})
             self.assertEqual(stale.status_code, 409)

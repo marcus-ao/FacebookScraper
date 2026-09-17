@@ -23,6 +23,7 @@ class DeploymentApiTests(unittest.TestCase):
         self.control = Path(self.temp.name) / 'control'
         self.gate = maintenance.Gate(self.control)
         self.gate.initialize()
+        (self.control / 'host.json').write_text(json.dumps({'web_port': 8765}), encoding='utf-8')
         self.env = patch.dict(os.environ, FBSCRAPER_CONTROL_DIR=str(self.control))
         self.env.start()
         self.addCleanup(self.env.stop)

@@ -1,11 +1,9 @@
 """Local deployment status and admission; never performs a real business probe."""
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -14,27 +12,11 @@ from core import maintenance, paid_requests, review, translated
 from core.config import ROOT, cfg
 from core.process_identity import current_worker
 from core.runtime_identity import read_release, validate_binding
+from core.web_access import load_web_access
 from publish import journal
 
 router = APIRouter()
 CONTROL_PATHS = {'/api/health', '/api/deployment/status', '/api/deployment/session', '/api/deployment/defer'}
-
-
-def _local(request: Request):
-    host = request.url.hostname
-    try:
-        if not request.client or not ipaddress.ip_address(request.client.host).is_loopback:
-            raise ValueError('not loopback')
-        if host not in {'127.0.0.1', 'localhost', '::1'}:
-            raise ValueError('invalid host')
-        origin = request.headers.get('origin')
-        if origin:
-            parsed = urlsplit(origin)
-            if (parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == 'https' else 80)) != (
-                    request.url.scheme, host, request.url.port or (443 if request.url.scheme == 'https' else 80)):
-                raise ValueError('cross origin')
-    except ValueError as exc:
-        raise HTTPException(403, '部署协调只允许本机同源页面') from exc
 
 
 def _gate():
@@ -51,6 +33,8 @@ def health():
               'worker': current_worker(), 'launch_id': os.environ.get('FBSCRAPER_LAUNCH_ID'),
               'role': 'web', 'maintenance': None, 'error': None}
     try:
+        access = load_web_access()
+        result.update(web_host=access.web_host, web_port=access.web_port, public_base_url=access.public_base_url)
         manifest = read_release(ROOT)
         if manifest:
             result.update(sha=manifest['sha'], runtime_id=manifest['runtime_id'])
@@ -59,7 +43,15 @@ def health():
                 raise ValueError('受管进程缺少发布清单')
             c = cfg()
             result['instance_id'] = validate_binding(c, ROOT)['instance_id']
-            result['maintenance'] = _gate().status()['phase']
+            view = _gate().status()
+            result['maintenance'] = view['phase']
+            worker = view['workers'].get('web', {})
+            if any(worker.get(key) != result[key] for key in ('worker', 'launch_id', 'sha', 'runtime_id', 'role')):
+                raise ValueError('部署心跳不能证明当前 Web 进程')
+            actual = {key: worker.get(key) for key in ('web_host', 'web_port', 'public_base_url')}
+            result.update(actual)
+            if any(actual[key] != getattr(access, key) for key in actual):
+                raise ValueError('访问配置与正在监听的进程不一致，请按维护流程重启')
             if Path(str(c.get('paths', 'web_dist', 'web/ui/dist'))) != Path('web/ui/dist'):
                 raise ValueError('发布包必须提供版本内的固定前端目录')
             dist = ROOT / 'web/ui/dist'
@@ -89,9 +81,12 @@ def status():
     manifest = read_release(ROOT)
     result = {'managed': gate is not None, 'sha': manifest['sha'] if manifest else None,
               'runtime_id': manifest['runtime_id'] if manifest else None, 'maintenance': None,
-              'deployment': {}}
+              'deployment': {}, 'public_base_url': load_web_access().public_base_url}
     if gate:
-        result['maintenance'] = gate.status()
+        view = gate.status()
+        result['maintenance'] = {key: view.get(key) for key in ('phase', 'epoch', 'deferred_until')}
+        result['maintenance'].update(blockers=[{'reason': row['reason']} for row in view['blockers']],
+                                     operations=[{'kind': row['kind']} for row in view['operations']])
         path = gate.control / 'deployment.json'
         if path.exists():
             value = json.loads(path.read_text(encoding='utf-8'))
@@ -104,7 +99,6 @@ def status():
 
 @router.post('/api/deployment/session')
 async def session(request: Request):
-    _local(request)
     try:
         body = await request.json()
         if (not isinstance(body, dict) or set(body) - {'session_id', 'runtime_id', 'dirty', 'busy', 'ack_epoch', 'closed', 'sequence'}
@@ -118,7 +112,6 @@ async def session(request: Request):
 
 @router.post('/api/deployment/defer')
 async def defer(request: Request):
-    _local(request)
     _gate().defer()
     return {'deferred_minutes': 30}
 

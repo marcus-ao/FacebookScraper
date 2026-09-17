@@ -42,7 +42,7 @@ class CalendarApiTests(unittest.TestCase):
             self.addCleanup(mocked.stop)
         app = FastAPI()
         app.include_router(calendar.router)
-        self.client = TestClient(app)
+        self.client = TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000))
         self.addCleanup(self.client.close)
 
     def populate(self):

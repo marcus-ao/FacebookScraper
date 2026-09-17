@@ -28,13 +28,14 @@ SETTINGS_NOTE = "离线夹具：这些默认时刻只影响本次浏览器测试
 class BrowserFixture:
     """Own all resources; close them even when browser startup or assertions fail."""
 
-    def __init__(self):
+    def __init__(self, *, deployment_coordination=False):
         self.stack = ExitStack()
         self.server = None
         self.thread = None
         self.sources = {}
         self.denied_backend_requests = []
         self.local_image_writes = False
+        self.deployment_coordination = deployment_coordination
         self.config_original = (ROOT / "config.toml").read_bytes()
         self.chrome_exe = os.environ.get('FBSCRAPER_TEST_CHROME_EXE') or config.Config().chrome_exe
 
@@ -85,6 +86,8 @@ class BrowserFixture:
                     path, method = scope["path"], scope["method"]
                     safe_write = (method == "PUT" and (path == "/api/settings" or path.endswith("/localization")))
                     safe_write |= method == "POST" and path.endswith("/check")
+                    if self.deployment_coordination and method == "POST":
+                        safe_write |= path in {"/api/deployment/session", "/api/deployment/defer"}
                     if self.local_image_writes and method == "POST":
                         safe_write |= path.endswith(("/image/0/upload", "/export"))
                         safe_write |= path.startswith("/api/image-versions/task/")
@@ -95,7 +98,10 @@ class BrowserFixture:
                         return
                 await app(scope, receive, send)
 
-            self.client = self.stack.enter_context(TestClient(isolated_app))
+            self.client = self.stack.enter_context(TestClient(
+                isolated_app, base_url=f"http://127.0.0.1:{self.port}",
+                client=("127.0.0.1", 41000),
+                headers={"Origin": f"http://127.0.0.1:{self.port}"}))
             self.server = uvicorn.Server(uvicorn.Config(isolated_app, log_level="error", lifespan="off"))
             self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [listen]}, daemon=True)
             self.thread.start()

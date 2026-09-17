@@ -19,6 +19,22 @@ beforeEach(async () => {
 afterEach(async () => { await vi.runAllTimersAsync(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('business request deployment lifecycle', () => {
+  it('reports policy denial, retains a dirty draft, and blocks another save without mislabeling it as maintenance', async () => {
+    store.setDirty('editor', true)
+    const payload = { code: 'access_denied', detail: '当前地址或来源未获允许' }
+    fetch.mockResolvedValueOnce(response(payload, 403))
+    await expect(http.request('/api/save', http.putBody({ body: 'draft' }))).rejects.toMatchObject({
+      status: 403, payload, message: expect.stringContaining('访问被拒绝'),
+    })
+    expect(store.getSnapshot()).toMatchObject({ accessDenied: true, frozen: true, dirty: true })
+    await expect(http.request('/api/save', http.putBody({ body: 'draft' }))).rejects.toMatchObject({
+      status: 403, message: expect.stringContaining('访问被拒绝'),
+    })
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/save')).toHaveLength(1)
+    await vi.runAllTimersAsync()
+    expect(store.getSnapshot()).toMatchObject({ pending: 0, dirty: true, frozen: true })
+  })
+
   it('sends the built runtime header and retains busy until JSON and consumer complete', async () => {
     let finish!: (body: unknown) => void
     fetch.mockResolvedValueOnce({ ...response(null), json: () => new Promise(done => { finish = done }) })

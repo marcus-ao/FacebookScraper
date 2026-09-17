@@ -101,6 +101,10 @@ def parser():
         command.add_argument('--root', type=Path, required=True)
         if name == 'install':
             command.add_argument('--release', type=Path, required=True)
+            command.add_argument('--web-host', choices=('127.0.0.1', '0.0.0.0'), default='127.0.0.1')
+            command.add_argument('--web-port', type=int, default=8765)
+            command.add_argument('--public-base-url')
+            command.add_argument('--allow-client-subnet', action='append', default=[])
         elif name == 'install-task':
             command.add_argument('--dry-run', action='store_true')
         elif name == 'rollback':
@@ -119,7 +123,9 @@ def main(argv=None):
     args = parser().parse_args(argv)
     root = args.root.resolve()
     if args.command == 'install':
-        value = install(root, args.release)
+        value = install(root, args.release, web_host=args.web_host, web_port=args.web_port,
+                        public_base_url=args.public_base_url,
+                        allowed_client_cidrs=args.allow_client_subnet)
     elif args.command == 'install-task':
         value = install_task(root, dry_run=args.dry_run)
     elif args.command == 'supervise':

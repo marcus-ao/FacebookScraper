@@ -60,7 +60,7 @@ class WebReviewTests(unittest.TestCase):
         }
         self.addCleanup(patch.stopall)
         patch.object(config, "_cfg", test_config).start()
-        self.client = TestClient(api_app.app)
+        self.client = TestClient(api_app.app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000))
         self.addCleanup(self.client.close)
 
     def write_source(self):

@@ -1,6 +1,6 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化、整体复审与自动部署同步至 2026-09-16（§1.4–1.8），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化、整体复审、自动部署与局域网访问同步至 2026-09-16（§1.4–1.9），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
 
 ## 1. 当前工作区事实
 
@@ -229,6 +229,30 @@ TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互
 [首次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091541154)在构建前拒绝 job 级 `runner.temp` 表达式；修正为 runner 启动后的 PowerShell 步骤写入 `GITHUB_ENV`。`actionlint 1.7.12` 已[复现原错误](../state/service-auto-update/workflow-lint-before.log)，[修正后通过](../state/service-auto-update/workflow-lint-after.log)，实际步骤也在隔离环境文件上验证。托管测试与制品产出仍以对应提交的工作流结果为准。
 [第二次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091838093)完成锁定依赖与浏览器安装后，复现 3 项单测因提前注入生产运行标识而进入维护状态的环境差异。工作流改为先运行普通模式单测，再为生产构建生成版本标识；[相同环境复现](../state/service-auto-update/ui-ci-environment-negative.log)和[修正后 566 项通过](../state/service-auto-update/ui-ci-environment-positive.log)均保留。受管模式继续由专门单测与实际构建浏览器场景覆盖。
 [第三次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35092261582)的前端检查和构建通过，Python 为 84/88：runner 的账户临时目录使用 `RUNNER~1` 短路径，影响三组采集夹具与安装路径断言。已用本机 8.3 别名[复现全部 4 组失败](../state/service-auto-update/short-temp-negative.log)，CI 改用 runner 下明确创建的临时目录，实际工作流步骤配置后[4/4 通过](../state/service-auto-update/short-temp-positive.log)。业务目录保护未放宽；托管环境与本机环境的原始日志均保留。
+
+### 1.9 局域网访问实施（2026-09-16）
+
+用户确认：服务机尚未首次部署，2–5 人同权使用受控办公网 HTTP，暂不登录、不记录个人身份，继续 `actor: null`。实施分支 `codex/lan-access` 基于 `b70b786`，工作区 `.worktrees/lan-access` 使用隔离测试数据。局域网代码为 **离线通过**；改动保留在该分支工作区，尚未提交、合并或推送，主检出保持干净。
+
+收尾检查时 `main` 已由其他工作前进到 `f659581`，新增 7 个排期相关提交。本节证据对应 `b70b786` 加本分支改动；未合入这些同期提交。后续合并须处理四份文档、Web 入口与测试夹具的交集，并验证新排期生命周期、维护协议及远程写入，不能把本节结果当作合并后版本的证据。
+
+本轮覆盖持久网络配置、受管监听、来源/同源检查、非安全 HTTP 前端、多标签页维护、统一飞书链接及防火墙步骤。实际服务机 IP/网段、至少两台办公电脑、锁屏/跨夜/登录后恢复和真实业务验收均待现场执行。
+
+`control/host.json` 是网络配置唯一来源；受管健康由匹配 PID/创建时间及启动标识的心跳报告实际监听，配置与进程不一致拒绝 readiness。来源检查先于业务登记，代理头解释关闭，部署状态只输出页面所需字段。独立复审发现并修复了 Vite 代理改写 Host 后与浏览器 Origin 不符的问题，开发代理保留原 Host；防火墙脚本复审没有遗留阻断项。
+
+| 检查 | 结果与证据 |
+|---|---|
+| 全量 Python 离线 | **90/90 脚本通过**，含部署、访问策略 12 项、防火墙 7 项、通知、写入冲突及 hygiene；[逐脚本结果与日志](../state/offline-validation-20260917T031920Z/results.json) |
+| 前端单测与构建 | **31 个文件、572 项通过**，TypeScript/Vite 生产构建通过；本任务核对了命令输出，原始 stdout 未单独落盘。已有大 chunk 提示保留 |
+| 浏览器主流程与静态入口 | **12/12 组通过**；[主流程报告](../state/ui-regression/browser-stage-all.json)及 [18 个 HTTP 入口、深链刷新与缺失资源检查](../state/cutover-lan.json) |
+| 部署页面协调 | **6/6 组通过**；[报告](../state/deployment-implementation/frontend-browser.json)，隔离浏览器与模拟部署接口 |
+| 非安全 HTTP 局域网专项 | **7/7 组通过**；[报告及同目录截图](../state/offline-lan-20260917T032746Z-33084/report.json)。实际 `isSecureContext=false`，5 个独立客户端及同浏览器多标签页，真实临时会话/保存接口，无草稿丢失、控制台异常或外部业务操作 |
+| Windows 受管实例 | **4/4 场景通过**；[完整报告、包及安装日志](../state/windows-lan-rehearsal/report.json)。最终路径安装 3 个独立环境，9 个受管启动确认退出；11 份共享文件字节与网络配置不变，源码指纹无漂移 |
+| 汇总 | [本次核验记录](../state/lan-access-validation.json)，记录代码指纹、测试命令及现场验收缺口 |
+
+本机 Windows 演练监听 `0.0.0.0` 临时端口，允许来源为文档保留网段，不把开发机作为业务入口；预检用独立回环端口。成功切换阶段实测约 5 秒，仅代表这套无业务负载夹具；回退与中断恢复使用推进的逻辑时限，不承诺服务机耗时。测试没有修改本机防火墙、注册计划任务、使用业务 Chrome profile 或发送飞书/模型/发布请求。飞书链接以假消息验证生成地址，实际点击仍须现场验收。
+
+新增 LAN 浏览器检查已纳入发布工作流；本地同等门禁通过，GitHub 上包含本次改动的云端运行尚未执行。真实办公网络、至少两台实体客户端及持续运行均为 **待真实联调**，按 [MANUAL_STEPS §16](MANUAL_STEPS.md#16-办公局域网接入) 留证。上述新增证据目前只在本 worktree 的 `state/`，不随 Git 提交；清理该 worktree 前必须保全，否则相应结论需降级。
 
 ## 2. 红线
 

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from core.config import MonitorSchedule, cfg
+from core.web_access import load_web_access
 from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 
 # ⚠️ dispatch 先按 sorted(KINDS) 建投递，再按建立顺序逐条发送——**kind 名字的字典序就是群里
@@ -70,7 +72,8 @@ class FeishuSettings:
         enabled = c.get('feishu', 'enabled', False)
         if not isinstance(enabled, bool):
             raise ValueError('[feishu].enabled 必须是布尔值')
-        result = cls(enabled, c.get('feishu', 'base_url', ''),
+        base_url = load_web_access().public_base_url if os.environ.get('FBSCRAPER_CONTROL_DIR') else c.get('feishu', 'base_url', '')
+        result = cls(enabled, base_url,
                      keep_delivered_days=c.get('feishu', 'keep_delivered_days', 30))
         if enabled:
             result.validate()

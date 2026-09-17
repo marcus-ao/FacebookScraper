@@ -74,6 +74,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/browser_deployment.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/browser_lan.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package verified commit
         run: |
           python -c "import os; from pathlib import Path; from deployment.release import runtime_fingerprint; assert runtime_fingerprint(Path.cwd()) == os.environ['VITE_FBSCRAPER_RUNTIME_ID'], 'Runtime inputs changed after frontend build'"
@@ -99,5 +101,6 @@ jobs:
             state/ui-regression/
             state/cutover-release.json
             state/deployment-implementation/browser-deployment*
+            state/offline-lan-*/
           if-no-files-found: ignore
           retention-days: 14

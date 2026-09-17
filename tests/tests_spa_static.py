@@ -56,7 +56,7 @@ def setUpModule():
     from web.api.app import DIST, app
 
     assert DIST == dist.resolve(), f"临时 dist 没有生效，量到的是 {DIST}"
-    _client = TestClient(app)
+    _client = TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000))
     _client.__enter__()
 
 

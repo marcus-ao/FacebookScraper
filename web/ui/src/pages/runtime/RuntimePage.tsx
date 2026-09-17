@@ -1,20 +1,26 @@
-import { useState } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { Alert, App, Badge, Button, Checkbox, Collapse, Drawer, Input, Modal, Space, Spin, Typography } from 'antd'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { PageTitle } from '@/app/PageTitle'
+import { deploymentStore } from '@/app/deployment-store'
 import { useRuntime } from '@/hooks/useRuntime'
 import { mirrorDiagnostics, mirrorSummary, runtimeSignature, stageSummary } from '@/features/runtime/model'
 import { getRuntime, recoverProcessing, resolveNotification } from '@/services/runtime'
 import { idPath, isConflict } from '@/services/http'
 import { ShanghaiTime } from '@/components/Time'
+import { CopyButton } from '@/components/CopyButton'
 import type { FeishuDelivery, RuntimeSnapshot } from '@/types/domain'
 import styles from './RuntimePage.module.css'
 import { MonitorPanel } from './MonitorPanel'
 
 export function RuntimePage() {
   const query = useRuntime()
-  return <section><PageTitle />{query.data ? <RuntimeView initial={query.data} current={query.data} /> : query.isPending ? <Spin description="正在读取状态…" /> : <Alert type="warning" title="运行状态暂时不可读" action={<Button onClick={() => void query.refetch()}>重试</Button>} />}</section>
+  const deployment = useSyncExternalStore(deploymentStore.subscribe, deploymentStore.getSnapshot, deploymentStore.getSnapshot)
+  const publicUrl = deployment.status?.public_base_url
+  return <section><PageTitle />
+    {publicUrl && <p><Space wrap><span>审校台入口：<Typography.Text code>{publicUrl}</Typography.Text></span><CopyButton text={publicUrl} label="复制入口" /></Space></p>}
+    {query.data ? <RuntimeView initial={query.data} current={query.data} /> : query.isPending ? <Spin description="正在读取状态…" /> : <Alert type="warning" title="运行状态暂时不可读" action={<Button onClick={() => void query.refetch()}>重试</Button>} />}</section>
 }
 function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: RuntimeSnapshot }) {
   const [data, setData] = useState(initial), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null)

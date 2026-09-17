@@ -24,9 +24,11 @@ export default defineConfig(({ mode }) => {
     sourcemap: true,
   },
   server: {
+    host: '127.0.0.1',
     port: 5174,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true },
+      // Keep the browser Host paired with Origin for the backend's same-origin check.
+      '/api': { target: 'http://127.0.0.1:8765', changeOrigin: false },
     },
   },
   }

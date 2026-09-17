@@ -99,7 +99,7 @@ class InitialTranslationTests(ConsentFixture):
 
     def test_http_requires_explicit_consent_and_queues_without_blocking_the_page(self):
         url = '/api/initial-translation/task/' + self.account.name + '/' + self.source['post_id']
-        with TestClient(app) as client, patch.object(refinement, '_executor', self.executor):
+        with TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000)) as client, patch.object(refinement, '_executor', self.executor):
             capability = client.get(url)
             self.assertEqual(capability.status_code, 200)
             body = dict(source_fingerprint=capability.json()['source_fingerprint'],

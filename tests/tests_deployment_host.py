@@ -23,6 +23,88 @@ from core.maintenance import Gate
 
 
 class HostTests(unittest.TestCase):
+    def test_install_cli_passes_explicit_network_policy(self):
+        from deployment.cli import main
+        with patch('deployment.cli.install', return_value={}) as installer, patch('builtins.print'):
+            main(['install', '--root', 'fixture-root', '--release', 'fixture-release',
+                  '--web-host', '0.0.0.0', '--web-port', '9876',
+                  '--public-base-url', 'http://192.168.20.10:9876',
+                  '--allow-client-subnet', '192.168.20.0/24',
+                  '--allow-client-subnet', '10.40.0.0/16'])
+        self.assertEqual(installer.call_args.kwargs, {
+            'web_host': '0.0.0.0', 'web_port': 9876,
+            'public_base_url': 'http://192.168.20.10:9876',
+            'allowed_client_cidrs': ['192.168.20.0/24', '10.40.0.0/16'],
+        })
+
+    def test_invalid_network_policy_is_rejected_before_install_creates_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'untouched'
+            with patch('deployment.host.verify_release') as verify:
+                with self.assertRaises(ValueError):
+                    install(root, Path(tmp), web_host='0.0.0.0',
+                            task_query=lambda name: False)
+            self.assertFalse(root.exists())
+            verify.assert_not_called()
+
+    def test_readiness_requires_the_expected_network_identity(self):
+        backend = LocalBackend.__new__(LocalBackend)
+        worker = {'pid': 123, 'started': '12'}
+        row = {'role': 'web', 'sha': 'a' * 40, 'runtime_id': 'b' * 64,
+               'instance_id': 'fixture', 'launch_id': 'launch', 'worker': worker,
+               'seen_at': time.time(), 'port': 9876, 'web_host': '0.0.0.0',
+               'web_port': 9876, 'public_base_url': 'http://192.168.20.10:9876'}
+        health = dict(row, managed=True, deployment_ready=True, frontend_runtime_id='b' * 64)
+        with patch.object(backend, '_refresh'), patch('deployment.host.worker_alive', return_value=True), \
+                patch.object(backend, '_health', return_value=health) as fetch:
+            self.assertTrue(backend.ready(row['sha'], {'web': row}, {'scheduler_enabled': False}))
+            fetch.assert_called_with(9876)
+            for key, wrong in (('web_host', '127.0.0.1'), ('web_port', 8765),
+                               ('public_base_url', 'http://127.0.0.1:9876')):
+                with self.subTest(field=key):
+                    health[key] = wrong
+                    self.assertFalse(backend.ready(row['sha'], {'web': row}, {'scheduler_enabled': False}))
+                    health[key] = row[key]
+
+    def test_wildcard_port_check_rejects_an_existing_loopback_listener(self):
+        backend = LocalBackend.__new__(LocalBackend)
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            self.assertFalse(backend._port_free(port, '0.0.0.0'))
+
+    def test_lan_start_passes_persisted_network_policy_to_owned_worker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'logs').mkdir()
+            backend = LocalBackend.__new__(LocalBackend)
+            backend.root, backend.control = root, root / 'control'
+            backend.gate = Gate(backend.control)
+            backend.gate.initialize()
+            backend.gate.announce(delay=0)
+            self.assertTrue(backend.gate.try_quiesce())
+            backend.marker, backend.processes = {'instance_id': 'fixture'}, {}
+            sha = 'a' * 40
+            backend.manifest = lambda selected: {'sha': selected, 'runtime_id': 'b' * 64}
+            policy = {'web_host': '0.0.0.0', 'web_port': 9876,
+                      'public_base_url': 'http://192.168.20.10:9876',
+                      'allowed_client_cidrs': ['192.168.20.0/24']}
+            write_json(backend.control / 'host.json', policy)
+            saved = []
+            with patch.object(backend, '_port_free', return_value=True) as available, \
+                    patch('deployment.host.subprocess.Popen') as process, \
+                    patch('deployment.host.process_identity', return_value={'pid': 123, 'started': '12'}):
+                workers = backend.start(sha, {'scheduler_enabled': False, 'process_enabled': False},
+                                        lambda rows: saved.append(json.loads(json.dumps(rows))))
+            available.assert_called_once_with(9876, '0.0.0.0')
+            command = process.call_args.args[0]
+            self.assertEqual(command[-4:], ['--host', '0.0.0.0', '--port', '9876'])
+            self.assertTrue(saved[0]['web']['spawn_pending'])
+            self.assertFalse(saved[-1]['web']['spawn_pending'])
+            for key in ('web_host', 'web_port', 'public_base_url'):
+                self.assertEqual(workers['web'][key], policy[key])
+
     def test_managed_cli_rejects_a_release_selected_before_cutover(self):
         from deployment.cli import _exec_worker
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +187,25 @@ class HostTests(unittest.TestCase):
             self.assertEqual(read_json(root / 'control/instance.json'), read_json(root / 'shared/instance.json'))
             self.assertEqual(probes, [environments[0]])
             self.assertEqual(read_json(root / 'control/deployment.json')['phase'], 'booting')
+            settings = read_json(root / 'control/host.json')
+            self.assertEqual(settings['web_host'], '127.0.0.1')
+            self.assertEqual(settings['web_port'], 8765)
+            self.assertEqual(settings['public_base_url'], 'http://127.0.0.1:8765')
+            self.assertEqual(settings['allowed_client_cidrs'], [])
+            lan_root = base / 'lan-installation'
+            network = {'web_host': '0.0.0.0', 'web_port': 9876,
+                       'public_base_url': 'http://192.168.20.10:9876',
+                       'allowed_client_cidrs': ['192.168.20.0/24']}
+            with patch('deployment.host._quiet_run', return_value='fixture-owner'):
+                result = install(lan_root, payload, **network, task_query=lambda name: False,
+                                 environment=environments.append,
+                                 probe=lambda release, manifest: probes.append(release))
+            settings = read_json(lan_root / 'control/host.json')
+            for key, value in network.items():
+                self.assertEqual(settings[key], value)
+                self.assertEqual(result[key], value)
+            self.assertFalse(settings['scheduler_enabled'])
+            self.assertFalse(settings['process_enabled'])
 
     def test_probe_environment_drops_secrets_and_sets_controller_identity(self):
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'secret', 'FEISHU_ALERT_WEBHOOK': 'secret'}):
@@ -239,11 +340,22 @@ class BackendLifecycleTests(unittest.TestCase):
             time.sleep(.1)
         self.assertTrue(backend.exited(workers))
         self.assertEqual(list((fixture.shared / 'state').iterdir()), [])
+        lan_policy = {'web_host': '0.0.0.0', 'web_port': port,
+                      'public_base_url': f'http://192.168.20.10:{port}',
+                      'allowed_client_cidrs': ['192.168.20.0/24']}
+        write_json(fixture.control / 'host.json', lan_policy)
         backend.probe(release, fixture.manifest)
         probes = list(fixture.control.glob('probe-*/control/probe.json'))
         self.assertEqual(len(probes), 1)
         self.assertTrue(read_json(probes[0])['ready'])
         self.assertTrue(read_json(probes[0])['exited'])
+        probe = read_json(probes[0])
+        probe_policy = read_json(probes[0].with_name('host.json'))
+        self.assertEqual(probe_policy, {'web_host': '127.0.0.1', 'web_port': probe['port'],
+                                        'public_base_url': f"http://127.0.0.1:{probe['port']}",
+                                        'allowed_client_cidrs': []})
+        self.assertEqual(read_json(fixture.control / 'host.json'), lan_policy)
+        self.assertEqual((probes[0].parents[1] / 'shared/.env').read_bytes(), b'')
         self.assertEqual(list((fixture.shared / 'state').iterdir()), [])
 
 

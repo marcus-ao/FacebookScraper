@@ -42,6 +42,8 @@ class ReleaseTests(unittest.TestCase):
                              wheelhouse=self.wheels)
 
     def test_package_copies_allowlist_byte_for_byte_and_verifies_installed_directory(self):
+        self.put('scripts/configure_lan_firewall.ps1',
+                 (Path(__file__).resolve().parents[1] / 'scripts/configure_lan_firewall.ps1').read_bytes())
         for path in ('.env', 'config.local.toml', 'state/paid_requests.jsonl', 'archive/photo.jpg',
                      'core/.env', 'core/secret.json', 'web/ui/node_modules/private.js'):
             self.put(path, b'private')
@@ -52,6 +54,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(manifest['workflow'], 'release.yml')
         names = {entry['path'] for entry in manifest['files']}
         self.assertIn('requirements.lock', names)
+        self.assertIn('scripts/configure_lan_firewall.ps1', names)
         self.assertIn('wheelhouse/example-1-py3-none-any.whl', names)
         self.assertNotIn('release.json', names)
         self.assertFalse(any('private' in p.read_text(errors='ignore') for p in self.output.rglob('*') if p.is_file()))
@@ -209,6 +212,9 @@ class ReleaseTests(unittest.TestCase):
         self.put('deployment/worker.py', b'application worker change')
         self.assertEqual(controller_fingerprint(self.root), before)
         self.put('core/maintenance.py', b'controller protocol change')
+        self.assertNotEqual(controller_fingerprint(self.root), before)
+        before = controller_fingerprint(self.root)
+        self.put('core/web_access.py', b'installation network policy change')
         self.assertNotEqual(controller_fingerprint(self.root), before)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics')

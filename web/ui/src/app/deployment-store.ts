@@ -1,15 +1,17 @@
 export const RUNTIME_ID = import.meta.env.VITE_FBSCRAPER_RUNTIME_ID || ''
+export const ACCESS_DENIED_NOTICE = '访问被拒绝：当前地址或来源未获允许。当前草稿仍保留，请使用公布的审校台入口，或联系技术人员检查访问配置。'
 
 export interface DeploymentStatus {
   managed: boolean
   sha: string | null
   runtime_id: string | null
+  public_base_url: string
   maintenance: null | {
     phase: 'open' | 'announcing' | 'quiesced'
     epoch: string
     deferred_until?: number
-    blockers: { session_id?: string; reason: string }[]
-    operations: unknown[]
+    blockers: { reason: string }[]
+    operations: { kind: string }[]
   }
   deployment: {
     phase?: string; current_sha?: string; observed_sha?: string; last_good_sha?: string
@@ -20,6 +22,7 @@ export interface DeploymentStatus {
 export interface DeploymentSnapshot {
   status: DeploymentStatus | null
   connected: boolean
+  accessDenied: boolean
   registered: boolean
   dirty: boolean
   pending: number
@@ -29,6 +32,11 @@ export interface DeploymentSnapshot {
 }
 
 type Transport = (url: string, options?: RequestInit) => Promise<Response>
+
+function createSessionId(): string {
+  // getRandomValues remains available on trusted-LAN HTTP; randomUUID requires a secure context.
+  return Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 /** Per-tab memory only. The server retains dirty sessions even when this tab disappears. */
 export class DeploymentStore {
@@ -52,13 +60,13 @@ export class DeploymentStore {
     runtimeId = RUNTIME_ID,
     transport: Transport = (url, options) => fetch(url, options),
     reload: () => void = () => window.location.reload(),
-    sessionId: string = globalThis.crypto.randomUUID(),
+    sessionId: string = createSessionId(),
   ) {
     this.sessionId = sessionId
     this.runtimeId = runtimeId
     this.transport = transport
     this.reload = reload
-    this.state = { status: null, connected: !runtimeId, registered: false, dirty: false,
+    this.state = { status: null, connected: !runtimeId, accessDenied: false, registered: false, dirty: false,
       pending: 0, frozen: !!runtimeId, conflict: false, notice: '' }
   }
 
@@ -71,7 +79,7 @@ export class DeploymentStore {
   private update(patch: Partial<DeploymentSnapshot>) {
     const next = { ...this.state, ...patch }
     const managed = next.status?.managed ?? !!this.runtimeId
-    next.frozen = managed && (!next.connected || !next.registered || next.conflict
+    next.frozen = next.accessDenied || managed && (!next.connected || !next.registered || next.conflict
       || next.status?.maintenance?.phase === 'quiesced'
       || (next.status?.maintenance?.phase === 'announcing' && !next.dirty))
     this.state = next
@@ -124,29 +132,40 @@ export class DeploymentStore {
 
   rejectBusiness(status: number, payload: unknown) {
     const code = payload && typeof payload === 'object' && 'code' in payload ? payload.code : null
-    if (status === 409 && code === 'runtime_changed') {
+    if (status === 403) {
+      this.denyAccess()
+    } else if (status === 409 && code === 'runtime_changed') {
       this.update({ conflict: true, connected: false, notice: '系统版本已更新。当前草稿保留，请先复制草稿；确认放弃或保存完毕后再刷新。' })
     } else if (status === 503 && code === 'maintenance') {
       this.uncertain('系统正在更新，正在重新连接。当前内容仍保留，请勿重复提交。')
     }
   }
 
+  private denyAccess() {
+    this.generation++
+    this.update({ accessDenied: true, connected: false, registered: false, notice: ACCESS_DENIED_NOTICE })
+  }
+
   uncertain(notice = '正在重新确认服务状态，暂时暂停操作；当前草稿仍保留。') {
     this.generation++
-    this.update({ connected: false, registered: false, notice })
+    this.update({ connected: false, registered: false, notice: this.state.accessDenied ? ACCESS_DENIED_NOTICE : notice })
   }
 
   async refresh(): Promise<void> {
     const generation = ++this.generation
     try {
       const response = await this.transport('/api/deployment/status', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
+      if (generation !== this.generation || this.stopped) return
+      if (response.status === 403) { this.denyAccess(); return }
       if (!response.ok) throw new Error('status unavailable')
       const status = await response.json() as DeploymentStatus
       if (generation !== this.generation || this.stopped) return
       if (!status || typeof status.managed !== 'boolean') throw new Error('invalid status')
       this.statusAt = Date.now()
       const conflict = status.managed && status.runtime_id !== this.runtimeId
-      this.update({ status, connected: true, conflict, notice: '',
+      this.update({ status, connected: true, conflict,
+        accessDenied: status.managed && this.state.accessDenied,
+        notice: status.managed && this.state.accessDenied ? ACCESS_DENIED_NOTICE : '',
         registered: status.managed ? this.state.registered : true })
       if (status.managed && this.runtimeId) await this.report()
       else if (status.managed) this.update({ notice: '页面缺少部署版本，请安全刷新页面。' })
@@ -157,7 +176,7 @@ export class DeploymentStore {
   }
 
   private reportSoon() {
-    if (!this.state.status?.managed || this.stopped) return
+    if (!this.state.status?.managed || this.state.accessDenied || this.stopped) return
     this.desired = true
     // Coalesce synchronous dirty/busy transitions; never send an intermediate clean snapshot.
     setTimeout(() => { void this.report() }, 0)
@@ -172,7 +191,7 @@ export class DeploymentStore {
   }
 
   async report(): Promise<void> {
-    if (!this.runtimeId || !this.state.status?.managed || this.stopped) return
+    if (!this.runtimeId || !this.state.status?.managed || this.stopped || (this.state.accessDenied && !this.state.connected)) return
     this.desired = true
     if (this.sending) return this.sending
     this.sending = (async () => {
@@ -185,10 +204,15 @@ export class DeploymentStore {
           const response = await this.transport('/api/deployment/session', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(4000),
           })
+          if (response.status === 403) {
+            this.desired = false
+            if (generation === this.generation && !this.stopped) this.denyAccess()
+            break
+          }
           if (!response.ok) throw new Error('session unavailable')
           await response.json()
           if (revision !== this.revision) this.desired = true
-          else if (generation === this.generation && this.state.connected) this.update({ registered: true })
+          else if (generation === this.generation && this.state.connected) this.update({ registered: true, accessDenied: false, notice: '' })
         } catch {
           this.desired = false
           this.uncertain()
@@ -204,6 +228,7 @@ export class DeploymentStore {
       const response = await this.transport('/api/deployment/defer', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(4000),
       })
+      if (response.status === 403) { this.denyAccess(); return }
       if (!response.ok) throw new Error('defer unavailable')
       await response.json()
       await this.refresh()
