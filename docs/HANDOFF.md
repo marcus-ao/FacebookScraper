@@ -321,9 +321,10 @@ socket 关闭边界故障注入复现同一错误：请求与连接集合已空�
 | 完整 CI 浏览器步骤 | [12/12 主流程](../state/ui-regression/browser-stage-all.json)、[18 个 HTTP 入口与深链](../state/ci-browser-shutdown/final-cutover.json)、[部署页面 6 项](../state/deployment-implementation/frontend-browser.json)、[LAN 7 项](../state/offline-lan-20260917T130702Z-38800/report.json)；四个命令连续退出 0 |
 | 构建与复审 | 当前前端生产构建通过；运行输入指纹与构建一致，独立复审无遗留阻断；[本机汇总](../state/ci-browser-shutdown/validation.json) |
 
-本机验证后，远端 `main` 仍为 `bbeb3b5`，上述托管运行仍失败且只有失败证据制品。
-修复尚未推送，须按 AGENTS 确认后触发新 main 构建并核验 SHA、结论及 `fbscraper-windows`，
-不能将本地结果写成托管构建恢复或正式包已可用。服务机部署与真实业务继续为 **待真实联调**。
+修复代码提交为 `a9909e5`；本机验证时，远端 `main bbeb3b5` 的上述托管运行仍失败且只有
+失败证据制品。用户已确认合并并推送，后续提交、main 工作流与制品核验回执记入上述本机汇总。
+托管构建恢复须核对新 main 的完整 SHA、工作流成功结论及 `fbscraper-windows` 包身份；
+本地通过不替代这三项证据。服务机部署与真实业务继续为 **待真实联调**。
 
 ## 2. 红线
 
