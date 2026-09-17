@@ -1016,11 +1016,11 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
 
 浏览器测试通过隔离域名映射验证非 localhost HTTP，断言 `isSecureContext === false`，不降低浏览器安全选项。Windows 演练使用临时端口、测试域名和文档保留网段，核对 `0.0.0.0` 监听及更新/回退前后的网络配置，隔离候选仍只绑定回环；不设置本机防火墙或注册业务任务。两者均使用隔离数据及假外部服务，不能代替实际办公网验收。
 
-### 17.6 当前分支在服务机的调试步骤
+### 17.6 拉取主分支后在服务机调试
 
 这轮使用新的 `C:\FacebookScraperServiceLanTest`，与将来的正式业务实例分开。测试目录不接续既有 archive/state/.env，不注册正式任务；默认调度与付费关闭。端口沿用 8765，因此测试与正式实例不能同时占用该端口。
 
-1. 在服务机运营账户安装 **Windows x64 Python 3.12.9**。本流程使用已构建制品，无需安装 Node、Git 或自行运行前端开发服务器。管理员核对：
+1. 在服务机运营账户安装 **Windows x64 Python 3.12.9** 和 Git。本流程拉取源码用于核对版本、网络配置与手册，运行环境使用同一提交的已构建制品，无需安装 Node 或自行运行前端开发服务器。管理员核对：
 
    ```powershell
    Get-NetIPAddress -InterfaceAlias WLAN -AddressFamily IPv4
@@ -1030,24 +1030,37 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
 
    地址应为 `10.66.3.157/24`；网络类型应为 DomainAuthenticated 或 Private。若是 Public，按公司网络政策确认办公网络属性后再由管理员调整；不放宽为 Public。已有监听时先确定归属，不结束不认识的进程。
 
-2. 在 GitHub Actions 的 **Windows release** 中选择 **codex/lan-access** 和本次推送 SHA，等全部检查成功。下载同一次运行的 `fbscraper-windows` 与 `service-machine-network` 两份制品，分别解压到当前用户 Downloads 下的同名目录。前者根目录必须直接有 `release.json`，后者有 `service-machine.network.json`。不能拿当前 main 的旧制品测试新局域网功能。
+2. 在服务机现有仓库目录打开普通 PowerShell，先检查是否有本地改动；有改动时先核对和保全，不强制覆盖。工作区干净后拉取 `main`，这些变量在后续同一窗口复用：
+
+   ```powershell
+   git status --short --branch
+   git switch main
+   git pull --ff-only origin main
+   if ($LASTEXITCODE -ne 0) { throw 'Pull failed; stop before installation.' }
+   $Source = (git rev-parse --show-toplevel).Trim()
+   $ExpectedSha = (git rev-parse HEAD).Trim()
+   $Network = Join-Path $Source 'ops\service-machine.network.json'
+   Get-Content $Network
+   ```
+
+   在 GitHub Actions 的 **Windows release** 中选择 **main** 和 `$ExpectedSha` 对应的成功运行，下载 `fbscraper-windows`，解压到当前用户 Downloads 下的同名目录，根目录必须直接有 `release.json`。网络配置使用刚拉取的 `ops/service-machine.network.json`，无需再下载独立配置制品。不要选择合并前的旧包或失败运行；`git pull` 本身不会安装构建产物、更新固定控制器或改变受管实例的 `control/host.json`。
 
 3. 在运营账户普通 PowerShell 中安装；这些变量在后续同一窗口复用：
 
    ```powershell
    $Release = Join-Path $env:USERPROFILE 'Downloads\fbscraper-windows'
-   $Network = Join-Path $env:USERPROFILE 'Downloads\service-machine-network\service-machine.network.json'
    $ServiceRoot = 'C:\FacebookScraperServiceLanTest'
    Set-Location $Release
    py -3.12 --version
    Get-Content $Network
-   py -3.12 -m deployment.release verify .
+   py -3.12 -m deployment.release verify . --expected-sha $ExpectedSha
+   if ($LASTEXITCODE -ne 0) { throw 'Release verification failed; stop before installation.' }
    py -3.12 -m deployment install --root $ServiceRoot --release $Release --network-config $Network
    ```
 
    版本、SHA 或校验不符时停止；安装目标非空也会拒绝，不能删除其内容来重试。安装会准备两个最终路径虚拟环境及独立回环预检，期间等命令返回。安装输出须显示真实入口、网段以及 `scheduler_enabled=false`、`process_enabled=false`。
 
-4. 首次运行前暂停自动更新，保留当前分支版本供调试；保留安装器生成的空业务凭据和空 GitHub token：
+4. 首次运行前暂停自动更新，固定本次主分支版本供调试；保留安装器生成的空业务凭据和空 GitHub token：
 
    ```powershell
    Set-Location "$ServiceRoot\controller"
@@ -1056,7 +1069,7 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
    .\.venv\Scripts\python.exe -m deployment supervise --root $ServiceRoot
    ```
 
-   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 是所装分支、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.3.157:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
+   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 等于 `$ExpectedSha`、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.3.157:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
 
 5. 在管理员 PowerShell 中预览并应用测试实例规则：
 
@@ -1073,6 +1086,6 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
 
 7. 空实例可直接用设置页验证多人保护：两台电脑先打开同一旧值，各自输入不同的合法默认时间；A 保存，B 保存应提示版本冲突且保留 B 的输入。测试结束明确保存或放弃草稿。图片、素材下载和内容编辑须准备隔离样本后再按第 17.3 节验收；不要为造测试数据启动真实抓取、模型或发布。完整假服务回归使用第 17.5 节的源码测试工具，不在业务账本中造夹具。
 
-8. 记录页面、HTTP 结果、版本和两台客户端；按第 17.4 节验证锁屏及跨夜。当前分支制品只供显式安装调试，生产轮询仍只接受 main。合并后的 main 制品、正式运行目录、凭据、任务与业务启用按第 15 节另行验收；不把测试实例的账本搬成正式数据。
+8. 记录页面、HTTP 结果、版本和两台客户端；按第 17.4 节验证锁屏及跨夜。生产轮询只接受当前 main 的成功制品，调试实例保持暂停以便复核固定版本。正式运行目录、凭据、任务与业务启用按第 15 节另行验收；不把测试实例的账本搬成正式数据。
 
 撤销远程入口用第 17.5 节的 `-Remove`，将 Root 换成测试目录。`pause` 只暂停自动更新，`Ctrl+C` 只退出前台控制器，都不承诺 Web 已退出；不能把窗口消失当作完整停机。结束调试前先保存或放弃所有草稿并关闭标签页，再退出前台控制器；技术人员使用维护 Gate 关闭接单、向已登记的准确进程请求退出并核对 PID/创建时间，不能强杀未完成操作或删除测试目录解除阻塞。
