@@ -64,7 +64,7 @@ class PublishOperationTests(unittest.TestCase):
                     patch.object(web_approval, '_source', return_value=source), \
                     patch.object(web_approval.approval, 'options', return_value={'available': True}), \
                     patch.object(web_approval.approval, 'approve', side_effect=approve):
-                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=('10.66.3.42', 41000)),
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=('10.66.4.12', 41000)),
                                             base_url=network['public_base_url'],
                                             headers={'Origin': network['public_base_url']}) as client:
                     response = await client.post('/api/tasks/fa_example/x/approve', json={
