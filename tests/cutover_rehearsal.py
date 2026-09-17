@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from core import config  # noqa: E402
 from core.store import Archive, Post  # noqa: E402
+from tests.http_fixture import run_http_server  # noqa: E402
 
 REACT_PATHS = ["/", "/review", "/history", "/calendar", "/settings", "/runtime"]
 LEGACY = ["/?view=history", "/?view=calendar", "/?view=settings", "/?view=runtime"]
@@ -94,8 +95,9 @@ def main() -> int:
                 return
             await app(scope, receive, send)
 
-        server = uvicorn.Server(uvicorn.Config(read_only, log_level="error", lifespan="off"))
-        thread = threading.Thread(target=server.run, kwargs={"sockets": [listen]}, daemon=True)
+        server = uvicorn.Server(uvicorn.Config(
+            read_only, log_level="error", lifespan="off"))
+        thread = threading.Thread(target=run_http_server, args=(server, [listen]), daemon=True)
         thread.start()
         deadline = time.monotonic() + 15
         while not server.started:

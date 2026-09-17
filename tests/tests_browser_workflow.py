@@ -540,9 +540,13 @@ class BrowserWorkflowTests(unittest.TestCase):
             data = io.BytesIO()
             Image.new("RGB", (1080, 700), colour).save(data, "PNG")
             with self.page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/image/0/upload")) as response:
-                self.page.locator('input[type="file"]').set_input_files({
+                # Direct set_input_files bypasses the disabled upload control while
+                # download/upload refreshes are still updating the review revision.
+                with self.page.expect_file_chooser() as chooser:
+                    self.page.get_by_role("button", name=re.compile("上传图片替换第")).click()
+                chooser.value.set_files({
                     "name": "manual.png", "mimeType": "image/png", "buffer": data.getvalue()})
-            self.assertEqual(response.value.status, 200)
+            self.assertEqual(response.value.status, 200, response.value.text())
             current = self.fixtures.detail(task_id)
             expect(self.page.get_by_role("img", name="德语图 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
             expect(self.page.get_by_text("人工图片", exact=True)).to_be_visible()

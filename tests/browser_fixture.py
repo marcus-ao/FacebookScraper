@@ -20,6 +20,7 @@ from PIL import Image
 
 from core import config, translated
 from core.store import Archive, Post, post_dirname
+from tests.http_fixture import run_http_server
 
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS_NOTE = "离线夹具：这些默认时刻只影响本次浏览器测试"
@@ -102,8 +103,9 @@ class BrowserFixture:
                 isolated_app, base_url=f"http://127.0.0.1:{self.port}",
                 client=("127.0.0.1", 41000),
                 headers={"Origin": f"http://127.0.0.1:{self.port}"}))
-            self.server = uvicorn.Server(uvicorn.Config(isolated_app, log_level="error", lifespan="off"))
-            self.thread = threading.Thread(target=self.server.run, kwargs={"sockets": [listen]}, daemon=True)
+            self.server = uvicorn.Server(uvicorn.Config(
+                isolated_app, log_level="error", lifespan="off"))
+            self.thread = threading.Thread(target=run_http_server, args=(self.server, [listen]), daemon=True)
             self.thread.start()
             deadline = time.monotonic() + 15
             while not self.server.started:

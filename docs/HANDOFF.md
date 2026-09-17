@@ -288,6 +288,43 @@ state、配置、依赖与构建产物，旧报告的 worktree 绝对路径按�
 
 [Windows 首次安装失败现场](../state/windows-lan-delivery/report.json)保留：临时 probe 维护文件替换遇到 `WinError 5`，尚无业务进程；同路径稍后可正常原子写入，新目录完整重跑通过。没有将失败目录当作成功安装，不断言系统短暂拒绝的具体来源。若服务机复现，保留目录与日志，核对文件占用及权限后处理，不删除共享数据或放宽进程保护。
 
+### 1.11 Windows CI 浏览器宿主退出诊断（2026-09-17）
+
+`main bbeb3b5` 的 [发布运行 35218364147](https://github.com/marcus-ao/FacebookScraper/actions/runs/35218364147)
+在 D3 图片断言通过后，隔离 HTTP 宿主退出失败；打包和运行包上传均未执行。
+Python 3.12.9 的 Windows Proactor 连接清理遇到 `WinError 10054` 时，
+`socket.shutdown()` 异常跳过 `close()` 和 server transport detach，导致 Uvicorn 的
+`wait_closed()` 持续等待；不是 D3 业务断言失败，也不能通过忽略退出错误放行制品。
+
+修复工作树为 `.worktrees/ci-browser-shutdown`，分支 `codex/ci-browser-shutdown`。
+仅复用主检出 Python，archive/state/.env 独立绑定；GitHub 原始日志与摘要核验后的失败 ZIP
+保存在该工作树 `state/ci-browser-shutdown/`。其中 `reset-negative.log` 用真实 HTTP 宿主和
+socket 关闭边界故障注入复现同一错误：请求与连接集合已空，server 仍挂接 1 个 transport。
+自然重跑 D3 曾通过，不能代替这个确定性失败证据。
+
+测试 HTTP 宿主统一通过 `tests/http_fixture.py` 的 `asyncio.Runner` 使用 Selector 循环，
+不改全局事件循环策略，Playwright 子进程仍用 Windows 默认循环；运行服务的宿主不变。
+`tests_browser_fixture` 的 2 项回归校验关闭异常后线程/端口释放，以及宿主运行期间真实异步
+子进程可用；在锁定 Uvicorn 0.52.4 和声明的最低版本 0.30.0 均通过，兼容验证只解包 wheel，
+没有改动开发环境依赖。对应日志为 `reset-runner-positive.log`、`uvicorn-030-regression.log`。
+
+首轮定向 [3/4 记录](../state/offline-validation-20260917T124605Z/results.json)还保留了连续上传
+得到 409 的测试失败。诊断确认旧测试会在按钮禁用时直接设置隐藏文件输入，绕过页面的刷新
+等待；`upload-diagnostic-2.log` 记录了这一行为。上传测试改为点击可用按钮后经文件选择器
+上传，保留两次 200、图片刷新、人工标记及无付费断言，不放宽业务版本检查，也不自动重试。
+
+最终修复为 **离线通过**，证据均在上述工作树，未使用业务数据或真实外部服务：
+
+| 检查 | 结果与证据 |
+|---|---|
+| 定向脚本 | [4/4](../state/offline-validation-20260917T125835Z/results.json)：宿主 2 项、浏览器工作流 11 项、文案交互 6 项、Hygiene 9 组 |
+| 完整 CI 浏览器步骤 | [12/12 主流程](../state/ui-regression/browser-stage-all.json)、[18 个 HTTP 入口与深链](../state/ci-browser-shutdown/final-cutover.json)、[部署页面 6 项](../state/deployment-implementation/frontend-browser.json)、[LAN 7 项](../state/offline-lan-20260917T130702Z-38800/report.json)；四个命令连续退出 0 |
+| 构建与复审 | 当前前端生产构建通过；运行输入指纹与构建一致，独立复审无遗留阻断；[本机汇总](../state/ci-browser-shutdown/validation.json) |
+
+本机验证后，远端 `main` 仍为 `bbeb3b5`，上述托管运行仍失败且只有失败证据制品。
+修复尚未推送，须按 AGENTS 确认后触发新 main 构建并核验 SHA、结论及 `fbscraper-windows`，
+不能将本地结果写成托管构建恢复或正式包已可用。服务机部署与真实业务继续为 **待真实联调**。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
