@@ -23,6 +23,48 @@ from core.maintenance import Gate
 
 
 class HostTests(unittest.TestCase):
+    def test_install_uses_service_machine_profile_without_changing_local_defaults(self):
+        from deployment.cli import main
+        from core.web_access import WebAccess
+        profile = Path(__file__).resolve().parents[1] / 'ops/service-machine.network.json'
+        expected = read_json(profile)
+        policy = WebAccess.from_mapping(expected)
+        self.assertEqual(policy.public_base_url, 'http://10.66.3.157:8765')
+        self.assertTrue(policy.permits_client('10.66.3.42'))
+        self.assertFalse(policy.permits_client('10.66.4.42'))
+        with patch('deployment.cli.install', return_value={}) as installer, patch('builtins.print'):
+            main(['install', '--root', 'fixture-root', '--release', 'fixture-release',
+                  '--network-config', str(profile)])
+            self.assertEqual(installer.call_args.kwargs, expected)
+            main(['install', '--root', 'fixture-root', '--release', 'fixture-release'])
+            self.assertEqual(installer.call_args.kwargs, {'web_host': '127.0.0.1', 'web_port': 8765,
+                'public_base_url': None, 'allowed_client_cidrs': []})
+
+    def test_network_file_cannot_override_modes_or_be_combined_with_flags(self):
+        from deployment.cli import main
+        from deployment.errors import DeploymentError
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp) / 'network.json'
+            root = Path(tmp) / 'must-not-exist'
+            base = ['install', '--root', str(root), '--release', tmp, '--network-config', str(profile)]
+            policy = {'web_host': '0.0.0.0', 'web_port': 8765,
+                      'public_base_url': 'http://10.66.3.157:8765', 'allowed_client_cidrs': ['10.66.3.0/24']}
+            for value in ({}, dict(policy, process_enabled=True), dict(policy, allowed_client_cidrs=['0.0.0.0/0']),
+                          dict(policy, public_base_url='http://0.0.0.0:8765')):
+                write_json(profile, value)
+                with self.subTest(value=value), patch('deployment.host.verify_release') as verify:
+                    with self.assertRaises((ValueError, DeploymentError)):
+                        main(base)
+                    verify.assert_not_called()
+                    self.assertFalse(root.exists())
+            write_json(profile, policy)
+            for flags in (['--web-host', '0.0.0.0'], ['--web-port', '8765'],
+                          ['--public-base-url', policy['public_base_url']], ['--allow-client-subnet', '10.66.3.0/24']):
+                with self.subTest(flags=flags), patch('deployment.cli.install') as installer:
+                    with self.assertRaisesRegex(DeploymentError, 'network_config_conflicts'):
+                        main(base + flags)
+                    installer.assert_not_called()
+
     def test_install_cli_passes_explicit_network_policy(self):
         from deployment.cli import main
         with patch('deployment.cli.install', return_value={}) as installer, patch('builtins.print'):

@@ -11,11 +11,11 @@ export interface ApprovalGate {
   readonly optionsFailed: boolean
   /** 后端说这篇现在可以排期。读不到 options 时按 false。 */
   readonly available: boolean
-  /** 柏林墙上时刻，`datetime-local` 的原串。 */
+  /** 业务时区墙上时刻，`datetime-local` 的原串。 */
   readonly when: string
 }
 
-/** 验证输入完整且日历日期有效；不按浏览器时区转换，柏林夏令时由后端核对。 */
+/** 验证输入完整且日历日期有效；不按浏览器时区转换，夏令时由后端核对。 */
 export function isCompleteScheduleTime(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value)
   if (!match) return false
@@ -31,11 +31,13 @@ export function approvalDisabledReason(gate: ApprovalGate): string {
   if (gate.editing) return '请先保存或放弃正在编辑的文案'
   if (gate.busy) return '正在提交并核验，请等待'
   if (gate.fetching) return '正在核对发布条件'
-  if (!gate.eligible) return gate.status === 'scheduled' ? '这篇已有已确认的排期' : '请先恢复审校并准备好内容'
+  if (!gate.eligible) return gate.status === 'scheduled' ? '这篇已有已确认的排期'
+    : ['pending_review', 'edited'].includes(gate.status) ? '请先点「编辑确认无误」冻结内容'
+    : '请先恢复审校并准备好内容'
   if (gate.optionsFailed) return '发布条件读取失败，请重新核对'
   if (!gate.available) return '发布条件尚未满足，请查看下方提示'
-  if (!gate.when) return '请先填写柏林发布时间'
-  if (!isCompleteScheduleTime(gate.when)) return '请填写完整有效的柏林日期和时间'
+  if (!gate.when) return '请先填写发布时间'
+  if (!isCompleteScheduleTime(gate.when)) return '请填写完整有效的日期和时间'
   return ''
 }
 

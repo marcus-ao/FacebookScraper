@@ -119,7 +119,7 @@ def main():
                 pages.append(page)
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(origin + '/settings', wait_until='domcontentloaded')
-                expect(page.get_by_role('textbox', name='默认排期时间（柏林）')).to_be_visible()
+                expect(page.get_by_role('textbox', name='默认排期时间（北京）')).to_be_visible()
                 editable(page)
                 capability = page.evaluate('({secure: window.isSecureContext, uuid: typeof crypto.randomUUID, '
                                            'random: typeof crypto.getRandomValues, clipboard: typeof navigator.clipboard})')
@@ -134,7 +134,7 @@ def main():
             report['scenarios'].append('Five independent clients initialize on insecure HTTP without randomUUID; sessions are distinct')
 
             first, second, busy, disconnected, closing = pages
-            times = lambda page: page.get_by_role('textbox', name='默认排期时间（柏林）')
+            times = lambda page: page.get_by_role('textbox', name='默认排期时间（北京）')
             times(first).fill('09:30, 18:30')
             times(second).fill('11:15, 19:15')
             saved = save(first, '保存设置', '/api/settings')

@@ -36,7 +36,8 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/tasks/{id}` | 人工优先内容、来源指纹、子资源版本、风险、模型任务与发布状态；按 ID 查询不受 90 天限制 |
 | `GET /api/tasks/{id}/image/{index}` | 原图或德语图，缺德语图须显式标识回退 |
 | `GET /api/tasks/{id}/approval-options` | 可用范围、许可、content_fingerprint；不可用不能推定可排期 |
-| `GET /api/calendar` | 月历缓存、业务/UI 时区、完整性与 stale |
+| `GET /api/calendar` | 月历缓存、业务/UI/受众时区、完整性与 stale；`local` 为本地图层，`local_error` 表示本地账本读不出来 |
+| `GET /api/publish-operations/{id}` | 一次提交的当前步骤与终态；进程消失的记录读回来是 uncertain |
 | `GET /api/templates/{kind}` | text/image 模板，只读 |
 | `GET /api/settings` | version、editable、controlled、controlled_fields、editable_help |
 | `GET /api/runtime` | 与 CLI 共用五阶段 snapshot；读取不扫描平台、不调用模型、不发送消息 |
@@ -71,7 +72,11 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `POST /api/tasks/{id}/image/{index}/upload` | JSON + base64 上传人工图替换该张；校验格式/动图/体积，旧文件备份至 `media_de/superseded/`；明确选择追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；审校记为 `edited`，继续系统排期 |
 | `POST /api/image-versions/task/{id}` | 当前账号采用某历史版本为当前版；冻结账号拒绝写入；零模型调用、零费用、不占优化次数 |
 | `GET /api/image-versions/task/{id}/preview?media_index=N&out_path=...` | 预览本帖本张有生成记录的版本；不改变当前选择，也可查看上传时备份的旧件 |
-| `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at，锁内复核并创建单渠道排期 |
+| 任务详情的 `publish_operation` | 当前冻结快照的最近提交操作；刷新后恢复轮询，撤销成功后不显示旧的排期成功操作 |
+| `POST /api/tasks/{id}/content-lock` | 回传 content_fingerprint，冻结正文与图片字节并关掉编辑入口 |
+| `DELETE /api/tasks/{id}/content-lock` | 解除冻结，快照标 discarded 但保留字节 |
+| `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at；能当场判定的失败同步返回，其余返回 202 与操作编号，浏览器在请求外跑 |
+| `POST /api/tasks/{id}/publication/unschedule` | 登记人工已在后台删除；持锁实时读整月核实后才解除防重 |
 | `POST /api/tasks/{id}/publication/reconcile` | 按已有回执和冻结版补本地状态、镜像、通知，不重复提交 |
 | `POST /api/calendar/refresh` | 持发布锁重新读取远端，失败时保留可用卡片与错误状态 |
 | `GET/POST /api/initial-translation/task/{id}` | 能力/初翻；POST 含来源、人工/审校版本与内容级许可 |
@@ -87,7 +92,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 
 ## 编辑与状态
 
-七个持久状态为 pending_review、edited、snoozed、approved、scheduled、skipped、handed_off；not_ready 仅为准备状态。approved 表示提交处理中；scheduled 只表示排期已核验。来源变化保留人工稿，非终态重新审核，已排期内容仅提醒比较。
+八个持久状态为 pending_review、edited、content_locked、snoozed、approved、scheduled、skipped、handed_off；not_ready 仅为准备状态。content_locked 表示人已确认内容并冻结、时刻待选，它算在待审口径里；approved 表示提交处理中；scheduled 只表示排期已核验。来源变化保留人工稿，非终态重新审核，已排期内容仅提醒比较。
 
 FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，未插入链接追加末尾，已插入的不重复。IG 使用 bio CTA。缺目标、未知编号或损坏 token 阻止通过；金额等可人工解释的差异仅提示。即时检查只应用于对应草稿，字符数按最终完整正文计算。
 
@@ -95,7 +100,7 @@ FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，
 
 图片详情带 `manual`、`replaced_at`、`warnings`；人工图地址随实际字节哈希变化，避免连续上传仍显示旧图。`metrics.changed_pixel_ratio` 忽略小于等于 24 的通道差；`null` 表示未量过，0 表示未检测到明显变化，不证明未翻译。`GET /api/refinements/task/{id}` 附只读 `image_model` 及按媒体下标分组的 `image_versions`，每版含预览 URL、时间、指令、指标、是否当前及不可用原因。
 
-设置仅开放 default_times（1–12 个不重复柏林 HH:MM）和 snooze_default_days（1–30 个上海工作日）。只影响后续预填，不移动既有排期；CAS 改写保留无关值、注释和换行，不安全的格式拒绝改写。
+设置仅开放 default_times（1–12 个不重复的业务时区 HH:MM）和 snooze_default_days（1–30 个上海工作日）。只影响后续预填，不移动既有排期；CAS 改写保留无关值、注释和换行，不安全的格式拒绝改写。
 
 ## 风险、标签与运行状态
 
@@ -111,7 +116,7 @@ FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，
 
 月历读取完整可见范围、所有日期/时刻项、手工任务和延迟加载；推荐时段不算帖子。缺覆盖、未知卡片或无明确空态显示 incomplete/unknown。公开状态附观测时间和来源，不按到点推定成功。
 
-同渠道间隔至少 90 分钟，冲突返回建议而不改用户时间；提交前在发布锁内重读占用。最终确认展示人工优先完整文案、标签/链接或 CTA、有序图片、来源版本、唯一目标渠道、柏林时刻及许可。冻结 fingerprint 与回执一致，文件后续变化不影响该次提交。
+同渠道间隔至少 90 分钟，冲突返回建议而不改用户时间；提交前在发布锁内重读占用。最终确认展示人工优先完整文案、标签/链接或 CTA、有序图片、来源版本、唯一目标渠道、业务时刻（并排给出德国受众当地时刻）及许可。冻结 fingerprint 与回执一致，文件后续变化不影响该次提交；内容冻结与时刻绑定分两步，绑定过不同时刻的快照不得改绑。
 
 成功验收要求全文相等、remote_images_verified=true、图片数量及有序 remote_media/source SHA 与冻结清单一致。仅编辑器图片或远端 ID 不足以通过；中断和不确定结果先核对，恢复只补有证据的记录。界面严格以 ok=true 且 status=scheduled 判定排期成功。
 

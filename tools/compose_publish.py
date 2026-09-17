@@ -31,7 +31,7 @@ def _schedule_timezone() -> ZoneInfo:
             "  Windows 不自带 IANA 时区数据库，需要纯数据包 tzdata：\n"
             "      uv pip install --python .venv\\Scripts\\python.exe tzdata\n"
             "  或者直接重跑 scripts\\setup.bat（requirements.txt 里已经列了它）。\n\n"
-            "  ❌ 不要改成写死 UTC 偏移绕过去：Europe/Berlin 每年切两次夏令时，"
+            "  ❌ 不要改成写死 UTC 偏移绕过去：美西 UI 时区每年切两次夏令时，"
             "写死偏移会在切换日把帖子发到错误的时刻，而且没人会立刻发现"
             "（见 docs/HANDOFF.md 第 6 节）。") from exc
     except ValueError as exc:

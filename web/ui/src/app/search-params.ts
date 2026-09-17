@@ -6,7 +6,8 @@ export const QUEUE_BUCKETS = ['review', 'not_ready', 'snoozed', 'processed'] as 
 
 /** queue 分桶包含多个真实 status，不能直接作为接口 status 传入。 */
 export const QUEUE_BUCKET_STATUSES: Readonly<Record<QueueBucket, readonly DisplayStatus[]>> = {
-  review: ['pending_review', 'edited'],
+  // 冻结的帖子还等着人选时刻，留在待审里；挪进「已处理」就没人再看它了。
+  review: ['pending_review', 'edited', 'content_locked'],
   not_ready: ['not_ready'],
   snoozed: ['snoozed'],
   processed: ['approved', 'scheduled', 'skipped', 'handed_off'],

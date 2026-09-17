@@ -14,8 +14,8 @@ import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, review, translated
 from pipeline import approval, engine
-from publish import business_suite as bs, compose, journal, workflow
-from web.api.approval import berlin_time
+from publish import business_suite as bs, compose, journal, snapshots, workflow
+from web.api.approval import business_time
 
 NOW = datetime(2026, 9, 12, 8, tzinfo=timezone.utc)
 TARGET = NOW + timedelta(hours=4)
@@ -43,15 +43,34 @@ class ApprovalTests(unittest.TestCase):
         patch.object(bs, 'require_submission_evidence', return_value=None).start()
         patch.object(bs, 'require_readback_evidence', return_value=None).start()
 
+    def lock_content(self):
+        """排期前必须先「编辑确认无误」；返回冻结后的审校版本。"""
+        return approval.lock(self.account, self.source, now=NOW,
+                             source_text_sha256=self.params['source_text_sha256'],
+                             review_revision=None,
+                             content_fingerprint=self.params['content_fingerprint'])
+
+    def approve(self, **kwargs):
+        locked = self.lock_content()
+        params = dict(self.params, review_revision=locked['revision'])
+        params.update(kwargs.pop('params', {}))
+        return asyncio.run(approval.approve(self.account, self.source, **params, **kwargs))
+
     def test_missing_channel_evidence_means_zero_remote_reads_or_state_change(self):
         reader, execute = AsyncMock(), AsyncMock()
         with self.assertRaises(bs.ProbeRequired):
-            asyncio.run(approval.approve(self.account, self.source, **self.params,
-                                         inventory_reader=reader, executor=execute))
+            self.approve(inventory_reader=reader, executor=execute)
         reader.assert_not_called()
         execute.assert_not_called()
-        self.assertFalse(review.latest(self.account))
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
         self.assertFalse(approval.options(self.account, self.source, now=NOW)['available'])
+
+    def test_content_can_be_frozen_before_the_publish_gate_is_open(self):
+        """录证缺失让排期不可用，但不该挡住人确认文案和图片。"""
+        options = approval.options(self.account, self.source, now=NOW)
+        self.assertFalse(options['available'])
+        self.assertTrue(options['lockable'])
+        self.assertEqual(options['fingerprint'], self.params['content_fingerprint'])
 
     def test_selected_conflicting_time_is_rejected_with_three_alternatives(self):
         self.allow_fixture_evidence()
@@ -59,11 +78,11 @@ class ApprovalTests(unittest.TestCase):
             cards=(bs.RemotePlannerCard(TARGET, ('facebook',), rendered='another operator caption'),), cards_loaded=True)
         execute = AsyncMock()
         with self.assertRaises(approval.ApprovalConflict) as error:
-            asyncio.run(approval.approve(self.account, self.source, **self.params,
-                inventory_reader=AsyncMock(return_value=self.inventory), executor=execute))
+            self.approve(inventory_reader=AsyncMock(return_value=self.inventory), executor=execute)
         self.assertEqual(len(error.exception.suggestions), 3)
         execute.assert_not_called()
-        self.assertFalse(review.latest(self.account))
+        # 冲突不解冻：内容仍然是她确认过的那一份，改时刻就能再提交。
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
 
     def test_success_uses_frozen_media_and_only_then_updates_review(self):
         self.allow_fixture_evidence()
@@ -79,38 +98,79 @@ class ApprovalTests(unittest.TestCase):
             result = journal.transition(base, journal.STATUS_SCHEDULED, recorded_at=NOW.isoformat())
             journal.append(config.cfg().state_dir, result)
             return workflow.AttemptOutcome(0, result, 'fixture-confirmed')
-        result = asyncio.run(approval.approve(self.account, self.source, **self.params,
-            inventory_reader=AsyncMock(return_value=self.inventory), executor=execute))
+        result = self.approve(inventory_reader=AsyncMock(return_value=self.inventory), executor=execute)
         self.assertTrue(result['ok'])
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'scheduled')
         self.assertEqual(len(list((config.cfg().state_dir / 'publish_snapshots').glob('*/receipt.json'))), 1)
+
+    def test_freezing_binds_the_moment_only_once(self):
+        self.allow_fixture_evidence()
+        locked = self.lock_content()
+        metadata, _, _, _ = snapshots.load(locked['snapshot_id'])
+        self.assertIsNone(metadata['scheduled_at'])
+        self.assertEqual(snapshots.bind_schedule(locked['snapshot_id'], TARGET)['scheduled_at'],
+                         TARGET.isoformat())
+        # 幂等；换个时刻必须拒绝，否则冻结的内容会被悄悄搬到另一个时段。
+        snapshots.bind_schedule(locked['snapshot_id'], TARGET)
+        with self.assertRaises(review.ReviewConflict):
+            snapshots.bind_schedule(locked['snapshot_id'], TARGET + timedelta(hours=1))
+
+    def test_releasing_a_freeze_voids_the_snapshot_but_keeps_its_bytes(self):
+        locked = self.lock_content()
+        directory = snapshots.folder(locked['snapshot_id'])
+        before = (directory / 'text_de.txt').read_bytes()
+        approval.unlock(self.account, self.source, now=NOW,
+                        source_text_sha256=self.params['source_text_sha256'],
+                        review_revision=locked['revision'])
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'edited')
+        metadata, _, _, _ = snapshots.load(locked['snapshot_id'])
+        self.assertEqual(metadata['status'], 'discarded')
+        self.assertEqual((directory / 'text_de.txt').read_bytes(), before)
+        with self.assertRaises(review.ReviewConflict):
+            snapshots.bind_schedule(locked['snapshot_id'], TARGET)
 
     def test_stale_fingerprint_never_calls_submit(self):
         self.allow_fixture_evidence()
         execute = AsyncMock()
         with self.assertRaises(approval.ApprovalConflict):
-            asyncio.run(approval.approve(self.account, self.source,
-                **dict(self.params, content_fingerprint='old'),
-                inventory_reader=AsyncMock(return_value=self.inventory), executor=execute))
+            self.approve(params={'content_fingerprint': 'old'},
+                inventory_reader=AsyncMock(return_value=self.inventory), executor=execute)
         execute.assert_not_called()
-        self.assertFalse(review.latest(self.account))
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
 
     def test_browser_failure_restores_pending_review(self):
         self.allow_fixture_evidence()
         with self.assertRaises(bs.PublishStepError):
-            asyncio.run(approval.approve(self.account, self.source, **self.params,
-                inventory_reader=AsyncMock(return_value=self.inventory),
-                executor=AsyncMock(side_effect=bs.PublishStepError('fixture unavailable'))))
+            self.approve(inventory_reader=AsyncMock(return_value=self.inventory),
+                executor=AsyncMock(side_effect=bs.PublishStepError('fixture unavailable')))
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'pending_review')
         self.assertFalse(journal.load(config.cfg().state_dir))
 
-    def test_berlin_input_does_not_use_the_shanghai_browser_timezone(self):
-        self.assertEqual(berlin_time('2026-09-12T14:30').astimezone(timezone.utc).hour, 12)
-        self.assertEqual(berlin_time('2026-11-12T14:30').astimezone(timezone.utc).hour, 13)
-        with self.assertRaises(ValueError):
-            berlin_time('2026-03-29T02:30')
-        with self.assertRaises(ValueError):
-            berlin_time('2026-10-25T02:30')
+    def test_picker_input_is_read_in_the_business_timezone(self):
+        """北京无夏令时，全年固定 +08:00；两个换算方向都要钉住。"""
+        self.assertEqual(business_time('2026-09-12T14:30').astimezone(timezone.utc).hour, 6)
+        self.assertEqual(business_time('2026-11-12T14:30').astimezone(timezone.utc).hour, 6)
+        self.assertEqual(business_time('2026-09-12T14:30').utcoffset(), timedelta(hours=8))
+
+    def test_a_business_timezone_with_dst_still_rejects_its_two_bad_moments(self):
+        """上海没有夏令时不等于这个函数以后不会换到有夏令时的时区。"""
+        with patch.object(bs, 'business_timezone', return_value='Europe/Berlin'):
+            self.assertEqual(business_time('2026-09-12T14:30').astimezone(timezone.utc).hour, 12)
+            with self.assertRaises(ValueError):
+                business_time('2026-03-29T02:30')     # 不存在
+            with self.assertRaises(ValueError):
+                business_time('2026-10-25T02:30')     # 出现两次
+
+    def test_the_german_audience_hour_is_reported_next_to_the_business_hour(self):
+        """北京 10:00 落在柏林凌晨——这条换算必须让人看见，不能靠记时差。"""
+        from publish import planning
+        default = planning.audience_local(business_time('2026-09-12T16:00'))
+        self.assertEqual(default['at'], '2026-09-12T10:00:00+02:00')
+        self.assertFalse(default['quiet_hours'])
+        # 看起来最正常的那个时刻，恰恰是德国受众睡着的时候。
+        night = planning.audience_local(business_time('2026-09-12T10:00'))
+        self.assertEqual(night['at'], '2026-09-12T04:00:00+02:00')
+        self.assertTrue(night['quiet_hours'])
 
     def test_new_conflict_after_composer_preparation_never_arms_or_clicks(self):
         self.allow_fixture_evidence()

@@ -45,7 +45,7 @@ function selectedMenuLabel(html: string): string | null {
 describe('导航选中项来自路由', () => {
   it('平台入口的总数和硬闸由该平台的完整 summary 提供', () => {
     const states = { not_ready: 0, pending_review: 0, edited: 0, snoozed: 0,
-      approved: 0, scheduled: 0, skipped: 0, handed_off: 0 }
+      content_locked: 0, approved: 0, scheduled: 0, skipped: 0, handed_off: 0 }
     const list: ReviewListResponse = { ...(listFixture as unknown as ReviewListResponse), tasks: [],
       summary: { total: 9, with_hard_alerts: 7, tags: [],
         by_status: { ...states, pending_review: 9 },

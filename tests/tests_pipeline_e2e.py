@@ -252,8 +252,9 @@ with tempfile.TemporaryDirectory() as folder:
         approved = A.approve(
             item_ids=[item["item_id"] for item in again], selections={},
             state_dir=state, now=now, confirm=lambda _message: False)
+    # 占位的柏林 10:00 就是北京 16:00，正好占掉第一个槽，于是顺延到当天第二个。
     check(approved == 0 and "已取消" in approval_output.getvalue()
-          and "2026-09-04T17:00:00+02:00" in approval_output.getvalue(),
+          and "2026-09-04T23:00:00+08:00" in approval_output.getvalue(),
           "批准前和远端占位后都通过真实时间闸，顺延槽位使用同一注入时钟")
 
     print("\n[3] 硬闸仍然拦得住：正文被改脏之后 ready 立刻消失")

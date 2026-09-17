@@ -218,8 +218,8 @@ def select_version(account_dir: Path, indexed: dict, *, media_index: int, out_pa
             expected_source_sha256=source_text_sha256,
             scheduled=journal.source_ref(
                 indexed.get('platform'), indexed.get('post_id')) in journal.scheduled_source_refs(cfg().state_dir))
-        if state['status'] in review.TERMINAL | {'approved'}:
-            raise review.ReviewConflict('这篇已结束审校或正在提交，不能更换图片版本')
+        if state['status'] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict('这篇已冻结内容、结束审校或正在提交，不能更换图片版本')
         try:
             basis = _current_basis(account_dir, source)
             chosen = image_de.select_image_version(
@@ -239,7 +239,9 @@ def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_
     scheduled = journal.source_ref(source['platform'], source['post_id']) in journal.scheduled_source_refs(cfg().state_dir)
     state = review.state_for(account_dir, source, scheduled=scheduled)
     if state['status'] not in {'pending_review', 'edited'}:
-        raise review.ReviewConflict('请先恢复这篇的审校，再发起优化')
+        raise review.ReviewConflict('这篇的内容已冻结；要改动请先解除冻结'
+                                    if state['status'] == 'content_locked'
+                                    else '请先恢复这篇的审校，再发起优化')
     if translated.source_text_sha256(source['text']) != source_hash:
         raise review.ReviewConflict('原文已有更新，请重新核对后发起优化')
     human = translated.load_human_translated(account_dir / 'translated_human.jsonl').get(source['post_id'])

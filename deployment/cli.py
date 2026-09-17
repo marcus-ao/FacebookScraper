@@ -101,8 +101,10 @@ def parser():
         command.add_argument('--root', type=Path, required=True)
         if name == 'install':
             command.add_argument('--release', type=Path, required=True)
-            command.add_argument('--web-host', choices=('127.0.0.1', '0.0.0.0'), default='127.0.0.1')
-            command.add_argument('--web-port', type=int, default=8765)
+            command.add_argument('--network-config', type=Path,
+                                 help='Read installation network settings from a separate JSON file')
+            command.add_argument('--web-host', choices=('127.0.0.1', '0.0.0.0'))
+            command.add_argument('--web-port', type=int)
             command.add_argument('--public-base-url')
             command.add_argument('--allow-client-subnet', action='append', default=[])
         elif name == 'install-task':
@@ -119,13 +121,25 @@ def parser():
     return result
 
 
+def _install_network(args):
+    if args.network_config is not None:
+        if (args.web_host is not None or args.web_port is not None
+                or args.public_base_url is not None or args.allow_client_subnet):
+            raise DeploymentError('network_config_conflicts_with_flags')
+        value = read_json(args.network_config)
+        if set(value) != {'web_host', 'web_port', 'public_base_url', 'allowed_client_cidrs'}:
+            raise DeploymentError('network_config_requires_exact_network_fields')
+        return value
+    return {'web_host': args.web_host if args.web_host is not None else '127.0.0.1',
+            'web_port': args.web_port if args.web_port is not None else 8765,
+            'public_base_url': args.public_base_url, 'allowed_client_cidrs': args.allow_client_subnet}
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     root = args.root.resolve()
     if args.command == 'install':
-        value = install(root, args.release, web_host=args.web_host, web_port=args.web_port,
-                        public_base_url=args.public_base_url,
-                        allowed_client_cidrs=args.allow_client_subnet)
+        value = install(root, args.release, **_install_network(args))
     elif args.command == 'install-task':
         value = install_task(root, dry_run=args.dry_run)
     elif args.command == 'supervise':

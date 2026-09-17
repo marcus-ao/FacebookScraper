@@ -71,7 +71,7 @@ def main():
 
             page.route('**/*', route_request)
             page.goto(fixture.base_url + '/settings', wait_until='domcontentloaded')
-            field = page.get_by_role('textbox', name='默认排期时间（柏林）')
+            field = page.get_by_role('textbox', name='默认排期时间（北京）')
             expect(field).to_be_visible()
             expect(page.locator('[data-deployment-content]')).to_have_attribute('inert', '')
             page.wait_for_function('document.querySelector("[data-deployment-controls]") !== null')

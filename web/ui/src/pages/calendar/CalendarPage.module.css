@@ -12,3 +12,8 @@
 .card :global(.ant-tag) { white-space: normal; margin: 0; }
 .caption { max-width: var(--rc-calendar-popover-w); max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
+
+/* 本地图层画成虚线，一眼能和后台读回来的实线卡分开。 */
+.localCard { border: 1px dashed var(--rc-border); background: transparent; text-decoration: none; }
+.audience { color: var(--rc-fg-muted); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--rc-space-2); margin-bottom: var(--rc-space-2); align-items: center; }

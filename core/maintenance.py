@@ -1,6 +1,7 @@
 """Shared admission and cooperative maintenance for one managed business instance."""
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import math
@@ -285,3 +286,29 @@ def submit(executor, kind: str, fn, /, *args, **kwargs):
         raise
     future.add_done_callback(lambda completed: gate.release(operation_id) if completed.cancelled() else None)
     return future
+
+
+def create_task(kind: str, fn, /, *args, **kwargs):
+    """Reserve background async work independently of its submitting HTTP request."""
+    gate = managed_gate()
+    if gate is None:
+        return asyncio.create_task(fn(*args, **kwargs))
+    operation_id, _owned = gate.acquire(kind, independent=True)
+
+    async def invoke():
+        token = _admission.set((str(gate.control), operation_id))
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            _admission.reset(token)
+            gate.release(operation_id)
+
+    coroutine = invoke()
+    try:
+        task = asyncio.create_task(coroutine)
+    except BaseException:
+        coroutine.close()
+        gate.release(operation_id)
+        raise
+    task.add_done_callback(lambda done: gate.release(operation_id) if done.cancelled() else None)
+    return task

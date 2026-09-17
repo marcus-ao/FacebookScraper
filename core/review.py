@@ -13,11 +13,14 @@ from core.paid_model import FileLock, FileLockBusy, append_jsonl
 from core.store import Archive, assert_physical_direct_path, read_post_truth
 from core.translated import source_text_sha256
 
-STATUSES = frozenset({"pending_review", "edited", "snoozed", "approved",
-                      "scheduled", "skipped", "handed_off"})
+STATUSES = frozenset({"pending_review", "edited", "content_locked", "snoozed",
+                      "approved", "scheduled", "skipped", "handed_off"})
 TERMINAL = frozenset({"skipped", "handed_off", "scheduled"})
-ACTIONS = frozenset({"edited", "snoozed", "woke", "skipped", "handed_off",
-                     "handoff_link", "approved", "scheduled", "submit_failed"})
+ACTIONS = frozenset({"edited", "content_locked", "unlocked", "snoozed", "woke",
+                     "skipped", "handed_off", "handoff_link", "approved",
+                     "scheduled", "submit_failed", "unscheduled"})
+# 内容已冻结但尚未提交：四个编辑入口共用这个集合判闸。
+LOCKED = frozenset({"content_locked", "approved"})
 
 
 class ReviewConflict(ValueError):
@@ -88,6 +91,9 @@ def history(account_dir: Path, post_id: str | None = None) -> list[dict]:
                     _moment(event["wake_at"])
                 if event["status"] == "skipped" and not str(event.get("reason") or "").strip():
                     raise ValueError('missing skip reason')
+                if (event["status"] == "content_locked"
+                        and not re.fullmatch(r'[0-9a-f]{32}', str(event.get("snapshot_id") or ""))):
+                    raise ValueError('missing frozen snapshot')
                 if post_id is None or event["post_id"] == post_id:
                     events.append(event)
             except (ValueError, KeyError, TypeError, AttributeError, UnicodeError) as exc:
@@ -164,10 +170,28 @@ class transaction:
         previous = current["status"]
         if previous in TERMINAL and not (
                 (previous == "handed_off" and action == "handoff_link")
-                or (previous == "scheduled" and action == "scheduled" and scheduled)):
+                or (previous == "scheduled" and action == "scheduled" and scheduled)
+                or (previous == "scheduled" and action == "unscheduled")):
             raise ReviewConflict("这篇已结束审校，不能直接改变其处理决定")
+        # 解除防重的证据在发布账本那边核（records.unschedule 实时读整月）；
+        # 这里只保证不是凭空把一篇没排期的帖子改回待审。
+        if action == "unscheduled" and previous != "scheduled":
+            raise ReviewConflict("只有已排期的帖子可以登记撤销")
         if previous == "approved" and action not in {"scheduled", "submit_failed"}:
             raise ReviewConflict("这篇正在提交，暂时不能修改审校决定")
+        if previous == "content_locked" and action not in {
+                "approved", "unlocked", "skipped", "handed_off"}:
+            # 挂起会在到期时退回待审，冻结状态就被无声丢掉了；要挂起先解冻。
+            raise ReviewConflict("这篇的内容已冻结；要改动请先解除冻结")
+        if action == "content_locked":
+            if previous not in {"pending_review", "edited"}:
+                raise ReviewConflict("只有待审或已修改的帖子可以冻结内容")
+            if not snapshot_id:
+                raise ReviewValidationError("冻结内容必须绑定快照")
+        if action == "unlocked" and previous != "content_locked":
+            raise ReviewConflict("只有已冻结的帖子可以解除冻结")
+        if action == "approved" and previous != "content_locked":
+            raise ReviewConflict("请先确认内容无误并冻结，再选择发布时间")
         if action == "woke" and previous != "snoozed" and not current["source_stale"]:
             raise ReviewConflict("只有挂起的帖子可以恢复审校")
         if action == "handoff_link" and previous != "handed_off":
@@ -180,6 +204,8 @@ class transaction:
         reason = reason.strip()
         if action == "skipped" and not reason:
             raise ReviewValidationError("请填写这篇不发的理由")
+        if action == "unscheduled" and not reason:
+            raise ReviewValidationError("请说明这条排期是怎么处理的")
         if not isinstance(handoff_url, str) or len(handoff_url) > 2048:
             raise ReviewValidationError("手工发布链接无效")
         handoff_url = handoff_url.strip()
@@ -188,6 +214,7 @@ class transaction:
             if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username:
                 raise ReviewValidationError("请填写 http 或 https 开头的帖子链接")
         status = {"woke": "pending_review", "submit_failed": "pending_review",
+                  "unscheduled": "pending_review", "unlocked": "edited",
                   "handoff_link": "handed_off"}.get(action, action)
         deadline = None
         if action == "snoozed":
@@ -205,7 +232,8 @@ class transaction:
             "recorded_at": moment.isoformat(), "actor": None, "reason": reason,
             "wake_at": deadline.isoformat() if deadline is not None else None,
             "handoff_url": handoff_url or current.get("handoff_url") or "",
-            "snapshot_id": snapshot_id or current.get('snapshot_id') or '',
+            # 解冻作废那份快照，不能让编号继承下去再被当成仍然有效的冻结内容。
+            "snapshot_id": '' if action == "unlocked" else snapshot_id or current.get('snapshot_id') or '',
         }
         append_jsonl(_path(self.account_dir), event, guard=lambda path: _path(path.parent))
         return event

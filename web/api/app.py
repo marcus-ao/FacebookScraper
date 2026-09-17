@@ -137,6 +137,26 @@ async def post_review(task_id: str, request: Request) -> JSONResponse:
     return JSONResponse(writer.review_action(task_id, body.get("action"), **_review_input(body)))
 
 
+@app.post("/api/tasks/{task_id:path}/content-lock")
+async def post_content_lock(task_id: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    fingerprint = body.get("content_fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise review.ReviewValidationError("请重新载入本篇内容后确认")
+    options = _review_input(body)
+    return JSONResponse(writer.lock_content(
+        task_id, source_text_sha256=options["source_text_sha256"],
+        review_revision=options["review_revision"], content_fingerprint=fingerprint))
+
+
+@app.delete("/api/tasks/{task_id:path}/content-lock")
+async def delete_content_lock(task_id: str, request: Request) -> JSONResponse:
+    options = _review_input(await _json_body(request))
+    return JSONResponse(writer.unlock_content(
+        task_id, source_text_sha256=options["source_text_sha256"],
+        review_revision=options["review_revision"]))
+
+
 @app.post("/api/tasks/{task_id:path}/export")
 async def post_export(task_id: str, request: Request) -> Response:
     body = await _json_body(request)

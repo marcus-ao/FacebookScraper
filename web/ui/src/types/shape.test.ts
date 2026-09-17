@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   APPROVAL_OPTIONS_SHAPE,
   CALENDAR_CARD_SHAPE,
+  CALENDAR_LOCAL_SHAPE,
+  PUBLISH_OPERATION_SHAPE,
   CALENDAR_SHAPE,
   HISTORY_LIST_ITEM_SHAPE,
   HISTORY_LIST_SHAPE,
@@ -23,6 +25,7 @@ import {
 
 import approvalOptions from './__fixtures__/approval-options.json'
 import calendar from './__fixtures__/calendar.json'
+import publishOperation from './__fixtures__/publish-operation.json'
 import historyList from './__fixtures__/history-list.json'
 import initialCapabilities from './__fixtures__/initial-capabilities.json'
 import refinementCapabilities from './__fixtures__/refinement-capabilities.json'
@@ -192,7 +195,18 @@ describe('GET /api/tasks/{id}/approval-options', () => {
     expect(approvalOptions.fingerprint).toBeNull()
   })
 
-  it('default_times 是柏林时刻字符串', () => {
+  it('lockable 与 available 分开：缺录证不该挡住人确认文案和图片', () => {
+    expect(approvalOptions).toHaveProperty('lockable')
+    expect(approvalOptions).toHaveProperty('lock_reason')
+  })
+
+  it('业务时区是北京，受众时区另给，两者不能混成一个', () => {
+    expect(approvalOptions.business_timezone).toBe('Asia/Shanghai')
+    expect(approvalOptions.audience_timezone).toBe('Europe/Berlin')
+    expect(approvalOptions.ui_timezone).toBe('America/Los_Angeles')
+  })
+
+  it('default_times 是业务时区的时刻字符串', () => {
     expect(approvalOptions.default_times.length).toBeGreaterThan(0)
     for (const time of approvalOptions.default_times) {
       expect(time).toMatch(/^\d{2}:\d{2}$/)
@@ -216,8 +230,44 @@ describe('GET /api/calendar', () => {
     }
   })
 
+  it('每张卡都带德国受众钟点 —— 北京 10:00 是柏林凌晨，不能只显示北京', () => {
+    for (const card of calendar.cards) {
+      expect(card.audience?.timezone).toBe('Europe/Berlin')
+      expect(card.audience?.at).not.toBe(card.at_business)
+    }
+  })
+
+  it('本地图层形状；未选时刻的条目 at 为 null，落不到任何一天', () => {
+    expect(calendar.local.length).toBeGreaterThan(0)
+    calendar.local.forEach((entry, index) => {
+      ok(entry, CALENDAR_LOCAL_SHAPE, `local[${index}]`)
+    })
+    expect(calendar.local.some((entry) => entry.at === null)).toBe(true)
+  })
+
+  it('local_error 与空的 local 是两件事，不能长得一样', () => {
+    expect(calendar).toHaveProperty('local_error')
+    expect(calendar.local_error).toBeNull()
+  })
+
   it('gap_minutes 是 90 —— 同渠道冲突窗口', () => {
     expect(calendar.gap_minutes).toBe(90)
+  })
+})
+
+describe('GET /api/publish-operations/{id}', () => {
+  it('形状', () => ok(publishOperation, PUBLISH_OPERATION_SHAPE, 'publish operation'))
+
+  it('带步骤序号与总数，页面才画得出进度', () => {
+    expect(publishOperation.step_total).toBeGreaterThan(0)
+    expect(publishOperation.step_index).toBeLessThanOrEqual(publishOperation.step_total)
+    expect(publishOperation.step.length).toBeGreaterThan(0)
+  })
+
+  it('运行中的记录不带结论 —— 只有终态才有话可说', () => {
+    expect(publishOperation.status).toBe('running')
+    expect(publishOperation.result).toBeNull()
+    expect(publishOperation.message).toBe('')
   })
 })
 

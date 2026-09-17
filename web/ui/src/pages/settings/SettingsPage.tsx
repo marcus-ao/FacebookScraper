@@ -48,7 +48,7 @@ function SettingsForm({ initial }: { initial: OperatingSettings }) {
     {error ? isConflict(error) ? <ConflictRecovery kind="settings" recovering={busy} onRecover={() => void recover(true)} /> : <Alert type="error" title="设置未保存，已保留本次修改，请重试" /> : null}
     {saved && !dirty && <p role="status">设置已保存，下次选期或挂起时生效。</p>}
     <Card size="small" title="日常运营设置"><Form layout="vertical" onFinish={() => void save()} className={styles.form ?? ''} disabled={busy}>
-      <Form.Item label="默认排期时间（柏林）" required extra="用逗号分隔 1 至 12 个时刻，例如 10:00, 17:00。已有排期保持原时刻。"><Input aria-label="默认排期时间（柏林）" value={times} onChange={event => setTimes(event.target.value)} /></Form.Item>
+      <Form.Item label="默认排期时间（北京）" required extra="用逗号分隔 1 至 12 个时刻，例如 16:00, 23:00（≈柏林 10:00/17:00）。已有排期保持原时刻。"><Input aria-label="默认排期时间（北京）" value={times} onChange={event => setTimes(event.target.value)} /></Form.Item>
       <Form.Item label="默认挂起期限" required extra="1 至 30 个上海工作日，周一至周五；到期后回到待我审。"><InputNumber aria-label="默认挂起期限" min={1} max={30} step={1} value={days} onChange={setDays} addonAfter="工作日" /></Form.Item>
       {dirty && invalid && <p className={styles.help} role="status">{invalid}</p>}
       <Space><Tooltip title={invalid || (!dirty ? '当前没有未保存的修改' : '')}><span><Button type="primary" htmlType="submit" loading={busy} disabled={!dirty || !!invalid}>保存设置</Button></span></Tooltip>

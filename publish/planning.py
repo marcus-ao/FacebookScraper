@@ -37,6 +37,18 @@ class SlotDecision:
     suggestions: tuple[datetime, ...] = ()
 
 
+AUDIENCE_TIMEZONE = "Europe/Berlin"
+# 德国受众的深夜区间：落在这里不拦，但必须让人看见——北京 10:00 就是柏林 03:00。
+AUDIENCE_QUIET_HOURS = range(0, 6)
+
+
+def audience_local(target: datetime) -> dict:
+    """把业务时刻换算成德国受众当地时刻，供界面并排显示。"""
+    local = aware_utc(target).astimezone(resolve_ui_timezone(AUDIENCE_TIMEZONE))
+    return {"timezone": AUDIENCE_TIMEZONE, "at": local.isoformat(),
+            "quiet_hours": local.hour in AUDIENCE_QUIET_HOURS}
+
+
 def configured_window(platform: str) -> ScheduleWindow:
     """复用本地已录证窗口；缺 dump/实测值时保持异常，供日期控件说明不可用。"""
     return verified_constraints_from_config(platform)[1]

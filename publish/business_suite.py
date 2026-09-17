@@ -538,6 +538,20 @@ def resolve_ui_timezone(name: str) -> ZoneInfo:
         raise PublishStepError("不是有效的 IANA 时区名：%r" % value) from exc
 
 
+def business_timezone() -> str:
+    """运营选择发布时刻用的时区。⚠️ 与 ``ui_timezone`` 是两件事：这个决定她看到和
+    填写的墙上时刻，``ui_timezone`` 是 Business Suite 那台设备的时区，决定能选到哪个月。"""
+    value = str(cfg().get("publish", "timezone", "") or "").strip()
+    if not value:
+        raise PublishStepError("[publish].timezone 为空；发布时刻没有可解释的时区")
+    resolve_ui_timezone(value)
+    return value
+
+
+def resolve_business_timezone() -> ZoneInfo:
+    return resolve_ui_timezone(business_timezone())
+
+
 def ui_time_is_ambiguous(when: datetime, ui_timezone: str) -> bool:
     """目标绝对时刻落在 UI 时区回拨的重复墙上时间时返回 True。"""
     if not isinstance(when, datetime) or when.tzinfo is None or when.utcoffset() is None:

@@ -89,3 +89,10 @@ web/        审校台：FastAPI + React，只调上面的入口，反向不依�
 ## 八、提交统一使用英文 Conventional Commits
 
 提交标题和正文一律使用英文。标题格式为 `type(scope): summary`，`scope` 可省略；使用 `feat`、`fix`、`docs`、`refactor`、`test`、`chore` 等标准类型，摘要用简洁的英文祈使句。示例：`docs(agents): clarify testing and delivery rules`。
+
+## 九、功能工作先建立独立工作树与分支
+
+- 开始任一功能的计划拟定、开发实现或相关测试前，先检查 `git status`，为该功能创建独立 Git worktree 和对应分支，再在其中开展工作。不得在主检出或其他功能的工作树中混写改动。
+- 同一功能的后续配置、修复和交付复用其既有工作树与分支；不同功能分别隔离，确保文件改动和提交可追踪。
+- 分支和工作树名称必须概括具体功能或实现目的，例如 `codex/windows-lan-access`、`codex/publication-freeze`；禁止使用 `stage-1`、`phase-3`、`phrase-3` 等只有阶段编号的模糊命名。
+- 清理工作树前按现有证据与数据规则保全其独有文件；创建隔离工作树不代表允许复制凭据、接入真实业务数据或删除其他工作。

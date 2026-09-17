@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from core import review, store, translated, localization
 from core.config import cfg
 from localize import images
+from pipeline import approval
 from web.api import exporter, reader
 
 
@@ -32,13 +33,31 @@ def save_text_de(task_id: str, text_de: str, *, source_text_sha256: str,
         truth, state = session.validate(
             dict(source.row), expected_revision=review_revision,
             expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
-        if state["status"] in review.TERMINAL | {"approved"}:
-            raise review.ReviewConflict("这篇已结束审校或正在提交，不能直接修改文案")
+        if state["status"] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict(
+                "这篇的内容已冻结；要改动请先解除冻结"
+                if state["status"] == "content_locked"
+                else "这篇已结束审校或正在提交，不能直接修改文案")
         translated.append_human_translation(
             source.account_dir / "translated_human.jsonl", truth, text_de,
             expected_revision=human_revision)
         session.change(truth, "edited", expected_revision=review_revision,
                        expected_source_sha256=source_text_sha256)
+    return _detail(task_id)
+
+
+def lock_content(task_id: str, *, source_text_sha256: str, review_revision: str | None,
+                 content_fingerprint: str) -> dict:
+    source = _source(task_id)
+    approval.lock(source.account_dir, dict(source.row), source_text_sha256=source_text_sha256,
+                  review_revision=review_revision, content_fingerprint=content_fingerprint)
+    return _detail(task_id)
+
+
+def unlock_content(task_id: str, *, source_text_sha256: str, review_revision: str | None) -> dict:
+    source = _source(task_id)
+    approval.unlock(source.account_dir, dict(source.row),
+                    source_text_sha256=source_text_sha256, review_revision=review_revision)
     return _detail(task_id)
 
 
@@ -96,8 +115,8 @@ def replace_image(task_id: str, index: int, data: bytes, filename: str, *,
         truth, state = session.validate(
             dict(source.row), expected_revision=review_revision,
             expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
-        if state["status"] in review.TERMINAL | {"approved"}:
-            raise review.ReviewConflict("这篇已结束审校或正在提交，不能替换图片")
+        if state["status"] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict("这篇已冻结内容、结束审校或正在提交，不能替换图片")
         try:
             images.replace_localized(source.account_dir, truth, index, data, filename)
         except store.ArchivePathError:
@@ -134,8 +153,11 @@ def save_localization(task_id: str, fields: dict, *, source_text_sha256: str,
     with review.transaction(source.account_dir) as session:
         truth, state = session.validate(dict(source.row), expected_revision=review_revision,
             expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
-        if state["status"] in review.TERMINAL | {"approved"}:
-            raise review.ReviewConflict("这篇已结束审校或正在提交，不能直接修改文案")
+        if state["status"] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict(
+                "这篇的内容已冻结；要改动请先解除冻结"
+                if state["status"] == "content_locked"
+                else "这篇已结束审校或正在提交，不能直接修改文案")
         human = translated.load_human_translated(source.account_dir / "translated_human.jsonl").get(source.post_id)
         machine = translated.load_translated(source.account_dir / "translated.jsonl").get(source.post_id)
         effective = translated.effective_translation(truth, machine, human)

@@ -45,7 +45,8 @@ class ReleaseTests(unittest.TestCase):
         self.put('scripts/configure_lan_firewall.ps1',
                  (Path(__file__).resolve().parents[1] / 'scripts/configure_lan_firewall.ps1').read_bytes())
         for path in ('.env', 'config.local.toml', 'state/paid_requests.jsonl', 'archive/photo.jpg',
-                     'core/.env', 'core/secret.json', 'web/ui/node_modules/private.js'):
+                     'core/.env', 'core/secret.json', 'web/ui/node_modules/private.js',
+                     'ops/service-machine.network.json'):
             self.put(path, b'private')
         manifest = self.build()
         self.assertEqual(verify_release(self.output, expected_sha='a' * 40), manifest)

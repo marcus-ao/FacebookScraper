@@ -5,7 +5,7 @@ React + TypeScript 界面位于 `web/ui/`，通过 FastAPI 读取归档并保存
 
 ## 构建与启动
 
-受管服务机通过部署安装参数配置局域网入口，页面/API/图片/下载共用持久的 `public_base_url`。默认回环模式；首次办公网部署、防火墙和业务电脑验收见 [MANUAL_STEPS 第 16 节](../docs/MANUAL_STEPS.md#16-办公局域网接入)。下面命令用于独立开发，Vite 保留浏览器 Host 以符合后端同源检查。
+受管服务机通过部署安装参数配置局域网入口，页面/API/图片/下载共用持久的 `public_base_url`。默认回环模式；首次办公网部署、防火墙和业务电脑验收见 [MANUAL_STEPS 第 17 节](../docs/MANUAL_STEPS.md#17-办公局域网接入)。下面命令用于独立开发，Vite 保留浏览器 Host 以符合后端同源检查。
 
 在仓库根目录运行：
 

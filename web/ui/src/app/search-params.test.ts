@@ -26,12 +26,13 @@ describe('队列分桶：参数叫 queue，不叫 status', () => {
     expect(QUEUE_BUCKETS).toEqual(['review', 'not_ready', 'snoozed', 'processed'])
   })
 
-  it('分桶覆盖全部八个展示态，且互不重叠', () => {
+  it('分桶覆盖全部九个展示态，且互不重叠', () => {
     const all = QUEUE_BUCKETS.flatMap((bucket) => [...QUEUE_BUCKET_STATUSES[bucket]])
     expect(new Set(all).size).toBe(all.length)
     expect(all.sort()).toEqual(
       [
         'approved',
+        'content_locked',
         'edited',
         'handed_off',
         'not_ready',
@@ -43,8 +44,9 @@ describe('队列分桶：参数叫 queue，不叫 status', () => {
     )
   })
 
-  it('「待我审」= pending_review + edited', () => {
-    expect(QUEUE_BUCKET_STATUSES.review).toEqual(['pending_review', 'edited'])
+  it('「待我审」= pending_review + edited + content_locked', () => {
+    // 冻结的帖子还等着人选时刻；挪进「已处理」就没人再看它了。
+    expect(QUEUE_BUCKET_STATUSES.review).toEqual(['pending_review', 'edited', 'content_locked'])
   })
 
   it('「已处理」是四个终态/提交中态的 UI 分桶，不改底层语义', () => {

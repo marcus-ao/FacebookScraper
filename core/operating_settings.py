@@ -29,7 +29,7 @@ def read():
     result = {'version': operator_preferences.version(data, preferences),
             'editable': {'default_times': pub.get('schedule_rule', {}).get('times', ['10:00', '17:00']),
                          'snooze_default_days': raw.get('review', {}).get('snooze_default_days', 3)},
-            'business_timezone': 'Europe/Berlin', 'workday_timezone': 'Asia/Shanghai',
+            'business_timezone': pub.get('timezone', ''), 'workday_timezone': 'Asia/Shanghai',
             # Only non-secret policy fields are exposed, never the local runtime binding or credentials.
             'controlled': {key: deepcopy(raw.get(key, {})) for key in
                            ('targets', 'delta', 'pipeline')}

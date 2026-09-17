@@ -1,0 +1,16 @@
+{
+ "version": 1,
+ "operation_id": "4b8f1c0a2d7e46b19c3a5f8e0d2b6417",
+ "task_id": "fa_neakasaofficial/1234567890",
+ "platform": "facebook",
+ "snapshot_id": "9f2c1d7e4b6a48f0b5c3e8d1a7420369",
+ "scheduled_at": "2026-09-20T16:00:00+00:00",
+ "status": "running",
+ "step_index": 3,
+ "step_total": 7,
+ "step": "交图（2 张）…",
+ "message": "",
+ "result": null,
+ "started_at": "2026-09-16T10:08:39.150649+00:00",
+ "updated_at": "2026-09-16T10:08:39.171549+00:00"
+}

@@ -190,16 +190,42 @@ def runtime_payload():
                 {"number": 5, "name": "审校与单渠道排期", "status": "blocked"}]}
 
 
-def calendar_payload():
+def calendar_payload(local=(), local_error=None):
     """Explicit remote-observation substitutes for frontend label assertions only."""
-    return {"month_ui": "2026-09", "business_timezone": "Europe/Berlin", "ui_timezone": "America/Los_Angeles",
+    return {"month_ui": "2026-09", "business_timezone": "Asia/Shanghai", "ui_timezone": "America/Los_Angeles",
+            "audience_timezone": "Europe/Berlin",
             "display_start": "2026-09-01", "display_end_exclusive": "2026-10-01",
             "cached_at": "2026-09-12T10:00:00Z", "stale": False, "status": "ready", "error": None,
             "coverage": {"matches_current_month": True}, "refresh_available": False,
-            "refresh_unavailable_reason": "离线替身：不连接发布后台", "cards": [
-                {"at": "2026-09-13T08:00:00Z", "at_business": "2026-09-13T10:00:00+02:00",
+            "refresh_unavailable_reason": "离线替身：不连接发布后台",
+            "local": list(local), "local_error": local_error, "cards": [
+                {"at": "2026-09-13T08:00:00Z", "at_business": "2026-09-13T16:00:00+08:00",
                  "channels": ["facebook"], "card_sha256": "offline-scheduled", "delivery": "scheduled",
-                 "rendered": "Offline scheduled fixture"},
-                {"at": "2026-09-12T08:00:00Z", "at_business": "2026-09-12T10:00:00+02:00",
+                 "rendered": "Offline scheduled fixture",
+                 "audience": {"timezone": "Europe/Berlin", "at": "2026-09-13T10:00:00+02:00",
+                              "quiet_hours": False}},
+                {"at": "2026-09-12T08:00:00Z", "at_business": "2026-09-12T16:00:00+08:00",
                  "channels": ["instagram"], "card_sha256": "offline-published", "delivery": "published",
-                 "rendered": "Offline published observation fixture"}]}
+                 "rendered": "Offline published observation fixture",
+                 "audience": {"timezone": "Europe/Berlin", "at": "2026-09-12T10:00:00+02:00",
+                              "quiet_hours": False}}]}
+
+
+def approval_options(**overrides):
+    """⚠️ available（能不能排期）与 lockable（能不能冻结内容）是两件事。"""
+    return {"available": True, "reason": "", "fingerprint": "offline-fingerprint",
+            "lockable": True, "lock_reason": "",
+            "earliest": "2026-09-13T08:00:00Z", "latest": "2026-10-01T08:00:00Z",
+            "default_times": ["16:00", "23:00"], "business_timezone": "Asia/Shanghai",
+            "audience_timezone": "Europe/Berlin", "audience_quiet_hours": [0, 6],
+            "platform": "facebook", "ui_timezone": "America/Los_Angeles", **overrides}
+
+
+def publish_operation(**overrides):
+    """一次浏览器提交的可观察记录；页面轮询它直到终态。"""
+    return {"version": 1, "operation_id": "offline-operation",
+            "task_id": "fa_neakasaofficial/1", "platform": "facebook",
+            "snapshot_id": "offline-snapshot", "scheduled_at": "2026-09-13T16:00:00+08:00",
+            "status": "running", "step_index": 0, "step_total": 7, "step": "准备中",
+            "message": "", "result": None,
+            "started_at": "2026-09-12T10:00:00Z", "updated_at": "2026-09-12T10:00:00Z", **overrides}

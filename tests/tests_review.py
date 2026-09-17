@@ -94,12 +94,43 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.state_for(self.account, self.source, scheduled=True)["status"], "scheduled")
 
     def test_confirmed_schedule_can_record_transition_but_guess_cannot(self):
+        self.change("content_locked", snapshot_id="a" * 32)
         self.change("approved")
         with self.assertRaises(review.ReviewConflict):
             self.change("scheduled")
         event = self.change("scheduled", scheduled=True)
         self.assertEqual(event["status"], "scheduled")
         self.assertEqual(review.state_for(self.account, self.source)["status"], "scheduled")
+
+    def test_freezing_blocks_edits_until_it_is_explicitly_released(self):
+        with self.assertRaises(review.ReviewValidationError):
+            self.change("content_locked")            # 冻结必须绑定快照
+        locked = self.change("content_locked", snapshot_id="b" * 32)
+        self.assertEqual(locked["status"], "content_locked")
+        self.assertEqual(locked["snapshot_id"], "b" * 32)
+        # 挂起会在到期时退回待审，那会把「人确认过」无声丢掉；要挂起先解冻。
+        for action in ("edited", "snoozed", "woke"):
+            with self.subTest(action=action), self.assertRaises(review.ReviewConflict):
+                self.change(action)
+        released = self.change("unlocked")
+        self.assertEqual(released["status"], "edited")
+        self.assertEqual(released["snapshot_id"], "")
+        with self.assertRaises(review.ReviewConflict):
+            self.change("unlocked")
+        self.assertEqual(self.change("edited")["status"], "edited")
+
+    def test_approving_without_freezing_first_is_refused(self):
+        with self.assertRaisesRegex(review.ReviewConflict, "先确认内容无误并冻结"):
+            self.change("approved")
+
+    def test_a_frozen_record_without_its_snapshot_fails_closed(self):
+        self.change("content_locked", snapshot_id="c" * 32)
+        path = self.account / "review_items.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        rows[-1]["snapshot_id"] = ""
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        with self.assertRaisesRegex(review.ReviewConflict, "审校记录.*损坏"):
+            review.state_for(self.account, self.source)
 
     def test_editing_a_snoozed_post_does_not_lose_its_wakeup(self):
         first = self.change("snoozed")

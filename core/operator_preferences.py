@@ -14,7 +14,7 @@ def validate_default_times(times):
     if (not isinstance(times, list) or not 1 <= len(times) <= 12
             or any(not isinstance(value, str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value) for value in times)
             or len(set(times)) != len(times)):
-        raise ValueError('默认时间须为 1 至 12 个不重复的 HH:MM 柏林时刻')
+        raise ValueError('默认时间须为 1 至 12 个不重复的 HH:MM 业务时区时刻')
     return tuple(times)
 
 

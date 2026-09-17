@@ -1,6 +1,7 @@
 """Deployment admission races and durable queue/session protection; temporary control only."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -78,6 +79,32 @@ class MaintenanceTests(unittest.TestCase):
             finally:
                 hold.set()
             blocker.result(timeout=3)
+
+    def test_async_work_keeps_independent_admission_after_request_and_cancellation(self):
+        async def scenario():
+            started, finish = asyncio.Event(), asyncio.Event()
+            async def work():
+                with maintenance.operation('nested-publish'):
+                    started.set()
+                    await finish.wait()
+            with maintenance.operation('http'):
+                task = maintenance.create_task('publish', work)
+                await started.wait()
+            self.announce()
+            self.assertEqual(len(self.gate.status(now=100)['operations']), 1)
+            self.assertFalse(self.gate.try_quiesce(now=100))
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertTrue(self.gate.try_quiesce(now=100))
+            self.gate.reopen()
+            queued = maintenance.create_task('publish', work)
+            queued.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await queued
+            self.announce()
+            self.assertTrue(self.gate.try_quiesce(now=100))
+        asyncio.run(scenario())
 
     def test_unsaved_session_does_not_become_safe_when_heartbeat_expires(self):
         self.gate.session('draft', runtime_id='a' * 64, dirty=True, busy=False, now=1)

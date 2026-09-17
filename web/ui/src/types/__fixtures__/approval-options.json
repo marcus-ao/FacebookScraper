@@ -3,12 +3,19 @@
  "reason": "帖子 122100548013379375：机器与人工译文账本中都没有译文",
  "fingerprint": null,
  "platform": "facebook",
- "business_timezone": "Europe/Berlin",
+ "business_timezone": "Asia/Shanghai",
  "default_times": [
-  "10:00",
-  "17:00"
+  "16:00",
+  "23:00"
  ],
  "earliest": "2026-09-13T13:49:07.603913+00:00",
  "latest": "2026-10-01T06:59:59.999999+00:00",
- "ui_timezone": "America/Los_Angeles"
+ "ui_timezone": "America/Los_Angeles",
+ "audience_timezone": "Europe/Berlin",
+ "audience_quiet_hours": [
+  0,
+  6
+ ],
+ "lockable": false,
+ "lock_reason": "帖子 122100548013379375：机器与人工译文账本中都没有译文"
 }

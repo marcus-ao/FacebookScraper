@@ -6,7 +6,7 @@ import { PlatformLabel } from '@/components/PlatformLabel'
 import { ProblemIndicator } from '@/components/ProblemIndicator'
 import type { ProblemSource } from '@/components/ProblemIndicator'
 import { StatusTag, isTerminalStatus } from '@/components/StatusTag'
-import { BerlinTime, ShanghaiTime } from '@/components/Time'
+import { BusinessTime, ShanghaiTime } from '@/components/Time'
 import { tokens } from '@/app/theme'
 import { cx } from '@/lib/css'
 import type { DisplayStatus, Platform } from '@/types/domain'
@@ -154,7 +154,7 @@ export function createPostColumns<T extends PostRowBase>(
           width: spec.width ?? layout.timeColumnWidth,
           render: (_value: unknown, row: T) =>
             spec.zone === 'berlin' ? (
-              <BerlinTime at={spec.at(row)} />
+              <BusinessTime at={spec.at(row)} />
             ) : (
               <ShanghaiTime at={spec.at(row)} />
             ),

@@ -49,7 +49,7 @@
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
 
-**运营地址仍须现场验收**——受管服务机使用持久的 `public_base_url`，按第 16 节从业务电脑实际打开飞书链接；消息通道可达不能替代这个检查。企业管理员那条路（应用 AppSecret、应用授权、云盘根目录权限）随云盘一起延期，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
+**运营地址仍须现场验收**——受管服务机使用持久的 `public_base_url`，按第 17 节从业务电脑实际打开飞书链接；消息通道可达不能替代这个检查。企业管理员那条路（应用 AppSecret、应用授权、云盘根目录权限）随云盘一起延期，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
 
 ### 2.1 配置同群四个机器人
 
@@ -220,7 +220,7 @@ Facebook 在链接区确定德国落地页后，可把对应 `{{linkN}}` 插入�
 
 风险夹具只供明确演示模式，不能据此批准真实内容；正式页面读取实际风险状态和来源。采样降级时仍可人工决定，不把缺数据写成热度为零或已扫描安全。
 
-从历史入口检查服务端分页、平台/月/tag/状态筛选、总数及 90 天外详情，冻结 `.tech` 只读；查询不会启动翻译。设置页只改默认柏林时刻与挂起工作日数，保存需版本校验；其它配置/模板只读并保留说明。五阶段运行状态显示真实激活、进程/处理、429、飞书凭据、镜像和月历状态，查看状态不触发外部操作。源发帖至首次就绪和批次处理时效分别显示，前者包含发现等待；没有历史就绪事实时不期待补出统计数字。
+从历史入口检查服务端分页、平台/月/tag/状态筛选、总数及 90 天外详情，冻结 `.tech` 只读；查询不会启动翻译。设置页只改默认业务时刻（北京）与挂起工作日数，保存需版本校验；其它配置/模板只读并保留说明。五阶段运行状态显示真实激活、进程/处理、429、飞书凭据、镜像和月历状态，查看状态不触发外部操作。源发帖至首次就绪和批次处理时效分别显示，前者包含发现等待；没有历史就绪事实时不期待补出统计数字。
 
 遇到 409 版本冲突时刷新后重做决定。遇到账本解析错误时停下来保留文件；不要删掉坏行让界面继续。
 
@@ -367,7 +367,7 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 - 最终德语正文、hashtags、链接/bio 话术；
 - 每张最终图片及哈希；
 - 唯一渠道和目标账号；
-- 柏林时刻，以及 UI 时区换算；
+- 北京时刻，以及德国受众当地时刻与 UI 时区换算；
 - Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
@@ -379,7 +379,7 @@ scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
 
 当前远端 scheduled 详情图片读取适配器还没有实现。受控样本具体确认后，先留取实际排期详情的图片控件证据，再补适配和回归，才能验证远端图片数量/顺序与冻结来源 SHA。编辑器两图通过、成功 dialog 或仅正文/ID 回读都不会让 G8 通过；历史 scheduled 仍保留防重，不为补验收重新提交。
 
-最终由运营走完真实飞书卡片 → 当前帖审校/修改/检查 → 柏林选期/确认 → 单渠道回读 → 飞书回执，记录实际任务与消息。两次独立脚本提交不能代替此流程。
+最终由运营走完真实飞书卡片 → 当前帖审校/修改/检查 → 北京选期/确认 → 单渠道回读 → 飞书回执，记录实际任务与消息。两次独立脚本提交不能代替此流程。
 
 点击后进程退出、回读失败或 remote ID 不一致时，不要重试。查 `published.jsonl`、Planner 和冻结快照，按不确定提交处理。
 
@@ -490,7 +490,7 @@ npm --prefix web/ui run build
 
 - [ ] 把开发分支合并到原 `main`
 - [ ] 在原主工作区运行 `scripts\run_web.bat`
-- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 16 节）
+- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 17 节）
 
 只刷新浏览器不会重新读取构建目录：`DIST` 在 `web/api/app.py` import 时确定。
 
@@ -509,7 +509,7 @@ npm --prefix web/ui run build
 - [ ] 旧链接 `/?view=history` 跳到 `/history?page=1&limit=50`
 - [ ] 浏览器 console 无报错
 - [ ] Network 没有异常 404/422
-- [ ] 柏林时刻和四个队列计数与实际数据一致
+- [ ] 北京时刻和四个队列计数与实际数据一致
 
 ### 低风险写入检查
 
@@ -525,9 +525,9 @@ npm --prefix web/ui run build
 
 ### 经确认的外部写入检查
 
-先核对当前会话是否已明确授权这篇具体帖子、最终文图、目标账号、唯一渠道和柏林时刻。已有这份具体授权就继续，不重复申请；缺少任一项时停在提交前补齐确认。
+先核对当前会话是否已明确授权这篇具体帖子、最终文图、目标账号、唯一渠道和北京时刻。已有这份具体授权就继续，不重复申请；缺少任一项时停在提交前补齐确认。
 
-- [ ] 选一篇明确允许用来测试的帖子和柏林时刻
+- [ ] 选一篇明确允许用来测试的帖子和北京时刻
 - [ ] 执行真实 approve
 - [ ] 在 Business Suite 确认排期存在
 - [ ] 审校台回读为「已排期」
@@ -762,7 +762,7 @@ D:\FacebookScraperService\
 
 默认新建空业务实例，调度与付费处理均关闭。开发机和服务机各自的测试数据不能混入生产账本。若要接续已经存在的真实业务数据，先停止其写入，按[第 1 节](#1-接续运行数据前先备份和核验)完整备份核验，再由技术人员在新实例首次启动前接续完整 `archive/state` 与必要凭据；核对全部路径及实例归属。不得只搬部分 JSONL，不能覆盖已有运行中的 `shared`，也不自动合并两份账本。
 
-网络参数保存在 `control\host.json`：`web_host`、`web_port`、`public_base_url`、`allowed_client_cidrs`。受管通知的审校台地址以这里为准；独立开发仍读取 `[feishu].base_url`。首次局域网安装见第 16 节。
+网络参数保存在 `control\host.json`：`web_host`、`web_port`、`public_base_url`、`allowed_client_cidrs`。受管通知的审校台地址以这里为准；独立开发仍读取 `[feishu].base_url`。首次局域网安装见第 17 节。
 
 两个运营可编辑偏好保存在 `shared\state\operator_preferences.json`：默认柏林排期时刻与挂起工作日数。其余配置、提示词和业务规则由已验证版本交付；不要在服务机直接改 `releases\<sha>\config.toml`。
 
@@ -871,19 +871,79 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --wheelhouse state\
 
 受管实例停用原来的“scheduler-disable → git pull → setup → scheduler-enable”流程。开发检出仍可手动安装和测试；生产目录由控制器管理，不 stash、不原地 pull、不复制旧虚拟环境，不同时安装第二套调度计划任务。
 
-## 16. 办公局域网接入
+## 16. 阶段三真实验收：冻结、排期与自动发布
+
+2026-09-16 完成的是**代码侧**：冻结与提交拆成两步、业务时区改北京、提交过程可轮询、
+月历叠加本地图层、到点核实、撤销登记。全部只有离线证据。要真的排出一条帖子，下面四步
+按顺序做，**顺序不能颠倒**。
+
+### 16.1 先录发布控件证据
+
+**不做这一步，后面三步一步都走不了**：`[publish].ui_probe_dump` 现在是空的、
+`ui_constraints_verified = false`，`capabilities.require()` 对两个渠道都会抛
+`ProbeRequired`，界面上排期按钮是灰的。
+
+按[第 8 节](#8-录制单渠道-business-suite-证据)录一遍并回填配置，录完先验一眼：
+
+```powershell
+scripts\run_python.bat -m pipeline.cli preflight --json
+```
+
+两个渠道的 `*_controls`、`submission`、`readback`、`calendar_coverage` 都要是
+`available: true`。
+
+⚠️ 这一步之前**「编辑确认无误」仍然可用**——缺录证只挡排期，不挡她确认文案和图片。
+所以看到"能冻结、不能排期"是预期，不是坏了。
+
+### 16.2 回填出一篇能发的稿
+
+`archive/` 现在是空的。按[第 4 节](#4-为当前目标建立归档)和
+[第 14 节](#14-阶段一真实验收监测与原帖抓取)回填，直到至少有一篇**有正文、媒体全是静态图、
+德语图齐全**的帖子。缺德语图的帖子连冻结都不给——它本来也发不出去，界面会写明缺第几张。
+
+### 16.3 走一遍完整的人工流程
+
+按[第 9 节](#9-真实发布前的最终确认)准备 FB-only 和 IG-only 各一篇，逐项给业务确认。
+确认之后在审校台上依次做：
+
+1. 点「编辑确认无误」，确认正文与图片被锁住、编辑入口都关掉了；
+2. 选北京时刻，核对旁边那行德国当地时刻是不是你要的；
+3. 点「确认发布时间并排期」，**盯着进度走完七步**——这一步现在可以关页面再回来看；
+4. 回读成功之后核对月历上远端卡片出现、飞书 publish 机器人收到回执。
+
+记下：实际耗时、进度停在哪一步最久、远端 remote ID、飞书卡片的实际发送者。
+
+### 16.4 排期详情的图片控件证据
+
+远端 scheduled 详情的图片读取适配器仍然**没有实现**，G8 媒体闸因此不会通过。
+16.3 排出真实卡片之后，先录一份排期详情的图片控件证据，再补适配和回归。
+
+⛔ 在拿到那份证据之前不要动 G8 的判据。编辑器里两张图核对通过、成功 dialog、
+只回读到正文和 remote ID，都**不能**替代远端排期详情里的图片数量与顺序。
+
+### 16.5 要撤掉一条已排期的帖子时
+
+系统不会替你删远端卡片。先在 Business Suite 里删掉，再回审校台点「我已在后台删除这条排期」
+并填写说明；系统会持发布锁重读整月核实那条 remote ID 确实不在了，核实不过不改状态。
+`published.jsonl` 里原来那条记录保留不删。
+
+## 17. 办公局域网接入
 
 首版面向 2–5 人同权、受控办公局域网 HTTP。用户确认暂不登录和记录个人身份，`actor: null`；获准进入入口的电脑具有相同业务能力，HTTP 不加密。业务写入仍经过已有预算、来源许可、冻结确认和版本冲突检查。本节只解决访问，不授予抓取、模型或发布权限。
 
-### 16.1 固定入口和首次安装
+### 17.1 固定入口和首次安装
 
-由技术人员与网络管理员核定服务机办公 IPv4、DHCP 地址保留、网卡名称及办公 CIDR。确认访客网络不包含在放行范围，检查 Wi-Fi 客户端隔离、VLAN 路由及公司组策略；不能拿开发机的 IP 或网段代填。业务访问地址为 `http://<固定办公IP>:8765`，`0.0.0.0` 只作为服务监听参数。
+用户提供的服务机 `ipconfig`：有效网卡 **WLAN**，IPv4 **10.66.3.157**，掩码 **255.255.255.0**，网关 **10.66.3.254**。由此配置标准入口 **http://10.66.3.157:8765**、允许来源 **10.66.3.0/24**。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
 
-按第 15 节下载通过发布门禁的制品，在运营账户下安装。下面 IP、网段及下载目录均为示例，替换成现场值：
+安装配置已写入 [ops/service-machine.network.json](../ops/service-machine.network.json)，仅含四个网络字段，通过 `--network-config` 读取并校验后写入 `control/host.json`。该文件独立于运行制品，不改变开发默认、不保存凭据、不覆盖业务运行模式。配置文件与逐项网络参数不可混用。
+
+这份输出仅证明采样时的地址；DHCP 地址保留、WLAN 的 Domain/Private 网络类型、客户端同网段及 Wi-Fi 客户端隔离仍需现场核对。先由网络管理员保留该地址，再用于持续业务；应用配置不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
+
+正式安装按第 15 节选择 main 的成功制品；当前功能分支的隔离调试按第 17.6 节。网络值已填写为本机真实信息，下面仅下载和安装目录是示例：
 
 ```powershell
 Set-Location D:\Downloads\fbscraper-windows
-py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --web-host 0.0.0.0 --public-base-url http://192.168.10.20:8765 --allow-client-subnet 192.168.10.0/24
+py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --network-config D:\Downloads\service-machine-network\service-machine.network.json
 ```
 
 `--allow-client-subnet` 可重复；只填已核定的办公 IPv4 CIDR，不填 `0.0.0.0/0`。默认端口为 8765，显式改变端口时 `--web-port` 与 URL 端口须一致。省略全部网络参数会安装为回环模式；局域网参数不完整或非法时，安装器在创建目标目录前拒绝。
@@ -899,25 +959,25 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen
 
 核对 `deployment_ready`、前后端指纹、实例、实际 `web_host`/`web_port` 与标准入口。健康信息来自匹配当前进程的心跳；配置文件和进程监听不一致会拒绝 readiness。候选预检继续绑定临时回环端口，不出现在办公入口。
 
-### 16.2 手动设置 Windows 防火墙
+### 17.2 手动设置 Windows 防火墙
 
-在具备权限的技术账户 PowerShell 中使用已安装控制器的 `scripts\configure_lan_firewall.ps1`。先预览，再应用；实际办公网卡名称通过 `Get-NetIPConfiguration` 核对，不照抄示例：
+在具备权限的技术账户 PowerShell 中使用已安装控制器的 `scripts\configure_lan_firewall.ps1`。先预览，再应用；本机使用 `WLAN`，执行前通过 `Get-NetIPConfiguration` 复核地址没有改变：
 
 ```powershell
-D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 192.168.10.20 -InterfaceAlias 'Ethernet' -WhatIf
-D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 192.168.10.20 -InterfaceAlias 'Ethernet'
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.3.157 -InterfaceAlias 'WLAN' -WhatIf
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.3.157 -InterfaceAlias 'WLAN'
 ```
 
 脚本读取并校验本实例的持久网络配置，仅管理名称 `FBScraper-LAN-Web`、分组 `FBScraper Managed Access` 的专用规则：TCP Web 端口、指定本机 IPv4 与办公网卡、配置的办公来源网段、Domain/Private 配置文件。重复执行更新同一条规则，不按版本目录绑定 Python 路径，不关闭整个防火墙、不启用 Public 配置文件。业务控制器不自动调用此脚本，也不因此增加运行权限。
 
 人工检查现有 Python 或端口放行规则和生效的组策略，确认没有更宽规则绕过范围；脚本不会擅自删除其他软件规则。Chrome 9222/9223/9224 保留本机回环，Vite 5174 不作为业务入口。
 
-### 16.3 从业务电脑验收
+### 17.3 从业务电脑验收
 
 至少两台实际办公电脑分别运行 TCP 连通检查，然后用桌面 Chrome/Edge 打开标准入口：
 
 ```powershell
-Test-NetConnection 192.168.10.20 -Port 8765
+Test-NetConnection 10.66.3.157 -Port 8765
 ```
 
 - 打开首页、深层任务链接并刷新，查看图片及下载素材；从运行页复制标准入口。
@@ -928,13 +988,13 @@ Test-NetConnection 192.168.10.20 -Port 8765
 
 访问被拒提示时先核对标准 URL、实际来源网段、办公网卡/配置文件、规则及公司网络策略；无需更改浏览器安全设置或放宽所有来源。临时断线时保留原标签页和输入，连接恢复后先确认版本再继续，不重复提交结果不确定的付费或发布请求。
 
-### 16.4 跨夜、重启和日常变更
+### 17.4 跨夜、重启和日常变更
 
 机器持续供电联网，禁用会中断任务的自动睡眠，运营账户保持登录；可锁屏，不以注销代替锁屏。记录一次锁屏期间及跨夜的局域网访问、版本与业务模式。控制器任务仍是 `InteractiveToken`：重启后无人登录时不承诺业务恢复；运营登录后验证只启动一套正确实例。Chrome 三个 profile 仍按原流程人工登录和独立验收。
 
 普通代码更新/回退不覆盖 `control\host.json`，飞书与页面入口保持一致。本轮不提供运行中改址：需要更换 IP/网卡/网段时，先暂停自动更新，使用维护协调确认全部页面和任务空闲、受管进程退出，再由技术人员修改并校验网络设置及规则，重启并重复本机和远程验收。不能只改文件后把它当作进程已经切换监听。
 
-### 16.5 撤回入口与证据
+### 17.5 撤回入口与证据
 
 撤回远程入口先撤销本系统专用放行，核对实际可达性；已有任务依然按维护协议处理，不强杀业务进程：
 
@@ -955,3 +1015,64 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
 ```
 
 浏览器测试通过隔离域名映射验证非 localhost HTTP，断言 `isSecureContext === false`，不降低浏览器安全选项。Windows 演练使用临时端口、测试域名和文档保留网段，核对 `0.0.0.0` 监听及更新/回退前后的网络配置，隔离候选仍只绑定回环；不设置本机防火墙或注册业务任务。两者均使用隔离数据及假外部服务，不能代替实际办公网验收。
+
+### 17.6 当前分支在服务机的调试步骤
+
+这轮使用新的 `C:\FacebookScraperServiceLanTest`，与将来的正式业务实例分开。测试目录不接续既有 archive/state/.env，不注册正式任务；默认调度与付费关闭。端口沿用 8765，因此测试与正式实例不能同时占用该端口。
+
+1. 在服务机运营账户安装 **Windows x64 Python 3.12.9**。本流程使用已构建制品，无需安装 Node、Git 或自行运行前端开发服务器。管理员核对：
+
+   ```powershell
+   Get-NetIPAddress -InterfaceAlias WLAN -AddressFamily IPv4
+   Get-NetConnectionProfile -InterfaceAlias WLAN
+   Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+   ```
+
+   地址应为 `10.66.3.157/24`；网络类型应为 DomainAuthenticated 或 Private。若是 Public，按公司网络政策确认办公网络属性后再由管理员调整；不放宽为 Public。已有监听时先确定归属，不结束不认识的进程。
+
+2. 在 GitHub Actions 的 **Windows release** 中选择 **codex/lan-access** 和本次推送 SHA，等全部检查成功。下载同一次运行的 `fbscraper-windows` 与 `service-machine-network` 两份制品，分别解压到当前用户 Downloads 下的同名目录。前者根目录必须直接有 `release.json`，后者有 `service-machine.network.json`。不能拿当前 main 的旧制品测试新局域网功能。
+
+3. 在运营账户普通 PowerShell 中安装；这些变量在后续同一窗口复用：
+
+   ```powershell
+   $Release = Join-Path $env:USERPROFILE 'Downloads\fbscraper-windows'
+   $Network = Join-Path $env:USERPROFILE 'Downloads\service-machine-network\service-machine.network.json'
+   $ServiceRoot = 'C:\FacebookScraperServiceLanTest'
+   Set-Location $Release
+   py -3.12 --version
+   Get-Content $Network
+   py -3.12 -m deployment.release verify .
+   py -3.12 -m deployment install --root $ServiceRoot --release $Release --network-config $Network
+   ```
+
+   版本、SHA 或校验不符时停止；安装目标非空也会拒绝，不能删除其内容来重试。安装会准备两个最终路径虚拟环境及独立回环预检，期间等命令返回。安装输出须显示真实入口、网段以及 `scheduler_enabled=false`、`process_enabled=false`。
+
+4. 首次运行前暂停自动更新，保留当前分支版本供调试；保留安装器生成的空业务凭据和空 GitHub token：
+
+   ```powershell
+   Set-Location "$ServiceRoot\controller"
+   .\.venv\Scripts\python.exe -m deployment pause --root $ServiceRoot
+   .\.venv\Scripts\python.exe -m deployment status --root $ServiceRoot
+   .\.venv\Scripts\python.exe -m deployment supervise --root $ServiceRoot
+   ```
+
+   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 是所装分支、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.3.157:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
+
+5. 在管理员 PowerShell 中预览并应用测试实例规则：
+
+   ```powershell
+   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.3.157 -InterfaceAlias WLAN -WhatIf
+   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.3.157 -InterfaceAlias WLAN
+   Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallAddressFilter
+   Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallPortFilter
+   ```
+
+   应为本地 `10.66.3.157`、远程 `10.66.3.0/24`、TCP 8765。若脚本受执行策略阻止，只按组织政策对已审阅下载文件解锁，不修改全机执行策略或关闭防火墙。
+
+6. 至少两台办公电脑先核对自身 IP 属于 `10.66.3.0/24`，然后运行 `Test-NetConnection 10.66.3.157 -Port 8765`，浏览器访问 **http://10.66.3.157:8765**。核对审校、历史、月历、设置、运行页及深链刷新；`/api/deployment/status` 应可读，`/api/health` 从远端应返回 403。浏览器不需要调整安全选项。
+
+7. 空实例可直接用设置页验证多人保护：两台电脑先打开同一旧值，各自输入不同的合法默认时间；A 保存，B 保存应提示版本冲突且保留 B 的输入。测试结束明确保存或放弃草稿。图片、素材下载和内容编辑须准备隔离样本后再按第 17.3 节验收；不要为造测试数据启动真实抓取、模型或发布。完整假服务回归使用第 17.5 节的源码测试工具，不在业务账本中造夹具。
+
+8. 记录页面、HTTP 结果、版本和两台客户端；按第 17.4 节验证锁屏及跨夜。当前分支制品只供显式安装调试，生产轮询仍只接受 main。合并后的 main 制品、正式运行目录、凭据、任务与业务启用按第 15 节另行验收；不把测试实例的账本搬成正式数据。
+
+撤销远程入口用第 17.5 节的 `-Remove`，将 Root 换成测试目录。`pause` 只暂停自动更新，`Ctrl+C` 只退出前台控制器，都不承诺 Web 已退出；不能把窗口消失当作完整停机。结束调试前先保存或放弃所有草稿并关闭标签页，再退出前台控制器；技术人员使用维护 Gate 关闭接单、向已登记的准确进程请求退出并核对 PID/创建时间，不能强杀未完成操作或删除测试目录解除阻塞。

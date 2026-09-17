@@ -239,8 +239,12 @@ def publish_rules(raw: Mapping[str, Any] | None = None) -> PublishRules:
             raise PipelineRunError("无效排期槽：%r" % value) from exc
     timezone_name = str(raw.get("timezone") or "")
     ui_timezone = str(raw.get("ui_timezone") or "")
-    if timezone_name != "Europe/Berlin":
-        raise PipelineRunError("[publish].timezone 必须是 Europe/Berlin")
+    # ⚠️ 必须是 IANA 时区名，不能写死 UTC 偏移：带夏令时的业务时区一年切两次，
+    # 固定偏移会在切换日把时刻整体挪一小时，而且不报错。
+    try:
+        ZoneInfo(timezone_name)
+    except Exception as exc:
+        raise PipelineRunError("[publish].timezone 不是有效的 IANA 时区名：%r" % timezone_name) from exc
     if not ui_timezone:
         raise PipelineRunError("[publish].ui_timezone 不能为空")
     price_map = raw.get("price_map") or {}
@@ -960,7 +964,7 @@ def pending_image_indices(source: SourcePost) -> tuple[int, ...]:
 
 def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
                rules: PublishRules) -> tuple[datetime, ...]:
-    """返回配置范围内可用的柏林候选时刻；不足时可能少于 count。"""
+    """返回配置范围内可用的业务时区候选时刻；不足时可能少于 count。"""
 
     zone = ZoneInfo(rules.timezone)
     ui_zone = bs.resolve_ui_timezone(rules.ui_timezone)
@@ -975,7 +979,7 @@ def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
     while len(found) < count and not exhausted:
         for slot in rules.slots:
             candidate = datetime.combine(day, slot, tzinfo=zone)
-            # 月份在 **UI 时区**里判：德国 10-01 00:00 在美西还是 09-30。
+            # 月份在 **UI 时区**里判：北京 10-01 00:00 在美西还是 09-30 上午。
             in_ui = candidate.astimezone(ui_zone)
             if (in_ui.year, in_ui.month) != ui_month:
                 exhausted = True

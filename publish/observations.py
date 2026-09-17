@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.paid_model import atomic_write_json
 from core.store import assert_physical_direct_path
+from publish import journal
 
 NAME = 'publication_observations.json'
 
@@ -39,6 +41,30 @@ def record(state_dir, inventory, observed_at):
                 'card_sha256': card.card_sha256, 'source': 'planner_live_detail'}
     if data['items']:
         atomic_write_json(Path(state_dir) / NAME, data)
+
+
+def overdue(state_dir, *, now, grace_minutes=60):
+    """排期时刻已过且仍未观测到公开的条目。
+
+    ⛔ 只报「还没观测到」，不报「没发出去」——时钟走过去不是远端事实，
+    这里也不去点 `Publish now` 验证（HANDOFF 红线、F5-5）。
+    """
+    grace = timedelta(minutes=grace_minutes)
+    late = []
+    for row in {item['attempt_id']: item for item in journal.load(Path(state_dir))}.values():
+        if row['status'] != journal.STATUS_SCHEDULED:
+            continue
+        try:
+            at = datetime.fromisoformat(row['scheduled_at'])
+        except (TypeError, ValueError):
+            continue
+        if now - at < grace or status(state_dir, row)['status'] == 'published':
+            continue
+        late.append({'attempt_id': row['attempt_id'], 'post_id': row['post_id'],
+                     'platform': row['platform'], 'scheduled_at': row['scheduled_at'],
+                     'remote_id': row.get('remote_id', '')})
+    late.sort(key=lambda item: item['scheduled_at'])
+    return late
 
 
 def status(state_dir, attempt):
