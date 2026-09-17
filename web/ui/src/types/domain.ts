@@ -53,7 +53,7 @@ export type LinkOrigin = 'mapping' | 'manual' | 'missing'
 
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'interrupted'
 
-export type ContentJobKind = 'text' | 'image'
+export type ContentJobKind = 'text' | 'image' | 'suggest'
 export type TemplateKind = 'text' | 'image'
 
 export type QueueBucket = 'review' | 'not_ready' | 'snoozed' | 'processed'
@@ -166,6 +166,9 @@ export interface ReviewListResponse {
     readonly with_hard_alerts: number
     /** 页签计数由服务端提供，不能以当前页重算。 */
     readonly by_status: Readonly<Record<DisplayStatus, number>>
+    /** 两个平台各自的页签计数；旧后端未提供时角标退回全量口径。 */
+    readonly by_platform_status?: Readonly<Record<Platform, Readonly<Record<DisplayStatus, number>>>>
+    readonly by_platform_hard_alerts?: Readonly<Record<Platform, number>>
     readonly tags: readonly string[]
   }
 }
@@ -267,6 +270,8 @@ export interface LocalizationValidation {
   readonly issues: readonly ValidationIssue[]
   readonly warnings: readonly ValidationIssue[]
   readonly ready: boolean
+  /** 服务端拼好的成品文案：正文 + 链接或引导话术 + 话题标签。复制用它，不在前端重拼。 */
+  readonly caption?: string
   /** 替换链接占位符之后的最终发布文案长度。 */
   readonly char_count: number
   readonly body_char_count: number
@@ -278,6 +283,22 @@ export interface ImageMetrics {
   readonly aspect_drift: number | null
   readonly scale_ratio: number | null
   readonly elapsed_s: number | null
+  /** 改动像素占比。0 表示模型一个像素都没动，须人眼判断是无需改动还是白花钱。 */
+  readonly changed_pixel_ratio?: number | null
+}
+
+export interface ImageVersion {
+  readonly preview_url?: string | null
+  readonly out_path: string
+  readonly created_at: string | null
+  readonly refine_id: string | null
+  readonly refine_instruction: string | null
+  readonly model: string | null
+  readonly available: boolean
+  readonly current: boolean
+  readonly usable: boolean
+  readonly unusable_reasons: readonly string[]
+  readonly metrics: ImageMetrics
 }
 
 export interface ImageAsset {
@@ -286,6 +307,10 @@ export interface ImageAsset {
   readonly de_url: string
   /** false 表示缺德语图，当前为原图回退。 */
   readonly de_present: boolean
+  /** 当前用的是人工放置或上传的图；模型优化不会被采用，入口须禁用。 */
+  readonly manual?: boolean
+  readonly replaced_at?: string | null
+  readonly warnings?: readonly string[]
   /** 没有程序生成记录时为 null（人工放的图，或没跑过德语图）。 */
   readonly metrics: ImageMetrics | null
 }
@@ -376,8 +401,13 @@ export interface TaskDetail {
   readonly review: ReviewStateRecord
   readonly tags: readonly string[]
   readonly tags_revision: Sha256
+  readonly hard_alerts?: readonly HardAlert[]
   readonly localization: LocalizationDraft
   readonly localization_validation: LocalizationValidation
+  /** 本轮标签热度推荐是否启用；关闭时标签只由人工选取。旧详情未提供时按启用处理。 */
+  readonly hashtag_suggestions_enabled?: boolean
+  /** 最近一次的只读优化建议；从未生成过时为 null。 */
+  readonly text_suggestions?: TextSuggestions | null
   /** 正文分区版，用于编辑对照。 */
   readonly body_highlights: readonly Highlight[]
   readonly body_risks: readonly BodyRisk[]
@@ -431,6 +461,8 @@ export interface ApprovalConflictPayload {
 
 export interface CheckResult {
   readonly highlights: readonly Highlight[]
+  /** 与 caption_length 出自同一次计算的成品文案；只有分区草稿路径会返回。 */
+  readonly caption?: string
   readonly caption_length: number
   readonly hashtag_count: number
   readonly warnings: readonly ValidationIssue[]
@@ -451,9 +483,41 @@ export interface ContentJob {
   readonly paid_request_ids?: readonly string[]
   readonly worker_state?: string
   readonly source_text_sha256?: Sha256
+  /** 文案候选的模板版本；旧任务缺少版本时不可采用。 */
+  readonly prompt_version?: number | null
+  readonly current_prompt_version?: number
+  readonly prompt_current?: boolean
   /** 仅 text 任务成功时提供正文分区。 */
   readonly body_de?: string
   readonly text_de?: string
+  /** 仅 suggest 任务成功时提供。 */
+  readonly suggestions?: readonly TextSuggestion[]
+  readonly dropped?: readonly string[]
+}
+
+export type SuggestionKind = 'grammar' | 'wording' | 'register' | 'terminology' | 'fluency'
+export interface TextSuggestion {
+  /** 当前德语正文里的原样片段，保证只出现一次，所以「采用」不会改错地方。 */
+  readonly quote: string
+  readonly replacement: string
+  readonly kind: SuggestionKind
+  /** 中文写的理由，读的人是中国运营。 */
+  readonly why: string
+}
+export interface TextSuggestions {
+  readonly job_id: string
+  /** 点击生成时的正文快照，供尚未保存的编辑区逐字符核对。旧记录可能没有。 */
+  readonly body_de: string | null
+  readonly source_text_sha256: Sha256
+  readonly text_de_sha256: Sha256
+  readonly items: readonly TextSuggestion[]
+  /** 越界被丢弃的条数说明，不静默吞掉。 */
+  readonly dropped: readonly string[]
+  /** 相对已保存正文是否有效；编辑区另与本次正文快照核对。 */
+  readonly current: boolean
+  readonly generated_at: string
+  readonly prompt_version: number
+  readonly current_prompt_version: number
 }
 
 export interface InitialTranslationCapabilities {
@@ -466,13 +530,17 @@ export interface InitialTranslationCapabilities {
 }
 
 export interface RefinementCapabilities {
+  readonly image_model?: string
+  readonly max_image_count?: number | null
   readonly max_refine_per_media: number
   /** 键为媒体下标的字符串形式。 */
   readonly image_attempts: Readonly<Record<string, number>>
-  readonly estimated_image_usd: number
+  readonly estimated_image_usd: number | null
   readonly estimate_basis: string
   readonly estimate_samples: number
   readonly jobs: readonly ContentJob[]
+  /** 键为媒体下标的字符串形式；每张图生成过的历史版本，按落盘顺序。 */
+  readonly image_versions?: Readonly<Record<string, readonly ImageVersion[]>>
 }
 
 

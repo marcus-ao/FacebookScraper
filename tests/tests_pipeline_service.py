@@ -11,6 +11,7 @@ from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from capture_fixtures import record_capture_rows
 from core import review
+from core.capture_state import CaptureState
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings
@@ -58,6 +59,69 @@ class ServiceTests(unittest.TestCase):
             runtime.maintenance(self.now)
             process.assert_called_once()
         self.assertEqual(detector.call_count, 2)
+
+    def capture_runtime(self, *, code=0):
+        runtime = Runtime(detector=Mock(return_value=0), process=True)
+        self.addCleanup(runtime.close)
+        record_capture_rows(runtime, [
+            ('post_discovered', {'post_id': 'stage2-complete', 'created_at': self.now.isoformat(),
+                                 'head': 'An English caption', 'images': 2}),
+            ('post_captured', {'post_id': 'stage2-complete'}),
+            ('post_discovered', {'post_id': 'stage2-manual', 'created_at': self.now.isoformat(),
+                                 'head': 'Another English caption', 'images': 1}),
+        ], self.now, 'facebook', code=code)
+        return runtime
+
+    def test_partial_scan_queues_complete_posts_without_retrying_capture(self):
+        runtime = self.capture_runtime(code=1)
+        self.assertEqual(runtime.scan('delta', 'facebook'), 1)
+        pending = runtime.processing_status()
+        self.assertEqual(pending['status'], 'pending')
+        self.assertEqual(pending['platforms']['facebook']['discovered'], 1)
+        self.assertEqual(pending['platforms']['facebook']['image_count'], 2)
+        with patch.object(engine, 'run', return_value=0) as process:
+            runtime.start_processing(self.now).result(timeout=5)
+        process.assert_called_once()
+        states = CaptureState(self.state).status()['items']
+        self.assertEqual(sorted(item['status'] for item in states.values()), ['complete', 'manual'])
+
+    def test_recovered_capture_queues_once_across_runtime_restart(self):
+        from core.store import Archive, Post, Media
+        from core.media import image_facts
+        from image_fixtures import image_bytes
+
+        runtime = self.capture_runtime()
+        runtime.scan('delta', 'facebook')
+        with patch.object(engine, 'run', return_value=0):
+            runtime.start_processing(self.now).result(timeout=5)
+        ledger = CaptureState(self.state)
+        snapshot = ledger.status()
+        item = next(item for item in snapshot['items'].values() if item['status'] == 'manual')
+        item = ledger.recover(item['key'], snapshot['revision'], 'fixture repair')
+        row = item['source']
+        post = Post(**{key: value for key, value in row.items() if key != 'media'},
+                    media=[Media(**value) for value in row['media']])
+        arc = Archive(cfg().archive_dir, 'fa_' + row['account'])
+        data = image_bytes()
+        arc.save_media(post, 0, data, image_facts(data, 'image/jpeg'))
+        arc.append(post)
+        ledger.finish(post, arc, self.now, archived=True)
+
+        with patch.object(runtime, '_deliver'), patch.object(engine, 'run', return_value=0) as process:
+            runtime.maintenance(self.now)
+            batch = runtime.processing_status()
+            self.assertEqual(batch['status'], 'pending')
+            self.assertEqual(batch['platforms']['facebook']['discovered'], 1)
+            runtime.start_processing(self.now).result(timeout=5)
+            runtime.maintenance(self.now)
+            runtime.start_processing(self.now)
+            process.assert_called_once()
+        restarted = Runtime(detector=Mock(return_value=0), process=True)
+        self.addCleanup(restarted.close)
+        with patch.object(restarted, '_deliver'), patch.object(engine, 'run') as process:
+            restarted.maintenance(self.now)
+            self.assertIsNone(restarted.start_processing(self.now))
+            process.assert_not_called()
 
     def test_handed_off_prevents_all_automatic_paid_stages(self):
         review.transition(self.fixture.account, self.fixture.source, 'handed_off',

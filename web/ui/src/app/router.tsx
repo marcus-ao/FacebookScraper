@@ -4,7 +4,8 @@ import type { RouteObject } from 'react-router'
 import { AppShell } from './AppShell'
 import { NotFound } from './NotFound'
 import type { PageMeta } from './page-meta'
-import { legacyRedirect } from './search-params'
+import { legacyRedirect, parsePlatform } from './search-params'
+import { reviewPath } from './nav-model'
 import { ReviewPage } from '@/pages/review/ReviewPage'
 import { HistoryPage } from '@/pages/history/HistoryPage'
 import { ReviewDetailPage } from '@/pages/review-detail/ReviewDetailPage'
@@ -19,6 +20,17 @@ function LegacyEntry() {
   return <Navigate to={target ?? '/review'} replace />
 }
 
+/**
+ * 旧的 `/review` 现在按 `?platform=` 落到对应入口。
+ * 面包屑和外部链接都还在用它，硬跳 Facebook 会把 Instagram 的返回路径带错地方。
+ */
+function ReviewEntry() {
+  const location = useLocation()
+  const search = new URLSearchParams(location.search)
+  const platform = parsePlatform(search.get('platform')) ?? 'facebook'
+  return <Navigate to={{ pathname: reviewPath(platform), search: location.search }} replace />
+}
+
 function meta(value: PageMeta): PageMeta {
   return value
 }
@@ -31,10 +43,17 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <LegacyEntry /> },
 
+      // 两个平台各一个入口。静态段先于 :account 匹配，所以详情路由不受影响。
+      { path: 'review', element: <ReviewEntry /> },
       {
-        path: 'review',
-        element: <ReviewPage />,
-        handle: meta({ title: '审校队列' }),
+        path: 'review/facebook',
+        element: <ReviewPage platform="facebook" />,
+        handle: meta({ title: 'Facebook 待审' }),
+      },
+      {
+        path: 'review/instagram',
+        element: <ReviewPage platform="instagram" />,
+        handle: meta({ title: 'Instagram 待审' }),
       },
       {
         path: 'review/:account/:postId',

@@ -1,6 +1,6 @@
 /** 禁用原因按分支顺序取最高优先级。 */
 
-import type { DisplayStatus } from '@/types/domain'
+import type { ContentJob, DisplayStatus } from '@/types/domain'
 
 export interface ApprovalGate {
   readonly editing: boolean
@@ -76,6 +76,8 @@ export interface RefinementGate {
   readonly capabilitiesLoaded: boolean
   readonly kind: 'text' | 'image'
   readonly remaining: number
+  /** 选中的这一张当前是人工图。 */
+  readonly manualImage?: boolean
 }
 
 export function refinementDisabledReason(gate: RefinementGate): string {
@@ -86,7 +88,17 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   if (gate.interrupted) return '请先核对中断的处理'
   if (!gate.instruction.trim()) return '请填写本次希望怎样调整'
   if (!gate.capabilitiesLoaded) return '正在读取可用次数与费用'
+  // 人工图优先于程序产出，所以模型再生成一版也不会被采用——那笔钱是白花的。
+  if (gate.kind === 'image' && gate.manualImage) return '这一张已换成人工图片，模型优化不会被采用'
   if (gate.kind === 'image' && !gate.remaining) return '这张图片的优化次数已用完'
+  return ''
+}
+
+export function textCandidateDisabledReason(job: ContentJob, sourceHash: string, eligible: boolean): string {
+  if (!eligible) return '请先恢复审校并复核原文变化'
+  if (job.source_text_sha256 !== sourceHash) return '原文已更新，此候选已失效。'
+  if (job.prompt_current !== true) return '提示词已更新或任务缺少版本依据，此候选已失效。'
+  if (job.body_de === undefined) return '正在读取候选正文，请稍后再采用。'
   return ''
 }
 

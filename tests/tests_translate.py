@@ -106,7 +106,7 @@ check(T.pick_style_examples(owned, 5, owner="acme") == [owned[0]["text"]],
       "风格参照只使用本账号正文，不把合作方文案提升进 system prompt")
 
 print("\n[4] system prompt 由模板渲染，含全部硬性要求")
-sp = T.build_system_prompt(s, ["Example one text here"])
+sp = T.build_system_prompt(s, ["Example one text here"], "facebook")
 check(T.TEMPLATE_PATH.exists(), f"模板文件存在：{T.TEMPLATE_PATH.name}")
 check(not sp.lstrip().startswith("<!--"), "给人看的 HTML 注释头没被发给模型")
 check("{{" not in sp, "没有残留未替换的占位符")
@@ -119,6 +119,26 @@ for token, label in [("逐个原样照搬", "话题标签原样照搬"), ("换�
     check(token in sp, f"包含{label}")
 check("最多 3 个" not in sp and "裁到 3 个" not in sp,
       "提示词不再限制话题标签数量")
+
+print("\n[4b] 渠道规则块按平台渲染")
+ig = T.build_system_prompt(s, ["Example one text here"], "instagram")
+check("{{" not in ig, "IG 版没有残留未替换的占位符")
+check("整句删掉" in ig and "两句重复的引导" in ig,
+      "IG 版要求删掉原文的 bio 引导句，并说明了理由")
+check("2,200 字符" in ig, "IG 版给出实际正文上限")
+check("link in bio" in ig.lower(), "IG 版列出了典型说法，模型不用自己猜")
+check("整句删掉" not in sp, "FB 版不含 IG 专属的删句要求")
+check("不要补写任何 URL" in sp, "FB 版要求不自行补写链接")
+check(ig != sp, "两个渠道渲染出的提示词确实不同")
+check(sp.count("$49.99") == ig.count("$49.99"),
+      "渠道块之外的金额规则两边一致，没有被平台分支改掉")
+
+missing_channel = False
+try:
+    T.build_system_prompt(s, [], "")
+except SystemExit as e:
+    missing_channel = "目标渠道" in str(e) and "可选值" in str(e)
+check(missing_channel, "渠道缺失或不认识时报错并列出可选值，不静默套用另一个平台的规则")
 
 print("\n[5] 数字类硬规则（修掉了原提示词里「把 $49.99 写成 49,99 €」的错误）")
 check("擅自改价" in sp, "明确禁止换算货币金额")
@@ -157,7 +177,7 @@ class _S:                                   # 轻量替身，只改要测的几�
 
 
 sie = T.build_system_prompt(_S(s, address_form="Sie", gender_style="generic",
-                               anglicism_policy="minimal"), [])
+                               anglicism_policy="minimal"), [], "facebook")
 check("Kaufen Sie jetzt" in sie, "改成 Sie 后提示词给的是 Sie 形式祈使句")
 check("du / dein / dir" not in sie, "Sie 配置下不再出现 du 形式指令")
 check("传统阳性泛指" in sie, "generic 性别策略生效")
@@ -165,7 +185,7 @@ check("尽量避免" in sie, "minimal 借词策略生效")
 
 bad_cfg = False
 try:
-    T.build_system_prompt(_S(s, address_form="ihr"), [])
+    T.build_system_prompt(_S(s, address_form="ihr"), [], "facebook")
 except SystemExit as e:
     bad_cfg = "address_form" in str(e) and "可选值" in str(e)
 check(bad_cfg, "无效的 address_form 直接报错并列出可选值，不静默走默认值")
@@ -192,7 +212,7 @@ check("| hoodie | Hoodie |" in gl, "渲染成 Markdown 表格")
 check("kostenloser Versand" in gl, "多条都在")
 check(gl.index("free shipping") < gl.index("hoodie"), "按英文词排序，输出稳定")
 check("必须" in gl, "措辞是强制而非建议")
-sp_gl = T.build_system_prompt(_S(s, glossary={"hoodie": "Hoodie"}), [])
+sp_gl = T.build_system_prompt(_S(s, glossary={"hoodie": "Hoodie"}), [], "facebook")
 check("| hoodie | Hoodie |" in sp_gl, "术语表进了提示词")
 
 print("\n[9] 风格示例渲染")
@@ -214,7 +234,7 @@ with tempfile.TemporaryDirectory() as prompt_tmp:
     T.TEMPLATE_PATH = broken_template
     unknown_placeholder = False
     try:
-        T.build_system_prompt(s, [])
+        T.build_system_prompt(s, [], "facebook")
     except SystemExit as e:
         unknown_placeholder = "MISSPELLED_RULE" in str(e)
     finally:
@@ -223,7 +243,7 @@ with tempfile.TemporaryDirectory() as prompt_tmp:
 
 try:
     literal_prompt = T.build_system_prompt(
-        s, ["Literal {{SALE}} and known {{TONE}} tokens in captured text"])
+        s, ["Literal {{SALE}} and known {{TONE}} tokens in captured text"], "facebook")
     check("{{TONE}}" in literal_prompt,
           "风格示例正文里的已知占位符保持数据原样，不被误替换/误报")
 except SystemExit as e:

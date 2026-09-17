@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 import os
 import re
 import sys
@@ -11,6 +12,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -85,6 +87,9 @@ class BrowserWorkflowTests(unittest.TestCase):
             self.writes.append(key)
             allowed = request.method == "PUT" and (parsed.path == "/api/settings" or parsed.path.endswith("/localization"))
             allowed |= request.method == "POST" and parsed.path.endswith("/check")
+            if self.fixtures.local_image_writes and request.method == "POST":
+                allowed |= parsed.path.endswith(("/image/0/upload", "/export"))
+                allowed |= parsed.path.startswith("/api/image-versions/task/")
             if not allowed:
                 self.denied.append(request.method + " " + parsed.path)
                 route.abort()
@@ -482,6 +487,70 @@ class BrowserWorkflowTests(unittest.TestCase):
             "href", "/history/in_neakasa.global/offline-capture")
         expect(panel.get_by_role("button", name="处理后尝试一次", exact=True)).to_have_count(0)
         self.assertEqual(self.writes, [])
+
+
+    def test_10_image_preview_download_upload_stays_in_system(self):
+        """Real local API and browser flow; seed paid-image outputs without a model."""
+        from core import translated
+        from localize import images
+        task_id = self.fixtures.add_post("fa_neakasaofficial", "3234567890", "facebook")
+        source, directory, account = self.fixtures.sources[task_id]
+        text = translated.load_translated(account / "translated.jsonl")[source["post_id"]]["text_de"]
+        media_de = directory / "media_de"
+        media_de.mkdir()
+        for number, colour in enumerate(("green", "purple")):
+            path = media_de / ("01.jpg" if number == 0 else "01_v" + "a" * 32 + ".jpg")
+            Image.new("RGB", (1080, 1080), colour).save(path)
+            row = {
+                "post_id": source["post_id"], "media_index": 0,
+                "source_sha256": images.sha256_file(directory / "01.jpg"),
+                "text_de_sha256": images.text_de_sha256(text),
+                "prompt_version": images.IMAGE_PROMPT_VERSION, "model": "gpt-image-2",
+                "out_path": path.relative_to(account).as_posix(), "output_sha256": images.sha256_file(path),
+                "size_requested": "1080x1080", "size_returned": "1080x1080", "quality": "high",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if number:
+                row["refine_id"] = "a" * 32
+            images.append_image_jsonl(account / "images_de.jsonl", row)
+        self.fixtures.local_image_writes = True
+        self.addCleanup(setattr, self.fixtures, "local_image_writes", False)
+        self.open_task(task_id)
+        self.page.get_by_role("tab", name="图片 1", exact=True).click()
+        self.page.get_by_role("button", name="预览第 1 版", exact=True).click()
+        dialog = self.page.get_by_role("dialog", name="历史版本预览（尚未采用）")
+        preview = dialog.get_by_role("img", name="待比较的历史版本")
+        expect(preview).to_be_visible()
+        self.page.wait_for_function("() => [...document.images].filter(i => i.alt === '待比较的历史版本').every(i => i.complete && i.naturalWidth > 0)")
+        self.assertIsNone(self.fixtures.detail(task_id)["review"]["revision"])
+        self.page.keyboard.press("Escape")
+        self.page.get_by_role("button", name="采用这一版", exact=True).click()
+        self.page.wait_for_function("() => !document.querySelector('.ant-btn-loading')")
+        before = self.fixtures.detail(task_id)
+        self.assertEqual(before["status"], "edited")
+        with self.page.expect_download():
+            self.page.get_by_role("button", name="下载本篇素材", exact=True).click()
+        self.assertEqual(self.fixtures.detail(task_id)["review"], before["review"])
+        for colour in ("orange", "red"):
+            data = io.BytesIO()
+            Image.new("RGB", (1080, 700), colour).save(data, "PNG")
+            with self.page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/image/0/upload")) as response:
+                self.page.locator('input[type="file"]').set_input_files({
+                    "name": "manual.png", "mimeType": "image/png", "buffer": data.getvalue()})
+            self.assertEqual(response.value.status, 200)
+            current = self.fixtures.detail(task_id)
+            expect(self.page.get_by_role("img", name="德语图 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
+            expect(self.page.get_by_text("人工图片", exact=True)).to_be_visible()
+            expect(self.page.get_by_role("alert").filter(has_text="宽高比")).to_be_visible()
+            self.assertEqual(current["status"], "edited")
+        self.page.get_by_text("单篇优化（可选）", exact=True).click()
+        self.page.get_by_role("combobox", name="优化内容").click()
+        self.page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter(has_text=re.compile("^图片$")).click()
+        self.page.get_by_role("textbox", name="这一次希望怎样调整").fill("请把 CTA 改短")
+        expect(self.page.get_by_role("button", name=re.compile("生成图片"))).to_be_disabled()
+        self.page.get_by_role("note", name=re.compile("生成图片.*人工图片")).hover()
+        expect(self.page.get_by_text("这一张已换成人工图片，模型优化不会被采用", exact=True)).to_be_visible()
+        self.assertFalse((self.fixtures.root / "state/paid_requests.jsonl").exists())
 
 
 if __name__ == "__main__":

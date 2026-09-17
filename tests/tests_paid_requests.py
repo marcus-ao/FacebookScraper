@@ -5,13 +5,18 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
+
+import httpx
+from openai import OpenAI
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import paid_requests as P
+from core import paid_model, paid_requests as P
 from core.console import force_utf8
 from pipeline import engine as A
+from localize import images as I
 from localize import text as T
 
 force_utf8()
@@ -159,6 +164,95 @@ with tempfile.TemporaryDirectory() as folder:
     else:
         locked = False
     check(locked, "同一时刻最多一个文本或图片请求在途")
+
+print("\n[5] SDK 不得在账本外重放可能已经计费的请求")
+for kind, failure, supplied_client in (
+        ("translation", "timeout", False), ("translation", "503", True),
+        ("image", "503", False), ("image", "timeout", True)):
+    with tempfile.TemporaryDirectory() as folder:
+        state = Path(folder) / "state"
+        settings = T.Settings() if kind == "translation" else I.Settings()
+        settings.max_retries = 2
+        settings.gap = 0
+        settings.api_key = lambda: "offline-placeholder"
+        attempts = []
+
+        def respond(request):
+            if request.method == "GET":
+                return httpx.Response(200, request=request, json={
+                    "object": "list", "data": [{"id": settings.model, "object": "model"}]})
+            attempts.append(request.url.path)
+            if len(attempts) == 1:
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("offline lost response", request=request)
+                return httpx.Response(503, request=request, json={"error": {"message": "offline"}})
+            # 第二次会成功，防止只检查最终异常而漏掉 SDK 内部重放。
+            if kind == "translation":
+                payload = {"id": "offline", "object": "chat.completion", "created": 1,
+                           "model": settings.model,
+                           "choices": [{"index": 0, "finish_reason": "stop",
+                                        "message": {"role": "assistant", "content": "[]"}}],
+                           "usage": {"prompt_tokens": 100, "completion_tokens": 10,
+                                     "total_tokens": 110}}
+            else:
+                payload = {"created": 1, "model": settings.model,
+                           "data": [{"b64_json": "aW1hZ2U="}],
+                           "usage": {"input_tokens": 100, "output_tokens": 10,
+                                     "total_tokens": 110,
+                                     "input_tokens_details": {"text_tokens": 20, "image_tokens": 80}}}
+            return httpx.Response(200, request=request, json=payload)
+
+        transport = httpx.MockTransport(respond)
+        sdk_clients = []
+
+        def offline_client(**kwargs):
+            client = OpenAI(**kwargs, http_client=httpx.Client(transport=transport))
+            sdk_clients.append(client)
+            return client
+
+        controller = P.RequestController(state, preflight=lambda: None)
+        client = (offline_client(api_key="offline-placeholder", base_url="https://offline.invalid",
+                                 max_retries=2) if supplied_client else None)
+        caller = (T.Translator(settings, client=client, paid_controller=controller)
+                  if kind == "translation" else I.ImageEditor(settings, client=client,
+                                                              paid_controller=controller))
+        source = Path(folder) / "source.png"
+        source.write_bytes(b"offline image upload")
+
+        def invoke():
+            caller.set_paid_context("offline-" + kind, "facebook:p6")
+            if kind == "translation":
+                caller.translate("offline body", "offline system")
+            else:
+                caller.edit(source, "offline prompt", "1024x1024")
+            caller.finalize_paid(True, "offline artifact")
+
+        label = f"{kind}/{failure}/{'injected' if supplied_client else 'constructed'}"
+        try:
+            with patch.object(paid_model, "build_client", side_effect=offline_client), \
+                    patch.object(OpenAI, "_sleep_for_retry", return_value=None):
+                try:
+                    invoke()
+                except P.PaidRequestBlocked:
+                    blocked = True
+                else:
+                    blocked = False
+                check(blocked and len(attempts) == 1,
+                      label + "：一次未知结果后没有第二次 HTTP 请求")
+                check([row["event"] for row in P.load_events(state)] == [
+                          P.EVENT_STARTED, P.EVENT_UNCERTAIN],
+                      label + "：未知结果立即记账，不用后一次成功伪装已闭合")
+                try:
+                    invoke()
+                except P.PaidRequestBlocked:
+                    blocked = True
+                else:
+                    blocked = False
+                check(blocked and len(attempts) == 1,
+                      label + "：未核账前再次调用也在 HTTP 前停止")
+        finally:
+            for sdk_client in sdk_clients:
+                sdk_client.close()
 
 if fails:
     print("\n%d 项失败" % len(fails))

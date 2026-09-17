@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from core import review, store, translated, localization
 from core.config import cfg
+from localize import images
 from pipeline import approval
 from web.api import exporter, reader
 
@@ -76,26 +77,56 @@ def review_action(task_id: str, action: str, *, source_text_sha256: str,
 
 
 def export_post(task_id: str, *, source_text_sha256: str,
-                 review_revision: str | None, handoff_url: str = "") -> tuple[bytes, str]:
+                 review_revision: str | None, handoff_url: str = "",
+                 handoff: bool = True) -> tuple[bytes, str]:
+    """打包本篇素材。
+
+    `handoff=False` 只下载，**不改状态**——业务要把某张图拿去自己改再传回来，
+    这篇仍然要留在系统里继续走排期。`handed_off` 是终态，代表"系统不再代发"，
+    两件事不是同一个决定，所以不能由同一个按钮顺带完成。
+    """
     source = _source(task_id)
     with review.transaction(source.account_dir) as session:
         truth, state = session.validate(
             dict(source.row), expected_revision=review_revision,
             expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
-        if state["status"] in {"scheduled", "approved", "skipped"}:
+        if handoff and state["status"] in {"scheduled", "approved", "skipped"}:
             raise review.ReviewConflict("这篇已排期、提交中或决定不发，不能直接转交人工")
         try:
-            package = exporter.package_post(source.account_dir, truth)
+            package = exporter.package_post(source.account_dir, truth, handoff=handoff)
         except (OSError, store.ArchivePathError, ValueError) as exc:
             raise review.ReviewConflict("资源包未准备成功：%s" % exc) from exc
         # 只有完整资源包准备成功才记录接管；已接管帖子允许重新下载，不重复转态。
-        if state["status"] != "handed_off":
+        if handoff and state["status"] != "handed_off":
             session.change(truth, "handed_off", expected_revision=review_revision,
                            expected_source_sha256=source_text_sha256, handoff_url=handoff_url)
         else:
             session.validate(truth, expected_revision=review_revision,
                              expected_source_sha256=source_text_sha256)
         return package
+
+
+def replace_image(task_id: str, index: int, data: bytes, filename: str, *,
+                  source_text_sha256: str, review_revision: str | None) -> dict:
+    """用业务自己的图片替换第 index 张德语图，记为 edited 后继续走系统发布。"""
+    source = _source(task_id)
+    with images.FileLock(cfg().state_dir / "images.lock",
+            busy_message="图片正在生成，请完成后再替换"), review.transaction(source.account_dir) as session:
+        truth, state = session.validate(
+            dict(source.row), expected_revision=review_revision,
+            expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
+        if state["status"] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict("这篇已冻结内容、结束审校或正在提交，不能替换图片")
+        try:
+            images.replace_localized(source.account_dir, truth, index, data, filename)
+        except store.ArchivePathError:
+            raise
+        except (OSError, ValueError) as exc:
+            # 上传内容的问题是人能当场改的，给 400 和原因，不要报成服务器故障。
+            raise review.ReviewValidationError("替换图片未保存：%s" % exc) from exc
+        session.change(truth, "edited", expected_revision=review_revision,
+                       expected_source_sha256=source_text_sha256)
+    return _detail(task_id)
 
 
 def save_tags(task_id: str, tags: list[str], *, source_text_sha256: str,

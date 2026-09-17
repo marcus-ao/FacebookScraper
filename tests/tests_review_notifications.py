@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
 from capture_fixtures import record_capture_rows
 from core import paid_consent
+from core.store import post_dirname
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
 from core.feishu import notification_card
@@ -50,6 +51,36 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(len(ready), 1)
         backlog = [e for e in self.events().values() if e['kind'] == 'backlog']
         self.assertIn('1 篇待审', backlog[0]['payload']['text'])
+
+    def test_backlog_preserves_each_platform_count_age_and_review_entry(self):
+        self.event('facebook-ready')
+        account = self.f.account.parent / 'in_neakasa.global'
+        source = dict(self.f.source, post_id='instagram-probe', platform='instagram',
+                      account='neakasa.global', owner='neakasa.global')
+        folder = 'posts/' + post_dirname(source['post_id'], source['created_at'])
+        source['media'] = [{'kind': 'image', 'local_path': folder + '/01.jpg'}]
+        post = account / folder
+        post.mkdir(parents=True)
+        (post / '01.jpg').write_bytes((self.f.post_dir / '01.jpg').read_bytes())
+        (post / 'post.json').write_text(json.dumps(source), encoding='utf-8', newline='')
+        (account / 'manifest.jsonl').write_text(json.dumps(source) + '\n', encoding='utf-8', newline='')
+        engine.append_human_item(cfg().state_dir, engine.HumanItem('instagram-ready',
+            'ready_to_publish', ('instagram:' + source['post_id'],), 'ready',
+            {'source_text_sha256': journal.text_sha256(source['text'])}),
+            self.now - timedelta(hours=5))
+        for _ in range(2):
+            self.runtime.collect([self.f.account, account], self.now)
+        backlog = [event for event in self.events().values() if event['kind'] == 'backlog']
+        self.assertEqual(len(backlog), 2)
+        by_platform = {event['payload']['platform']: event['payload'] for event in backlog}
+        self.assertIn('1 篇待审，最早一篇已等待 0 小时', by_platform['facebook']['text'])
+        self.assertIn('1 篇待审，最早一篇已等待 5 小时', by_platform['instagram']['text'])
+        for platform, payload in by_platform.items():
+            card = notification_card('backlog', [payload], self.runtime.settings)
+            self.assertIn(platform, card['header']['title']['content'])
+            buttons = [button for part in card['elements'] if part['tag'] == 'action'
+                       for button in part['actions']]
+            self.assertEqual(buttons[0]['url'], 'http://review.internal/review/' + platform)
 
     def test_effective_caption_and_german_preview_replace_old_event_snapshot(self):
         self.event('one')

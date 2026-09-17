@@ -78,6 +78,29 @@ class RefinementTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         translator.translate.assert_not_called()
 
+    def test_prompt_change_while_queued_stops_before_model_call(self):
+        row = self.submit()
+        self.assertEqual(row['prompt_version'], translated.PROMPT_VERSION)
+        before = (self.account / 'translated.jsonl').read_bytes()
+        translator = Mock()
+        with patch.object(translated, 'PROMPT_VERSION', translated.PROMPT_VERSION + 1):
+            result = refinement.execute(row, self.source, translator=translator)
+            public = refinement.job_result(row['job_id'])
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(public['prompt_current'])
+        translator.translate.assert_not_called()
+        self.assertEqual((self.account / 'translated.jsonl').read_bytes(), before)
+        self.assertFalse((cfg().state_dir / 'paid_requests.jsonl').exists())
+
+    def test_legacy_job_without_prompt_version_is_not_current_or_replayed(self):
+        row = self.submit()
+        row.pop('prompt_version')
+        refinement._append(row)
+        self.assertFalse(refinement.job_result(row['job_id'])['prompt_current'])
+        translator = Mock()
+        self.assertEqual(refinement.execute(row, self.source, translator=translator)['status'], 'failed')
+        translator.translate.assert_not_called()
+
     def test_text_refinement_is_machine_candidate_and_keeps_human_version(self):
         human = translated.append_human_translation(self.account / 'translated_human.jsonl', self.source,
             'Von Hand. #Neakasa', expected_revision=None)
@@ -87,19 +110,23 @@ class RefinementTests(unittest.TestCase):
         translator = SimpleNamespace(translate=lambda text, system: 'Modell. #Neakasa')
         result = refinement.execute(row, self.source, translator=translator)
         self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(result['prompt_version'], row['prompt_version'])
+        self.assertTrue(refinement.job_result(row['job_id'])['prompt_current'])
+        human_before = (self.account / 'translated_human.jsonl').read_bytes()
+        with patch.object(translated, 'PROMPT_VERSION', translated.PROMPT_VERSION + 1):
+            polled = self.fixture.client.get('/api/refinements/jobs/' + row['job_id']).json()
+            self.assertFalse(polled['prompt_current'])
+            self.assertEqual(polled['prompt_version'] + 1, polled['current_prompt_version'])
+            self.assertEqual(polled['body_de'], 'Modell.')
+        self.assertEqual((self.account / 'translated_human.jsonl').read_bytes(), human_before)
         machine = translated.load_translated(self.account / 'translated.jsonl')[self.source['post_id']]
         self.assertEqual(machine['refine_instruction'], '语气轻松')
         self.assertEqual(translated.load_human_translated(self.account / 'translated_human.jsonl')[
             self.source['post_id']]['text_de'], 'Von Hand. #Neakasa')
 
-    def test_image_refinement_keeps_original_and_manual_and_uses_versioned_output(self):
+    def test_image_refinement_keeps_original_and_uses_human_text_with_versioned_output(self):
         human = translated.append_human_translation(self.account / 'translated_human.jsonl', self.source,
             'Ein von Hand bearbeiteter Text. #Neakasa', expected_revision=None)
-        folder = self.fixture.post_dir / 'media_de'
-        folder.mkdir()
-        manual = folder / '01.png'
-        Image.new('RGB', (1080, 1080), 'yellow').save(manual)
-        before = manual.read_bytes()
         source_before = (self.fixture.post_dir / '01.jpg').read_bytes()
         row = refinement.submit(self.account, self.source, kind='image', instruction='保留原图排版',
             source_text_sha256=translated.source_text_sha256(self.source['text']),
@@ -110,23 +137,16 @@ class RefinementTests(unittest.TestCase):
         ImageDraw.Draw(image).rectangle((100, 100, 900, 900), fill='white')
         buffer = io.BytesIO()
         image.save(buffer, 'JPEG')
-        validated = images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 1)
+        validated = images.ValidatedImage(buffer.getvalue(), 1088, 1088, 'JPEG', 1, 0.02)
         editor.edit.return_value = images.EditResult('', 'gpt-image-2', {}, 'response')
         editor.paid_request_id = ''
         with patch.object(images, 'validate_output', return_value=validated):
             result = refinement.execute(row, self.source, editor=editor)
         self.assertEqual(result['status'], 'succeeded')
-        self.assertEqual(manual.read_bytes(), before)
         self.assertEqual((self.fixture.post_dir / '01.jpg').read_bytes(), source_before)
         self.assertIn('_v' + row['job_id'], result['out_path'])
         output = self.account / result['out_path']
         self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), hashlib.sha256(validated.data).hexdigest())
-        post = compose.compose_post(self.source['post_id'], datetime.now(timezone.utc),
-                                    archive_root=cfg().archive_dir, account=self.account.name,
-                                    warning_sink=None)
-        self.assertEqual(post.image_paths[0], manual)
-        # 移除测试人工稿之后，最新模型版本可作为发布素材，旧版本字节仍留存。
-        manual.unlink()
         jobs, _, stats = images.build_jobs(images.Settings(), self.account, [self.source])
         self.assertFalse(jobs, '人工稿生成的图片不能被后台按旧机器稿再次付费生成')
         self.assertEqual(stats.skipped_current, 1)

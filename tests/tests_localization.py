@@ -98,6 +98,46 @@ class LocalizationTests(unittest.TestCase):
         self.assertEqual(draft["ig_bio_url"], "")
         self.assertTrue(loc.validate(draft)["ready"])
 
+    def test_validation_hands_back_the_exact_caption_that_render_produces(self):
+        # 复制按钮拿的就是这一份；前端不得另拼一版，否则贴进 Business Suite 的会是别的东西。
+        draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
+        draft.update(hashtags_confirmed=True, body_de="Sauber jetzt {{link1}} täglich.")
+        draft["links"][0].update(target_url="https://de.example/p", confirmed=True)
+        result = loc.validate(draft)
+        self.assertEqual(result["caption"], loc.render(draft))
+        self.assertEqual(len(result["caption"]), result["char_count"])
+        self.assertIn("https://de.example/p", result["caption"])
+        self.assertNotIn("{{link1}}", result["caption"])
+
+    def test_instagram_body_keeping_a_profile_hint_warns_but_never_blocks(self):
+        self.source["platform"] = "instagram"
+        draft = self.draft()
+        draft.update(hashtags_confirmed=True, ig_cta="Link in Bio 🔗",
+                     body_de="Sauber jetzt. Den Link in unserer Bio findest du oben.")
+        result = loc.validate(draft)
+        # 黄色提醒而非硬闸：误杀的代价是拒绝一次已经付过钱的产出。
+        self.assertTrue(result["ready"])
+        self.assertIn("duplicate_profile_hint", {row["code"] for row in result["warnings"]})
+        draft["body_de"] = "Sauber jetzt."
+        self.assertNotIn("duplicate_profile_hint",
+                         {row["code"] for row in loc.validate(draft)["warnings"]})
+
+    def test_profile_hint_needs_a_direction_word_so_organic_wording_stays_quiet(self):
+        # 德语的 Bio 还有"有机"的意思，对这个品类（可降解废物袋）是会真出现的词。
+        for quiet in ["Biologisch abbaubare Müllbeutel.", "Jetzt mit Bio-Baumwolle.",
+                      "Alles in Bio-Qualität.", "Das Profil der Bürste ist neu."]:
+            self.assertFalse(loc.mentions_profile_link(quiet), quiet)
+        for hit in [*loc.CTA_PRESETS, "Der Link in unserer Bio", "Bio-Link oben",
+                    "Swipe up", "check the link in our bio"]:
+            self.assertTrue(loc.mentions_profile_link(hit), hit)
+
+    def test_facebook_body_mentioning_a_profile_is_not_warned(self):
+        draft = self.draft()
+        draft.update(hashtags_confirmed=True, body_de="Den Link in unserer Bio findest du oben.")
+        draft["links"][0].update(target_url="https://de.example/p", confirmed=True)
+        self.assertNotIn("duplicate_profile_hint",
+                         {row["code"] for row in loc.validate(draft)["warnings"]})
+
     def test_instagram_cta_cannot_leak_link_placeholders(self):
         self.source['platform'] = 'instagram'
         draft = self.draft()
@@ -105,6 +145,42 @@ class LocalizationTests(unittest.TestCase):
         result = loc.validate(draft)
         self.assertFalse(result['ready'])
         self.assertIn('placeholder_not_supported', {item['code'] for item in result['issues']})
+
+    def test_instagram_source_profile_hint_without_url_gets_separate_cta(self):
+        self.source['platform'] = 'instagram'
+        for hint in ('Please check the link in our bio for more information.',
+                     'Tap the link in our profile.', 'See our profile for details.'):
+            with self.subTest(hint=hint):
+                self.source['text'] = 'Discover Neakasa M1 Pro. ' + hint
+                self.machine.update(text_de='Entdecke Neakasa M1 Pro.',
+                    source_text_sha256=translated.source_text_sha256(self.source['text']))
+                draft = self.draft()
+                self.assertEqual(draft['links'], [])
+                self.assertEqual(draft['ig_cta'], loc.CTA_PRESETS[0])
+                self.assertEqual(loc.render(draft), 'Entdecke Neakasa M1 Pro.\n\n' + loc.CTA_PRESETS[0])
+                self.assertTrue(loc.validate(draft)['ready'])
+
+    def test_facebook_source_profile_hint_does_not_add_instagram_cta(self):
+        self.source['text'] = 'Discover Neakasa M1 Pro. Check the link in our bio.'
+        self.machine.update(text_de='Entdecke Neakasa M1 Pro. Mehr dazu in unserer Bio.',
+            source_text_sha256=translated.source_text_sha256(self.source['text']))
+        draft = self.draft()
+        self.assertEqual(draft['ig_cta'], '')
+        self.assertEqual(loc.render(draft), self.machine['text_de'])
+
+    def test_bound_human_can_keep_source_profile_cta_empty(self):
+        self.source.update(platform='instagram',
+            text='Discover Neakasa M1 Pro. Check the link in our bio.')
+        self.machine.update(text_de='Entdecke Neakasa M1 Pro.',
+            source_text_sha256=translated.source_text_sha256(self.source['text']))
+        self.write_source()
+        draft = self.draft()
+        draft['ig_cta'] = ''
+        saved = self.save_local(draft)
+        current = self.draft(record=saved)
+        self.assertTrue(current['has_record'])
+        self.assertEqual(current['ig_cta'], '')
+        self.assertEqual(loc.render(current), self.machine['text_de'])
 
     def test_counts_use_codepoints_and_limits_only_warn(self):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})

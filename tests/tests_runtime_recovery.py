@@ -27,19 +27,22 @@ class RecoveryTests(unittest.TestCase):
 
     def test_batch_recovery_is_cas_and_does_not_claim_successor_or_replay(self):
         journal = MonitoringJournal(self.state, now=NOW)
-        journal.request(NOW, 'facebook', 'delta', 1, {})
+        journal.request(NOW, 'facebook', 'delta', 1, {}, capture_event_id='first')
         batch = journal.claim(NOW)
-        journal.request(NOW, 'instagram', 'delta', 1, {})
+        journal.request(NOW, 'instagram', 'delta', 1, {}, capture_event_id='second')
         current = journal.finish(batch, NOW, code=None, error='stopped')
         with self.assertRaises(ValueError):
             journal.recover(batch_id=batch['batch_id'], expected_revision='old', now=NOW)
         result = journal.recover(batch_id=batch['batch_id'], expected_revision=journal.revision(current), now=NOW)
         self.assertEqual(result['status'], 'failed')
         self.assertIn('next_batch', result)
+        self.assertEqual(journal.request(NOW, 'instagram', 'delta', 1, {},
+                         capture_event_id='second'), result)
         self.assertIsNone(journal.claim(NOW))
         journal.request(NOW, 'facebook', 'delta', 2, {})
         next_batch = journal.claim(NOW)
         self.assertEqual(set(next_batch['platforms']), {'facebook', 'instagram'})
+        self.assertEqual(next_batch['platforms']['instagram']['discovered'], 1)
 
     def test_batch_scope_links_stage_calls_and_unresolved_calls_block_recovery(self):
         journal = MonitoringJournal(self.state, now=NOW)
@@ -60,6 +63,29 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(journal.recover(batch_id=batch['batch_id'], expected_revision=journal.revision(current),
                                          now=NOW, outputs_reviewed=True)['status'], 'failed')
         self.assertEqual(len([e for e in paid_requests.load_events(self.state) if e['event'] == 'started']), 1)
+
+    def test_capture_receipts_survive_successors_and_do_not_replay_uncertain_batches(self):
+        journal = MonitoringJournal(self.state, now=NOW)
+        for event_id in ('first', 'first'):
+            journal.request(NOW, 'facebook', 'new', 1, {}, capture_event_id=event_id)
+        first = journal.claim(NOW)
+        self.assertEqual(first['platforms']['facebook']['discovered'], 1)
+        for event_id in ('second', 'second'):
+            journal.request(NOW, 'instagram', 'recovered', 1, {}, capture_event_id=event_id)
+        pending = journal.finish(first, NOW, code=0)
+        self.assertEqual(pending['platforms']['instagram']['discovered'], 1)
+        second = journal.claim(NOW)
+        current = journal.finish(second, NOW, code=None, error='interrupted')
+        restarted = MonitoringJournal(self.state, now=NOW, inspect_running=False)
+        for event_id in ('first', 'second'):
+            self.assertEqual(restarted.request(NOW, 'facebook', 'new', 1, {},
+                             capture_event_id=event_id), current)
+        self.assertIsNone(restarted.claim(NOW))
+        closed = restarted.recover(batch_id=second['batch_id'],
+            expected_revision=restarted.revision(current), now=NOW)
+        self.assertEqual(restarted.request(NOW, 'facebook', 'new', 1, {},
+                         capture_event_id='first'), closed)
+        self.assertIsNone(restarted.claim(NOW))
 
     def test_uncertain_message_keeps_card_and_uuid_after_human_resolution(self):
         outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost:8765', publish_recipients=('publish',), alert_recipients=('alert',)))

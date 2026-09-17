@@ -59,11 +59,19 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | 接口 | 契约 |
 |---|---|
 | `PUT /api/tasks/{id}/text_de` | 保存人工德文，校验来源与人工稿版本 |
-| `PUT /api/tasks/{id}/localization` | 保存完整正文/标签/链接草稿与版本 |
+| `PUT /api/tasks/{id}/localization` | 保存完整正文/标签/链接草稿与版本；前端只清理与已提交快照相同的草稿，响应等待期间的新编辑保留并接续新版本 |
 | `PUT /api/tasks/{id}/tags` | 独立保存分类，不提交其他区域草稿 |
-| `POST /api/tasks/{id}/check` | 只计算；接收 localization、text_de/body_only，返回 caption_length、hashtag_count、warnings、issues |
+| `POST /api/tasks/{id}/check` | 只计算；接收 localization、text_de/body_only，返回 caption、caption_length、hashtag_count、warnings、issues。`caption` 是 `localization.render()` 的成品，供审校台复制；前端不另拼一份 |
+| `POST /api/refinements/task/{id}` | `kind` 为 `text`、`image` 或 `suggest`。`suggest` 必填本次编辑区的 `body_de`，不需要 `instruction`；任务冻结正文快照，产出只读清单，不保存译文 |
+| `GET /api/tasks/{id}` 的 `text_suggestions` | 最近一次建议：`job_id`、`body_de` 快照、源文/正文摘要、`items`、`dropped`、`current`、`generated_at` 与新旧 prompt 版本。`current` 只相对已保存正文；编辑区按源文版本、当前正文与快照逐字符相等、新旧 prompt 版本判断是否允许采用，任意正文改动立即失效 |
+| `GET /api/tasks` 的 `summary.by_platform_status` | 两平台各自的状态计数。审校台按平台分了入口，角标要按平台数，且不能由当前页重算 |
+| `GET /api/tasks` 的 `summary.by_platform_hard_alerts` | 两平台各自包含硬闸的帖数，和状态计数一样在分页前计算 |
+| 任务详情的 `hard_alerts` | 当前源帖的付费前硬闸；人工重新复核或逐篇授权后，详情刷新同步更新列表行及该平台硬闸计数 |
 | `POST /api/tasks/{id}/review` | 挂起、恢复、不发或人工接管；理由与 revision 按动作校验 |
-| `POST /api/tasks/{id}/export` | 完整生成 ZIP 后记录人工接管 |
+| `POST /api/tasks/{id}/export` | 完整生成 ZIP；`text_de.txt` 复用 `localization.render(effective_draft(...))`，包含本地标签与平台链接/CTA；`mode=handoff`（默认）才记录人工接管，`mode=download` 只下载不改状态 |
+| `POST /api/tasks/{id}/image/{index}/upload` | JSON + base64 上传人工图替换该张；校验格式/动图/体积，旧文件备份至 `media_de/superseded/`；明确选择追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；审校记为 `edited`，继续系统排期 |
+| `POST /api/image-versions/task/{id}` | 当前账号采用某历史版本为当前版；冻结账号拒绝写入；零模型调用、零费用、不占优化次数 |
+| `GET /api/image-versions/task/{id}/preview?media_index=N&out_path=...` | 预览本帖本张有生成记录的版本；不改变当前选择，也可查看上传时备份的旧件 |
 | `POST /api/tasks/{id}/content-lock` | 回传 content_fingerprint，冻结正文与图片字节并关掉编辑入口 |
 | `DELETE /api/tasks/{id}/content-lock` | 解除冻结，快照标 discarded 但保留字节 |
 | `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at；能当场判定的失败同步返回，其余返回 202 与操作编号，浏览器在请求外跑 |
@@ -72,7 +80,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `POST /api/calendar/refresh` | 持发布锁重新读取远端，失败时保留可用卡片与错误状态 |
 | `GET/POST /api/initial-translation/task/{id}` | 能力/初翻；POST 含来源、人工/审校版本与内容级许可 |
 | `GET/POST /api/refinements/task/{id}` | 能力/优化；POST 含 kind、instruction、media_index 与来源/版本 |
-| `GET /api/initial-translation/jobs/{job_id}`、`GET /api/refinements/jobs/{job_id}` | 新任务返回 202 与唯一 job ID，刷新继续轮询同一任务 |
+| `GET /api/initial-translation/jobs/{job_id}`、`GET /api/refinements/jobs/{job_id}` | 新任务返回 202 与唯一 job ID，刷新继续轮询同一任务；text 任务回传 `prompt_version`、`current_prompt_version`、`prompt_current`，旧版/缺失版本禁止采用 |
 | `POST /api/content-jobs/{job_id}/recover` | expected_updated_at 校验，先核对费用与产物，不隐含再次调用模型 |
 | `POST /api/runtime/processing/recover` | batch_id、version、outputs_reviewed；version 来自 processing.state_revision，未决付费阻止恢复 |
 | `POST /api/runtime/capture/recover` | key、version、reason；对指定帖子执行一次受控恢复，沿用详情配额、停机、身份匹配和媒体校验 |
@@ -87,7 +95,9 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 
 FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，未插入链接追加末尾，已插入的不重复。IG 使用 bio CTA。缺目标、未知编号或损坏 token 阻止通过；金额等可人工解释的差异仅提示。即时检查只应用于对应草稿，字符数按最终完整正文计算。
 
-每张图片最多受理三次人工优化；来源、源图或提示词变化使旧候选失效，人工版本保留。费用区分初次处理、优化、风险扫描和不确定金额。`text.stale` 只表示原文变化，提示词版本另看 machine_current 等字段。
+每张图片最多受理三次人工优化，失败的那次也算；来源、源图或提示词变化使旧候选失效，人工版本保留。费用区分初次处理、优化、风险扫描和不确定金额。`text.stale` 只表示原文变化，提示词版本另看 machine_current 等字段。
+
+图片详情带 `manual`、`replaced_at`、`warnings`；人工图地址随实际字节哈希变化，避免连续上传仍显示旧图。`metrics.changed_pixel_ratio` 忽略小于等于 24 的通道差；`null` 表示未量过，0 表示未检测到明显变化，不证明未翻译。`GET /api/refinements/task/{id}` 附只读 `image_model` 及按媒体下标分组的 `image_versions`，每版含预览 URL、时间、指令、指标、是否当前及不可用原因。
 
 设置仅开放 default_times（1–12 个不重复的业务时区 HH:MM）和 snooze_default_days（1–30 个上海工作日）。只影响后续预填，不移动既有排期；CAS 改写保留无关值、注释和换行，不安全的格式拒绝改写。
 

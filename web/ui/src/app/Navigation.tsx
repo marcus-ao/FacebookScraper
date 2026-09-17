@@ -1,5 +1,5 @@
 import { Menu } from 'antd'
-import { AuditOutlined, CalendarOutlined, InboxOutlined, SettingOutlined } from '@ant-design/icons'
+import { CalendarOutlined, FacebookOutlined, InboxOutlined, InstagramOutlined, SettingOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { Link, useLocation } from 'react-router'
 
@@ -10,7 +10,8 @@ import styles from './AppShell.module.css'
 
 
 const ICONS: Readonly<Record<NavKey, React.ReactNode>> = {
-  review: <AuditOutlined />,
+  'review-facebook': <FacebookOutlined />,
+  'review-instagram': <InstagramOutlined />,
   history: <InboxOutlined />,
   calendar: <CalendarOutlined />,
   settings: <SettingOutlined />,
@@ -22,7 +23,7 @@ export function Navigation() {
   const items: MenuProps['items'] = NAV_ITEMS.map((item) => ({
     key: item.key,
     icon: ICONS[item.key],
-    label: <Link to={item.path} state={item.key === 'review' ? { refreshReview: true } : null}>{item.label}</Link>,
+    label: <Link to={item.path} state={item.key.startsWith('review-') ? { refreshReview: true } : null}>{item.label}</Link>,
   }))
 
   return (
@@ -31,7 +32,7 @@ export function Navigation() {
       mode="inline"
       theme="light"
       items={items}
-      selectedKeys={selectedNavKeys(location.pathname)}
+      selectedKeys={selectedNavKeys(location.pathname, location.search)}
     />
   )
 }

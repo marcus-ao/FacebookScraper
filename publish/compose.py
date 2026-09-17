@@ -17,12 +17,13 @@ from PIL import Image, UnidentifiedImageError
 from core.config import ROOT as PROJECT_ROOT
 from core.config import cfg
 from core import localization
+from localize import images as image_de
 from publish import evidence
 from publish.business_suite import resolve_ui_timezone
 from core.store import (Archive, ArchivePathError, account_dirs,
                         assert_physical_direct_path, read_post_truth)
 from core.translated import (PROMPT_VERSION, apply_money_mapping,
-                            effective_translation, load_human_translated,
+                            effective_translation, image_translation, load_human_translated,
                             extract_hashtags, extract_money_tokens,
                             hashtags_preserved, load_translated,
                             money_preserved, normalize_money_token,
@@ -605,6 +606,8 @@ def _program_owned_media_de(account_dir: Path) -> dict[str, set[str | None]]:
 
 def _is_program_output(account_dir: Path, candidate: Path,
                        owned: dict[str, set[str | None]]) -> bool:
+    if image_de.manual_upload_record(candidate):
+        return False
     try:
         rel = candidate.relative_to(account_dir).as_posix()
     except ValueError:
@@ -704,6 +707,12 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
     except ArchivePathError as exc:
         raise _fail(post_id, str(exc)) from exc
     owned_media_de = _program_owned_media_de(arc.base)
+    image_state = image_de.load_image_state(arc.base / "images_de.jsonl")
+    image_text = image_translation(
+        source, load_translated(arc.base / "translated.jsonl").get(post_id),
+        load_human_translated(arc.base / "translated_human.jsonl").get(post_id))
+    current_pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(
+        arc.base, source, image_text, image_state)} if image_text else {}
     latest_images = {}
     ledger = arc.base / "images_de.jsonl"
     if ledger.is_file():
@@ -738,9 +747,15 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
         chosen: Path | None = None
         source_kind: Literal["media_de", "original"] = "original"
         latest = latest_images.get(position - 1) or {}
-        if latest.get("refine_id"):
-            manual = [path for path in localized if not _is_program_output(arc.base, path, owned_media_de)]
-            if not manual:
+        manual = [path for path in localized if not _is_program_output(arc.base, path, owned_media_de)]
+        if not manual:
+            if (post_id, position - 1) in image_state.latest:
+                # 与审校台共用版本判据；不能把页面已判过期的程序图冻结为发布素材。
+                pair = current_pairs.get(position - 1)
+                if pair is None or not pair.localized_rel:
+                    raise _fail(post_id, "第 %d 张德语图依据已过期或文件缺失，请重新生成并审校" % position)
+                localized = [_relative_archive_path(arc.base, pair.localized_rel, post_id=post_id)]
+            elif latest.get("refine_id"):
                 refined = _relative_archive_path(arc.base, latest.get("out_path", ""), post_id=post_id)
                 expected_stem = f"{position:02d}_v{latest['refine_id']}"
                 if (refined.parent != media_de or refined.stem != expected_stem

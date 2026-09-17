@@ -33,6 +33,7 @@ class BrowserFixture:
         self.thread = None
         self.sources = {}
         self.denied_backend_requests = []
+        self.local_image_writes = False
         self.config_original = (ROOT / "config.toml").read_bytes()
         self.chrome_exe = config.Config().chrome_exe
 
@@ -83,6 +84,9 @@ class BrowserFixture:
                     path, method = scope["path"], scope["method"]
                     safe_write = (method == "PUT" and (path == "/api/settings" or path.endswith("/localization")))
                     safe_write |= method == "POST" and path.endswith("/check")
+                    if self.local_image_writes and method == "POST":
+                        safe_write |= path.endswith(("/image/0/upload", "/export"))
+                        safe_write |= path.startswith("/api/image-versions/task/")
                     if method not in {"GET", "HEAD"} and not safe_write:
                         self.denied_backend_requests.append(method + " " + path)
                         from starlette.responses import JSONResponse

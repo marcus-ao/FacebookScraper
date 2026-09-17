@@ -38,20 +38,31 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
   const save = async () => {
     if (!draft || saving) return
     setSaving(true); setError(null)
-    try { apply(await saveLocalization(detail, draft)); discard(); void message.success('人工修改已保存') }
+    try {
+      const saved = await saveLocalization(detail, draft)
+      apply(saved)
+      // 保存只确认点击时的版本；等待响应期间的新输入仍需留在编辑区。
+      setDraft(current => current && JSON.stringify(editableFields(current)) !== JSON.stringify(editableFields(draft))
+        ? recoverDraft(detail, saved, current) : null)
+      setValidation(null); setActive(-1)
+      void message.success('本次提交已保存')
+    }
     catch (cause) { setError(cause) } finally { setSaving(false) }
   }
   const recover = async () => {
     setRecovering(true)
-    try { const latest = await refresh(); if (draft) setDraft(recoverDraft(detail, latest, draft)); setError(null) }
+    try { const latest = await refresh(); setDraft(current => current ? recoverDraft(detail, latest, current) : null); setError(null) }
     catch (cause) { setError(cause) } finally { setRecovering(false) }
   }
   const tail = shown.platform === 'instagram' ? shown.ig_cta : shown.links.map(link => link.target_url).filter(url => /^https?:\/\//.test(url)).join('\n')
   const count = !editing ? detail.localization_validation.char_count : live?.caption_length
     ?? charLength([shown.body_de.trim(), tail.trim(), shown.tags.join(' ')].filter(Boolean).join('\n\n'))
+  // ⛔ 只用服务端算好的成品文案。前端近似值可以拿来显示"约 N 字符"，但复制出去的东西
+  // 会被直接贴进 Business Suite——和实际发布内容不一致比没有这个按钮更糟。
+  const caption = editing ? live?.caption : detail.localization_validation.caption
   return { draft, shown, editing, dirty, checking, saving, error, recovering, marks, shownMarks, active, setActive,
     setDraft, start: () => { setDraft(structuredClone(detail.localization)); setActive(-1) }, discard, save, recover,
     jump: (delta: number) => { if (shownMarks.length) setActive(old => (old + delta + shownMarks.length) % shownMarks.length) },
-    count, approximate: editing && !live, issues: live?.issues ?? detail.localization_validation.issues,
+    count, caption, approximate: editing && !live, issues: live?.issues ?? detail.localization_validation.issues,
     warnings: live?.warnings ?? detail.localization_validation.warnings }
 }

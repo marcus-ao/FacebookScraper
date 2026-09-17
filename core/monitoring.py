@@ -167,6 +167,12 @@ def batch_budget_minutes(schedule: MonitorSchedule, platform_count: int,
     return processing + platform_count * schedule.reconcile_max_session_seconds / 60
 
 
+_PROCESSING_HISTORY_FIELDS = (
+    "last_success_duration_minutes", "last_success_posts", "last_success_images",
+    "capture_event_ids",
+)
+
+
 class MonitoringJournal:
     """Append scan facts and maintain one durable processing-batch marker."""
 
@@ -227,6 +233,9 @@ class MonitoringJournal:
             return {"version": 1, "status": "idle", "platforms": {}}
         if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("platforms"), dict):
             raise ValueError("内容处理标记损坏；保留现场，不自动运行付费步骤")
+        receipts = data.get("capture_event_ids", [])
+        if not isinstance(receipts, list) or any(not isinstance(item, str) for item in receipts):
+            raise ValueError("采集结果的处理回执损坏；保留现场，不自动重放")
         successor = data.get("next_batch")
         if successor is not None and (not isinstance(successor, dict)
                 or successor.get("version") != 1 or successor.get("status") != "pending"
@@ -268,28 +277,32 @@ class MonitoringJournal:
         }
 
     @staticmethod
-    def _new_batch(now: datetime, history: dict | None = None) -> dict:
+    def _new_batch(now: datetime) -> dict:
         return {"version": 1, "batch_id": uuid4().hex, "status": "pending",
-                "requested_at": now.isoformat(), "platforms": {}, 'operation_tracked': True, **(history or {})}
+                "requested_at": now.isoformat(), "platforms": {}, 'operation_tracked': True}
 
     def request(self, now: datetime, platform: str, kind: str, discovered: int,
-                skipped: dict[str, int], *, image_count: int | None = None) -> dict:
+                skipped: dict[str, int], *, image_count: int | None = None,
+                capture_event_id: str | None = None) -> dict:
         with self._processing_lock():
             current = self._read_processing_status()
+            if capture_event_id and capture_event_id in current.get("capture_event_ids", []):
+                return current
             if current.get("status") in {"running", "interrupted", "uncertain"}:
                 pending = current.get("next_batch")
                 if not isinstance(pending, dict) or pending.get("status") != "pending":
                     pending = self._new_batch(now)
                     current["next_batch"] = pending
                 self._merge_request(pending, now, platform, kind, discovered, skipped, image_count)
-                atomic_write_json(self.processing_path, current)
-                return current
-            if current.get("status") != "pending":
-                history = {key: current[key] for key in (
-                    "last_success_duration_minutes", "last_success_posts", "last_success_images")
-                           if key in current}
-                current = current.get('next_batch') or self._new_batch(now, history)
-            self._merge_request(current, now, platform, kind, discovered, skipped, image_count)
+            else:
+                if current.get("status") != "pending":
+                    history = {key: current[key] for key in _PROCESSING_HISTORY_FIELDS if key in current}
+                    current = current.get('next_batch') or self._new_batch(now)
+                    current.update(history)
+                self._merge_request(current, now, platform, kind, discovered, skipped, image_count)
+            if capture_event_id:
+                # 与入队原子保存；飞书确认、进程重启或重复维护不能重新受理同一结果。
+                current.setdefault("capture_event_ids", []).append(capture_event_id)
             atomic_write_json(self.processing_path, current)
             return current
 
@@ -333,8 +346,7 @@ class MonitoringJournal:
                 current["error"] = error
             successor = current.get("next_batch")
             if status != "uncertain" and isinstance(successor, dict):
-                for key in ("last_success_duration_minutes", "last_success_posts",
-                            "last_success_images"):
+                for key in _PROCESSING_HISTORY_FIELDS:
                     if key in current:
                         successor[key] = current[key]
                 current = successor

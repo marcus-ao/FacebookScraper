@@ -41,7 +41,7 @@ export function LocalizationEditor({ detail, draft, editing, onChange, onInsert 
       }}>{source.includes(tag) ? '' : '本篇新增 '}{tag}</Tag>) : '无语义标签'}</Space>
       <div className={styles.difference}>{source.filter(tag => !semantic.includes(tag)).map(tag => <Tag key={tag}>原帖未采用 {tag}</Tag>)}</div>
       {(source.length > 0 || semantic.length > 0) && (editing ? <Checkbox checked={draft.hashtags_confirmed} onChange={event => update({ hashtags_confirmed: event.target.checked })}>我已确认本篇使用的话题标签</Checkbox> : <p>{draft.hashtags_confirmed ? '已人工确认选择' : '语义标签尚待人工确认'}</p>)}
-      {source.length > 0 && !detail.read_only && <p><PaidActionButton label="生成德语标签建议" amount="按实际用量计费" {...(!editing ? { disabledReason: '请先进入编辑德语' } : {})} loading={busy} onClick={() => void suggest()} /></p>}
+      {source.length > 0 && !detail.read_only && detail.hashtag_suggestions_enabled !== false && <p><PaidActionButton label="生成德语标签建议" amount="按实际用量计费" {...(!editing ? { disabledReason: '请先进入编辑德语' } : {})} loading={busy} onClick={() => void suggest()} /></p>}
       {error && <Alert type="warning" title="建议暂时不可用，仍可手动编辑" />}
       {suggestion && <Collapse items={[{ key: 'suggestions', label: '德语标签建议与采样依据', children: <>
         <p>{suggestion.notice}</p><p>候选生成：<ShanghaiTime at={suggestion.generated_at} />（不是热度采样时间）</p>

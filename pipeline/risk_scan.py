@@ -164,6 +164,9 @@ def scan_source(state_dir: Path, *, task_id: str, source_ref: str, source_text: 
     try:
         if caller is None:
             caller = translation.Translator(translation.Settings())
+        # 风险预扫由下方 controller.run 记账，不能因 caller 没有内部 controller 而允许 SDK 重试。
+        if isinstance(caller, paid_model.PaidCaller):
+            caller.disable_sdk_retries()
         settings = caller.s
         source.update(provider=str(getattr(settings, "provider", "unknown")),
                       model=str(getattr(settings, "model", "unknown")))

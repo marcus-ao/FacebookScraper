@@ -16,13 +16,14 @@ if str(ROOT) not in sys.path:                          # 支持 `python -m web.a
     sys.path.insert(0, str(ROOT))
 
 from localize import images as image_de  # noqa: E402
+from localize import suggest as text_suggestions  # noqa: E402
 from core import store, review, localization                         # noqa: E402
 from core.mirror import MirrorService, MirrorSettings                # noqa: E402
 from core import translated as translation             # noqa: E402
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
-from pipeline import engine, risk_scan                 # noqa: E402
+from pipeline import engine, hashtag_suggestions, refinement, risk_scan  # noqa: E402
 from publish import compose, journal                   # noqa: E402
 from web.api import query_index                   # noqa: E402
 
@@ -342,8 +343,14 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         return (0, at, "") if at else (1, "", item["id"])
 
     tasks.sort(key=sort_key)
-    counts = {state: sum(item["status"] == state for item in tasks)
-              for state in review.STATUSES | {STATUS_NOT_READY}}
+    states_seen = review.STATUSES | {STATUS_NOT_READY}
+    counts = {state: sum(item["status"] == state for item in tasks) for state in states_seen}
+    # 两个平台各自成为独立入口，角标要按平台分开数——列表可能只加载了其中一边。
+    by_platform = {name: {state: sum(item["status"] == state and item["platform"] == name
+                                     for item in tasks) for state in states_seen}
+                   for name in ("facebook", "instagram")}
+    platform_alerts = {name: sum(bool(item['hard_alerts']) and item['platform'] == name
+                                for item in tasks) for name in by_platform}
     available_tags = sorted({value for item in tasks for value in item["tags"]})
     tasks = [item for item in tasks if (not status or item["status"] == status)
              and (not tag or (not item["tags"] if tag == "__untagged__" else tag in item["tags"]))
@@ -360,6 +367,8 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "total": len(tasks),
             "with_hard_alerts": sum(1 for t in tasks if t["hard_alerts"]),
             "by_status": counts,
+            "by_platform_status": by_platform,
+            "by_platform_hard_alerts": platform_alerts,
             "tags": available_tags,
         },
     }
@@ -416,14 +425,24 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
     for index in range(len(_image_media(source))):
         pair = by_index.get(index)
         record = pair.record if pair is not None else None
+        manual_record = None
+        output_digest = (record or {}).get("output_sha256") or "missing"
+        if pair and pair.manual and pair.localized_rel:
+            path = source.account_dir / pair.localized_rel
+            output_digest = image_de.sha256_file(path)
+            manual_record = image_de.manual_upload_record(path)
         version = "%s-%s-%s" % (
-            source_version, text_version, (record or {}).get("output_sha256") or "manual")
+            source_version, text_version, output_digest)
         out.append({
             "index": index,
             "original_url": "/api/tasks/%s/image/%d?variant=original&v=%s" % (
                 task_id, index, source_version),
             "de_url": "/api/tasks/%s/image/%d?variant=de&v=%s" % (task_id, index, version),
             "de_present": bool(pair is not None and pair.localized_rel),
+            # 人工图不能被模型重生成覆盖（红线 6），所以这一张的优化入口要禁用。
+            "manual": bool(pair is not None and pair.manual),
+            "replaced_at": (manual_record or {}).get("replaced_at"),
+            "warnings": (manual_record or {}).get("warnings", []),
             "metrics": _metrics(record),
         })
     return out
@@ -517,6 +536,8 @@ def _metrics(record: Mapping[str, Any] | None) -> dict | None:
         "aspect_drift": record.get("aspect_drift_percent"),
         "scale_ratio": record.get("scale_factor"),
         "elapsed_s": record.get("elapsed_seconds"),
+        # 旧记录没有这一项；null 表示"没量过"，不是"没改动"。
+        "changed_pixel_ratio": record.get("changed_pixel_ratio"),
     }
 
 
@@ -534,6 +555,25 @@ def _compose_warnings(source: engine.SourcePost,
     except Exception:                                  # noqa: BLE001
         return []
     return [line for line in post.warnings if "G1 实测值" not in line]
+
+
+def _text_suggestions(state_dir: Path, source, localized: dict) -> dict | None:
+    """最近一次的只读建议清单。刷新页面不该让已经付过费的结果消失。"""
+    row = text_suggestions.latest_for(Path(state_dir) / refinement.SUGGESTIONS_FILE,
+                                      account=source.account_dir.name, post_id=source.post_id)
+    if row is None:
+        return None
+    # 译文改过之后 quote 可能定位不到，所以只标过期，不隐藏也不自动重做。
+    current = text_suggestions.is_current(
+        row, source_text_sha256_value=localized["source_text_sha256"],
+        text_de=localized["body_de"])
+    return {"items": row["items"], "dropped": row["dropped"], "current": current,
+            "job_id": row["job_id"], "body_de": row.get("body_de"),
+            "source_text_sha256": row["source_text_sha256"],
+            "text_de_sha256": row["text_de_sha256"],
+            "generated_at": row["recorded_at"],
+            "prompt_version": row["prompt_version"],
+            "current_prompt_version": text_suggestions.SUGGEST_PROMPT_VERSION}
 
 
 def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
@@ -600,11 +640,14 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "platform": source.platform,
         "status": state["status"],
         "review": state,
+        "hard_alerts": alerts,
         "tags": tags,
         "tags_revision": tags_revision(tags),
         "storage": _storage_facts(source),
         "localization": localized,
         "localization_validation": localization.validate(localized),
+        "hashtag_suggestions_enabled": hashtag_suggestions.suggestions_enabled(),
+        "text_suggestions": _text_suggestions(ctx.state_dir, source, localized),
         "body_highlights": build_highlights(localized["source_body"], localized["body_de"]),
         "body_risks": body_risks,
         "risk_scan": ctx.risk_scans[task_id],

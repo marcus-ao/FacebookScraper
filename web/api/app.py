@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 # StaticFiles 抛父类异常，FastAPI 的子类捕获不到。
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
@@ -18,6 +19,7 @@ if str(ROOT) not in sys.path:
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from web.api import reader, writer, jobs, approval, calendar, settings, runtime                     # noqa: E402
+from localize import images                            # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
 from core import review, translated, localization                     # noqa: E402
 from core.paid_model import FileLockBusy                 # noqa: E402
@@ -149,13 +151,43 @@ async def delete_content_lock(task_id: str, request: Request) -> JSONResponse:
 async def post_export(task_id: str, request: Request) -> Response:
     body = await _json_body(request)
     options = _review_input(body)
+    # mode=download 只取素材，不转态；mode=handoff 才是"系统不再代发"这个终态决定。
+    mode = body.get("mode", "handoff")
+    if mode not in {"download", "handoff"}:
+        raise HTTPException(status_code=400, detail="导出方式只能是 download 或 handoff")
     data, filename = writer.export_post(task_id,
         source_text_sha256=options["source_text_sha256"], review_revision=options["review_revision"],
-        handoff_url=options["handoff_url"])
+        handoff_url=options["handoff_url"], handoff=mode == "handoff")
     return Response(data, media_type="application/zip", headers={
         "Content-Disposition": 'attachment; filename="%s"' % filename,
         "Cache-Control": "no-store",
     })
+
+
+@app.post("/api/tasks/{task_id:path}/image/{index}/upload")
+async def post_image_upload(task_id: str, index: int, request: Request) -> JSONResponse:
+    """用业务自己的图片替换第 index 张德语图；记为 edited 后继续走系统发布。
+
+    收 JSON + base64 而不是 multipart：后者要装 python-multipart，而本仓库对新依赖
+    有明确约定，且 `decode_image_payload` 已经是经过验证的"不可信 base64 → 图片字节"入口。
+    """
+    body = await _json_body(request)
+    digest = _source_digest(body)
+    payload = body.get("image_base64")
+    if not isinstance(payload, str) or not payload.strip():
+        raise HTTPException(status_code=400, detail="请提供要替换的图片内容")
+    # base64 比原字节大约 4/3，先按编码后长度挡住超大请求，再解码。
+    if len(payload) > images.MAX_UPLOAD_BYTES // 3 * 4 + 1024:
+        raise HTTPException(status_code=413, detail="上传的图片超过大小上限")
+    try:
+        data = images.decode_image_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="上传内容不是可识别的图片：%s" % exc) from exc
+    revision = _state_revision(body)
+    return JSONResponse(await run_in_threadpool(writer.replace_image,
+        task_id, index, data, str(body.get("filename") or ""),
+        source_text_sha256=digest,
+        review_revision=revision))
 
 
 @app.put("/api/tasks/{task_id:path}/tags")
@@ -223,7 +255,8 @@ async def post_check(task_id: str, request: Request) -> JSONResponse:
         return JSONResponse(dict(result, caption_length=len(text_de),
                                  hashtag_count=len(translated.extract_hashtags(text_de)), warnings=[], issues=[]))
     validation = localization.validate(draft)
-    return JSONResponse(dict(result, caption_length=validation['char_count'],
+    return JSONResponse(dict(result, caption=validation['caption'],
+                             caption_length=validation['char_count'],
                              hashtag_count=validation['hashtag_count'], warnings=validation['warnings'],
                              issues=validation['issues']))
 

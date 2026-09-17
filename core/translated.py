@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 from core import paid_model
 from core.store import assert_physical_direct_path, source_text_digest
 
-PROMPT_VERSION = 6
+PROMPT_VERSION = 7
 _UNSET_REVISION = object()
 
 
@@ -122,11 +122,12 @@ def load_human_translated(path: Path) -> dict[str, dict]:
     return {row["post_id"]: row for row in _translation_rows(path, human=True)}
 
 
-def load_human_translation_history(path: Path) -> dict[str, list[dict]]:
-    """保留人工版本历史，供图片按其生成时的正文指纹找到同源依据。"""
+def load_image_translation_history(arc_base: Path) -> dict[str, list[dict]]:
+    """供已有图片找回生成依据；不改变当前发布正文的人工优先选择。"""
     history: dict[str, list[dict]] = {}
-    for row in _translation_rows(path, human=True):
-        history.setdefault(row["post_id"], []).append(row)
+    for name, human in (("translated.jsonl", False), ("translated_human.jsonl", True)):
+        for row in _translation_rows(arc_base / name, human=human):
+            history.setdefault(row["post_id"], []).append(dict(row, is_human=human))
     return history
 
 

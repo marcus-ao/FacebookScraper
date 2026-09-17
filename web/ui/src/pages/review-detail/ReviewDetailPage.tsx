@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { PageTitle } from '@/app/PageTitle'
 import { buildDetailSearch, buildListSearch, parseHistoryListQuery, parseReviewListQuery } from '@/app/search-params'
+import { reviewPath } from '@/app/nav-model'
 import type { ListSource } from '@/app/search-params'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { historyListOptions, reviewListOptions } from '@/hooks/useTasks'
@@ -14,6 +15,7 @@ import { canEditTask } from '@/features/localization/model'
 import { TextWorkspace } from '@/features/localization/TextWorkspace'
 import type { TextWorkspaceHandle } from '@/features/localization/TextWorkspace'
 import { LocalizationEditor } from '@/features/localization/LocalizationEditor'
+import { SuggestionPanel } from '@/features/localization/SuggestionPanel'
 import { CategoryEditor } from '@/features/localization/CategoryEditor'
 import { ImageWorkspace } from '@/features/images/ImageWorkspace'
 import { ApprovalAction, DecisionPanel } from '@/features/approval/DecisionPanel'
@@ -22,9 +24,11 @@ import { ContentJobs } from '@/features/content-jobs/ContentJobs'
 import { DetailDrawers } from '@/features/diagnostics/DetailDrawers'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
+import { CopyButton } from '@/components/CopyButton'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
+import { refinementCapabilities } from '@/services/jobs'
 import { AUTHOR_KIND_LABEL, formatDate, formatTrailTime } from '@/lib/format'
 import type { ContentJob, MirrorStatus, TaskDetail, TaskStorage } from '@/types/domain'
 import styles from './ReviewDetailPage.module.css'
@@ -53,6 +57,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
   const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
+  // 历史版本随图片页一起用；只读查询，不触发模型也不产生费用。
+  const imageVersions = useQuery({
+    queryKey: ['refinement-capabilities', detail.id],
+    queryFn: () => refinementCapabilities(detail.id),
+  })
   const tab = ['text', 'images', 'localization'].includes(search.get('tab') ?? '') ? search.get('tab')! : 'text'
   const changeTab = (value: string) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
   // 标签页首次打开才挂载，之后保留结果；切换任务时由 Outlet key 重建。
@@ -68,7 +77,17 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     if (loc.dirty) modal.confirm({ title: '采用候选将替换编辑区中的正文，继续吗？', okText: '采用候选', cancelText: '保留修改', onOk: adopt })
     else adopt()
   }
-  const back = `/${source}?${buildListSearch(search, source)}`
+  // 审校台按平台分了入口，返回要回到这一篇所属的那个，不能一律回 Facebook。
+  const back = source === 'review'
+    ? `${reviewPath(detail.platform)}?${buildListSearch(search, source)}`
+    : `/${source}?${buildListSearch(search, source)}`
+  useEffect(() => {
+    // 旧飞书卡片、书签和 ?task= 跳转都不带平台。这里补回去，导航选中项与面包屑才落对入口。
+    if (source !== 'review' || search.get('platform') === detail.platform) return
+    const next = new URLSearchParams(search)
+    next.set('platform', detail.platform)
+    setSearch(next, { replace: true })
+  }, [source, detail.platform, search.get('platform')])
   const adjacent = (delta: number) => { const row = rows[index + delta]; if (index >= 0 && row) void navigate(`/${source}/${idPath(row.id)}?${buildDetailSearch(search, source, { tab })}`) }
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -108,12 +127,21 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <Tabs activeKey={tab} onChange={changeTab} items={[{ key: 'text', label: '正文对照' }, { key: 'images', label: `图片 ${detail.images.length}` }, { key: 'localization', label: '话题标签与链接' }]} />
       <div hidden={tab !== 'text'}><TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
         active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
-        onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} /></div>
+        onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
+        <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
+          onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} /></div>
       {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
       }} /></div>}
-      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images} onProgress={setUnseen} /></div>}
-      <div className={styles.counter}>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</div>
+      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images}
+        detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing}
+        maxImageCount={imageVersions.data?.max_image_count ?? null} imageModel={imageVersions.data?.image_model ?? ''}
+        onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={setUnseen} /></div>}
+      <div className={styles.counter}>
+        <span>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</span>
+        <CopyButton text={loc.caption} label="复制发布文案"
+          {...(loc.approximate ? { disabledReason: '正在校验，请稍候取准确文案' } : {})} />
+      </div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
       <CategoryEditor detail={detail} disabled={loc.editing} apply={apply} refresh={refresh} />

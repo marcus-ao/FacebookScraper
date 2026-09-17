@@ -18,6 +18,21 @@ from core.store import assert_physical_direct_path, read_post_truth
 CTA_PRESETS = ("Link in Bio 🔗", "Mehr dazu im Profil 🔗", "Entdecke mehr über den Link in unserer Bio.")
 _URL_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 
+# IG 正文里残留的主页引导句。⚠️ 必须出现"链接/去某处"的指向词才算命中：德语的 Bio 还有
+# "有机"的意思（Bio-Abfall、biologisch abbaubar），对这个品类是会真出现的词。
+_PROFILE_HINT = re.compile(
+    r"(?:bio|profil)\w*[-\s]?link"
+    # bio/profil 必须是独立的词：跟着连字符或别的字母就是 Bio-Qualität、biologisch
+    # 这类复合词，属于正常文案。
+    r"|(?:in|im)\s+(?:der\s+|die\s+|unserer\s+|unserem\s+|our\s+|the\s+)?(?:bio|profile?)\b(?![-\w])"
+    r"|\b(?:see|check|visit)\s+(?:our\s+|the\s+|my\s+|your\s+)?(?:bio|profile)\b(?![-\w])"
+    r"|swipe\s+up", re.IGNORECASE)
+
+
+def mentions_profile_link(text: str) -> bool:
+    """正文里是否已经有一句去主页/bio 看链接的引导。"""
+    return bool(_PROFILE_HINT.search(text or ""))
+
 
 class LocalizationConflict(ValueError):
     """人工版本、源文或本地化选择已经改变。"""
@@ -93,7 +108,9 @@ def valid_url(value: str) -> bool:
         return False
 
 
-def _text_hash(value):
+def text_de_digest(value: str) -> str:
+    """`text_de_sha256` 字段的唯一算法。⚠️ 别再写第二份：同名字段两套摘要，
+    绑定关系会静默对不上，而对不上的表现只是"页面说内容变了"。"""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -107,7 +124,7 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
     source_hash = translated.source_text_sha256(source["text"])
     is_human = entry.get("is_human") is True
     bound = bool(record and record.get("source_text_sha256") == source_hash
-                 and record.get("text_de_sha256") == _text_hash(text_de)
+                 and record.get("text_de_sha256") == text_de_digest(text_de)
                  and is_human and record.get("human_revision") == entry.get("revision"))
     links = []
     for index, url in enumerate(original["links"]):
@@ -124,10 +141,14 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
         links = [{"source_url": "", "target_url": url, "mapped_url": "",
                   "confirmed": False, "origin": "manual"} for url in current["links"]]
     tags = current["tags"] if text_de.strip() else list(original["tags"])
+    # IG 原帖通常只写 link in bio，没有 URL；提示词删掉正文里的引导后，在独立区保留它。
+    # 已绑定的人工决定在下面完整还原，包括运营明确选定的空 CTA。
+    ig_cta = (CTA_PRESETS[0] if source["platform"] == "instagram"
+              and (original["links"] or mentions_profile_link(original["body"])) else "")
     draft = {"platform": source["platform"], "body_de": current["body"], "source_body": original["body"],
              "source_tags": original["tags"], "protected_tags": protected, "tags": tags,
              "hashtags_confirmed": not bool([tag for tag in original["tags"] if tag not in protected]),
-             "links": links, "ig_cta": CTA_PRESETS[0] if source["platform"] == "instagram" and original["links"] else "",
+             "links": links, "ig_cta": ig_cta,
              "ig_bio_url": ig_bio_url, "cta_presets": list(CTA_PRESETS),
              "revision": record.get("revision") if record else None,
              "source_stale": bool(text_de and not translated.translation_is_current(source, entry)),
@@ -249,10 +270,18 @@ def validate(draft: dict) -> dict:
             issue("invalid_cta", "bio 引导话术不应包含链接或话题标签")
         if draft.get("links") and not str(draft.get("ig_cta") or "").strip():
             issue("cta_missing", "原帖有链接，请选择或填写 bio 引导话术")
+        if (str(draft.get("ig_cta") or "").strip()
+                and mentions_profile_link(draft.get("body_de") or "")):
+            # 只提示不拦：自然语言判断误杀的代价是拒绝一次已经付过钱的产出。
+            warnings.append({"code": "duplicate_profile_hint",
+                             "message": "正文里可能还有一句主页引导，和下面的引导话术重复了；"
+                                        "确认后删掉其中一处"})
     else:
         issue("unsupported_platform", "不支持这个目标平台")
     caption = render(draft)
-    counts = {"char_count": len(caption), "body_char_count": len(draft.get("body_de") or ""),
+    # 一并回传成品文案：审校台的复制按钮要给出的就是这一份，不能在前端另拼一遍。
+    counts = {"caption": caption, "char_count": len(caption),
+              "body_char_count": len(draft.get("body_de") or ""),
               "hashtag_count": len(tags)}
     if draft.get("platform") == "instagram":
         if counts["char_count"] >= 1980:
@@ -318,7 +347,7 @@ def append_localization(account_dir: Path, source: dict, draft: dict, *, human_r
         row = {"post_id": truth["post_id"], "platform": truth["platform"], **fields,
                "revision": str(uuid4()), "previous_revision": expected_revision,
                "source_text_sha256": expected_source_sha256, "human_revision": human_revision,
-               "text_de_sha256": _text_hash(human["text_de"]), "recorded_at": moment.astimezone(timezone.utc).isoformat(),
+               "text_de_sha256": text_de_digest(human["text_de"]), "recorded_at": moment.astimezone(timezone.utc).isoformat(),
                "actor": None}
         paid_model.append_jsonl(path, row, guard=lambda p: _ledger(p.parent))
     return row

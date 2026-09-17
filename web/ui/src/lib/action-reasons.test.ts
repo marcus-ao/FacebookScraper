@@ -4,8 +4,35 @@ import {
   approvalDisabledReason,
   initialTranslationDisabledReason,
   refinementDisabledReason,
+  textCandidateDisabledReason,
   seedScheduleTime,
 } from './action-reasons'
+import type { ContentJob } from '@/types/domain'
+import type { Sha256 } from '@/types/brands'
+
+describe('文案候选采用资格', () => {
+  const sourceHash = 'a'.repeat(64) as Sha256
+  const job: ContentJob = { job_id: 'candidate', status: 'succeeded', kind: 'text',
+    source_text_sha256: sourceHash, prompt_current: true, body_de: 'Aktueller Vorschlag.' }
+
+  it('同源且当前模板的候选可以采用', () => {
+    expect(textCandidateDisabledReason(job, sourceHash, true)).toBe('')
+  })
+
+  it('模板升级使旧候选失效', () => {
+    expect(textCandidateDisabledReason({ ...job, prompt_current: false }, sourceHash, true)).toContain('提示词')
+  })
+
+  it('旧任务缺少模板依据时不能默认当成当前候选', () => {
+    const { prompt_current: _, ...legacy } = job
+    expect(textCandidateDisabledReason(legacy, sourceHash, true)).toContain('版本依据')
+  })
+
+  it('当前模板仍不能绕过来源或审校状态的限制', () => {
+    expect(textCandidateDisabledReason(job, 'updated-source', true)).toContain('原文已更新')
+    expect(textCandidateDisabledReason(job, sourceHash, false)).toContain('恢复审校')
+  })
+})
 
 
 const approvalOk = {
@@ -109,6 +136,20 @@ describe('单篇优化：七条原因，次数用完排在最后', () => {
 
   it('次数用完只管图片：文案优化不按张算', () => {
     expect(refinementDisabledReason({ ...refineOk, kind: 'text', remaining: 0 })).toBe('')
+  })
+
+  it('换成人工图之后不让再生成——人工图优先，模型那一版不会被采用，钱是白花的', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', manualImage: true }))
+      .toBe('这一张已换成人工图片，模型优化不会被采用')
+  })
+
+  it('人工图的原因排在次数之前：次数没用完也不该让她点', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', remaining: 0, manualImage: true }))
+      .toBe('这一张已换成人工图片，模型优化不会被采用')
+  })
+
+  it('人工图只影响图片：同一篇的文案优化照常可点', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'text', manualImage: true })).toBe('')
   })
 
   it('只有空白的指令等于没填', () => {

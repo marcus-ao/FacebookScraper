@@ -9,18 +9,19 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from localize import images as image_de
-from core import translated
+from core import localization, translated
 from core.review import ReviewConflict
 from core.store import assert_physical_direct_path, read_post_truth
 
 
-def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
+def package_post(account_dir: Path, indexed: dict, *, handoff: bool = True) -> tuple[bytes, str]:
     source, post_dir = read_post_truth(account_dir, indexed)
     machine = translated.load_translated(account_dir / "translated.jsonl").get(source["post_id"])
     human = translated.load_human_translated(account_dir / "translated_human.jsonl").get(source["post_id"])
     effective = translated.effective_translation(source, machine, human)
     if not effective or not translated.translation_is_current(source, effective):
         raise ReviewConflict("请先保存并复核当前德语文案，再下载交由人工处理")
+    caption = localization.render(localization.effective_draft(account_dir, source, effective))
     image_entry = translated.image_translation(source, machine, human)
     pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(
         account_dir, source, image_entry)} if image_entry else {}
@@ -33,9 +34,11 @@ def package_post(account_dir: Path, indexed: dict) -> tuple[bytes, str]:
                      "source_text_sha256": translated.source_text_sha256(source["text"]),
                      "human_revision": human["revision"] if human else None, "images": []})
     buffer = io.BytesIO()
-    notes = ["这份资源包已交由人工处理，系统不会代为发布。", "文案：text_de.txt；元信息：metadata.json。"]
+    notes = [("这份资源包已交由人工处理，系统不会代为发布。" if handoff else
+              "这是素材下载，帖子继续留在系统审校和排期；修改图片后可上传替换。"),
+             "文案：text_de.txt；元信息：metadata.json。"]
     with ZipFile(buffer, "w", ZIP_DEFLATED) as package:
-        package.writestr("text_de.txt", effective["text_de"].encode("utf-8"))
+        package.writestr("text_de.txt", caption.encode("utf-8"))
         total = 0
         for index, media_item in enumerate(media):
             original, _ = image_de._source_from_manifest(account_dir, source, media_item)

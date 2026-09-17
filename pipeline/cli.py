@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import math
 import sys
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -237,6 +239,8 @@ def month_spend(dirs: list[Path], month: str,
                 text_cost += cost
         if isettings is not None:
             for row in _jsonl_rows(arc_base / "images_de.jsonl"):
+                if "selected_from" in row:
+                    continue
                 paid_id = str(row.get("paid_request_id") or "")
                 if paid_id:
                     if paid_id not in paid_ids:
@@ -253,7 +257,7 @@ def month_spend(dirs: list[Path], month: str,
                         arc_base.name, row.get("post_id") or "?",
                         row.get("media_index") or "?"))
                     continue
-                cost = image_de.image_usage_cost(isettings, usage)
+                cost = image_de.image_usage_cost(isettings, usage, model=row.get("model"))
                 if cost is None or not math.isfinite(cost) or cost < 0:
                     problems.append("[image] %s/%s/%s 费用无法计算" % (
                         arc_base.name, row.get("post_id") or "?",
@@ -733,6 +737,11 @@ def main(argv=None) -> int:
         "--account", default=None,
         help="只看一个账号归档目录，如 in_neakasa.tech")
 
+    preview_parser = sub.add_parser(
+        "processing-preview", help="只读 dry-run：逐帖处理范围、图片数、排除原因与美元参考")
+    preview_parser.add_argument("--account", default=None, help="只预览一个归档账号；预算仍核算所有账号")
+    preview_parser.add_argument("--json", action="store_true", help="输出处理预览 JSON")
+
     alive_parser = sub.add_parser(
         "check-alive",
         help="死人开关：太久没成功运行就告警（退出码 0 活 / 2 死）")
@@ -847,6 +856,29 @@ def main(argv=None) -> int:
             return run_preflight(days=max(1, args.days))
         except (PipelineConfigError, ArchivePathError, OSError) as exc:
             print("[!] 预检失败：%s" % exc)
+            return 2
+
+    if args.command == "processing-preview":
+        from pipeline import processing_preview
+        try:
+            all_dirs = translation.account_dirs(cfg().archive_dir)
+            selected = translation.account_dirs(cfg().archive_dir, args.account)
+            if args.account and not selected:
+                raise ValueError("archive/ 下没有账号目录 %r" % args.account)
+            diagnostics = io.StringIO()
+            with redirect_stdout(diagnostics):
+                value = processing_preview.snapshot(
+                    account_dirs=all_dirs, processing_account_dirs=selected,
+                    state_dir=ROOT / cfg().get("paths", "state", "state"),
+                    settings=pipeline_settings())
+            value["diagnostics"] = diagnostics.getvalue().splitlines()
+            if args.json:
+                print(json.dumps(value, ensure_ascii=False, indent=2))
+            else:
+                processing_preview.print_snapshot(value)
+            return 0
+        except (RuntimeError, ValueError, OSError, SystemExit) as exc:
+            print("[!] 内容处理预览失败：%s" % exc)
             return 2
 
     if args.command == "activate":
