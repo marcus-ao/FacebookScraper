@@ -88,7 +88,8 @@ web/        审校台：FastAPI + React，只调上面的入口，反向不依�
 
 ## 八、提交统一使用英文 Conventional Commits
 
-提交标题和正文一律使用英文。标题格式为 `type(scope): summary`，`scope` 可省略；使用 `feat`、`fix`、`docs`、`refactor`、`test`、`chore` 等标准类型，摘要用简洁的英文祈使句。示例：`docs(agents): clarify testing and delivery rules`。
+- 提交标题和正文一律使用英文。标题格式为 `type(scope): summary`，`scope` 可省略；使用 `feat`、`fix`、`docs`、`refactor`、`test`、`chore` 等标准类型，摘要用简洁的英文祈使句。示例：`docs(agents): clarify testing and delivery rules`。
+- 在本项目中创建 Git Commit 或 Pull Request 时，只使用我当前配置的 Git 用户身份，禁止添加任何 Claude、Anthropic 或 AI 相关署名，包括 Co-Authored-By、Claude-Session、Generated with Claude Code 等内容。提交和推送前请检查并移除所有此类 AI attribution，不要修改我的 user.name 和 user.email。
 
 ## 九、功能工作先建立独立工作树与分支
 
