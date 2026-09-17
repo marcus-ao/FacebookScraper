@@ -92,3 +92,15 @@ def active() -> dict | None:
         if record and record['status'] == RUNNING:
             return record
     return None
+
+
+def for_task(task_id: str, snapshot_id: str | None) -> dict | None:
+    """Recover the latest submission of this frozen revision after a page reload."""
+    if not snapshot_id:
+        return None
+    matches = []
+    for path in _root().glob('*.json'):
+        record = read(path.stem)
+        if record and record.get('task_id') == task_id and record.get('snapshot_id') == snapshot_id:
+            matches.append(record)
+    return max(matches, key=lambda row: row['started_at'], default=None)

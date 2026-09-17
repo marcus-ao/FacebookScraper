@@ -6,10 +6,12 @@ import copy
 import json
 import random
 import time
+from threading import Event
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.config import ROOT, Config, MonitorSchedule, cfg
+from core import maintenance
 from core.integrity import parse_ts
 from core.monitor_access import AccessController, next_homepage_due
 from core.paid_model import FileLock, atomic_write_json
@@ -42,6 +44,7 @@ class Scheduler:
         self.lock = FileLock(self.path.with_suffix(".lock"), error_type=SchedulerAlreadyRunning,
                              busy_message="监测调度器已在运行")
 
+    @maintenance.guarded('scheduler_start')
     def __enter__(self):
         self.config.assert_chrome_profiles_isolated()
         self.lock.__enter__()
@@ -244,7 +247,7 @@ class Scheduler:
         return results
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, stop_event=None) -> int:
     parser = argparse.ArgumentParser(description="上海窗口监测；默认离线预览")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--run", action="store_true", help="常驻运行，可能抓取社媒")
@@ -254,6 +257,7 @@ def main(argv=None) -> int:
     parser.add_argument("--process", action="store_true",
                         help="配合 --run，扫描后处理新内容（会消耗模型 API，仍受预算和审核闸约束）")
     args = parser.parse_args(argv)
+    stop_event = stop_event or Event()
     if args.once and not args.run:
         parser.error("--once 必须与 --run 一起显式使用")
     if args.process and not args.run:
@@ -270,24 +274,32 @@ def main(argv=None) -> int:
         runner.callback = runtime.scan
         runner.maintenance = runtime.maintenance
         with runner:
-            while True:
-                for result in runner.tick():
-                    print(json.dumps(result, ensure_ascii=False), flush=True)
-                now = datetime.now(timezone.utc)
-                processing = runtime.start_processing(now)
+            while not stop_event.is_set():
+                try:
+                    with maintenance.operation('scheduler_tick'):
+                        for result in runner.tick():
+                            print(json.dumps(result, ensure_ascii=False), flush=True)
+                        now = datetime.now(timezone.utc)
+                        processing = runtime.start_processing(now)
+                except maintenance.MaintenanceBlocked:
+                    if args.once:
+                        return 75
+                    stop_event.wait(1)
+                    continue
                 if args.once:
                     if args.process and processing is not None:
                         # 首轮投递早于翻译/出图；内容完成后再汇总一次，才会收到本轮待审卡。
                         # 不再 tick/maintenance，避免额外扫描或唤醒；关闭执行器前完整排空投递。
                         processing.result()
                         runtime.await_delivery(timeout=None)
-                        runtime.delivery_future = runtime.delivery_executor.submit(
-                            runtime._deliver, datetime.now(timezone.utc))
+                        runtime.delivery_future = maintenance.submit(runtime.delivery_executor,
+                            'delivery', runtime._deliver, datetime.now(timezone.utc))
                         runtime.await_delivery(timeout=None)
                     else:
                         runtime.await_delivery()
                     return 0
-                time.sleep(30)
+                stop_event.wait(30)
+            return 0
     except SchedulerAlreadyRunning as exc:
         print(str(exc))
         return 0

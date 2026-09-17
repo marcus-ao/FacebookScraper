@@ -390,6 +390,7 @@ export interface TaskStorage {
 }
 
 export interface TaskDetail {
+  readonly publish_operation?: PublishOperation | null
   readonly id: TaskId
   /** 冻结账号：只能查阅，不渲染任何加工/发布入口。 */
   readonly read_only: boolean

@@ -304,18 +304,23 @@ class BrowserWorkflowTests(unittest.TestCase):
             detail["status"] = "scheduled"
             detail["publication"] = {"attempt_id": "offline-attempt", "status": "scheduled"}
             detail["delivery"] = {"status": "not_observed", "message": "尚无远端公开发布观测"}
-            return {"body": publish_operation(status="running", step_index=1, step="打开编辑器")}
+            detail["publish_operation"] = publish_operation(status="running", step_index=1, step="打开编辑器")
+            return {"body": detail["publish_operation"]}
 
         self.responses[("POST", endpoint + "/approve")] = approve
         # 提交跑在请求之外；页面轮询到终态才算数。
-        self.responses[("GET", "/api/publish-operations/offline-operation")] = {
-            "body": publish_operation(status="succeeded", step_index=7, step="提交并回读月历",
-                                      message="自动提交并回读为 scheduled")}
+        self.responses[("GET", "/api/publish-operations/offline-operation")] = lambda request: {
+            "body": detail["publish_operation"]}
         self.responses[("GET", "/api/calendar")] = {"body": calendar_payload()}
         self.open_task(self.fixtures.fb_id)
         self.page.get_by_label("发布时间（北京时间）").fill("2026-09-13T16:00")
         self.page.get_by_role("button", name="确认发布时间并排期", exact=True).click()
         self.page.get_by_role("button", name="确认并创建排期", exact=True).click()
+        expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
+        self.page.reload()
+        expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
+        detail["publish_operation"] = publish_operation(status="succeeded", step_index=7,
+            step="提交并回读月历", message="自动提交并回读为 scheduled")
         expect(self.page.get_by_text("排期已创建并回读确认", exact=True)).to_be_visible(timeout=15000)
         expect(self.page.get_by_role("status")).to_contain_text("排期已确认。")
         expect(self.page.get_by_text("已排期", exact=True)).to_be_visible()

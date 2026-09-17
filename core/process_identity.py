@@ -44,6 +44,13 @@ def current_worker() -> dict:
     return {'pid': os.getpid(), 'started': _started(os.getpid())}
 
 
+def process_identity(pid: int) -> dict:
+    """Capture another known process without treating an unreadable owner as absent."""
+    if type(pid) is not int or pid <= 0:
+        raise ValueError('Invalid process ID')
+    return {'pid': pid, 'started': _started(pid)}
+
+
 def worker_alive(owner: dict | None) -> bool | None:
     """None means unknown, and must never authorize closing a task."""
     if not isinstance(owner, dict) or not owner.get('started'):

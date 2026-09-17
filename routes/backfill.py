@@ -8,6 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from core import maintenance
 from core.capture import INTEREST, Collector  # noqa: F401  （INTEREST 供外部引用）
 from core.capture import atomic_write_json, download_media as _download
 from core.chrome import attach
@@ -89,6 +90,7 @@ def _stdin_waiter(readline=None) -> tuple[threading.Event, threading.Thread]:
     return done, thread
 
 
+@maintenance.guarded('backfill')
 async def run(platform: str, days: int | None = None) -> int:
     c = cfg()
     account = c["targets"][platform]

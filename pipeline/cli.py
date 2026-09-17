@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Mapping
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from core import maintenance
 from core.monitoring import detection_failure_kind
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
@@ -725,6 +726,7 @@ def run_check_alive(now: datetime | None = None, state_dir: Path | None = None,
 
 # ---------------------------------------------------------------------------
 
+@maintenance.guarded('pipeline_cli')
 def main(argv=None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(

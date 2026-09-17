@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 import socket
 import tempfile
@@ -35,7 +36,7 @@ class BrowserFixture:
         self.denied_backend_requests = []
         self.local_image_writes = False
         self.config_original = (ROOT / "config.toml").read_bytes()
-        self.chrome_exe = config.Config().chrome_exe
+        self.chrome_exe = os.environ.get('FBSCRAPER_TEST_CHROME_EXE') or config.Config().chrome_exe
 
     def __enter__(self):
         try:

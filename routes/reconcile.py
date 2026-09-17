@@ -1,5 +1,6 @@
 """每日兜底深扫；复用 delta 的身份校验、抓取、落盘与失败预算。"""
 from __future__ import annotations
+from core import maintenance
 
 import random
 from dataclasses import replace
@@ -7,6 +8,7 @@ from dataclasses import replace
 from routes import delta
 
 
+@maintenance.guarded('reconcile')
 def main(argv=None, *, rng=None) -> int:
     rng = rng or random.SystemRandom()
     config = delta.DeltaConfig.load()

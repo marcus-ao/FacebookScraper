@@ -1,15 +1,17 @@
 """提交过程对页面可见：进度落盘、轮询、进程死掉也能判定，且不排队。"""
 import asyncio
 import json
+import os
 import sys
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_approval as fixtures
-from core import config, review
+from core import config, maintenance, review
 from publish import (business_suite as bs, journal, local_schedule, observations,
                      operations, records, workflow)
 from web.api import approval as web_approval
@@ -39,6 +41,45 @@ class PublishOperationTests(unittest.TestCase):
                                  message='已排期', result={'ok': True})
         self.assertEqual(done['step_index'], done['step_total'])
         self.assertEqual(operations.read(record['operation_id'])['result'], {'ok': True})
+
+    def test_accepted_http_submission_blocks_deployment_until_background_completion(self):
+        import httpx
+        from web.api.app import app
+        locked = self.f.lock_content()
+        control = config.cfg().state_dir / 'test-control'
+        gate = maintenance.Gate(control)
+        gate.initialize()
+
+        async def scenario():
+            started, finish = asyncio.Event(), asyncio.Event()
+            async def approve(*args, **kwargs):
+                with maintenance.operation('workflow'):
+                    started.set()
+                    await finish.wait()
+                return {'ok': True, 'message': 'offline fixture'}
+            source = SimpleNamespace(account_dir=self.f.account, row=self.f.source)
+            with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR=str(control)), \
+                    patch.object(web_approval, '_source', return_value=source), \
+                    patch.object(web_approval.approval, 'options', return_value={'available': True}), \
+                    patch.object(web_approval.approval, 'approve', side_effect=approve):
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                            base_url='http://127.0.0.1:8765') as client:
+                    response = await client.post('/api/tasks/fa_example/x/approve', json={
+                        'scheduled_at': fixtures.TARGET.isoformat(), 'content_fingerprint': 'fixture',
+                        'review_revision': locked['revision']})
+                self.assertEqual(response.status_code, 202, response.text)
+                await asyncio.wait_for(started.wait(), timeout=3)
+                pending = list(web_approval._running)
+                try:
+                    gate.announce(delay=0)
+                    self.assertEqual(len(gate.status()['operations']), 1)
+                    self.assertFalse(gate.try_quiesce())
+                finally:
+                    finish.set()
+                    await asyncio.gather(*pending)
+                self.assertTrue(gate.try_quiesce())
+                self.assertEqual(operations.read(response.json()['operation_id'])['status'], 'succeeded')
+        asyncio.run(scenario())
 
     def test_a_dead_submitter_becomes_uncertain_rather_than_running_forever(self):
         """进程没了不等于远端没提交；必须停下等人工核对，不能自动重试。"""
@@ -171,6 +212,12 @@ class UnscheduleTests(unittest.TestCase):
     def test_the_card_disappearing_from_a_complete_read_releases_the_dedupe(self):
         row = self.schedule()
         self.assertIsNotNone(row)
+        task_id = self.f.fixture.task_id
+        frozen = review.latest(self.f.account)[self.f.source['post_id']]
+        record = operations.start(task_id, platform='facebook',
+                                  snapshot_id=frozen['snapshot_id'], scheduled_at=fixtures.TARGET)
+        operations.finish(record['operation_id'], status=operations.SUCCEEDED, message='fixture')
+        self.assertIsNotNone(self.f.fixture.client.get(self.f.fixture.url).json()['publish_operation'])
         result = self.unschedule(self.inventory())
         self.assertEqual(result['status'], 'pending_review')
         self.assertEqual(result['remote_ids'], ['987654'])
@@ -179,6 +226,7 @@ class UnscheduleTests(unittest.TestCase):
         self.assertNotIn(ref, journal.scheduled_source_refs(config.cfg().state_dir))
         self.assertEqual(review.latest(self.f.account)[self.f.source['post_id']]['status'],
                          'pending_review')
+        self.assertIsNone(self.f.fixture.client.get(self.f.fixture.url).json()['publish_operation'])
         # ⛔ 原始 scheduled 行必须还在：它是这篇曾经提交过的证据。
         statuses = [item['status'] for item in journal.load(config.cfg().state_dir)]
         self.assertEqual(statuses[-2:], [journal.STATUS_SCHEDULED, journal.STATUS_CANCELLED_REMOTE])

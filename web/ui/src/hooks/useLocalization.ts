@@ -4,7 +4,8 @@ import type { CheckResult, LocalizationDraft, TaskDetail } from '@/types/domain'
 import { buildMarks, charLength } from '@/lib/marks'
 import { checkLocalization, saveLocalization } from '@/services/localization'
 import { editableFields, recoverDraft } from '@/features/localization/model'
-import { useUnsavedChangesGuard } from './useUnsavedChangesGuard'
+import { useDeploymentDraft } from './useDeploymentDraft'
+import { deploymentStore } from '@/app/deployment-store'
 
 export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) => void, refresh: () => Promise<TaskDetail>) {
   const { message } = App.useApp()
@@ -19,7 +20,7 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
   const shown = draft ?? detail.localization
   const signature = JSON.stringify(shown)
   const dirty = editing && JSON.stringify(editableFields(shown)) !== JSON.stringify(editableFields(detail.localization))
-  useUnsavedChangesGuard({ dirty, message: 'detail' })
+  useDeploymentDraft(dirty)
   const marks = useMemo(() => buildMarks(detail.body_highlights, detail.body_risks), [detail])
   const live = validation?.signature === signature ? validation.result : null
   const shownMarks = live ? buildMarks(live.highlights, detail.body_risks) : marks
@@ -61,7 +62,7 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
   // 会被直接贴进 Business Suite——和实际发布内容不一致比没有这个按钮更糟。
   const caption = editing ? live?.caption : detail.localization_validation.caption
   return { draft, shown, editing, dirty, checking, saving, error, recovering, marks, shownMarks, active, setActive,
-    setDraft, start: () => { setDraft(structuredClone(detail.localization)); setActive(-1) }, discard, save, recover,
+    setDraft, start: () => { if (deploymentStore.canStartEditing()) { setDraft(structuredClone(detail.localization)); setActive(-1) } }, discard, save, recover,
     jump: (delta: number) => { if (shownMarks.length) setActive(old => (old + delta + shownMarks.length) % shownMarks.length) },
     count, caption, approximate: editing && !live, issues: live?.issues ?? detail.localization_validation.issues,
     warnings: live?.warnings ?? detail.localization_validation.warnings }

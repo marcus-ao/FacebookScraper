@@ -362,6 +362,8 @@ def main(argv=None) -> int:
                                       "scheduler-disable", "scheduler-enable"))
     p.add_argument("--dry-run", action="store_true", help="install 时只打印命令")
     args = p.parse_args(argv)
+    if os.environ.get('FBSCRAPER_CONTROL_DIR') and args.action not in {'xml', 'scheduler-xml', 'status', 'scheduler-status'}:
+        p.error('受管服务机只使用 deployment mode/install-task 管理启动，不能另装或结束旧调度任务')
     if args.action == "scheduler-xml":
         print(scheduler_xml())
         return 0

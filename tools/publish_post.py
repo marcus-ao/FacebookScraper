@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core import maintenance
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from publish import business_suite as bs                     # noqa: E402
@@ -156,6 +157,7 @@ def _manual_resolve(state_dir: Path, post_id: str, *, scheduled: bool) -> int:
     return 0
 
 
+@maintenance.guarded('publish_cli')
 def main(argv=None) -> int:
     force_utf8()
     parser = argparse.ArgumentParser(

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from core import config, operating_settings
+from core import config, operating_settings, operator_preferences
 
 
 class OperatingSettingsTests(unittest.TestCase):
@@ -34,6 +34,16 @@ class OperatingSettingsTests(unittest.TestCase):
         self.assertNotEqual(result['version'], before['version'])
         self.assertEqual(config.cfg().get('review', 'snooze_default_days'), 4)
         self.assertEqual(config.cfg().get('pipeline', 'daily_budget_usd'), 5)
+
+    def test_preferences_values_and_version_share_one_snapshot(self):
+        from types import SimpleNamespace
+        c = SimpleNamespace(path=self.path, preferences_path=Path(self.temp.name) / 'preferences.json')
+        first = b'{"snooze_default_days":3}'
+        second = b'{"snooze_default_days":7}'
+        with patch.object(operating_settings, 'cfg', return_value=c), patch.object(operator_preferences, 'revision', side_effect=[first, second]):
+            result = operating_settings.read()
+        self.assertEqual(result['editable']['snooze_default_days'], 3)
+        self.assertEqual(result['version'], operator_preferences.version(self.path.read_bytes(), first))
 
     def test_save_is_visible_when_the_rewrite_lands_in_the_same_timestamp_tick(self):
         """固定相同 mtime 和字节数，验证保存后主动失效配置缓存。"""

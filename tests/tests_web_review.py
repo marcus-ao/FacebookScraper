@@ -316,9 +316,18 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(image_ledger.read_bytes(), frozen_images)
         self.assertEqual(self.client.get(image_url).content, frozen_bytes)
         self.assertEqual(self.client.get(self.url).json()["review"], locked.json()["review"])
+        from publish import operations
+        record = operations.start(self.task_id, platform="facebook",
+            snapshot_id=locked.json()["review"]["snapshot_id"],
+            scheduled_at=datetime.now(timezone.utc) + timedelta(days=1))
+        self.assertEqual(self.client.get(self.url).json()["publish_operation"]["operation_id"],
+                         record["operation_id"])
+        operations.finish(record["operation_id"], status=operations.FAILED, message="offline fixture")
+        self.assertEqual(self.client.get(self.url).json()["publish_operation"]["status"], "failed")
         released = self.client.request("DELETE", self.url + "/content-lock", json=self.action_body())
         self.assertEqual(released.status_code, 200, released.text)
         self.assertEqual(released.json()["status"], "edited")
+        self.assertIsNone(released.json()["publish_operation"])
         self.assertEqual(self.client.put(self.url + "/text_de", json={
             **self.action_body(), "text_de": "Neu", "human_revision": None}).status_code, 200)
 

@@ -9,6 +9,8 @@ import { zonedInput } from '@/lib/format'
 
 /** 提交跑在请求之外，页面每两秒问一次进度；关掉再回来也能接着看。 */
 const POLL_MS = 2000
+import { useDeploymentDraft } from './useDeploymentDraft'
+import { deploymentStore } from '@/app/deployment-store'
 
 export function useApproval(detail: TaskDetail, editing: boolean, refresh: () => Promise<TaskDetail>) {
   const options = useQuery({ queryKey: ['approval-options', detail.id, detail.text.source_text_sha256, detail.text.human_revision, detail.review.revision, detail.localization.revision], queryFn: () => approvalOptions(detail.id), enabled: !detail.read_only })
@@ -17,8 +19,15 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const [operation, setOperation] = useState<PublishOperation | null>(null)
   // 人工修改或清空后不再自动预填。
   const touched = useRef(false)
+  useDeploymentDraft(snapshot !== null || (touched.current && !confirmed))
   const setWhen = (value: string) => { touched.current = true; setWhenState(value) }
-  useEffect(() => { touched.current = false; setWhenState(''); setOperation(null) }, [detail.id])
+  useEffect(() => { touched.current = false; setWhenState(''); setOperation(null); setBusy(false); setConfirmed(false) }, [detail.id])
+  useEffect(() => {
+    const saved = detail.publish_operation ?? null
+    setOperation(saved)
+    setBusy(saved?.status === 'running')
+    setConfirmed(saved?.status === 'succeeded')
+  }, [detail.id, detail.review.revision, detail.publish_operation])
   useEffect(() => {
     const seed = seedScheduleTime({ current: when, touched: touched.current, earliest: options.data?.earliest, scheduledAt: detail.schedule?.at })
     if (seed) setWhenState(zonedInput(seed, options.data?.business_timezone))
@@ -100,7 +109,7 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,
     snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover,
-    open: () => { if (!reason && options.data) setSnapshot({ detail: structuredClone(detail), body: approvalBody(detail, when, options.data) }) },
+    open: () => { if (deploymentStore.canStartEditing() && !reason && options.data) setSnapshot({ detail: structuredClone(detail), body: approvalBody(detail, when, options.data) }) },
     refresh: async () => { await refresh(); await options.refetch(); setError(null); setOperation(null) } }
 }
 export type ApprovalController = ReturnType<typeof useApproval>

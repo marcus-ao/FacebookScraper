@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core import notify, paid_consent, review, translated
+from core import maintenance, notify, paid_consent, review, translated
 from core.config import cfg
 from core.store import read_post_truth
 from pipeline import engine
@@ -108,6 +108,7 @@ def _bind(post, snapshot_id, source, account_dir):
         raise ApprovalConflict(str(exc)) from exc
 
 
+@maintenance.guarded('publication')
 async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text_sha256: str,
                   human_revision: str | None, review_revision: str | None, content_fingerprint: str,
                   now=None, inventory_reader=None, executor=None, report=None) -> dict:

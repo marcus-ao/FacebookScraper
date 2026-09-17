@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from core import maintenance
 from core.chrome import attach                             # noqa: E402
 from core.config import cfg                                # noqa: E402
 from core.console import force_utf8                        # noqa: E402
@@ -1914,6 +1915,7 @@ def _run_with_bounded_shutdown(awaitable):
         loop.close()
 
 
+@maintenance.guarded('publish_probe')
 def main(argv=None) -> int:
     force_utf8()
     args = _parse_args(argv)

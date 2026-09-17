@@ -72,6 +72,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `POST /api/tasks/{id}/image/{index}/upload` | JSON + base64 上传人工图替换该张；校验格式/动图/体积，旧文件备份至 `media_de/superseded/`；明确选择追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；审校记为 `edited`，继续系统排期 |
 | `POST /api/image-versions/task/{id}` | 当前账号采用某历史版本为当前版；冻结账号拒绝写入；零模型调用、零费用、不占优化次数 |
 | `GET /api/image-versions/task/{id}/preview?media_index=N&out_path=...` | 预览本帖本张有生成记录的版本；不改变当前选择，也可查看上传时备份的旧件 |
+| 任务详情的 `publish_operation` | 当前冻结快照的最近提交操作；刷新后恢复轮询，撤销成功后不显示旧的排期成功操作 |
 | `POST /api/tasks/{id}/content-lock` | 回传 content_fingerprint，冻结正文与图片字节并关掉编辑入口 |
 | `DELETE /api/tasks/{id}/content-lock` | 解除冻结，快照标 discarded 但保留字节 |
 | `POST /api/tasks/{id}/approve` | 回传 content_fingerprint 与 scheduled_at；能当场判定的失败同步返回，其余返回 202 与操作编号，浏览器在请求外跑 |

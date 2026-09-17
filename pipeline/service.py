@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from core.config import MonitorSchedule, cfg
+from core import maintenance
 from core.capture_state import CaptureState, CaptureStateError
 from core.feishu import FeishuSettings, Outbox, WebhookBot
 from core.heartbeat import Heartbeat, HeartbeatSettings
@@ -23,13 +24,13 @@ from publish import journal, observations, planner_cache
 
 
 class Runtime:
-    def __init__(self, *, detector, process: bool = False):
+    def __init__(self, *, detector, process: bool = False, inspect_running: bool = True):
         self.detector, self.process = detector, process
         self.clock = lambda: datetime.now(timezone.utc)
         self.c = cfg()
         if process and engine.activation_time(self.c.state_dir) is None:
             raise ValueError('流水线尚未激活；请先完成发布前置核验，再启用 --process')
-        self.processing = MonitoringJournal(self.c.state_dir, now=self.clock())
+        self.processing = MonitoringJournal(self.c.state_dir, now=self.clock(), inspect_running=inspect_running)
         self.processing_executor = ThreadPoolExecutor(max_workers=1,
                                                       thread_name_prefix='content-processing')
         self.processing_future = None
@@ -57,9 +58,8 @@ class Runtime:
     def await_delivery(self, timeout: float = 120) -> None:
         """等本轮消息与镜像投递跑完。
 
-        ⛔ 单轮执行（`--once`）必须调它再退出：`close()` 用 `cancel_futures=True` 关投递
-        执行器，刚提交、尚未启动的 `_deliver` 会被直接取消——实测 8/8 轮一条消息都没发出，
-        而且不报错，看起来和"飞书配置有问题"一模一样。连续 `--run` 靠下一轮重投，不受影响。
+        单轮执行（`--once`）须等待加工后再汇总投递。不要退回取消排队任务的退出方式：
+        旧 `cancel_futures=True` 实测 8/8 轮漏掉刚受理的卡片。关闭执行器也必须排空。
         """
         future = self.delivery_future
         if future is None:
@@ -70,9 +70,9 @@ class Runtime:
             notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
 
     def close(self):
-        self.processing_executor.shutdown(wait=False, cancel_futures=False)
-        self.sampling_executor.shutdown(wait=False, cancel_futures=True)
-        self.delivery_executor.shutdown(wait=False, cancel_futures=True)
+        self.processing_executor.shutdown(wait=True, cancel_futures=False)
+        self.sampling_executor.shutdown(wait=True, cancel_futures=False)
+        self.delivery_executor.shutdown(wait=True, cancel_futures=False)
         self.heartbeat.close()
         if self.delivery_future is not None:
             self.delivery_future.add_done_callback(lambda _: self._close_delivery_clients())
@@ -217,6 +217,7 @@ class Runtime:
     def activity_summary(self, now: datetime) -> dict | None:
         return self.processing.activity_summary(now)
 
+    @maintenance.guarded('processing_admission')
     def start_processing(self, now: datetime):
         """Run a pending batch off-thread; interrupted batches require explicit recovery."""
         if not self.process:
@@ -227,7 +228,7 @@ class Runtime:
         if batch is None:
             return None
         try:
-            self.processing_future = self.processing_executor.submit(self._process_batch, batch)
+            self.processing_future = maintenance.submit(self.processing_executor, 'processing', self._process_batch, batch)
         except Exception:
             self.processing.finish(batch, self.clock(), code=1)
             self._system('processing-executor:' + batch['batch_id'], '内容执行线程未启动，本次未调用模型。', now)
@@ -308,7 +309,7 @@ class Runtime:
                 except Exception as exc:
                     notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
             try:
-                self.delivery_future = self.delivery_executor.submit(self._deliver, now)
+                self.delivery_future = maintenance.submit(self.delivery_executor, 'delivery', self._deliver, now)
             except Exception as exc:
                 notify.notify('消息和镜像维护等待重试', type(exc).__name__, popup=False)
 
@@ -363,7 +364,7 @@ class Runtime:
             self.sampling_future = None
         try:
             if hashtag_suggestions.weekly_refresh_due(now=now, c=self.c):
-                self.sampling_future = self.sampling_executor.submit(hashtag_suggestions.weekly_refresh, now=now, c=self.c)
+                self.sampling_future = maintenance.submit(self.sampling_executor, 'sampling', hashtag_suggestions.weekly_refresh, now=now, c=self.c)
         except Exception:
             notify.notify('标签采样未启动', '请检查采样配置；监测继续运行。', popup=False)
 

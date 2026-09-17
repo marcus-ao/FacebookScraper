@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from core import review
+from core import maintenance, review
 from pipeline import approval
 from publish import business_suite as bs, compose, operations, records
 from starlette.concurrency import run_in_threadpool
@@ -88,6 +88,10 @@ async def _run(operation_id: str, account_dir, row, body, fingerprint):
     except approval.ApprovalConflict as exc:
         operations.finish(operation_id, status=operations.FAILED, message=str(exc),
                           result={'suggestions': [value.isoformat() for value in exc.suggestions]})
+    except asyncio.CancelledError:
+        operations.finish(operation_id, status=operations.UNCERTAIN,
+                          message='提交任务已中断，结果不明确；请核对发布回执，不要直接重试。')
+        raise
     except (bs.PublishStepError, bs.ProbeRequired, compose.ComposeError, review.ReviewConflict,
             ValueError, TypeError) as exc:
         operations.finish(operation_id, status=operations.FAILED, message=str(exc))
@@ -135,8 +139,13 @@ async def post_approve(task_id: str, request: Request):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    task = asyncio.create_task(
-        _run(record['operation_id'], source.account_dir, dict(source.row), body, fingerprint))
+    try:
+        task = maintenance.create_task('publish', _run, record['operation_id'],
+                                       source.account_dir, dict(source.row), body, fingerprint)
+    except maintenance.MaintenanceBlocked:
+        operations.finish(record['operation_id'], status=operations.FAILED,
+                          message='系统正在准备更新，本次尚未开始提交，请更新后重新确认。')
+        raise
     # 留住引用：没有强引用的 task 可能在跑完之前被回收。
     _running.add(task)
     task.add_done_callback(_running.discard)

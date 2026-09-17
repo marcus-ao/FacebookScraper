@@ -6,10 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.chrome import attach
 from core.config import cfg
+from core import maintenance
 from core.console import force_utf8
 from publish.month_inventory import capture
 
 
+@maintenance.guarded('calendar_probe')
 async def run():
     c = cfg()
     pw, _browser, context = await attach(port=c.publish_debug_port, profile=c.publish_profile_dir,

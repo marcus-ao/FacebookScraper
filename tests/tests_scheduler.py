@@ -119,10 +119,11 @@ class SchedulerEntryTests(unittest.TestCase):
 
     def test_continuous_run_does_not_wait_for_processing(self):
         runtime = Mock()
+        stopped = Event()
         with patch.object(scheduler, 'Scheduler', return_value=self.runner()), \
              patch('pipeline.service.Runtime', return_value=runtime), \
-             patch.object(scheduler.time, 'sleep', side_effect=KeyboardInterrupt):
-            self.assertEqual(scheduler.main(['--run', '--process']), 0)
+             patch.object(stopped, 'wait', side_effect=lambda _: stopped.set()):
+            self.assertEqual(scheduler.main(['--run', '--process'], stop_event=stopped), 0)
         runtime.start_processing.return_value.result.assert_not_called()
         runtime.await_delivery.assert_not_called()
         runtime.close.assert_called_once()

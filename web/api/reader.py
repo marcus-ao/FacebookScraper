@@ -20,6 +20,7 @@ from localize import suggest as text_suggestions  # noqa: E402
 from core import store, review, localization                         # noqa: E402
 from core.mirror import MirrorService, MirrorSettings                # noqa: E402
 from core import translated as translation             # noqa: E402
+from publish import operations
 from core.config import cfg                            # noqa: E402
 from core.console import force_utf8                    # noqa: E402
 from core.store import ArchivePathError                # noqa: E402
@@ -632,10 +633,14 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         at = localized["source_body"].find(phrase) if phrase else -1
         if at >= 0:
             body_risks.append(dict(risk, en_span=[at, at + len(phrase)]))
+    operation = operations.for_task(task_id, state.get("snapshot_id"))
+    if operation and operation['status'] == operations.SUCCEEDED and state['status'] != 'scheduled':
+        operation = None
     return {
         "id": task_id,
         "read_only": source.account_dir.name not in cfg().active_accounts(),
         "publication": publication,
+        "publish_operation": operation,
         "delivery": delivery_status(ctx.state_dir, publication),
         "platform": source.platform,
         "status": state["status"],

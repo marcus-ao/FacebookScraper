@@ -15,6 +15,7 @@ from localize import images as image_de
 from localize import suggest as text_suggestions
 from localize import text as translation
 from core import paid_consent, paid_model, paid_requests, review, translated
+from core import maintenance
 from core.process_identity import current_worker, worker_alive
 from core.config import cfg
 from core.store import ArchivePathError, account_dirs, read_post_truth
@@ -262,6 +263,7 @@ def _eligible(account_dir, indexed, *, source_hash, review_revision=None, human_
     return source, effective
 
 
+@maintenance.guarded('refinement')
 def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
            source_text_sha256: str, human_revision: str | None,
            review_revision: str | None, media_index: int | None = None,
@@ -311,7 +313,7 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
             row['body_de'] = body_de
         _append(row)
     try:
-        (executor or _executor).submit(execute, row, source)
+        maintenance.submit(executor or _executor, 'refinement', execute, row, source)
     except Exception as exc:
         _append(dict(row, status='failed', error='executor_unavailable',
                      message='处理线程未启动，本次未调用模型，请重新受理'))

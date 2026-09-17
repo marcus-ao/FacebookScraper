@@ -1,4 +1,4 @@
-
+import { deploymentStore } from '@/app/deployment-store'
 /** 保留 status 与 payload，供排期建议和月历失败回退使用。 */
 export class ApiError extends Error {
   readonly status: number
@@ -22,7 +22,13 @@ export function idPath(taskId: string): string {
 }
 
 async function fetchResponse(url: string, options?: RequestInit): Promise<Response> {
-  const response = await fetch(url, options)
+  const mutation = !['GET', 'HEAD', 'OPTIONS'].includes((options?.method ?? 'GET').toUpperCase())
+  if (mutation && !deploymentStore.mutationAllowed()) {
+    throw new ApiError('系统正在协调更新，请保留当前内容，等待恢复连接后再操作。', 503, { code: 'maintenance' })
+  }
+  const headers = new Headers(options?.headers)
+  if (mutation && deploymentStore.runtimeId) headers.set('X-FBScraper-Runtime', deploymentStore.runtimeId)
+  const response = await fetch(url, { ...options, headers })
   if (!response.ok) {
     let detail = `HTTP ${response.status}`
     let payload: unknown = null
@@ -36,13 +42,16 @@ async function fetchResponse(url: string, options?: RequestInit): Promise<Respon
     } catch {
       /* 响应不是 JSON，就用状态码 */
     }
+    deploymentStore.rejectBusiness(response.status, payload)
     throw new ApiError(detail, response.status, payload)
   }
   return response
 }
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  return (await fetchResponse(url, options)).json() as Promise<T>
+  const end = deploymentStore.beginRequest()
+  try { return await (await fetchResponse(url, options)).json() as T }
+  finally { end() }
 }
 
 export const jsonBody = (body: unknown): RequestInit => ({
@@ -70,9 +79,12 @@ export async function requestFile(
   options: RequestInit,
   fallbackFilename: string,
 ): Promise<DownloadedFile> {
-  const response = await fetchResponse(url, options)
-  const filename = filenameFromDisposition(response.headers.get('Content-Disposition'))
-  return { blob: await response.blob(), filename: filename ?? fallbackFilename }
+  const end = deploymentStore.beginRequest()
+  try {
+    const response = await fetchResponse(url, options)
+    const filename = filenameFromDisposition(response.headers.get('Content-Disposition'))
+    return { blob: await response.blob(), filename: filename ?? fallbackFilename }
+  } finally { end() }
 }
 
 export const OBJECT_URL_TTL_MS = 30_000

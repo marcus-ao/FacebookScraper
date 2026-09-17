@@ -1,7 +1,6 @@
 """Two operator preferences with compare-and-swap, preserving the TOML document."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -10,44 +9,24 @@ import tomllib
 from copy import deepcopy
 
 from core.config import cfg, invalidate_cfg_cache
-from core.paid_model import FileLock
-
-FIELDS = {'default_times': ('publish.schedule_rule', 'times'),
-          'snooze_default_days': ('review', 'snooze_default_days')}
+from core.paid_model import FileLock, atomic_write_json
+from core import operator_preferences, maintenance
+from core.operator_preferences import FIELDS, validate_default_times
 
 
 class SettingsConflict(RuntimeError):
     pass
 
 
-def validate_default_times(times):
-    """Validate the shared operator-facing default slots, in the business timezone."""
-    if (not isinstance(times, list) or not 1 <= len(times) <= 12
-            or any(not isinstance(value, str)
-                   or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value)
-                   for value in times)
-            or len(set(times)) != len(times)):
-        raise ValueError('默认时间须为 1 至 12 个不重复的 HH:MM 业务时区时刻')
-    return tuple(times)
-
-
-def _validated(values):
-    if not isinstance(values, dict) or not values or set(values) - FIELDS.keys():
-        raise ValueError('仅可修改默认排期时间和挂起工作日数')
-    if 'snooze_default_days' in values:
-        days = values['snooze_default_days']
-        if type(days) is not int or not 1 <= days <= 30:
-            raise ValueError('挂起天数须为 1 至 30 个工作日')
-    if 'default_times' in values:
-        validate_default_times(values['default_times'])
-    return values
-
-
 def read():
-    data = cfg().path.read_bytes()
+    c = cfg()
+    data = c.path.read_bytes()
     raw = tomllib.loads(data.decode('utf-8'))
+    preferences_path = getattr(c, 'preferences_path', None)
+    preferences = operator_preferences.revision(preferences_path)
+    operator_preferences.apply(raw, operator_preferences.decode(preferences))
     pub = raw.get('publish', {})
-    result = {'version': hashlib.sha256(data).hexdigest(),
+    result = {'version': operator_preferences.version(data, preferences),
             'editable': {'default_times': pub.get('schedule_rule', {}).get('times', ['10:00', '17:00']),
                          'snooze_default_days': raw.get('review', {}).get('snooze_default_days', 3)},
             'business_timezone': pub.get('timezone', ''), 'workday_timezone': 'Asia/Shanghai',
@@ -145,13 +124,24 @@ def _replace(text, section, key, value):
     return text[:start] + rendered + text[finish:]
 
 
+@maintenance.guarded('operator_settings')
 def save(values, expected_version):
-    values = _validated(values)
+    values = operator_preferences.validate(values)
     c = cfg()
     path = c.path
+    preferences_path = getattr(c, 'preferences_path', None)
+    if preferences_path:
+        with FileLock(preferences_path.with_suffix('.lock'), busy_message='另一位同事正在保存设置，请稍后重试'):
+            before = operator_preferences.revision(preferences_path)
+            if operator_preferences.version(path.read_bytes(), before) != expected_version:
+                raise SettingsConflict('配置已有更新，请重新读取后再保存；本次内容尚未写入')
+            next_values = operator_preferences.decode(before) | values
+            atomic_write_json(preferences_path, next_values)
+            invalidate_cfg_cache()
+        return read()
     with FileLock(path.with_suffix('.lock'), busy_message='另一位同事正在保存设置，请稍后重试'):
         before = path.read_bytes()
-        if hashlib.sha256(before).hexdigest() != expected_version:
+        if operator_preferences.version(before) != expected_version:
             raise SettingsConflict('配置已有更新，请重新读取后再保存；本次内容尚未写入')
         text = before.decode('utf-8')
         expected = tomllib.loads(text)
