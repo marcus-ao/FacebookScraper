@@ -1,6 +1,6 @@
 {
   "web_host": "0.0.0.0",
   "web_port": 8765,
-  "public_base_url": "http://10.66.4.35:8765",
+  "public_base_url": "http://10.66.4.9:8765",
   "allowed_client_cidrs": ["10.66.4.0/24"]
 }

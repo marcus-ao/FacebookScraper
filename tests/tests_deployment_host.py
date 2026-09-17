@@ -29,7 +29,7 @@ class HostTests(unittest.TestCase):
         profile = Path(__file__).resolve().parents[1] / 'ops/service-machine.network.json'
         expected = read_json(profile)
         policy = WebAccess.from_mapping(expected)
-        self.assertEqual(policy.public_base_url, 'http://10.66.4.35:8765')
+        self.assertEqual(policy.public_base_url, 'http://10.66.4.9:8765')
         self.assertTrue(policy.permits_client('10.66.4.12'))
         self.assertFalse(policy.permits_client('10.66.3.42'))
         with patch('deployment.cli.install', return_value={}) as installer, patch('builtins.print'):
@@ -48,7 +48,7 @@ class HostTests(unittest.TestCase):
             root = Path(tmp) / 'must-not-exist'
             base = ['install', '--root', str(root), '--release', tmp, '--network-config', str(profile)]
             policy = {'web_host': '0.0.0.0', 'web_port': 8765,
-                      'public_base_url': 'http://10.66.4.35:8765', 'allowed_client_cidrs': ['10.66.4.0/24']}
+                      'public_base_url': 'http://10.66.4.9:8765', 'allowed_client_cidrs': ['10.66.4.0/24']}
             for value in ({}, dict(policy, process_enabled=True), dict(policy, allowed_client_cidrs=['0.0.0.0/0']),
                           dict(policy, public_base_url='http://0.0.0.0:8765')):
                 write_json(profile, value)

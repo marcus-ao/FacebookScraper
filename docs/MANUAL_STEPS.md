@@ -933,11 +933,11 @@ scripts\run_python.bat -m pipeline.cli preflight --json
 
 ### 17.1 固定入口和首次安装
 
-2026-09-17 用户切换 Wi-Fi 后提供的服务机 `ipconfig`：有效网卡 **WLAN**，IPv4 **10.66.4.35**，掩码 **255.255.255.0**，网关 **10.66.4.254**。此后标准入口为 **http://10.66.4.35:8765**，只允许 **10.66.4.0/24**；开发机 `10.66.4.12` 在该范围内。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
+2026-09-17 用户确认服务机最新 IPv4 为 **10.66.4.9**；沿用此前办公网络信息：有效网卡 **WLAN**，掩码 **255.255.255.0**，网关 **10.66.4.254**。此前 `10.66.4.35` 是旧 DHCP 采样地址，不再作为当前入口；地址仍未确认保留。当前标准入口为 **http://10.66.4.9:8765**，只允许 **10.66.4.0/24**；开发机 `10.66.4.12` 在该范围内。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
 
 安装配置已写入 [ops/service-machine.network.json](../ops/service-machine.network.json)，仅含四个网络字段，通过 `--network-config` 读取并校验后写入 `control/host.json`。该文件只在版本库里，不随运行制品发布，不改变开发默认、不保存凭据、不覆盖业务运行模式。配置文件与逐项网络参数不可混用。
 
-这份输出仅证明采样时的地址；DHCP 地址保留、WLAN 的 Domain/Private 网络类型、客户端同网段及 Wi-Fi 客户端隔离仍需现场核对。先由网络管理员为 `10.66.4.35` 保留 DHCP 地址，再用于持续业务；应用配置不会切换 Wi-Fi，也不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
+上述地址仅代表用户最近确认的网络状态；DHCP 地址保留、WLAN 的 Domain/Private 网络类型、客户端同网段及 Wi-Fi 客户端隔离仍需现场核对。先由网络管理员为 `10.66.4.9` 保留 DHCP 地址，再用于持续业务；应用配置不会切换 Wi-Fi，也不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
 
 正式安装按第 15 节选择 main 的成功制品；当前功能分支的隔离调试按第 17.6 节。网络配置取服务机上已拉取的仓库副本（同第 17.6 节），网络值已填写为本机真实信息，下面仅下载、仓库和安装目录是示例：
 
@@ -946,7 +946,7 @@ Set-Location D:\Downloads\fbscraper-windows
 py -3.12 -m deployment install --root D:\FacebookScraperService --release D:\Downloads\fbscraper-windows --network-config D:\VSCodeWorkspace\Facebook\FacebookScraper\ops\service-machine.network.json
 ```
 
-服务机上没有仓库副本时，改用等价的逐项参数 `--web-host 0.0.0.0 --public-base-url http://10.66.4.35:8765 --allow-client-subnet 10.66.4.0/24`，不要另行传递这份文件。
+服务机上没有仓库副本时，改用等价的逐项参数 `--web-host 0.0.0.0 --public-base-url http://10.66.4.9:8765 --allow-client-subnet 10.66.4.0/24`，不要另行传递这份文件。
 
 `--allow-client-subnet` 可重复；只接受已核定的内网 IPv4 CIDR，公网网段与 `0.0.0.0/0`、`128.0.0.0/1` 这类全网放行一律拒绝。默认端口为 8765，显式改变端口时 `--web-port` 与 URL 端口须一致。省略全部网络参数会安装为回环模式；局域网参数不完整或非法时，安装器在创建目标目录前拒绝。
 
@@ -966,8 +966,8 @@ Get-NetTCPConnection -LocalPort 8765 -State Listen
 在具备权限的技术账户 PowerShell 中使用已安装控制器的 `scripts\configure_lan_firewall.ps1`。先预览，再应用；本机使用 `WLAN`，执行前通过 `Get-NetIPConfiguration` 复核地址没有改变：
 
 ```powershell
-D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.4.35 -InterfaceAlias 'WLAN' -WhatIf
-D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.4.35 -InterfaceAlias 'WLAN'
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.4.9 -InterfaceAlias 'WLAN' -WhatIf
+D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:\FacebookScraperService -LocalAddress 10.66.4.9 -InterfaceAlias 'WLAN'
 ```
 
 脚本读取并校验本实例的持久网络配置，仅管理名称 `FBScraper-LAN-Web`、分组 `FBScraper Managed Access` 的专用规则：TCP Web 端口、指定本机 IPv4 与办公网卡、配置的办公来源网段、Domain/Private 配置文件。重复执行更新同一条规则，不按版本目录绑定 Python 路径，不关闭整个防火墙、不启用 Public 配置文件。业务控制器不自动调用此脚本，也不因此增加运行权限。
@@ -979,7 +979,7 @@ D:\FacebookScraperService\controller\scripts\configure_lan_firewall.ps1 -Root D:
 至少两台实际办公电脑分别运行 TCP 连通检查，然后用桌面 Chrome/Edge 打开标准入口：
 
 ```powershell
-Test-NetConnection 10.66.4.35 -Port 8765
+Test-NetConnection 10.66.4.9 -Port 8765
 ```
 
 - 打开首页、深层任务链接并刷新，查看图片及下载素材；从运行页复制标准入口。
@@ -1003,8 +1003,8 @@ Test-NetConnection 10.66.4.35 -Port 8765
 1. 在服务机本地记录实例 ID、当前 SHA、实际及保留的调度/处理模式、自动更新暂停状态和控制器启动方式。执行第 15.8 节的 `pause`，确认没有正在切换的部署事务、尚未处理的 retry/rollback 请求或模式变更。所有使用者保存或明确放弃草稿，等上传、采集、模型和发布任务结束；换网造成的失联草稿仍需核对，不删除维护记录解除阻塞。
 2. 技术人员先防止控制器再次启动，再核验控制器正常退出：有 `FBScraperService` 计划任务时先停用其后续启动/重启机制；前台控制器用 `Ctrl+C` 退出并核对进程身份。`pause` 只暂停更新，控制器仍会重启已退出业务进程或重开维护闸，不能让它与手动维护并行；退出控制器也不代表 Web/调度进程已退出。
 3. 控制器退出后，技术人员通过现有维护 Gate 预告，等预告期结束且 operations 和 blockers 清空，确认 `try_quiesce()` 成功；再由 `LocalBackend.stop()` 向登记的准确业务进程请求协作退出，用 `LocalBackend.exited()` 确认 worker 和 launcher 均已退出，核验 PID、创建时间及端口。维护调用不要经过 `deployment exec`，它登记的 manual_cli 本身会阻止进入维护。不可使用 `schtasks /End`、强杀业务进程或删账本来结束任务；只关闭前台窗口不足以完成这一步。
-4. 备份该实例 `control\host.json`，仅将 `public_base_url` 改为 `http://10.66.4.35:8765`、`allowed_client_cidrs` 改为 `["10.66.4.0/24"]`。核对原监听仍为 `0.0.0.0:8765`；保留 instance_id、shared、版本、调度/处理模式等其余字段，不用四字段安装配置替换整个 host 文件，不更改 `releases` 中的配置或 `shared` 数据。使用现有网络策略校验确认 URL、端口和 CIDR 一致。
-5. 核对 WLAN 当前为 `10.66.4.35/24`、Domain/Private 网络，并完成 DHCP 地址保留。按第 17.2 节使用该实例的脚本先预览再应用防火墙：本地地址 `10.66.4.35`，来源仅 `10.66.4.0/24`，TCP 8765。核对旧来源已不在本系统专用规则中，其他放行规则仍按第 17.2 节人工审查。
+4. 备份该实例 `control\host.json`，仅将 `public_base_url` 改为 `http://10.66.4.9:8765`、`allowed_client_cidrs` 改为 `["10.66.4.0/24"]`。核对原监听仍为 `0.0.0.0:8765`；保留 instance_id、shared、版本、调度/处理模式等其余字段，不用四字段安装配置替换整个 host 文件，不更改 `releases` 中的配置或 `shared` 数据。使用现有网络策略校验确认 URL、端口和 CIDR 一致。
+5. 核对 WLAN 当前为 `10.66.4.9/24`、Domain/Private 网络，并完成 DHCP 地址保留。按第 17.2 节使用该实例的脚本先预览再应用防火墙：本地地址 `10.66.4.9`，来源仅 `10.66.4.0/24`，TCP 8765。核对旧来源已不在本系统专用规则中，其他放行规则仍按第 17.2 节人工审查。
 6. 保持维护闸关闭，通过原控制器入口启动同一实例，由控制器完成 readiness 后自行开放接单，不手动 `reopen()`。恢复原来已有的控制器启动机制，自动更新先保持暂停。核对本机 `/api/health` 的 readiness、新标准入口、实例、SHA 与前后端指纹，以及实际调度/处理模式；再由开发机 `10.66.4.12` 和另一台同网段办公电脑按第 17.3 节检查页面、刷新和访问限制。记录新网络结果，更新书签；历史飞书卡片不会改写，后续卡片链接使用新入口。检查通过后恢复改址前的自动更新状态，原已暂停的继续暂停。
 
 网络切换与业务启用分别验收，改址不打开调度、付费处理或发布。新网段的两台客户端、跨夜及登录恢复尚未验收时，状态继续为「待真实联调」。
@@ -1043,7 +1043,7 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
    Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
    ```
 
-   地址应为 `10.66.4.35/24`；网络类型应为 DomainAuthenticated 或 Private。若是 Public，按公司网络政策确认办公网络属性后再由管理员调整；不放宽为 Public。已有监听时先确定归属，不结束不认识的进程。
+   地址应为 `10.66.4.9/24`；网络类型应为 DomainAuthenticated 或 Private。若是 Public，按公司网络政策确认办公网络属性后再由管理员调整；不放宽为 Public。已有监听时先确定归属，不结束不认识的进程。
 
 2. 在服务机现有仓库目录打开普通 PowerShell，先检查是否有本地改动；有改动时先核对和保全，不强制覆盖。工作区干净后拉取 `main`，这些变量在后续同一窗口复用：
 
@@ -1084,20 +1084,20 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
    .\.venv\Scripts\python.exe -m deployment supervise --root $ServiceRoot
    ```
 
-   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 等于 `$ExpectedSha`、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.4.35:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
+   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 等于 `$ExpectedSha`、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.4.9:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
 
 5. 在管理员 PowerShell 中预览并应用测试实例规则：
 
    ```powershell
-   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.35 -InterfaceAlias WLAN -WhatIf
-   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.35 -InterfaceAlias WLAN
+   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.9 -InterfaceAlias WLAN -WhatIf
+   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.9 -InterfaceAlias WLAN
    Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallAddressFilter
    Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallPortFilter
    ```
 
-   应为本地 `10.66.4.35`、远程 `10.66.4.0/24`、TCP 8765。若脚本受执行策略阻止，只按组织政策对已审阅下载文件解锁，不修改全机执行策略或关闭防火墙。
+   应为本地 `10.66.4.9`、远程 `10.66.4.0/24`、TCP 8765。若脚本受执行策略阻止，只按组织政策对已审阅下载文件解锁，不修改全机执行策略或关闭防火墙。
 
-6. 至少两台办公电脑先核对自身 IP 属于 `10.66.4.0/24`，然后运行 `Test-NetConnection 10.66.4.35 -Port 8765`，浏览器访问 **http://10.66.4.35:8765**。核对审校、历史、月历、设置、运行页及深链刷新；`/api/deployment/status` 应可读，`/api/health` 从远端应返回 403。浏览器不需要调整安全选项。
+6. 至少两台办公电脑先核对自身 IP 属于 `10.66.4.0/24`，然后运行 `Test-NetConnection 10.66.4.9 -Port 8765`，浏览器访问 **http://10.66.4.9:8765**。核对审校、历史、月历、设置、运行页及深链刷新；`/api/deployment/status` 应可读，`/api/health` 从远端应返回 403。浏览器不需要调整安全选项。
 
 7. 空实例可直接用设置页验证多人保护：两台电脑先打开同一旧值，各自输入不同的合法默认时间；A 保存，B 保存应提示版本冲突且保留 B 的输入。测试结束明确保存或放弃草稿。图片、素材下载和内容编辑须准备隔离样本后再按第 17.3 节验收；不要为造测试数据启动真实抓取、模型或发布。完整假服务回归使用第 17.5 节的源码测试工具，不在业务账本中造夹具。
 
