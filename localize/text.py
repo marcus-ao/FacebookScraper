@@ -88,9 +88,10 @@ class Settings:
         if not self.model:
             raise SystemExit("[translate].model 不能为空")
         if self.model not in {
-                "deepseek-v4-pro", "deepseek-v4-flash"}:
+                "deepseek-v4-pro", "deepseek-flash"}:
             raise SystemExit("DeepSeek 文本翻译模型只允许 deepseek-v4-pro 或 "
-                             "deepseek-v4-flash；旧 deepseek-chat/reasoner 已停用")
+                             "deepseek-flash；deepseek-v4-flash 已退役，请改用 deepseek-flash；"
+                             "旧 deepseek-chat/reasoner 已停用")
         if not self.api_key_env:
             raise SystemExit("[translate].api_key_env 不能为空")
         paid_model.validate_endpoint(
@@ -276,7 +277,7 @@ def _strip_wrapper(text: str) -> str:
 
 
 class ModelMismatchError(RuntimeError):
-    """DeepSeek 会把未知模型静默映射到 Flash；不能让它污染 Pro 译文批次。"""
+    """响应模型与请求不匹配；停止批次，避免混用模型产出。"""
 
 
 class FatalBatchError(RuntimeError):
@@ -388,7 +389,8 @@ class Translator(paid_model.PaidCaller):
         if self.s.provider == "deepseek" and not _model_matches(self.s.model, self.last_model):
             raise ModelMismatchError(
                 f"请求模型 {self.s.model!r}，实际响应 model={self.last_model!r}。"
-                "DeepSeek 会把不支持的模型名静默映射到 Flash，已停止批次以免混用模型")
+                "响应模型与请求不匹配，已停止批次以免混用模型；"
+                "请核对 DeepSeek 官方模型名称、退役/兼容路由公告和 [translate].model")
 
         choices = getattr(resp, "choices", None) or []
         if not choices:

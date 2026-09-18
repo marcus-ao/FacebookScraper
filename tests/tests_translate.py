@@ -2,6 +2,7 @@
 import json
 import sys
 import tempfile
+from copy import copy
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))   # tests/ 在子目录，得把项目根加进来
@@ -65,7 +66,7 @@ check(s.provider == "deepseek", f"provider={s.provider}")
 check(s.base_url == T.DEEPSEEK_API_URL, f"base_url={s.base_url}")
 check(s.api_key_env == "DEEPSEEK_API_KEY", f"api_key_env={s.api_key_env}")
 # 检查模型白名单，不固定业务配置选择。
-check(s.model in {"deepseek-v4-pro", "deepseek-v4-flash"}, f"model={s.model}")
+check(s.model in {"deepseek-v4-pro", "deepseek-flash"}, f"model={s.model}")
 check(s.reasoning_effort == "high", "DeepSeek 翻译默认 high thinking")
 check(s.style_examples == 6, f"style_examples={s.style_examples}")
 check(s.max_retries >= 0, "max_retries 有值")
@@ -82,6 +83,20 @@ check("litter box" in s.glossary and "pet grooming" in s.glossary,
       "真实语料高频品类词已进入术语表")
 check(set(s.cost_rates) == {"input", "cache_read", "output"},
       "DeepSeek 保守预算费率齐全")
+
+for model in ("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash",
+              "deepseek-chat", "deepseek-reasoner", "unknown-model"):
+    candidate = copy(s)
+    candidate.model = model
+    error = ""
+    try:
+        candidate.validate()
+    except SystemExit as exc:
+        error = str(exc)
+    allowed = model in {"deepseek-flash", "deepseek-v4-pro"}
+    check(bool(error) != allowed, f"模型配置在请求前校验：{model}")
+    if not allowed:
+        check("deepseek-flash" in error, "无效/退役模型提示当前调用名称")
 
 print("\n[2] 风格示例取长度中位数附近，不取两头")
 rows = [post(f"p{i}", "x" * (10 + i * 40), i) for i in range(1, 10)]
@@ -1034,12 +1049,72 @@ except RuntimeError as e:
     check("服务端输出上限" in str(e) and "没有发送 max_tokens" in str(e),
           "截断说明来自服务端；不会叫用户添加客户端 max_tokens")
 
-mismatch = False
-try:
-    T.Translator(deepseek_s, client=SpyClient("deepseek-v4-flash")).translate("hi", "SYSTEM")
-except T.ModelMismatchError:
-    mismatch = True
-check(mismatch, "请求 Pro 却被静默回退 Flash 时立即失败")
+for returned_model in ("deepseek-flash", "deepseek-v4-flash", ""):
+    mismatch = ""
+    mismatched = T.Translator(deepseek_s, client=SpyClient(returned_model, Usage()))
+    try:
+        mismatched.translate("hi", "SYSTEM")
+    except T.ModelMismatchError as exc:
+        mismatch = str(exc)
+    check(bool(mismatch), f"请求 Pro，响应 {returned_model!r} 仍须立即失败")
+    check("静默映射" not in mismatch and "官方" in mismatch,
+          "模型不匹配只报告事实并提示核对官方名称，不断言发生回退")
+    check(mismatched.usage_totals.get("output_tokens") == 7,
+          "模型不匹配仍保留已返回的用量")
+
+print("\n[Flash 升级：单篇翻译与付费账本]")
+with tempfile.TemporaryDirectory() as raw:
+    root = Path(raw)
+    fixture_posts = [post("flash-migration", "Hello from Neakasa")]
+    flash_settings = copy(s)
+    flash_settings.model = "deepseek-flash"
+    flash_settings.gap = 0
+    legacy_settings = copy(flash_settings)
+    legacy_settings.model = "deepseek-v4-flash"  # 重放旧版本已发出的请求。
+    for old_rejections in (1, 2):
+        arc = make_archive(root / str(old_rejections), fixture_posts)
+        state = root / str(old_rejections) / "state"
+        controller = T.paid_requests.RequestController(state, preflight=lambda: None)
+        for _ in range(old_rejections):
+            legacy = T.Translator(legacy_settings,
+                                  client=SpyClient("deepseek-flash", Usage()),
+                                  paid_controller=controller)
+            try:
+                T.run_translate(legacy_settings, legacy, arc, limit=1,
+                                force=False, dry_run=False)
+                check(False, "旧名称/新响应应复现 ModelMismatchError")
+            except T.FatalBatchError as exc:
+                check(isinstance(exc.__cause__, T.ModelMismatchError),
+                      "旧请求复现模型契约失败且停止批次")
+        check(not T.load_translated(arc / "translated.jsonl"),
+              "模型不匹配的产出没有保存成可用译文")
+        before = T.paid_requests.load_events(state)
+        check(sum(row["event"] == "usage_recorded" for row in before) == old_rejections
+              and all(row["reason"] == "request_or_contract_error:ModelMismatchError"
+                      for row in before if row["event"] == "output_rejected"),
+              "旧失败的 usage 和拒绝原因完整留账")
+        client = SpyClient("deepseek-flash", Usage(), content="Hallo von Neakasa")
+        current = T.Translator(flash_settings, client=client, paid_controller=controller)
+        try:
+            result = T.run_translate(flash_settings, current, arc, limit=1,
+                                     force=False, dry_run=False)
+        except T.FatalBatchError as exc:
+            result = None
+            check(old_rejections == 2
+                  and isinstance(exc.__cause__, T.paid_requests.PaidRequestBlocked),
+                  f"仅已用满拒绝预算才阻止本次修复后的重试：{exc.__cause__}")
+        after = T.paid_requests.load_events(state)
+        check(after[:len(before)] == before, "修复不改写已有付费事件")
+        if old_rejections == 1:
+            saved = T.load_translated(arc / "translated.jsonl").get("flash-migration", {})
+            check(result == (1, 0) and saved.get("model") == "deepseek-flash"
+                  and saved.get("text_de") == "Hallo von Neakasa"
+                  and saved.get("paid_request_id") == after[-1]["request_id"]
+                  and after[-1]["event"] == "accepted",
+                  "当前配置接受新版 Flash，单篇成功落盘并闭合新请求")
+        else:
+            check(client.kw is None and after == before,
+                  "换模型名不重置两次拒绝上限，不产生第三次请求")
 
 print("\n[DeepSeek OpenAI SDK 线级契约]")
 import httpx       # noqa: E402
@@ -1054,7 +1129,7 @@ def deepseek_handler(request):
     wire["body"] = json.loads(request.content)
     return httpx.Response(200, json={
         "id": "chatcmpl_test", "object": "chat.completion", "created": 1788076800,
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-flash",
         "choices": [{"index": 0,
                      "message": {"role": "assistant", "content": "Hallo",
                                  "reasoning_content": "Reasoning"},
@@ -1068,7 +1143,9 @@ wire_http = httpx.Client(transport=httpx.MockTransport(deepseek_handler))
 wire_client = OpenAI(api_key="test-secret", base_url=T.DEEPSEEK_API_URL,
                      http_client=wire_http, max_retries=0)
 try:
-    wire_result = T.Translator(deepseek_s, client=wire_client).translate("hi", "SYSTEM")
+    wire_settings = copy(s)
+    wire_settings.model = "deepseek-flash"
+    wire_result = T.Translator(wire_settings, client=wire_client).translate("hi", "SYSTEM")
 finally:
     wire_client.close()
 check(wire_result == "Hallo", "官方 OpenAI 兼容响应能被主流程解析")
@@ -1076,7 +1153,7 @@ check(wire["url"] == "https://api.deepseek.com/chat/completions",
       "base_url 经 SDK 拼成 DeepSeek 官方 Chat Completions 路径")
 check(wire["authorization"] == "Bearer test-secret",
       "线级请求使用官方 OpenAI 格式的 Bearer 鉴权")
-check(wire["body"]["model"] == "deepseek-v4-pro"
+check(wire["body"]["model"] == "deepseek-flash"
       and wire["body"]["thinking"] == {"type": "enabled"}
       and wire["body"]["reasoning_effort"] == "high"
       and wire["body"]["messages"][0] == {"role": "system", "content": "SYSTEM"},
