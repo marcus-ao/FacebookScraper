@@ -275,6 +275,7 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 |---|---|---|---|---|
 | F3-9 审校台按平台分入口 | 离线通过 | `/review/facebook` 与 `/review/instagram` 两条并列入口；角标按 `summary.by_platform_status` 分别计数；详情路由不变，缺平台参数由详情页补回 | 运营实际使用另验 | `AppShell`/`nav-model` 用例：两入口选中、详情按 `?platform=` 亮对应项、不从目录前缀猜平台 |
 | F3 正文模型名称契约 | 离线通过 | 默认 `deepseek-flash`，保留 `deepseek-v4-pro`；退役名称请求前拒绝，响应不匹配仍停止整批 | 服务机旧账核对、指定单篇与真实模型账单另验 | `tests_translate`：SDK + MockTransport、新 Flash 落盘、Pro/Flash 不匹配、旧拒绝费用保留及两次上限；[证据与边界](HANDOFF.md#112-deepseek-flash-模型名修复2026-09-17) |
+| F3 图片模型空目录兼容 | 离线通过 | 合法空列表只补查一次同网关精确详情；缺型号、异常结构与失败仍在付费前停止，不切型号或绕过预算 | 服务机 Key 的详情响应、真实 edits 与账单仍待核验 | `tests_image_model_catalog`：实际 SDK + MockTransport，精确查询/失败缓存/无付费副作用/预算与响应型号拒绝；[证据与边界](HANDOFF.md#114-图片模型空目录修复2026-09-18) |
 | F3 自动处理作用域预览 | 离线通过 | `processing-preview` 逐帖显示激活/许可/审校/发布/预算筛选、文案动作、风险预扫与预计新图；共享画幅带及人工图保护，当前产物保留；切换图片模型不沿用其它模型历史单价 | 当前凭据、供应商费用与真实新帖另验 | `tests_processing_preview` 16 项；[隔离 CLI 输出](../state/stage2-platform-split/stage2-processing-preview.json)：旧帖排除，新帖 1 次翻译、1 次风险预扫、2 张图片，预览前后文件字节不变 |
 | F3 单轮内容处理与通知 | 离线通过 | `--run --process --once` 等待本批次处理及结果通知后退出；保留静默时间，连续模式仍异步 | 真实模型、飞书与新帖另验 | `tests_scheduler` 5 项：实际 Runtime、假处理/飞书，待审卡在关闭前送达，不新增扫描或后台任务 |
 | F3 采集与内容处理衔接 | 离线通过 | 完整采集结果独立触发处理，兼容同轮部分失败、人工恢复和重启；回执随批次原子保存，已受理结果不重放 | 真实自然新帖与人工恢复另验 | `tests_pipeline_service` 与 `tests_runtime_recovery`：完整帖入队、未完整帖保留人工状态、恢复后一次受理、跨批次及中断去重；假处理器零模型调用 |

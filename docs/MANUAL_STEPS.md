@@ -210,6 +210,47 @@ V4.1 Flash 的调用名为 `deepseek-flash`，旧 `deepseek-v4-flash` 已退役�
 本次修复没有提供额外付费授权或清零入口；不要删账本、伪造 accepted 或只改 PROMPT_VERSION 绕过限制。
 原保守估算费率保持，`reasoning` 已包含在输出 tokens 中；实际费用以供应商账单为准。
 
+### 5.5 图片模型目录为空时的核验与单图复验
+
+供应商[模型管理文档](https://docs.aihubmix.com/cn/api/Models-API)说明，带 Authorization 的
+`GET /v1/models` 查询该 Key 的 token 配置列表，并提供 `GET /v1/models/{model}` 精确详情。
+HTTP 200 且有效模型 ID 数为 0 不能单独证明模型下架，也不能证明图片 Key 已有出图权限；
+非空但缺少有效 `id` 的列表属于结构异常，不能按空列表放行。
+
+含本修复的版本在合法空列表后自动补查详情，详情 `id` 精确匹配配置型号才继续。
+原有翻译无需重做，保持 `gpt-image-2`，不用切换模型或修改账本。
+先在服务机同一运行目录执行以下免费核验；只读取模型元数据，不上传图片、不写付费账本：
+
+```powershell
+@'
+from localize.images import Settings, ImageEditor, build_client, safe_error_summary
+
+settings = Settings()
+print("base_url:", settings.base_url)
+print("configured_model:", settings.model)
+try:
+    with build_client(settings).with_options(timeout=30.0, max_retries=0) as client:
+        ImageEditor(settings, client=client).verify_model_available()
+    print("model_metadata_verified: True (not a paid image test)")
+except Exception as exc:
+    print(safe_error_summary(exc))
+    raise SystemExit(1)
+'@ | scripts\run_python.bat -B -
+```
+
+若仍失败，提示会区分列表结构、精确型号和详情查询的 HTTP 错误；401/403 核对图片 Key/权限，
+404 或详情型号不一致向供应商核对该 Key 的模型配置。保留安全错误摘要即可，不发送密钥或原始响应体。
+不得用公开产品页替代当前 Key 的查询，也不要反复运行付费 `--check`。
+
+元数据通过后，按本节开头核对来源许可、统一预算和未闭合请求，再对用户指定的单图执行：
+
+```powershell
+scripts\run_images.bat --account in_neakasa.global --post-id 3987885751693561790 --media-index 0 --limit 1
+```
+
+这一步才会产生真实图片费用。核对生成图的德语、图片尺寸、用量与供应商账单；
+元数据通过不代表这些项目已验收。若 edits 结果不确定，先核账，不能自动重放。
+
 ## 6. 审校台人工检查
 
 开发机 API 跑在 [127.0.0.1:8765](http://127.0.0.1:8765)，绑定真实数据。2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态四个 GET 均为 200，冻结详情与运行状态只读。可直接打开本机页面；**这不证明运营机器能访问。** 下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。

@@ -293,7 +293,7 @@ class ModelMismatchError(RuntimeError):
 
 
 class ModelUnavailableError(RuntimeError):
-    """模型目录未精确列出请求模型；必须在付费 edits 请求前停止。"""
+    """模型列表或空列表后的详情未确认精确型号；在付费 edits 前停止。"""
 
 
 class ModelCatalogPreflightError(RuntimeError):
@@ -409,39 +409,62 @@ class ImageEditor(paid_model.PaidCaller):
         self.last_model_verification = ""
 
     def verify_model_available(self) -> None:
-        """每个客户端实例只查一次目录，且必须先于付费图片调用。"""
+        """列表为空时补查精确型号；每个客户端缓存预检结果，先于付费调用。"""
         if self._catalog_verified:
             return
         if self._catalog_attempted:
             assert self._catalog_error is not None
             raise self._catalog_error
         self._catalog_attempted = True
+        endpoint = "/v1/models"
         try:
             catalog = self.client.models.list()
+            raw = _as_dict(catalog)
+            entries = raw.get("data", getattr(catalog, "data", None))
+            if raw.get("error") is not None or raw.get("success") is False:
+                raise ModelCatalogPreflightError(
+                    "模型目录返回错误对象；已在图片 edits 付费请求前停止")
+            if not isinstance(entries, (list, tuple)):
+                raise ModelCatalogPreflightError(
+                    "模型目录结构异常：data 不是列表；已在图片 edits 付费请求前停止")
+            if not entries:
+                # 带 Key 的列表反映 token 配置，空列表不等于模型下架。
+                # 必须由同一端点/凭据的精确详情确认，不能凭公开目录或直接付费试探。
+                endpoint = f"/v1/models/{self.s.model}（列表为空后的详情查询）"
+                detail = self.client.models.retrieve(self.s.model)
+                detail_raw = _as_dict(detail)
+                if detail_raw.get("error") is not None or detail_raw.get("success") is False:
+                    raise ModelCatalogPreflightError(
+                        "模型目录为空且详情返回错误对象；已在图片 edits 付费请求前停止")
+                model_id = detail_raw.get("id", getattr(detail, "id", None))
+                if model_id != self.s.model:
+                    raise ModelUnavailableError(
+                        f"模型目录为空，详情未返回精确模型 {self.s.model!r}；"
+                        "请核对图片 Key 的模型权限与网关目录；已在图片 edits 付费请求前停止")
+            else:
+                model_ids = {
+                    value
+                    for entry in entries
+                    for value in [_as_dict(entry).get("id", getattr(entry, "id", None))]
+                    if isinstance(value, str) and value.strip()
+                }
+                if not model_ids:
+                    raise ModelCatalogPreflightError(
+                        "模型目录结构异常：非空 data 中没有有效的 id；"
+                        "已在图片 edits 付费请求前停止")
+                if self.s.model not in model_ids:
+                    raise ModelUnavailableError(
+                        f"模型目录返回 {len(model_ids)} 个型号，但未返回精确模型 {self.s.model!r}；"
+                        "请核对图片 Key 的模型权限；已在图片 edits 付费请求前停止")
+        except (ModelUnavailableError, ModelCatalogPreflightError) as exc:
+            self._catalog_error = exc
+            raise
         except Exception as exc:
             cached = ModelCatalogPreflightError(
-                "模型目录预检失败，已停止本批且本客户端不再重试："
+                f"模型目录预检 {endpoint} 失败，已停止本批且本客户端不再重试："
                 + safe_error_summary(exc))
             self._catalog_error = cached
             raise cached from exc
-        raw = _as_dict(catalog)
-        entries = raw.get("data", getattr(catalog, "data", None))
-        if not isinstance(entries, (list, tuple)):
-            entries = []
-        model_ids = {
-            value
-            for entry in entries
-            for value in [
-                _as_dict(entry).get("id", getattr(entry, "id", None))
-            ]
-            if isinstance(value, str)
-        }
-        if self.s.model not in model_ids:
-            cached = ModelUnavailableError(
-                f"模型目录未返回精确模型 {self.s.model!r}；"
-                "已在图片 edits 付费请求前停止")
-            self._catalog_error = cached
-            raise cached
         self._catalog_verified = True
 
     def request_kwargs(self, image, prompt: str, size: str, *,
