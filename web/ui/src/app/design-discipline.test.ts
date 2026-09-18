@@ -190,7 +190,7 @@ describe('动效 2/10', () => {
   it('尊重 prefers-reduced-motion', () => {
     expect(globalCss).toContain('prefers-reduced-motion: reduce')
     expect(globalCss).toMatch(/animation-duration:\s*0\.01ms\s*!important/)
-    expect(globalCss).toMatch(/transition-duration:\s*0\.01ms\s*!important/)
+    expect(globalCss).toMatch(/transition-duration:\s*0s\s*!important/)
   })
 
   it("⛔ 全局禁用平滑滚动：没有 behavior: 'smooth'，也没有 scroll-behavior: smooth", () => {

@@ -543,7 +543,65 @@ def stage_i(page, ui):
     return {'B1':'PASS','B2':'PASS','B7_tags':'PASS','B7_review':'PASS','B13':'PASS'}
 
 
-STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i}
+def stage_review_menu(page, ui):
+    measurements = []
+
+    def open_action(trigger, action, label):
+        trigger.click()
+        popup = page.locator('.ant-dropdown:visible')
+        expect(popup).to_have_count(1)
+        item = popup.get_by_role('menuitem', name=action, exact=True)
+        # Playwright 的 visible 只检查布局；屏幕外的菜单也会通过，必须验证视口和真实点击。
+        try:
+            expect(item).to_be_in_viewport(ratio=1)
+        except AssertionError:
+            print(json.dumps({'case': label, 'popup': popup.bounding_box(),
+                              'style': popup.evaluate('(el) => ({top: el.style.top, transition: getComputedStyle(el).transition})')},
+                             ensure_ascii=False), flush=True)
+            raise
+        measurements.append({'case': label, 'popup': popup.bounding_box(), 'trigger': trigger.bounding_box()})
+        item.click()
+        dialog = page.get_by_role('dialog')
+        expect(dialog).to_be_visible()
+        dialog.get_by_role('button', name='取消', exact=True).click()
+        expect(dialog).to_have_count(0)
+        expect(trigger).to_be_focused()
+
+    data = ui.synthetic_buckets()
+    for motion in ('no-preference', 'reduce'):
+        page.emulate_media(reduced_motion=motion)
+        for width in (827, 1366):
+            page.set_viewport_size({'width': width, 'height': 730})
+            page.goto(ui.fx.base_url + '/review', wait_until='networkidle')
+            for index, tab, action in ((0, '待我审 2', '稍后再审'), (1, '待我审 2', '这篇不发'),
+                                       (2, '未就绪 1', '稍后再审'), (3, '已挂起 1', '恢复审校')):
+                page.get_by_role('tab', name=tab, exact=True).click()
+                row = data['tasks'][index]
+                trigger = page.locator(f'tr[data-task-id="{row["id"]}"]').get_by_role('button', name='更多处理动作')
+                open_action(trigger, action, f'{motion}/{width}/list/{row["status"]}')
+                # 关闭后重新展开同一实例，验证不残留屏幕外的定位或隐藏状态。
+                trigger.click()
+                expect(page.get_by_role('menuitem', name=action, exact=True)).to_be_in_viewport(ratio=1)
+                page.get_by_role('heading', level=1).click()
+                expect(page.locator('.ant-dropdown:visible')).to_have_count(0)
+                assert urlparse(page.url).path == '/review/facebook'
+            # 同时走真实夹具详情与优化能力 GET；菜单测试不替换该接口，也不提交处理动作。
+            for task_id in (ui.fx.fb_id, ui.fx.ig_id):
+                page.goto(ui.fx.base_url + '/review/' + task_id, wait_until='networkidle')
+                trigger = page.get_by_role('button', name='更多处理动作', exact=True)
+                open_action(trigger, '稍后再审', f'{motion}/{width}/detail/{task_id}')
+            if motion == 'reduce' and width == 827:
+                trigger.click()
+                item = page.get_by_role('menuitem', name='稍后再审', exact=True)
+                expect(item).to_be_in_viewport(ratio=1)
+                item.hover()
+                page.screenshot(path=str(EVIDENCE / 'review-menu-reduced-motion.png'))
+                page.get_by_role('heading', level=1).click()
+    assert not [r for r in ui.requests if r['method'] not in {'GET', 'HEAD'}], ui.requests
+    return {'review_menu': 'PASS', 'measurements': measurements, 'cancel_without_mutation': True}
+
+
+STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i,'REVIEW_MENU':stage_review_menu}
 
 def main():
     parser=argparse.ArgumentParser()

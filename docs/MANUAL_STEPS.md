@@ -591,6 +591,18 @@ npm --prefix web/ui run build
 - [ ] Network 没有异常 404/422
 - [ ] 北京时刻和四个队列计数与实际数据一致
 
+菜单定位复验：在系统或 DevTools Rendering 中启用 `prefers-reduced-motion: reduce`，
+分别在常规窗口及约 827×730 的窄窗口打开列表、FB/IG 详情的“三点”。核对菜单位于按钮附近，
+“待我审／已修改／未就绪”可进入“稍后再审／这篇不发”对话框，“已挂起”可进入“恢复审校”；
+只点取消，核对焦点回到三点按钮，再次展开仍正常。恢复原动画偏好后再核对一次。
+若仍出现在屏幕外，记录实际前端资源 hash、动画偏好、菜单坐标与计算后的过渡时长。
+修复需要包含新 CSS 的前端构建，拉取源码后仅刷新旧构建不能生效；受管实例按第 17 节更新制品。
+本机离线定向命令为 `scripts\run_python.bat tests/browser_regression.py --stage REVIEW_MENU`，运行前先构建。
+
+若优化能力查询 `/api/refinements/task/...` 仍返回 500，另取服务机 Python 日志中该请求的
+Traceback 末尾、异常类型和错误说明，遮去密钥；`Internal Server Error` 或 React 调用栈
+不足以定位后端原因，菜单定位修复不等于该接口通过。
+
 ### 低风险写入检查
 
 由你或授权运营手工执行，每步之后回列表核对状态：

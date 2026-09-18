@@ -423,6 +423,33 @@ MockTransport 执行，确认仅两个 GET、无 edits。证据位于本工作�
 12 项（含两变体的 SDK 请求/响应/账本身份及笼统名称拒绝）、图片处理、图片工作流、
 处理预览、付费账本与 hygiene。仍使用隔离数据及 MockTransport，没有真实付费请求。
 
+### 1.15 减少动画模式下的审校菜单定位
+
+分支 `codex/review-menu-position`，工作树 `.worktrees/review-menu-position`，基点 `4b8516c`。
+用户现场菜单已打开但 `y=-7296`。隔离 Chromium 在 `prefers-reduced-motion: reduce`、
+827×730 视口下复现 `x=729, y=-7300`，没有前端异常；普通动画模式通过。
+全局非零 `transition-duration: 0.01ms !important` 使弹层同步测量读到 `-1000vh` 的过渡起点；
+[上游 #618](https://github.com/react-component/trigger/issues/618)描述同一机制，本次结论以本地前后对照为依据。
+过渡时间改为 `0s`，动画时长仍为 `0.01ms`，保留减少动画偏好及菜单业务条件。
+
+状态为 **离线通过**：[修复前失败日志](../state/review-menu-position/browser-before.log)、
+[修复后浏览器报告](../state/ui-regression/browser-stage-review_menu.json)记录 24 个组合：
+普通/减少动画、827/1366 宽度、列表四种可处理状态及 FB/IG 详情。菜单项完全进入视口、
+点击打开对话框、取消返回焦点、列表重新展开和点击外部关闭均通过；未发送业务写请求。
+原失败组合修复后为 `x=729, y=199`；[减少动画截图](../state/ui-regression/review-menu-reduced-motion.png)保留。
+[相关前端 48 项](../state/review-menu-position/ui-tests.log)与
+[TypeScript/Vite 构建](../state/review-menu-position/build-after.log)通过，构建仍有既有大 chunk 提示。
+[既有列表流程 C](../state/review-menu-position/browser-list.log)、
+[详情冲突恢复 I](../state/review-menu-position/browser-detail.log)及
+[hygiene 9 组](../state/review-menu-position/hygiene.log)通过，独立只读复审无遗留阻断项。
+测试使用临时归档、合成图片与独立浏览器 profile，没有接入业务 Chrome、模型、飞书或发布。
+本节证据在上述工作树的 `state/`，不随 Git 交付，清理工作树前须保全。
+
+附件另报 `/api/refinements/task/...` 返回 500。本机 FB/IG 隔离样例均为
+[HTTP 200](../state/review-menu-position/capabilities-check.log)，未复现，未修改该接口。
+服务机菜单复验及这条 500 的 Traceback 取证为 **待真实联调**，按
+[MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台)执行；不能宣称此 CSS 修复解决了后端 500。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

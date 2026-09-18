@@ -117,7 +117,8 @@ html {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+    /* 不要改回非零时长：弹层同步测量 top/left 时会读到屏幕外的过渡起点。 */
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }
