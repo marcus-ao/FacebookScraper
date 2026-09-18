@@ -450,6 +450,28 @@ MockTransport 执行，确认仅两个 GET、无 edits。证据位于本工作�
 服务机菜单复验及这条 500 的 Traceback 取证为 **待真实联调**，按
 [MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台)执行；不能宣称此 CSS 修复解决了后端 500。
 
+**源码启动补验。** 用户确认服务机只执行 `git pull`、停止旧 Web 后重新运行 `scripts/run_web.bat`，
+没有执行前端构建。旧脚本仅启动 Uvicorn，Git 忽略 `web/ui/dist`，因此重启继续提供旧 CSS；
+本机主检出也保留了 `index-DOeRiS6m.css` 中的 `.01ms` 规则。上面的 CSS 回归先手动构建，
+没有覆盖这个实际启动入口，不能证明拉取源码后重启已生效。
+
+源码版 `run_web.bat` 现每次按锁文件安装依赖并构建，全部成功后才启动 Python；缺 Node/npm、
+安装或构建失败会退出并明确报错。带 `release.json` 的运行包使用包内前端，继续不要求 Node。
+[启动修复前失败](../state/review-menu-startup/launcher-before.log)与
+[修复后 5 项通过](../state/review-menu-startup/launcher-after.log)使用真实 Windows 批处理和临时目录，
+npm/Python 边界为替身；覆盖连续源码更新后的旧产物替换、顺序、失败停止、空格路径与参数转发、
+运行包跳过构建。状态为 **离线通过**，服务机运行该入口及页面复验仍为 **待真实联调**。
+另将本机主检出的旧前端产物复制到隔离工作树，再执行真实 `scripts/run_web.bat --help`：
+[安装、构建与 Uvicorn 入口日志](../state/review-menu-startup/real-launch-build.log)通过；
+`--help` 只用于构建后退出，不启动业务服务。
+[旧 CSS](../state/review-menu-startup/stale-build-before.json)已替换为
+[含 `0s` 的新 CSS](../state/review-menu-startup/fresh-build-after.json)。用这次脚本生成的产物运行
+[24 个菜单组合](../state/review-menu-startup/browser-report.json)和
+[18 个实际 FastAPI HTTP 入口及深链刷新](../state/review-menu-startup/static-http.json)均通过；
+[hygiene 9 组](../state/review-menu-startup/hygiene.log)通过。
+这些 HTTP/浏览器检查仍用临时归档与合成图片；服务机地址本机访问超时，没有远程部署或真实页面验收。
+本次续修证据在同工作树 `state/review-menu-startup/`，旧菜单证据保留。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

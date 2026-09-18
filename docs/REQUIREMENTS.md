@@ -375,6 +375,7 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 | Web/CLI 五阶段只读状态 | 离线通过 | 共用 snapshot，含批次 `operation_id`/费用/版本、处理时效、Trends blocked 和独立投递状态 | `tests_runtime_status` + 浏览器 UI 夹具；只读 GET 零外部操作 |
 | 单一 React 审校台 | 离线通过 | `web/ui/` 是唯一源码目录，构建为 `web/ui/dist`；真实路由支持深链接刷新和分享 | 图片阶段复审 React 27 文件 523 项测试；`tests_browser_workflow` 10 场景通过；原 `browser_regression.py --stage ALL` 12 组证据仍只对应原运行代码 |
 | 审校三点菜单的减少动画兼容 | 离线通过 | 全局过渡时长为零，保留减少动画；列表和详情的菜单在视口内，可打开操作对话框并取消。服务机仍需更新构建后复验 | `browser_regression.py --stage REVIEW_MENU`：两种动画偏好、两种宽度、列表四态及 FB/IG 详情，共 24 个组合；[前后对照与证据边界](HANDOFF.md#115-减少动画模式下的审校菜单定位) |
+| 源码启动同步前端构建 | 离线通过 | `run_web.bat` 在源码检出中先按锁文件安装依赖、构建，再启动 Web；失败不提供旧产物。运行包跳过源码构建，无需 Node；服务机入口仍需复验 | `tests_web_launcher` 5 项实际 Windows 批处理回归；[遗漏入口与修复证据](HANDOFF.md#115-减少动画模式下的审校菜单定位) |
 | 前端静态部署契约 | 离线通过 | `SinglePageFiles` 提供 SPA 回落，且不吞 `/api` 404、带扩展名的缺失资源和非 HTML 客户端 | `tests/tests_spa_static.py` 14 项；退回裸 `StaticFiles` 会红 11 项 |
 | FastAPI 静态演练 | 离线通过 | `tests/cutover_rehearsal.py` 默认伺服 `web/ui/dist`；深链接、旧链接、真实资源、API/资源 404 和刷新均通过 | 实际 FastAPI、零外部写入；需先构建前端 |
 | 历史页缩略图成本 | 待真实联调 | React 默认 50 行。原归档（1,067 篇）实测单张中位 1.57s、最大 2.0s。当时无图的帖子也发请求，六连接下首屏约 12–13 秒；现在只有真有图的行才发，首屏要按有图行数重算 | `3718c0d` 实测 + 无图行不发请求（`tests_history`）；合并后的日常服务观察一个工作日，太慢先把每页改成 20 条 |

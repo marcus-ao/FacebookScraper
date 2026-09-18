@@ -10,12 +10,12 @@ React + TypeScript 界面位于 `web/ui/`，通过 FastAPI 读取归档并保存
 在仓库根目录运行：
 
 ```powershell
-npm.cmd --prefix web/ui ci
-npm.cmd --prefix web/ui run build
 scripts\run_web.bat
 ```
 
-日常入口为 `http://127.0.0.1:8765`。FastAPI 读取 `config.toml` 的 `paths.web_dist = "web/ui/dist"`；本机数据、解释器和环境文件绑定见 [配置示例](../config.local.example.toml)。构建产物和依赖不入库，运行构建后的页面不需要 Node。
+源码启动需要 Node.js/npm；脚本每次按锁文件安装依赖并构建前端，成功后才启动 Web，失败会保留 npm 错误并退出。这样 `git pull` 后重新运行脚本就会提供当前源码的页面。直接调用 Uvicorn 时，仍需自行先执行 `npm.cmd --prefix web/ui ci` 与 `npm.cmd --prefix web/ui run build`。
+
+日常入口为 `http://127.0.0.1:8765`。FastAPI 读取 `config.toml` 的 `paths.web_dist = "web/ui/dist"`；本机数据、解释器和环境文件绑定见 [配置示例](../config.local.example.toml)。构建产物和依赖不入库。带 `release.json` 的运行包使用包内已验证的前端，跳过源码构建，不需要 Node；受管实例仍通过部署控制器启动和更新。
 
 开发时保持 FastAPI 运行，另执行：
 

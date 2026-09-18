@@ -545,12 +545,17 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。
 
-⚠️ 清库后 `web/ui/node_modules` 与 `web/ui/dist` 都已删除，**打开页面之前必须先装依赖并构建**：
+源码检出的前端产物不随 `git pull` 更新。安装 Node.js/npm 后，日常更新并启动使用：
 
 ```powershell
-npm --prefix web/ui ci
-npm --prefix web/ui run build
+git pull --ff-only
+scripts\run_web.bat
 ```
+
+先正常停止旧 Web 进程，再运行启动脚本。脚本每次执行锁定依赖安装（包含构建工具）与前端构建，
+两步都成功后才启动 Python；失败时修正控制台中的 npm 错误后重试，不会继续提供旧页面。
+带 `release.json` 的运行包跳过这两步，不需要 Node，受管实例按第 17 节更新制品。
+直接运行 Uvicorn 不经过此脚本，仍须先执行 `npm.cmd --prefix web/ui ci` 和 `npm.cmd --prefix web/ui run build`。
 
 下面的清单用于每次更新前端后的复验。
 
@@ -572,7 +577,8 @@ npm --prefix web/ui run build
 - [ ] 在原主工作区运行 `scripts\run_web.bat`
 - [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 17 节）
 
-只刷新浏览器不会重新读取构建目录：`DIST` 在 `web/api/app.py` import 时确定。
+`DIST` 的目录在 `web/api/app.py` import 时确定，但每次请求仍读取其中的文件。
+旧版启动脚本只启动 Python，不会将更新后的源码变成新构建；当前脚本已补上构建步骤。
 
 ### 只读检查
 
@@ -596,7 +602,8 @@ npm --prefix web/ui run build
 “待我审／已修改／未就绪”可进入“稍后再审／这篇不发”对话框，“已挂起”可进入“恢复审校”；
 只点取消，核对焦点回到三点按钮，再次展开仍正常。恢复原动画偏好后再核对一次。
 若仍出现在屏幕外，记录实际前端资源 hash、动画偏好、菜单坐标与计算后的过渡时长。
-修复需要包含新 CSS 的前端构建，拉取源码后仅刷新旧构建不能生效；受管实例按第 17 节更新制品。
+拉取含启动修复的源码后，正常停止旧 Web 进程并重新执行 `scripts\run_web.bat`，确认 npm 构建成功，
+再刷新页面核对菜单；受管实例按第 17 节更新制品。
 本机离线定向命令为 `scripts\run_python.bat tests/browser_regression.py --stage REVIEW_MENU`，运行前先构建。
 
 若优化能力查询 `/api/refinements/task/...` 仍返回 500，另取服务机 Python 日志中该请求的
