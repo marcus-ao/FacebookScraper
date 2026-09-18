@@ -768,6 +768,12 @@ scripts\run_python.bat -m tools.replay facebook --capture "D:\capture-copy\_capt
 `should_append`/归档保护补入帖子，不删除拒绝历史，不自动重建监测或发布激活边界。
 
 最终以 `post.json` 的规范化 `owner`、`owner_evidence`、媒体图序、实际文件及 SHA 核验恢复结果。
+
+若作者已经正确、目录仍只有 `post.json` 与 `text.txt`，先看 `media`：空数组表示下载器没有收到媒体项，
+不是图片下载失败；有图片项但 `local_path` 为空才继续核对该帖的下载错误。
+从同次捕获中保留目标 `post_id` 的全部 story 片段及其 `attachments`、`comet_sections`，不要用主页照片栏替代。
+缺附件字段应解析为来源不完整、数量未知；已知图片不应被空片段覆盖。
+修复版本可在重新人工回填取得图片后补入旧空归档，无须先删目录；只更新代码不会产生缺失的原图。
 视频的 `kind=video` 且 `local_path=null` 属于设计行为；真实原帖含视频但 `media=[]` 才需另查媒体结构。
 完整响应、原图补入与服务机核验未完成前，身份修复只记“离线通过”。
 

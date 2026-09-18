@@ -1142,7 +1142,7 @@ class Archive:
         if previous is not None and self._source_changed(previous, post):
             old_media = previous.get("media") or []
             source_complete = post.source_media_complete if post.source_media_complete is not None else post.media_complete
-            if not source_complete and (previous.get('media_complete') is True
+            if not source_complete and ((previous.get('media_complete') is True and old_media)
                                         or len(old_media) > len(post.media)
                                         or _post_quality_parts(previous)[2] > _post_quality_parts(post)[2]):
                 observed = {media.url: media for media in post.media}
@@ -1198,10 +1198,13 @@ class Archive:
     def _source_changed(old: dict, new: Post) -> bool:
         if any(old.get(key) != getattr(new, key) for key in ("text", "created_at", "owner", "coauthors", "permalink")):
             return True
+        before = old.get('media') or []
+        # 旧 FB 响应可能把缺附件误存为完整空帖；新图片证据必须能够进入补抓。
+        if new.platform == 'facebook' and new.media and not before:
+            return True
         source_complete = new.source_media_complete if new.source_media_complete is not None else new.media_complete
         if not source_complete:
             return False
-        before = old.get('media') or []
         if len(before) != len(new.media):
             return True
         for item, media in zip(before, new.media):

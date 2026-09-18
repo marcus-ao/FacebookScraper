@@ -385,6 +385,19 @@ socket 关闭边界故障注入复现同一错误：请求与连接集合已空�
 图序与本地原图。部署代码不会自动改写历史拒绝列表或恢复缺图；按
 [MANUAL_STEPS §14 的误拒核验与恢复](MANUAL_STEPS.md#facebook-误拒记录的核验与恢复)执行。
 
+**缺图续查（2026-09-18）。** 用户重跑后的 `122123783349379375/post.json` 已有正确作者和身份依据，
+但 `media=[]`、两层 completeness 均为 `true`、`source_media_count=0`。因此该帖在下载前已没有媒体项，
+不能归因为 CDN 下载失败。截图只证明目录没有图片，不能证明原始响应中的附件位置。
+在同一工作树基于主干 `e22c9b1` 复现并修复：缺附件字段误判完整空帖、空片段覆盖部分图片、
+旧完整空档阻止部分图片补入。明确空数组仍支持纯文案帖；视频身份保持不变。
+[失败复现](../state/offline-validation-20260918T070515Z/results.json)和
+[6/6 定向脚本通过](../state/offline-validation-20260918T070545Z/results.json)均为隔离构造响应；
+归档用例实际写入合成 PNG，并核验旧来源历史、人工分类和人工稿保留。
+[另外 5/5 入口、生命周期、存储链路及 hygiene 脚本通过](../state/offline-validation-20260918T070957Z/results.json)，
+独立复审未发现本次补丁的新增阻断项。上述证据保留在工作树，并按 SHA-256 核对复制到主检出 `state/`，
+未接入服务机数据。代码为 **离线通过**；
+仍缺该帖的完整原始 story（含各片段 `attachments` / `comet_sections`），尚未证明现场图片已能提取或补回。
+
 ### 1.14 图片模型空目录修复（2026-09-18）
 
 分支 `codex/image-model-catalog`，工作树 `.worktrees/image-model-catalog`，基点 `5bb1751`。

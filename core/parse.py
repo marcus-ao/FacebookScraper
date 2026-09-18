@@ -338,7 +338,8 @@ def _fb_media(node: dict) -> tuple[list[Media], bool]:
             if children is not None:
                 collect(children)
 
-    collect(node.get('attachments') or [])
+    # 缺附件字段只是响应片段；不能当成明确的空列表，否则会压掉别段的图片。
+    collect(node.get('attachments'))
     return out, complete
 
 
@@ -364,9 +365,10 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
 
 
 def merge_post(current: Post, candidate: Post) -> Post:
-    """合并同帖响应：优先完整媒体，并补齐正文、时间、链接及作者信息。"""
-    def rank(post: Post) -> tuple[bool, int, bool, bool, bool]:
-        return (bool(post.source_media_complete), len(post.media), bool(post.text),
+    """合并同帖响应：FB 已知媒体优先于空片段，再按完整性选取并补齐其它字段。"""
+    def rank(post: Post) -> tuple[bool, bool, int, bool, bool, bool]:
+        return (bool(post.media) if post.platform == 'facebook' else True,
+                bool(post.source_media_complete), len(post.media), bool(post.text),
                 bool(post.created_at), bool(post.permalink))
 
     winner, other = ((candidate, current)
@@ -386,7 +388,8 @@ def merge_post(current: Post, candidate: Post) -> Post:
         winner.owner_evidence = winner.owner_evidence + [
             item for item in other.owner_evidence if item not in winner.owner_evidence]
         _resolve_fb_owner(winner)
-    if winner.source_media_count is None and other.source_media_count is not None:
+    if (winner.source_media_count is None and other.source_media_count is not None
+            and (winner.platform != 'facebook' or other.source_media_count >= len(winner.media))):
         winner.source_media_count = other.source_media_count
         if winner.source_media_count != len(winner.media):
             winner.source_media_complete = winner.media_complete = False
