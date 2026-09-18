@@ -256,7 +256,7 @@ with tempfile.TemporaryDirectory() as d:
     check(n.new == 1 and n.rejected == 1, "他人帖不计入新增，但计入丢弃数")
     rejected = (Path(d) / "in_acme_us" / "_rejected.jsonl").read_text(encoding="utf-8")
     check("someone_else" in rejected, "他人帖写进了 _rejected.jsonl，不是静默丢弃")
-    check("222" not in json.dumps(arc.rows()), "他人帖没有进归档")
+    check("222" not in {row['post_id'] for row in arc.rows()}, "他人帖没有进归档")
 
 with tempfile.TemporaryDirectory() as d:
     # 残缺帖必须能被补全：用 should_append 而不是 has()

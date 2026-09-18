@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from core import maintenance
+from core.archive_integrity import archive_report, reconcile_instagram
 from core.capture import (Collector, atomic_write_json, download_media,
                           prune_captures_days, MediaRateLimited)
 from core.capture_state import CaptureState, verified_images
@@ -365,7 +366,7 @@ class ScanResult:
     def summary(self) -> str:
         span = ("%s ~ %s" % (self.oldest_seen[:10], self.newest_seen[:10])
                 if self.newest_seen else "—")
-        result = ("新增 %d 篇 · 修复旧帖 %d 篇 · 本账号 %d 篇（原创 %d · 合作 %d，%s）"
+        result = ("新增 %d 篇 · 处理已有帖 %d 篇 · 本轮看到本账号 %d 篇（原创 %d · 合作 %d，%s）"
                 "· 丢弃 %d · 归档最新 %s"
                 % (self.new, self.upgraded, self.own, self.authored, self.collab, span,
                    self.rejected, self.newest_known[:10] or "—"))
@@ -794,6 +795,8 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
     """持有 :class:`DeltaRunLock` 后执行一次计划/手工增量。"""
     access = AccessController(path.parent, schedule=dcfg.schedule)
     dcfg = replace(dcfg, access=access)
+    if not args.dry_run:
+        _reconcile_archive(platforms)
     due = []
     blocked_by_budget = []
     now = utcnow()
@@ -859,6 +862,18 @@ def _run_locked(args, dcfg: DeltaConfig, path: Path,
     return run_rc if run_rc else (2 if blocked_by_budget else 0)
 
 
+def _reconcile_archive(platforms):
+    c = cfg()
+    account_dir = c.archive_dir / ('in_' + c['targets']['instagram'])
+    if 'instagram' not in platforms or not account_dir.exists():
+        return
+    report = reconcile_instagram(Archive(c.archive_dir, account_dir.name))
+    if report['checked']:
+        print('[i] Instagram 历史归档本地核验：检查 %d 篇 · 修复 %d 篇 · 保留待核验 %d 篇'
+              % (report['checked'], len(report['repaired']), len(report['unresolved'])))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 @maintenance.guarded('capture')
 def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     args = _parse_args(argv)
@@ -880,11 +895,18 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     if args.status:
         try:
             print(json.dumps(AccessController(path.parent).status(), ensure_ascii=False, indent=2))
+            status = {'items': {}}
             if (path.parent / 'capture_state.json').exists():
                 status = CaptureState(path.parent).status()
                 print(json.dumps({'capture_revision': status['revision'], 'baselines': status['baselines'],
                     'manual_items': [{'key': key, 'reason': item.get('reason')} for key, item in status['items'].items()
                                      if item['status'] == 'manual']}, ensure_ascii=False, indent=2))
+            c = cfg()
+            for platform in platforms:
+                account_dir = c.archive_dir / (platform[:2] + '_' + c['targets'][platform])
+                if account_dir.exists():
+                    print(json.dumps(archive_report(Archive(c.archive_dir, account_dir.name), status['items']),
+                                     ensure_ascii=False, indent=2))
             _print_status(load_state(path))
             return 0
         except AccessDenied as exc:

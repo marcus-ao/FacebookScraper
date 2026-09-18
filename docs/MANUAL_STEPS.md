@@ -141,6 +141,26 @@ $postDetail.storage.local | Format-List
 
 服务机 capture 和业务目录未在开发机实际修复；开发机验证使用同字段形态的构造响应、合成原图与隔离账本，不能替代本步骤的真实回读。
 
+### 4.2 历史 IG 完整性自动核验
+
+更新代码后，普通监测和晨间对账自动检查当前 IG 账号归档中标记不完整的历史帖子，在访问平台及清理过期增量 capture 之前执行。不需要逐篇输入 ID、寻找 capture、重新初始化或重新回填。`scripts\run_scheduler.bat --run --once` 在调度到 Instagram 时调用同一入口；没有到访问时刻则调度器不会派发，该轮返回不表示修复已执行。
+
+自动核验读取账号目录下全部现存 `_capture*.json`，不只选最新文件。只修复证据明确且一致的单图/单视频；每篇核对身份、媒体 URL/ID，图片需解码及校验。成功先保存 `post.json.before-completeness-*.bak` 原字节和配套 `.evidence.json`（含捕获摘要、媒体类型与匹配依据），再修完整性及 manifest。正文、原图、分类、人工记录、业务账本、访问配额和采集历史不改写。视频 `metadata_only` 是正常存储形式，但仍需完整来源证据才可修复。
+
+日志单独输出“历史归档本地核验”的检查、修复、保留数量和逐帖结果。“处理已有帖”是本轮平台扫描处理数量，不是修复成功数量。显示“首次检查发现”表示第一次保存告警数量；后续数量与上次记录比较，均不能解释为本轮下载损坏了多少篇。
+
+只读查看当前归档缺口无需粘贴临时 Python：
+
+```powershell
+scripts\run_python.bat -m routes.delta --status --platform instagram
+```
+
+检查 `archive_incomplete`、`source_unconfirmed`、`images_unavailable`、`metadata_only_videos`、`index_mismatch` 和 `incomplete_items`。计数可以重叠，视频数是待核验帖内的视频项数。`not_in_capture_state` 表示历史归档尚未登记为监测采集项，不能使用 `--recover-post`。没有 capture、文件损坏、同帖证据矛盾或实际图片缺失时，程序保留原记录并输出原因；重复运行不会绕过证据要求，也不会触发额外详情访问。`--status` 和 `--dry-run` 不执行修复。
+
+修复后的列表/详情从真相读取，SQLite 在展示入口按现有刷新机制更新（历史页可能保留短时缓存）。即使真相已写入而 manifest 中断，下一次普通监测也能继续同步；原图与备份无需移动或删除。单帖工具 §4.1 仍可用于明确指定证据的定点操作，并支持 `media_type=2` 的明确单视频。
+
+本机只用隔离归档及构造 capture 验证自动处理；服务机的 7 篇是否都有可用证据、实际修复数量以服务机输出为准。
+
 ## 5. 付费模型操作
 
 先检查预算、来源许可和不确定请求：
