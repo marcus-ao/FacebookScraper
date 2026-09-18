@@ -196,9 +196,10 @@ check(posts[0].owner == "neakasa.tech", "归属取自 user.username")
 
 print("\n[真实结构 2] Facebook 归属：name 与 URL 里的账号名并不相等")
 def fb_story(pid, actor_name, actor_url, attachments, text="hi", ts=1756400000):
+    actor_id = "61591381265280" if actor_name == "Neakasa Official" else "90000000000001"
     return {"post_id": pid, "creation_time": ts,
             "message": {"text": text},
-            "actors": [{"__typename": "User", "id": "61591381265280",
+            "actors": [{"__typename": "User", "id": actor_id,
                         "name": actor_name, "url": actor_url}],
             "attachments": attachments,
             "url": "https://www.facebook.com/neakasaofficial/posts/%s" % pid}

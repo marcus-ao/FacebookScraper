@@ -551,10 +551,20 @@ async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=Non
                 reason = login_wall_reason(final, detail.blocked_status())
                 if reason:
                     raise DeltaBlocked(reason, hard=True)
-                matches, _ = partition_by_owner(extract(detail.payloads, platform, account, route='delta'), account)
+                matches = extract(detail.payloads, platform, account, route='delta')
+                if platform != 'facebook':
+                    matches, _ = partition_by_owner(matches, account)
                 match = next((p for p in matches if p.platform == post.platform and p.post_id == post.post_id), None)
                 if match:
-                    post = merge_post(post, match)
+                    # 同帖详情可能只有数字 ID；先结合主页证据，再过滤合并结果。
+                    merged = merge_post(replace(post), match)
+                    accepted, rejected = partition_by_owner([merged], account)
+                    if accepted:
+                        post = merged
+                    else:
+                        arc.record_rejected(rejected)
+                        dcfg.source_failures.append('详情作者证据与主页不匹配')
+                        raise ValueError('详情作者证据与主页不匹配')
                 else:
                     dcfg.source_failures.append('详情没有提供身份匹配的帖子结构')
                 if post.source_media_complete is not True:

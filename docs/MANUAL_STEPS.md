@@ -645,6 +645,33 @@ scripts\run_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID -
 
 验收报告里写清楚：跑了什么、哪几条是真实账号的结果、哪些外部依赖仍未联调。离线测试通过不能替代上面任何一项。
 
+### Facebook 误拒记录的核验与恢复
+
+出现 `owner=id:<数字>`、`expected_owner=neakasaofficial` 的 `owner_mismatch` 时，先保留本次
+`_capture_*.json`、`_rejected.jsonl` 和全部既有归档。捕获文件开头常是界面配置或主页资料，
+不等于帖子正文；核验单帖需找到其 `post_id` 对应的 story，连同 `actors`、`attachments`、
+`creation_time`、`url/permalink_url` 及账号身份对象一起检查。
+
+更新到包含身份修复的版本后，可在服务机已绑定正确数据的运行目录执行以下只读预览，替换捕获路径：
+
+```powershell
+scripts\run_python.bat -m tools.replay facebook --capture "D:\capture-copy\_capture_TIMESTAMP.json" --dry-run
+```
+
+保留 `--dry-run`。预览会使用新的作者解析规则，显示保留/拒绝与图片/视频数；
+它不下载图片，也不证明图片已落盘。非 dry-run 的 replay 会重建索引并移动未关联目录，
+不能作为这次误拒的一键补入命令。
+
+核对数字 ID 与用户名是否由同一作者/主页对象或 `ProfileActionMessage` 明确关联，确认没有
+`owner_conflict`，再检查目标日期范围内的逐帖图片数量、顺序与 URL。若需要从完整 capture 补入，
+先在完整数据副本制定仅补缺失帖/原图的清单，保留现有人工稿、审校和发布账本；当前没有自动追加恢复命令。
+若原始响应不足或图片 URL 失效，由人在 9222 按本节 B 的同一日期窗口重新回填；修复后的回填使用已有
+`should_append`/归档保护补入帖子，不删除拒绝历史，不自动重建监测或发布激活边界。
+
+最终以 `post.json` 的规范化 `owner`、`owner_evidence`、媒体图序、实际文件及 SHA 核验恢复结果。
+视频的 `kind=video` 且 `local_path=null` 属于设计行为；真实原帖含视频但 `media=[]` 才需另查媒体结构。
+完整响应、原图补入与服务机核验未完成前，身份修复只记“离线通过”。
+
 ## 14.1 打开内容处理：抓到就翻译和出图
 
 阶段一固定不带 `--process`。这一节是把它打开的顺序。**它是本轮第一次让非开发者触发付费调用**，

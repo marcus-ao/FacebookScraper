@@ -53,11 +53,17 @@ class ScrollProgress:
         if not fresh:
             return
         try:
+            # FB 身份映射可能晚于数字 ID 帖到达，进度须与最终全批解析一致。
+            if self.platform == 'facebook':
+                fresh = payloads
             posts, _ = partition_by_owner(
                 extract(fresh, self.platform, self.account, route="backfill"),
                 self.account)
         except Exception:
             return          # 显示用的统计，坏了也不能影响正在进行的抓取
+        if self.platform == 'facebook':
+            self.ids.clear()
+            self.earliest = ''
         for p in posts:
             self.ids.add(p.post_id)
             if p.created_at and (not self.earliest or p.created_at < self.earliest):

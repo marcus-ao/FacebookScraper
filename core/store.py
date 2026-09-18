@@ -58,6 +58,9 @@ class Post:
     tags: list[str] | None = None   # None 尚未预填；[] 是人工明确清空
     tags_origin: str | None = None
     archived_at: str | None = None
+    # Facebook 作者对象中的 ID/主页 URL；包含用于归一化的同身份响应证据。
+    owner_evidence: list[dict[str, str]] = field(default_factory=list)
+    owner_conflict: bool = False
 
     def to_row(self) -> dict:
         d = asdict(self)
@@ -865,12 +868,19 @@ class Archive:
         return [r for r in self._rows.values() if not r.get("media_complete", True)]
 
     def record_rejected(self, rows: list[dict]) -> int:
-        """按 post_id 去重追加拒绝记录，返回新增数。"""
+        """按帖子及身份判据去重追加；新冲突证据不能被旧拒绝记录掩盖。"""
         if not rows:
             return 0
         path = self.base / "_rejected.jsonl"
         assert_physical_direct_path(
             self.base, path, kind="file", label="_rejected.jsonl")
+        def identity_key(row):
+            if not isinstance(row, dict) or not row.get('post_id'):
+                return ''
+            return json.dumps({key: row.get(key) for key in (
+                'post_id', 'owner', 'coauthors', 'owner_evidence', 'reason', 'expected_owner')},
+                sort_keys=True, ensure_ascii=False)
+
         seen: set[str] = set()
         if path.exists():
             with path.open(encoding="utf-8") as f:
@@ -879,7 +889,7 @@ class Archive:
                     if not line:
                         continue
                     try:
-                        seen.add(json.loads(line)["post_id"])
+                        seen.add(identity_key(json.loads(line)))
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue
         added = 0
@@ -887,10 +897,10 @@ class Archive:
             self.base, path, kind="file", label="_rejected.jsonl")
         with path.open("a", encoding="utf-8") as f:
             for row in rows:
-                pid = row.get("post_id")
-                if not pid or pid in seen:
+                key = identity_key(row)
+                if not key or key in seen:
                     continue
-                seen.add(pid)
+                seen.add(key)
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 added += 1
         return added

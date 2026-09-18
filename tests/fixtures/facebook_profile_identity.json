@@ -1,0 +1,42 @@
+{
+  "data": {
+    "node": {
+      "__typename": "User",
+      "id": "61591381265280",
+      "profile_tile_sections": {
+        "edges": [{
+          "node": {
+            "profile_tile_section_type": "CONTACT_INFO",
+            "profile_tile_views": {
+              "nodes": [{
+                "view_style_renderer": {
+                  "__typename": "ProfileTileViewDirectoryFieldListRenderer",
+                  "view": {
+                    "profile_tile_items": {
+                      "nodes": [{
+                        "directory_tile_item_renderer": {
+                          "__typename": "MessengerDirectoryFieldSectionViewRenderer",
+                          "message_action": {
+                            "__isProfileAction": "ProfileActionMessage",
+                            "client_handler": {
+                              "__typename": "ProfileActionMessageHandler",
+                              "profile_action": {
+                                "__typename": "ProfileActionMessage",
+                                "profile_owner": {"id": "61591381265280"},
+                                "uri": "https://www.facebook.com/messages/t/neakasaofficial/"
+                              }
+                            }
+                          }
+                        }
+                      }]
+                    }
+                  }
+                }
+              }]
+            }
+          }
+        }]
+      }
+    }
+  }
+}

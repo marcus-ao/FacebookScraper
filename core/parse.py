@@ -1,8 +1,10 @@
 """将 IG iphone_struct、GraphQL media 与 FB story 归一为 Post；缺轮播子项时标记媒体不全。"""
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Callable, Iterator
+from urllib.parse import parse_qs, urlsplit
 
 from core.store import Media, Post
 
@@ -191,31 +193,89 @@ def is_fb_story(d: dict) -> bool:
 FB_WATCH = "https://www.facebook.com/watch/?v="
 
 
-def _fb_slug(url: str | None) -> str | None:
-    """从 FB URL 提取小写 slug；无自定义名称的主页返回 id:<数字>。"""
-    if not url:
+def _fb_slug(url: str | None, *, message_action: bool = False) -> str | None:
+    """只接受 Facebook 主页 URL；查询串不是用户名，帖子链接不是作者证据。"""
+    if not isinstance(url, str) or not url:
         return None
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    if tail.startswith("profile.php"):
-        _, _, qs = tail.partition("?")
-        for part in qs.split("&"):
-            key, _, value = part.partition("=")
-            if key == "id" and value:
-                return "id:" + value
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
         return None
-    return tail.lower() or None
+    if (parsed.scheme not in {'http', 'https'}
+            or parsed.hostname not in {'facebook.com', 'www.facebook.com', 'm.facebook.com', 'web.facebook.com'}
+            or parsed.username or parsed.password):
+        return None
+    tail = parsed.path.strip('/')
+    if message_action:
+        parts = tail.split('/')
+        if len(parts) != 3 or parts[:2] != ['messages', 't']:
+            return None
+        tail = parts[2]
+    if tail == 'profile.php':
+        ids = parse_qs(parsed.query).get('id', [])
+        return 'id:' + ids[0] if len(ids) == 1 and re.fullmatch(r'[0-9]+', ids[0]) else None
+    if not re.fullmatch(r'[A-Za-z0-9_.]+', tail) or tail.lower() in {
+            'watch', 'reel', 'reels', 'posts', 'photo.php', 'photos', 'groups', 'pages', 'share', 'login.php'}:
+        return None
+    return 'id:' + tail if tail.isdigit() else tail.lower()
 
 
-def _fb_actor(node: dict) -> tuple[str | None, str | None]:
-    """从 actors[0] 取归属；比较 URL 账号名，不比较显示名。"""
+def _fb_actor(node: dict) -> dict:
+    """只取主作者；其它 actors 不自动当作已接受的合作方。"""
     actors = node.get("actors")
     if not (isinstance(actors, list) and actors and isinstance(actors[0], dict)):
-        return None, None
-    a = actors[0]
-    slug = _fb_slug(a.get("url"))
-    if slug is None and a.get("id"):
-        slug = "id:" + str(a["id"])
-    return slug, a.get("name")
+        return {}
+    return actors[0]
+
+
+def _fb_evidence(actor: dict) -> dict[str, str]:
+    return {key: str(actor[key]) for key in ('id', 'url')
+            if isinstance(actor.get(key), (str, int)) and actor[key]}
+
+
+def _fb_identity_tokens(evidence: dict[str, str]) -> set[str]:
+    tokens = set()
+    identifier = evidence.get('id', '')
+    if re.fullmatch(r'[0-9]+', identifier):
+        tokens.add('id:' + identifier)
+    slug = _fb_slug(evidence.get('url'), message_action=evidence.get('source') == 'profile_message')
+    if slug:
+        tokens.add(slug)
+    return tokens
+
+
+def _fb_identity_index(evidence: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    index: dict[str, list[dict[str, str]]] = {}
+    for item in evidence:
+        for token in _fb_identity_tokens(item):
+            bucket = index.setdefault(token, [])
+            if item not in bucket:
+                bucket.append(item)
+    return index
+
+
+def _resolve_fb_owner(post: Post, index=None) -> Post:
+    """沿同一作者对象的 ID/URL 关联取规范名；分离或冲突的证据不能互相覆盖。"""
+    evidence = list(post.owner_evidence)
+    index = _fb_identity_index(evidence) if index is None else index
+    roots = set().union(*(_fb_identity_tokens(item) for item in evidence))
+    pending = [min(roots)] if roots else []
+    reached: set[str] = set()
+    while pending:
+        token = pending.pop()
+        if token in reached:
+            continue
+        reached.add(token)
+        for item in index.get(token, []):
+            if item not in evidence:
+                evidence.append(item)
+            pending.extend(_fb_identity_tokens(item) - reached)
+    ids = {token for token in reached if token.startswith('id:')}
+    names = reached - ids
+    post.owner_conflict = not roots.issubset(reached) or len(ids) > 1 or len(names) > 1
+    post.owner = None if post.owner_conflict else next(iter(names or ids), None)
+    post.owner_evidence = sorted(evidence, key=lambda item: (item.get('id', ''), item.get('url', '')))
+    return post
 
 
 def _fb_media(node: dict) -> tuple[list[Media], bool]:
@@ -288,9 +348,10 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
 
     media, complete = _fb_media(node)
 
-    owner, owner_name = _fb_actor(node)
+    actor = _fb_actor(node)
+    evidence = _fb_evidence(actor)
     ts = node.get("creation_time") or node.get("created_time")
-    return Post(
+    return _resolve_fb_owner(Post(
         post_id=str(node["post_id"]), platform="facebook", account=account,
         text=text, created_at=iso(ts) if isinstance(ts, (int, float)) else (ts or ""),
         permalink=node.get("url") or node.get("permalink_url"),
@@ -298,8 +359,8 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
         # 纯文字或视频不等于媒体残缺；下载失败由下载层标记。
         media_complete=complete, source_media_complete=complete,
         source_media_count=len(media) if complete else None,
-        owner=owner, owner_name=owner_name,
-    )
+        owner_name=actor.get('name'), owner_evidence=[evidence] if evidence else [],
+    ))
 
 
 def merge_post(current: Post, candidate: Post) -> Post:
@@ -321,6 +382,10 @@ def merge_post(current: Post, candidate: Post) -> Post:
     for attr in ("text", "created_at", "permalink", "owner", "owner_name"):
         if not getattr(winner, attr) and getattr(other, attr):
             setattr(winner, attr, getattr(other, attr))
+    if winner.platform == 'facebook' and (winner.owner_evidence or other.owner_evidence):
+        winner.owner_evidence = winner.owner_evidence + [
+            item for item in other.owner_evidence if item not in winner.owner_evidence]
+        _resolve_fb_owner(winner)
     if winner.source_media_count is None and other.source_media_count is not None:
         winner.source_media_count = other.source_media_count
         if winner.source_media_count != len(winner.media):
@@ -349,13 +414,29 @@ def extract(payloads: list[dict], platform: str, account: str,
                 prev = out.get(post.post_id)
                 # 同一帖可能在多个响应里出现：保留媒体更全者，同时补齐正文等字段。
                 out[post.post_id] = post if prev is None else merge_post(prev, post)
+    if platform == 'facebook':
+        evidence = [item for post in out.values() for item in post.owner_evidence]
+        # 主页对象/消息动作显式绑定账号 ID；不能从任意链接或帖子 permalink 猜作者。
+        for payload in payloads:
+            for actor in walk(payload, lambda node: node.get('__typename') in ('Page', 'User', 'ProfileActionMessage')):
+                if actor.get('__typename') == 'ProfileActionMessage':
+                    owner = actor.get('profile_owner')
+                    if isinstance(owner, dict):
+                        item = _fb_evidence({'id': owner.get('id'), 'url': actor.get('uri')})
+                        if item.get('id') and item.get('url'):
+                            evidence.append(dict(item, source='profile_message'))
+                else:
+                    evidence.append(_fb_evidence(actor))
+        index = _fb_identity_index(evidence)
+        for post in out.values():
+            _resolve_fb_owner(post, index)
     return list(out.values())
 
 
 def on_timeline_of(post: Post, target: str) -> bool:
     """目标为 owner 或已接受的 coauthor 即属于该时间线；账号名忽略大小写。"""
     who = (target or "").strip().lower()
-    return post.owner == who or who in (post.coauthors or [])
+    return not post.owner_conflict and (post.owner == who or who in (post.coauthors or []))
 
 
 def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], list[dict]]:
@@ -372,11 +453,13 @@ def partition_by_owner(posts: list[Post], account: str) -> tuple[list[Post], lis
             "platform": post.platform,
             "owner": post.owner,
             "owner_name": post.owner_name,
+            "owner_evidence": post.owner_evidence,
             "coauthors": post.coauthors,
             "created_at": post.created_at,
             "permalink": post.permalink,
             "text_head": (post.text or "")[:80],
-            "reason": "owner_unknown" if post.owner is None else "owner_mismatch",
+            "reason": ("owner_conflict" if post.owner_conflict else
+                       "owner_unknown" if post.owner is None else "owner_mismatch"),
             "expected_owner": target,
         })
     return kept, rejected
