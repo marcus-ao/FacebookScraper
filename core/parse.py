@@ -73,7 +73,9 @@ def from_iphone_struct(item: dict, account: str, route: str) -> Post:
                      if isinstance(c, dict) and c.get("url")), None)
 
     media: list[Media] = []
-    carousel = item.get('media_type') == 8 or 'carousel_media' in item
+    # XDTMediaDict 单图也带 carousel_media: null/[]；字段存在不代表轮播。
+    # 非空子项或异常值仍须匹配轮播类型，不能把矛盾响应放行为完整单图。
+    carousel = item.get('media_type') == 8 or item.get('carousel_media') not in (None, [])
     declared = _media_count(item.get('carousel_media_count'))
     children = item.get("carousel_media") or [item]
     media_complete = (item.get('media_type') in (1, 2) if not carousel

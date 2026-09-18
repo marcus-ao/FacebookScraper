@@ -238,6 +238,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F2-3 分类 tag | 离线通过 | 统一型号别名、完整 hashtag 优先、正文补充；auto/manual/legacy 来源，人工清空保留 | 业务核对别名表 | `tests_storage_contract`、`tests_storage_v2`：多型号/边界、自动更新、人工与旧分类保留 |
 | F2-3 本地 tag 母目录 | 离线通过 | `posts/<月份>/<tag>/<帖子>`；移动意图/完成记录、当前路径更新、历史/人工文件及图片所有权保留 | 重建归档后复验 | `tests_storage_contract`、`tests_storage_v2`：中断恢复、A→B→A、下载期间移动、中文/保留名/长路径 |
 | F2-2 原图完整性与修订 | 离线通过 | 实际 MIME/解码/大小/SHA、临时文件原子落盘、旧原图不覆盖、缺图可补、复用核对原哈希 | 真实 CDN 与图文样本 | `tests_storage_contract`、`tests_backfill`、`tests_fb_graph`、`tests_delta_logged_in` |
+| F2-2 IG 单图来源完整性与定点修复 | 离线通过 | 明确单图兼容空轮播字段；指定 capture 校验身份/原图，备份后只修三个完整性字段并同步派生索引 | 服务机指定帖执行与详情回读仍待真实联调 | `tests_parse`、`tests_ig_completeness_repair`：空字段/异常轮播、原字节备份、无关内容保留、坏图拒绝、中断续跑及实际素材闸；[操作步骤](MANUAL_STEPS.md#41-ig-单图被误标不完整时的离线修复) |
 | F2-2 回填窗口 | 离线通过 | `--days N` 按 `created_at` 收紧，窗口外计数可见；算不出日期的保留 | 真实回填会话 | `tests_backfill` [9]：窗口内外、无日期、边界当天、不带参数保持全量 |
 | F2-5 源图片变化 | 离线通过 | 指纹含每张实际字节、数量、顺序；人工劳动保留 | 可控来源样本 | `tests_content_recovery`：同名等长换字节、增删、换序；旧候选失效，已排期只提醒 |
 | F2-5 来源文字摘要统一 | 离线通过 | `source_text_sha256` 全链路统一 + AST 守卫；风险另存 raw `scan_text_sha256`，最终提交字节摘要不改 | 无 | `tests_hygiene`/`tests_risk_scan`/`tests_publication_recovery`：字段算法与高亮偏移、来源空白兼容 |
@@ -299,6 +300,7 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 | F3-4 上传替换与下载拆分 | 离线通过 | 上传落 `media_de/NN.<ext>`，人工选择单独追加到 `manual_uploads.jsonl`，**不写 `images_de.jsonl`**；旧件先备份，失败保留原选择，同字节旧生成图也按人工选择采用；审校记为 `edited` 继续排期。下载按钮及 ZIP 说明不触发交接，转交人工仍需独立确认 | 业务真实换图走完排期 | `tests_web_review`/`tests_image_workflow_review`/浏览器第 10 场景：连续跨格式上传、发布素材选择、错误与 Windows 占用恢复、人工标记/时间/偏差提示/禁用优化；下载不转态 |
 | F3-4 模型任务恢复/旧候选 | 离线通过 | 按进程/job/request/source/prompt 对账，恢复不发新付费请求 | 不确定项人工核账 | `tests_content_recovery`/`tests_refinement`：执行中不抢占、未请求收敛、不确定阻塞、源变候选不可应用 |
 | F3-4 恢复 UI/费用呈现 | 离线通过 | job 与批次 `operation_id` 关联 paid request、费用、CAS 版本；人工核对恢复不重新付费 | 真实供应商核账另验 | runtime/content recovery 后端定向；浏览器用明确 UI 夹具验证中断/费用/取消恢复 |
+| F3-4 优化拒绝原因与状态刷新 | 离线通过 | 显示 API 具体错误，保留输入；查询失败不清错，成功后清除旧提交提示；不自动重提生成 | 服务机实际页面复验 | `tests_browser_workflow.test_11`：409 detail、503 刷新失败、恢复后清错，生成 POST 始终只有一次；[证据](HANDOFF.md#116-instagram-单图完整性与优化错误提示修复) |
 | F3-8 风险扫描代码 | 离线通过 | 翻译前真实调用路径，pun/ambiguous/us_only，源文/提示词绑定 | 无 | `tests_risk_scan`：未扫/失败/成功零风险/stale，缺钥匙不造 paid started，费用入账 |
 | F3-8 实际语义扫描 | 待真实联调 | 一篇受许可/预算约束的真实扫描并核 usage | 模型凭据/许可 | request ID、模型/提示词/结果/时间、供应商用量；夹具不算 |
 | **F3-5 热度推荐整条链路** | **明确延期** | 2026-09-15 决定本轮不做，标签只由业务手工选取编辑。闸在 `suggestions_enabled()`，关掉后连候选词的付费调用都不发；采集器代码保留不删 | 恢复 9224 访问、业务给出同类账号名单 | `tests_hashtag_rank`：关闭时零付费、不排周更任务；开启时的付费契约仍有覆盖 |

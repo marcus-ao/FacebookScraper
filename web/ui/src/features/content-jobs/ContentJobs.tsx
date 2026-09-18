@@ -7,7 +7,7 @@ import { initialCapabilities, initialTranslate, refinementCapabilities, refine, 
 import { useContentJob } from '@/hooks/useContentJob'
 import { PaidActionButton } from '@/components/PaidActionButton'
 import { initialTranslationDisabledReason, refinementDisabledReason, textCandidateDisabledReason } from '@/lib/action-reasons'
-import { isConflict } from '@/services/http'
+import { isApiError, isConflict } from '@/services/http'
 import { displayLinks } from '@/features/localization/model'
 import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
 import styles from './ContentJobs.module.css'
@@ -50,9 +50,28 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     setBusy(true); setError(null)
     try { if (family === 'initial' && initial.data) { first.accept(await initialTranslate(detail, initial.data, consent)); setConsent(false); await initial.refetch() }
       else { next.accept(await refine(detail, kind, instruction, media)); setSubmittedInstruction(instruction); await capabilities.refetch() } }
-    catch (cause) { setError(cause); if (isConflict(cause) && !editing) { setConsent(false); await refresh(); await initial.refetch() } }
+    catch (cause) {
+      setError(cause)
+      if (isConflict(cause) && !editing) {
+        setConsent(false)
+        try { await refresh(); await initial.refetch() }
+        catch { /* 保留原始拒绝原因；刷新失败不能覆盖提交错误或丢失输入。 */ }
+      }
+    }
     finally { setBusy(false) }
   }
+  const refreshStatus = async (family: 'initial' | 'refine') => {
+    setBusy(true)
+    try {
+      const query = family === 'initial' ? initial : capabilities
+      const flow = family === 'initial' ? first : next
+      const [, result] = await Promise.all([query.refetch({ throwOnError: true }), flow.refresh()])
+      if (result?.error) throw result.error
+      setError(null)
+    } catch (cause) { setError(cause) }
+    finally { setBusy(false) }
+  }
+  const currentError = error || initial.error || capabilities.error || first.error || next.error
   const status = (flow: typeof first, initialFlow: boolean) => flow.job && <div className={styles.job}>
     <p role="status">{labels[flow.job.status] ?? '处理状态待核对'}{flow.job.cost_usd !== undefined && ` · 已记录费用 US$${flow.job.cost_usd.toFixed(4)}`}</p>
     {flow.job.status === 'interrupted' && <Button disabled={busy || editing} onClick={() => { setBusy(true); void flow.recover().catch(setError).finally(() => setBusy(false)) }}>核对并恢复本地状态（不重新生成）</Button>}
@@ -70,10 +89,12 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
       <Alert type="warning" showIcon title="这篇来自第三方作者，请先查看原帖，确认可用于德国站内容运营。" description={<Space wrap>
         {initial.data.available && !jobRunning(first.job) ? <><Checkbox checked={consent} disabled={editing || busy} onChange={event => setConsent(event.target.checked)}>我已确认可以处理这篇内容，开始本篇模型处理。</Checkbox>
           <PaidActionButton label="翻译这篇" amount="按实际用量计费" {...(firstReason ? { disabledReason: firstReason } : {})} loading={busy} onClick={() => void act('initial')} /></> : <span>{first.job ? '请查看本篇处理进度。' : '请继续审校；若仍缺正文或德语图，可刷新处理状态。'}</span>}
-        <Button size="small" onClick={() => { void initial.refetch(); void first.refresh() }}>刷新处理状态</Button>
+        <Button size="small" disabled={busy} onClick={() => void refreshStatus('initial')}>刷新处理状态</Button>
       </Space>} />{status(first, true)}
     </section>, initialContainer)}
-    {error || initial.error || capabilities.error || first.error || next.error ? <Alert type="warning" title="本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对" /> : null}
+    {currentError ? <Alert type="warning" showIcon
+      title={isApiError(currentError) ? currentError.message : '本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对'}
+      description={isApiError(currentError) ? '已保留输入。请按提示处理后刷新任务状态，再决定是否重新生成。' : undefined} /> : null}
     <Collapse items={[{ key: 'refine', label: '单篇优化（可选）', children: <>
       <Space><label>优化内容 <Select aria-label="优化内容" value={kind} disabled={busy || jobRunning(next.job)} onChange={setKind} options={[{ value: 'text', label: '文案' }, { value: 'image', label: '图片' }]} /></label>
         {kind === 'image' && <Select aria-label="选择图片" value={media} disabled={busy || jobRunning(next.job)} onChange={setMedia} options={detail.images.map((_, index) => ({ value: index, label: `第 ${index + 1} 张` }))} />}
@@ -88,7 +109,7 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
       </div>}
       <PaidActionButton label={kind === 'image' ? '生成图片' : '生成文案候选'} amount={kind === 'image' && capabilities.data?.estimated_image_usd != null ? `约 US$${capabilities.data.estimated_image_usd.toFixed(3)}` : '按实际用量计费'} {...(nextReason ? { disabledReason: nextReason } : {})} {...(kind === 'image' ? { remaining } : {})} loading={busy} onClick={() => void act('refine')} />
       {kind === 'image' && <Typography.Paragraph type="secondary">当前模型：{capabilities.data?.image_model ?? '读取中'}。{capabilities.data?.estimate_basis}；费用以实际记录为准。每张图最多受理 {capabilities.data?.max_refine_per_media ?? 3} 次，<strong>失败的那次也算一次</strong>；生成过的版本可以在图片页比较后换回去。</Typography.Paragraph>}
-      {status(next, false)}<Button type="text" onClick={() => { void capabilities.refetch(); void next.refresh() }}>刷新任务状态</Button>
+      {status(next, false)}<Button type="text" disabled={busy} onClick={() => void refreshStatus('refine')}>刷新任务状态</Button>
     </> }]} />
     <Drawer title="生成模板（只读）" open={templateOpen} onClose={() => setTemplateOpen(false)} size="large"><pre className={styles.diagnostic}>{template.isPending ? '正在读取模板…' : template.data?.content ?? '模板暂时不可读'}</pre></Drawer>
   </div>

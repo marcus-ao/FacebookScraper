@@ -215,6 +215,10 @@ Facebook Comet 的单图及相册附件从 `styles.attachment` 读取实际媒�
 
 `source_media_complete` 表示来源结构与 `capture_state.json` 中的 `items[key].source.media` 已知完整；`media_complete` 表示来源完整且所有静态图片都完成实际全图下载、解码、SHA 校验和原子写入。媒体按来源顺序保存，每项只选一个尺寸；IG 不把重复封面或视频缩略图当图片。未知结构一律不完整；Facebook 多图的真实响应顺序仍须真机核验。
 
+IG `media_type=1` 的单图响应允许 `carousel_media=null` 或空数组，来源总数为 1；字段存在本身不是轮播证据。`media_type=8` 缺子项、未知类型或类型与轮播字段矛盾仍标不完整。
+
+已归档的同类误判可按 [MANUAL_STEPS §4.1](MANUAL_STEPS.md#41-ig-单图被误标不完整时的离线修复) 用指定 capture 离线核验并修复单帖。仅更新完整性、追加该帖 manifest 和重建展示索引，保留原图及人工记录；历史采集结果和通知不改写。
+
 配额、时间预算或抓取失败立即进入人工处理，后续普通扫描不重试。显式人工恢复使用 `PLATFORM:ACCOUNT:POST_ID`、expected revision 和 reason，只尝试一次并遵守同一访问、停机、身份与媒体校验规则；保留人的工作和原始事实。卡片展示“实际验证图片数 / 已知总数”，总数未知时明确写未知。
 
 候选类别为 `new`、`historical`、`source_updated`、`recovered`、`time_unknown`。30 天基线只把既有内容记为 historical 并汇总，不向群里逐帖刷屏。内容 revision 由规范正文与按顺序的实际媒体 SHA 决定；CDN 签名、URL 路径变化和重复响应不产生新卡片。旧归档缺字段时显示 unknown，不补造事实。
@@ -787,6 +791,8 @@ IG 版明确要求整句删掉、不要补写替代说法。
 | 界面 | 直接点，无需确认 | **按钮上直接显示本次预计花费** |
 | 限制 | 无 | **3 次 / 张**；走已有 `RequestController` 预算硬闸 |
 | 执行方式 | 持久化任务，返回 job ID | **异步任务**，刷新继续查询同一 job ID |
+
+优化请求被拒绝时展示后端具体原因，保留优化要求；状态查询失败继续显示错误，成功后清除旧提交提示。刷新只查询状态，不自动重提付费生成。
 
 ⛔ **重生成不得覆盖人工放进 `media_de/` 的图。** [README](../README.md) 明写
 "人工放进去的文件程序不得覆盖——设计同事手工修的那张一定比模型那张对"。
