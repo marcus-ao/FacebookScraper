@@ -293,6 +293,13 @@ def _fb_media(node: dict) -> tuple[list[Media], bool]:
             if not isinstance(att, dict):
                 complete = False
                 continue
+            style = att.get('styles')
+            if (isinstance(style, dict) and style.get('__typename') in {
+                    'StoryAttachmentPhotoStyleRenderer', 'StoryAttachmentAlbumStyleRenderer'}
+                    and isinstance(style.get('attachment'), dict)):
+                # Comet 外层 media 只是 ID 占位；实际图片/有序相册在 renderer 内。
+                # 相册外层的封面不能另算一张，单图外层空 subattachments 也不表示缺图。
+                att = style['attachment']
             sub = att.get('all_subattachments') or att.get('subattachments')
             children = None
             if isinstance(sub, dict):

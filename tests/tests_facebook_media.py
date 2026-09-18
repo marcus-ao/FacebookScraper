@@ -1,4 +1,4 @@
-"""Facebook empty-media regressions; synthetic responses and isolated archive writes."""
+"""Facebook media regressions: minimized capture structures and isolated archive writes."""
 import asyncio
 import copy
 import json
@@ -37,6 +37,53 @@ def parse(payloads):
 
 
 class FacebookMediaTests(unittest.TestCase):
+    def captured(self):
+        # Real 2026-09-18 capture: retain attachment nesting/IDs, replace CDN URLs,
+        # omit tracking, comments and unrelated profile data. No network access.
+        path = Path(__file__).parent / 'fixtures' / 'facebook_media_styles.json'
+        return json.loads(path.read_text('utf-8'))
+
+    def test_captured_photo_renderer_resolves_placeholder_and_empty_subattachments(self):
+        root = next(p['data']['node'] for p in self.captured()
+                    if p['data']['node']['post_id'] == '122123783349379375')
+        content = root['comet_sections']['content']['story']
+        for node in (root, content):
+            with self.subTest(fragment='root' if node is root else 'content'):
+                post = from_fb_story(node, 'neakasaofficial', 'backfill')
+                self.assertEqual([m.source_media_id for m in post.media], ['122123783337379375'])
+                self.assertEqual(post.media[0].url, 'https://cdn.invalid/122123783337379375/photo_image.jpg')
+                self.assertEqual((post.media[0].width, post.media[0].height), (512, 640))
+                self.assertTrue(post.source_media_complete)
+                self.assertEqual(post.source_media_count, 1)
+
+    def test_captured_albums_keep_child_order_largest_sizes_and_video_identity(self):
+        expected = {
+            '122123185335379375': ['122123185281379375', '122123185275379375',
+                '122123185269379375', '122123185293379375', '122123185287379375'],
+            '122120053587379375': ['122120053533379375', '122120053539379375',
+                '122120053545379375', '122120053527379375'],
+        }
+        for payloads in (self.captured(), list(reversed(self.captured()))):
+            posts = {p.post_id: p for p in parse(payloads)}
+            self.assertEqual(len(posts), 4)
+            for pid, media_ids in expected.items():
+                post = posts[pid]
+                self.assertEqual([m.source_media_id for m in post.media], media_ids)
+                self.assertTrue(all(m.kind == 'image' and m.url.endswith('/viewer_image.jpg') for m in post.media))
+                self.assertTrue(post.source_media_complete)
+                self.assertEqual(post.source_media_count, len(media_ids))
+            video = posts['122125125675379375']
+            self.assertEqual([(m.kind, m.source_media_id) for m in video.media], [('video', '3751016248369637')])
+
+    def test_incomplete_rendered_album_keeps_available_images_without_extra_cover(self):
+        root = next(p['data']['node'] for p in self.captured()
+                    if p['data']['node']['post_id'] == '122123185335379375')
+        connection = root['attachments'][0]['styles']['attachment']['all_subattachments']
+        connection['nodes'] = connection['nodes'][:2]
+        post = from_fb_story(root, 'neakasaofficial', 'backfill')
+        self.assertEqual([m.source_media_id for m in post.media], ['122123185281379375', '122123185275379375'])
+        self.assertFalse(post.source_media_complete)
+
     def test_missing_or_null_attachments_are_unknown_not_confirmed_empty(self):
         for node in (story(), story(attachments=None)):
             post = from_fb_story(node, 'neakasaofficial', 'backfill')

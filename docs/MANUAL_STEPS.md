@@ -774,6 +774,12 @@ scripts\run_python.bat -m tools.replay facebook --capture "D:\capture-copy\_capt
 从同次捕获中保留目标 `post_id` 的全部 story 片段及其 `attachments`、`comet_sections`，不要用主页照片栏替代。
 缺附件字段应解析为来源不完整、数量未知；已知图片不应被空片段覆盖。
 修复版本可在重新人工回填取得图片后补入旧空归档，无须先删目录；只更新代码不会产生缺失的原图。
+
+已确认的 Comet 缺图结构：附件外层 `media` 只有 Photo ID，实际单图位于
+`styles.attachment.media.photo_image`，相册位于 `styles.attachment.all_subattachments.nodes`。
+预览应显示相册原顺序及真实项数，不能把外层封面重复计入；仅有宽高、没有 `uri` 的 `viewer_image`
+不是可下载地址。2026-09-18 用户捕获文件含 21 帖、23 图片、5 视频；按该次捕获时刻的 30 天窗口为
+12 帖、13 图片，其余帖子在窗口外。这些数量仅用于核对该文件，不是每次回填的固定期望值。
 视频的 `kind=video` 且 `local_path=null` 属于设计行为；真实原帖含视频但 `media=[]` 才需另查媒体结构。
 完整响应、原图补入与服务机核验未完成前，身份修复只记“离线通过”。
 
