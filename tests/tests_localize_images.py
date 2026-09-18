@@ -377,15 +377,13 @@ check(all(band_rejected), "非法画幅带在算尺寸前失败，不静默当�
 
 
 print("\n[K2c] 模型白名单与按模型分表的费率")
-check(L.SUPPORTED_MODELS == ("gpt-image-2", "gpt-image-2.5"),
-      "白名单就是这两个；其它模型仍然拒绝")
 check(set(settings.cost_rates_by_model) == set(L.SUPPORTED_MODELS),
       "每个白名单模型都必须有自己的费率，缺一个在加载时就失败")
 check(settings.cost_rates is settings.cost_rates_by_model[settings.model],
       "cost_rates 取的是当前 model 那一套，不是通用费率")
 
 base_image_config = dict(raw)
-for bad_model in ("gpt-image-1", "gpt-image-2-free", "free"):
+for bad_model in ("gpt-image-1", "gpt-image-2-free", "gpt-image-2.5", "free"):
     try:
         L.Settings(dict(base_image_config, model=bad_model), settings.glossary)
         model_rejected = False
@@ -393,10 +391,13 @@ for bad_model in ("gpt-image-1", "gpt-image-2-free", "free"):
         model_rejected = "gpt-image-2" in str(exc)
     check(model_rejected, f"model={bad_model} 被拒绝")
 
-switched = L.Settings(dict(base_image_config, model="gpt-image-2.5"), settings.glossary)
-check(switched.model == "gpt-image-2.5", "可以切到 gpt-image-2.5")
-check(switched.cost_rates is switched.cost_rates_by_model["gpt-image-2.5"],
-      "切模型之后费率跟着换，估算不会继续用旧模型那一套")
+for variant in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+    switched = L.Settings(dict(base_image_config, model=variant), settings.glossary)
+    check(switched.model == variant, f"可以切到 {variant}")
+    check(switched.cost_rates is switched.cost_rates_by_model[variant],
+          "切模型之后费率跟着换，估算不会继续用旧模型那一套")
+check(L.image_usage_cost(settings, minimal_usage(), model="gpt-image-2.5") is None,
+      "历史笼统 2.5 型号不猜成 Flare/Sunburst，未知费率不记成零")
 
 try:
     L.Settings(dict(base_image_config, cost_rates_usd_per_million={

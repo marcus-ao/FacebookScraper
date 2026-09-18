@@ -51,9 +51,9 @@ MAX_PIXELS = 8_294_400
 MAX_EDGE = 3_840
 MAX_ASPECT_RATIO = 3.0
 MAX_LATEST_POSTS = 3
-# ⚠️ 上面这组 size 契约是按 gpt-image-2 标定的，2.5 没有实测。切模型后先跑一次
+# ⚠️ 上面这组 size 契约是按 gpt-image-2 标定的，2.5 Flare/Sunburst 没有实测。切模型后先跑一次
 # `--check` 验证 816x816 返回尺寸与 usage；通过不证明其它尺寸边界也兼容。
-SUPPORTED_MODELS = ("gpt-image-2", "gpt-image-2.5")
+SUPPORTED_MODELS = ("gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst")
 
 IMAGE_CONFIG_KEYS = frozenset({
     "provider",

@@ -235,12 +235,14 @@ class ImageWorkflowReviewTests(unittest.TestCase):
         path.write_text(json.dumps(row) + "\n", encoding="utf-8", newline="")
         (self.account / "translated.jsonl").unlink()
         before = engine.budget_snapshot([self.account], now=datetime.now(timezone.utc))
-        cfg()._d["image"]["model"] = "gpt-image-2.5"
-        cfg()._d["image"]["cost_rates_usd_per_million"]["gpt-image-2.5"] = {
-            "text_input": 50, "image_input": 80, "image_output": 300}
-        after = engine.budget_snapshot([self.account], now=datetime.now(timezone.utc))
-        self.assertEqual(before, after)
-        self.assertIsNone(refinement.capabilities(self.account, self.fx.post_id)["estimated_image_usd"])
+        for model in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+            with self.subTest(model=model):
+                cfg()._d["image"]["model"] = model
+                cfg()._d["image"]["cost_rates_usd_per_million"][model] = {
+                    "text_input": 50, "image_input": 80, "image_output": 300}
+                after = engine.budget_snapshot([self.account], now=datetime.now(timezone.utc))
+                self.assertEqual(before, after)
+                self.assertIsNone(refinement.capabilities(self.account, self.fx.post_id)["estimated_image_usd"])
 
 
 if __name__ == "__main__":

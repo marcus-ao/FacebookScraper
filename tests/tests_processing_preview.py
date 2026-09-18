@@ -140,17 +140,19 @@ class ProcessingPreviewTests(unittest.TestCase):
 
     def test_new_image_model_does_not_inherit_another_models_historical_price(self):
         self.post("new-model")
-        self.config._d["image"]["model"] = "gpt-image-2.5"
-        value = self.preview()
-        self.assertEqual(value["totals"]["new_images_min"], 2)
-        self.assertIsNone(value["cost"]["image_historical_unit_usd"])
-        self.assertIsNone(value["cost"]["image_reference_max_usd"])
-        self.assertIsNone(value["cost"]["partial_reference_max_usd"])
-        output = io.StringIO()
-        with redirect_stdout(output):
-            processing_preview.print_snapshot(value)
-        self.assertIn("gpt-image-2.5", output.getvalue())
-        self.assertIn("未知", output.getvalue())
+        for model in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+            with self.subTest(model=model):
+                self.config._d["image"]["model"] = model
+                value = self.preview()
+                self.assertEqual(value["totals"]["new_images_min"], 2)
+                self.assertIsNone(value["cost"]["image_historical_unit_usd"])
+                self.assertIsNone(value["cost"]["image_reference_max_usd"])
+                self.assertIsNone(value["cost"]["partial_reference_max_usd"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    processing_preview.print_snapshot(value)
+                self.assertIn(model, output.getvalue())
+                self.assertIn("未知", output.getvalue())
 
     def test_preview_and_processing_keep_boundary_images_inside_the_aspect_band(self):
         arc, post = self.post("portrait", size=(1440, 1800))

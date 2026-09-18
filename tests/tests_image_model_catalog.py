@@ -27,6 +27,7 @@ class CatalogTests(unittest.TestCase):
         Image.new("RGB", (816, 816), "white").save(self.source)
         self.settings = L.Settings()
         self.settings.gap = 0
+        self.requested_model = "gpt-image-2"
         self.requests = []
         self.list_reply = {"object": "list", "data": []}
         self.detail_reply = {
@@ -62,7 +63,7 @@ class CatalogTests(unittest.TestCase):
             if request.url.path == "/v1/models":
                 reply = self.list_reply
             else:
-                self.assertEqual(request.url.path, "/v1/models/gpt-image-2")
+                self.assertEqual(request.url.path, "/v1/models/" + self.requested_model)
                 reply = self.detail_reply
             if reply == "timeout":
                 raise httpx.ReadTimeout("offline timeout", request=request)
@@ -71,7 +72,7 @@ class CatalogTests(unittest.TestCase):
             return httpx.Response(200, json=reply)
         self.assertEqual((request.method, request.url.path), ("POST", "/v1/images/edits"))
         self.assertEqual(P.load_events(self.state)[-1]["event"], P.EVENT_STARTED)
-        self.assertIn(b'\r\n\r\ngpt-image-2\r\n', request.read())
+        self.assertIn(('\r\n\r\n' + self.requested_model + '\r\n').encode(), request.read())
         return httpx.Response(200, json=self.edit_reply)
 
     def edit(self):
@@ -107,6 +108,46 @@ class CatalogTests(unittest.TestCase):
         result = self.edit()
         self.assertEqual(result.model, "gpt-image-2")
         self.assertEqual(self.requests, [("GET", "/v1/models"), ("POST", "/v1/images/edits")])
+
+    def test_flare_and_sunburst_keep_exact_names_through_detail_edit_and_ledger(self):
+        for model in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
+            with self.subTest(model=model):
+                self.settings = L.Settings(dict(L.cfg()["image"], model=model))
+                self.settings.gap = 0
+                self.requested_model = model
+                self.detail_reply["id"] = model
+                self.edit_reply["model"] = model
+                self.state = self.root / model
+                self.requests.clear()
+                self.editor = L.ImageEditor(self.settings, client=self.client,
+                    paid_controller=P.RequestController(self.state, preflight=self.preflight))
+                result = self.edit()
+                self.assertEqual((result.model, result.model_verification), (model, "response"))
+                self.editor.finalize_paid(True)
+                self.assertEqual(self.requests, [
+                    ("GET", "/v1/models"), ("GET", "/v1/models/" + model),
+                    ("POST", "/v1/images/edits"),
+                ])
+                started = [row for row in P.load_events(self.state) if row["event"] == P.EVENT_STARTED]
+                self.assertEqual(len(started), 1)
+                self.assertEqual(started[0]["model"], model)
+
+    def test_flare_response_cannot_be_accepted_as_sunburst(self):
+        self.settings = L.Settings(dict(L.cfg()["image"], model="gpt-image-2.5-sunburst"))
+        self.settings.gap = 0
+        self.requested_model = "gpt-image-2.5-sunburst"
+        self.detail_reply["id"] = "gpt-image-2.5-sunburst"
+        self.edit_reply["model"] = "gpt-image-2.5-flare"
+        self.editor = L.ImageEditor(self.settings, client=self.client,
+            paid_controller=P.RequestController(self.state, preflight=self.preflight))
+        with self.assertRaises(L.ModelMismatchError):
+            self.edit()
+        self.assertEqual(P.load_events(self.state)[-1]["event"], "output_rejected")
+
+    def test_unsuffixed_2_5_is_rejected_before_network(self):
+        with self.assertRaises(SystemExit):
+            L.Settings(dict(L.cfg()["image"], model="gpt-image-2.5"))
+        self.assertEqual(self.requests, [])
 
     def test_nonempty_list_missing_model_still_stops(self):
         self.list_reply["data"] = [{"id": "gpt-image-2-free", "object": "model"}]
