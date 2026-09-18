@@ -326,6 +326,27 @@ socket 关闭边界故障注入复现同一错误：请求与连接集合已空�
 托管构建恢复须核对新 main 的完整 SHA、工作流成功结论及 `fbscraper-windows` 包身份；
 本地通过不替代这三项证据。服务机部署与真实业务继续为 **待真实联调**。
 
+### 1.12 DeepSeek Flash 模型名修复（2026-09-17）
+
+分支 `codex/deepseek-flash-model`，工作树 `.worktrees/deepseek-flash-model`；独立 archive/state/.env，
+只复用主检出的 Python 解释器。用户提供的服务机日志对应旧名称 `deepseek-v4-flash` 请求、
+`deepseek-flash` 响应；[官方更新说明](https://api-docs.deepseek.com/zh-cn/updates/)确认旧模型于
+2026-09-10 退役并暂时兼容路由到 V4.1 Flash。默认配置和白名单已改用当前名称，Pro 仍允许；
+不匹配提示只陈述实际请求/响应并指向官方说明，不把所有名称变化断言成异常回退。
+
+状态为 **离线通过**：[翻译回归](../state/offline-validation-20260918T024929Z/results.json)通过，
+覆盖当前 Flash 的实际 SDK + MockTransport 请求、旧失败留账后单篇成功、Pro 收到 Flash 拒绝、
+旧两次拒绝阻止第三次请求。[相关定向记录](../state/offline-validation-20260918T024853Z/results.json)
+中的其余 7 个脚本通过：付费账本、初次翻译、风险扫描、优化、建议、标签及 hygiene；该次翻译
+唯一失败是新断言误写终态名称，改成既有 `accepted` 后单独复验通过。修复前同症状的
+[失败复现](../state/offline-validation-20260918T024714Z/results.json)保留。证据位于上述工作树
+`state/`，不随 Git 交付，清理前须保全。
+
+没有修改费用账本、任务标识、提示词版本、保守估算费率或两次拒绝上限；没有新增付费请求。
+本机隔离夹具不能证明服务机账单或该帖真实译文通过，当前也没有服务机账本可供判断是否已达
+拒绝上限。真实复验为 **待真实联调**，按 [MANUAL_STEPS §5.4](MANUAL_STEPS.md#54-deepseek-flash-模型名升级后的单篇复验)
+先核账、确认来源许可与预算，再对指定单篇执行；`--check` 本身付费，不作为必跑前置。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

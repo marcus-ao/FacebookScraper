@@ -117,11 +117,14 @@ scripts\run_backfill.bat instagram --days 30
 ```powershell
 scripts\run_pipeline.bat preflight
 scripts\run_pipeline.bat preflight --json
-scripts\run_translate.bat --check
+scripts\run_python.bat -m core.paid_requests --status
 scripts\run_translate.bat --estimate
 ```
 
 只有看到明确账号、篇数、预计费用和许可后再执行付费命令。第三方来源没有当前许可时不要运行。每张图最多受理三次优化，**失败的那次也算一次**（在受理入口计数）。生成过的版本在审校台图片页可以比较后换回去，换版不调用模型也不计费。
+
+`scripts\run_translate.bat --check` 会发起真实付费请求，只能在上述检查与费用确认之后运行；
+已有选定单篇的模型修复复验可直接按 §5.4 执行，不必额外付费自检。
 
 ### 5.1 切换图片模型前先自检
 
@@ -180,6 +183,32 @@ scripts\run_python.bat -m tools.hashtag_sampling trends-reset --reason "已人�
 ```
 
 `<revision>` 替换为刚读取的 revision，版本已变就重新核对，不删除 `trends_export_state.json`。随后用被动记录的真实 CSV 按钮生成本次 proof，核对同一英文标签的德语候选组、`geo=DE` 和起止日，再运行导出。Sign in 或任意链接不能作 CSV 控件证据；保留原始 CSV 字节、三个摘要和源文上下文，不用编辑器改换行后重新冒充原下载。当前没有可宣称通过的真实 CSV 导出。
+
+### 5.4 DeepSeek Flash 模型名升级后的单篇复验
+
+[DeepSeek 官方更新说明](https://api-docs.deepseek.com/zh-cn/updates/)确认：2026-09-10 起
+V4.1 Flash 的调用名为 `deepseek-flash`，旧 `deepseek-v4-flash` 已退役且暂时兼容路由到新版。
+当前 `[translate].model` 默认使用 `deepseek-flash`；另允许 `deepseek-v4-pro`。旧 Flash 名称在
+请求前直接拒绝并提示迁移。请求 Pro 却收到 Flash 仍报错并停止整批，不能删除模型校验。
+
+模型不匹配发生在读取 usage 之后、保存译文之前：有完整 usage 的失败会保留费用和
+`output_rejected`，没有可用译文；费用未知的请求会阻止后续付费。复验顺序：
+
+1. 服务机更新到含修复的版本，核对实际运行目录的 `[translate].model`。
+2. 运行本节开头的 `core.paid_requests --status`，核对未闭合请求和被拒预算，再与供应商后台核账。
+   只有查明真实结果才能结转不确定请求；`--resolve` 不能解除已闭合请求的拒绝次数限制。
+3. 确认该帖来源许可、统一预算与本次单篇费用后，执行：
+
+   ```powershell
+   scripts\run_translate.bat --account in_neakasa.global --post-id 3987885751693561790 --limit 1
+   ```
+
+4. 预期单篇 `OK`、成功 1 篇/失败 0 篇；核对保存的德语正文、响应模型及新付费记录。
+
+同一任务仍最多允许两次产出拒绝，任务标识不因模型名改变而重置。只有一次旧拒绝时可在上述
+核账后重试；若已达到上限，保留账本及 request ID，先人工核对拒绝原因和后续重试方案。
+本次修复没有提供额外付费授权或清零入口；不要删账本、伪造 accepted 或只改 PROMPT_VERSION 绕过限制。
+原保守估算费率保持，`reasoning` 已包含在输出 tokens 中；实际费用以供应商账单为准。
 
 ## 6. 审校台人工检查
 

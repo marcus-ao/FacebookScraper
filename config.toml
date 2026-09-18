@@ -52,7 +52,7 @@ gap_flag_days = { facebook = 5, instagram = 6 }  # 相邻源帖超过此间隔�
 provider = "deepseek"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"  # 环境变量名，非密钥。
-model = "deepseek-v4-flash"
+model = "deepseek-flash"  # 当前 Flash 调用名；deepseek-v4-flash 已退役并临时路由到新版。
 timeout_seconds = 120
 max_retries = 2  # 仅无付费账本的 SDK 客户端使用；受统一账本管理的调用固定为 0。
 request_gap_seconds = 1.0
