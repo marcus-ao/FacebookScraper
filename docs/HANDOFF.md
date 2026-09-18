@@ -472,6 +472,25 @@ npm/Python 边界为替身；覆盖连续源码更新后的旧产物替换、顺
 这些 HTTP/浏览器检查仍用临时归档与合成图片；服务机地址本机访问超时，没有远程部署或真实页面验收。
 本次续修证据在同工作树 `state/review-menu-startup/`，旧菜单证据保留。
 
+### 1.16 Instagram 单图完整性与优化错误提示修复
+
+分支 `codex/instagram-single-image-completeness`，工作树 `.worktrees/instagram-single-image-completeness`，基点 `e22c9b1`。archive/state/.env 独立绑定，仅复用主检出 Python。用户提供的服务机字段摘要为 `media_type=1`、`__typename=XDTMediaDict`、`product_type=feed`、`carousel_media=null`；旧解析器按字段存在性进入轮播分支，导致已校验单图仍被素材硬闸拒绝。没有拿到服务机完整 capture 或业务目录。
+
+明确单图现兼容空轮播字段，真实轮播缺子项及矛盾类型仍不完整。单帖命令 `tools.repair_ig_completeness` 默认预览，执行前核对指定 capture 的同帖证据和既有原图；备份原字节及修复依据后只改三个完整性字段，追加 manifest 并重建两个展示索引。不改原文、原图、人工记录、业务账本、采集历史或通知。manifest/索引中断可用原命令继续；服务机步骤见 [MANUAL_STEPS §4.1](MANUAL_STEPS.md#41-ig-单图被误标不完整时的离线修复)。
+
+页面直接展示 API 错误原因。刷新失败保留错误，成功后清除本地提交提示并保留优化要求；状态刷新不再提交生成。409 后详情刷新异常也被捕获，原拒绝原因不被吞掉。
+
+状态为 **离线通过**：
+
+| 检查 | 证据与边界 |
+|---|---|
+| 解析失败复现 | [修复前结果](../state/offline-validation-20260918T065437Z/results.json)记录单图 `null`/空数组错误判为不完整；样本由用户字段摘要构造，不是完整真实响应重放 |
+| 定向后端 | [7/7 脚本](../state/offline-validation-20260918T070250Z/results.json)：解析、单帖修复 5 项、采集媒体、存储链路/状态、优化及 hygiene；临时归档、合成图片、假传输，无外部请求 |
+| 浏览器 | [修复前失败](../state/refinement-browser-before.log)、[修复后通过](../state/refinement-browser-after.log)、[报告及截图](../state/offline-browser-20260918T070054Z-20376/report.json)；真实本地 API/构建页面，409/503 使用浏览器响应夹具，验证原因、保留输入、失败/成功刷新及仅一次 POST |
+| 前端与入口 | [相关前端 92 项](../state/ui-tests.log)、[TypeScript/Vite 构建](../state/ui-build-after.log)通过；保留既有大 chunk 提示。`scripts/run_python.bat -m tools.repair_ig_completeness --help` 入口通过 |
+
+独立只读复审未发现阻断项，并另行运行解析回归及 5 项单帖修复测试通过。本节证据保存在上述工作树 `state/`，不随 Git 交付，清理前须保全。服务机 `3984612646028833441` 的实际修复、详情回读以及真实模型请求仍为 **待真实联调**；代码部署不自动改写旧 `post.json`，也不代表付费功能已真实验收。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

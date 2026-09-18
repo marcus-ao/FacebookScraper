@@ -110,6 +110,37 @@ scripts\run_backfill.bat instagram --days 30
 
 `.global` 覆盖、会话与当前安全闸未满足时不启动其自动处理/常驻任务。已授权且不依赖回填的代码/离线验收继续做；冻结 `.tech` 不因历史可查询而重译或发布。
 
+### 4.1 IG 单图被误标不完整时的离线修复
+
+适用于来源明确 `media_type=1`、`carousel_media=null` 或空数组，现有原图已保存，但旧代码把来源完整性记为 false 的帖子。它不是模型、IP 或端口配置问题。先拉取包含修复的代码，停止 Web 和调度进程，保留现有 `archive/`、`state/` 与 `config.local.toml`；不要重新回填或运行全账号 replay。
+
+以下命令针对 `3984612646028833441`，只读配置绑定的 IG 账号归档与指定 capture，不连接平台或模型。`--capture` 只给文件名时从该账号归档根目录查找，也可传完整路径；不自动选择“最新”响应。
+
+```powershell
+scripts\run_python.bat -m tools.repair_ig_completeness --post-id 3984612646028833441 --capture _capture_1789697596.json
+```
+
+默认只预览，输出 `apply: false`、`changed`、预计完整性、已校验图片数及 capture/图片 SHA。确认 post ID、账号和 `verified_images: 1` 后执行：
+
+```powershell
+scripts\run_python.bat -m tools.repair_ig_completeness --post-id 3984612646028833441 --capture _capture_1789697596.json --apply
+```
+
+命令逐份核对同帖响应的类型、帖子链接、作者/合作关系、媒体 URL/ID 和本地原图解码/大小/SHA。来源不一致、真实轮播缺项或原图损坏会拒绝。成功时先在帖子目录保存 `post.json.before-completeness-<唯一标识>.bak` 原字节和配套 `.evidence.json`，仅把 `post.json` 的 `source_media_complete`、`source_media_count`、`media_complete` 改为 `true`、`1`、`true`，追加该帖 manifest 并重建两个 SQLite 展示索引。原文、分类、目录、原图及人工/审校/付费/发布记录保留。
+
+若中断或提示索引重建失败，保留输出与备份，核对原因后重跑同一命令；已修好的真相不会再次改写，manifest 和索引可继续修复。命令不改采集历史、访问停机状态或旧通知；这些历史记录仍反映当时结果。
+
+成功后执行 `scripts\run_web.bat`（源码启动会重建前端），重新打开详情，再只读核验：
+
+```powershell
+$postDetail = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/tasks/in_neakasa.global/3984612646028833441"
+$postDetail.storage.local | Format-List
+```
+
+本帖应为 `status: complete`，`saved_images / expected_images / verified_images` 均为 `1`，`source_media_complete / media_complete` 均为 `True`，`source_media_count: 1`。这只证明素材闸恢复；实际点击生成仍须满足原有许可、预算、审校版本等条件。后端拒绝原因现在直接显示在页面上，刷新成功会清除旧提交提示且保留优化要求，不重新提交生成。
+
+服务机 capture 和业务目录未在开发机实际修复；开发机验证使用同字段形态的构造响应、合成原图与隔离账本，不能替代本步骤的真实回读。
+
 ## 5. 付费模型操作
 
 先检查预算、来源许可和不确定请求：

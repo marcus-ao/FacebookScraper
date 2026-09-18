@@ -105,6 +105,21 @@ check(posts["3003"].text == "", "无文案帖不报错，text 为空")
 check(posts["3001"].permalink == "https://www.instagram.com/p/AAA/", "permalink 正确")
 
 print("\n[2] iphone_struct 形态（回填）")
+for empty_children in (None, []):
+    single = dict(iphone_with_caption, __typename='XDTMediaDict', product_type='feed',
+                  carousel_media=empty_children, carousel_media_count=None)
+    parsed = extract([single], 'instagram', 'acme', 'backfill')[0]
+    check(parsed.media_complete is True and parsed.source_media_complete is True
+          and parsed.source_media_count == 1 and len(parsed.media) == 1,
+          f'明确单图带空轮播字段 {empty_children!r} 仍完整且来源总数为 1')
+    for media_type in (8, None):
+        parsed = extract([dict(single, media_type=media_type)], 'instagram', 'acme', 'backfill')[0]
+        check(parsed.source_media_complete is False and parsed.source_media_count is None,
+              f'空轮播字段 {empty_children!r} 不放行轮播或未知类型 {media_type}')
+for children in ([{'image_versions2': iphone_with_caption['image_versions2']}], {}, False, 'invalid'):
+    parsed = extract([dict(iphone_with_caption, carousel_media=children)],
+                     'instagram', 'acme', 'backfill')[0]
+    check(parsed.source_media_complete is False, '单图与非空或异常轮播字段冲突时仍不完整')
 posts2 = {p.post_id: p for p in extract([feed_resp], "instagram", "acme", "backfill")}
 p = posts2["3002"]
 check(len(p.media) == 3, f"轮播 3 个子项，实得 {len(p.media)}")

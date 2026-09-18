@@ -127,6 +127,32 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(result.value.status, 200, result.value.text())
         expect(self.page.get_by_role("button", name="编辑德语", exact=True)).to_be_visible()
 
+    def test_11_refinement_rejection_explains_cause_and_refresh_clears_only_after_success(self):
+        endpoint = '/api/refinements/task/' + self.fixtures.ig_id
+        reason = 'instagram:3984612646028833441 的正文/图片/轮播完整性硬闸未通过，未调用付费服务。'
+        submissions = []
+        def reject(request):
+            submissions.append(request.post_data_json)
+            return {'status_code': 409, 'body': {'detail': reason}}
+        self.responses[('POST', endpoint)] = reject
+        self.open_task(self.fixtures.ig_id)
+        self.page.get_by_text('单篇优化（可选）', exact=True).click()
+        instruction = self.page.get_by_role('textbox', name='这一次希望怎样调整')
+        instruction.fill('保留型号，用更自然的德语。')
+        self.page.get_by_role('button', name=re.compile('生成文案候选')).click()
+        expect(self.page.get_by_text(reason, exact=True)).to_be_visible()
+        expect(instruction).to_have_value('保留型号，用更自然的德语。')
+        self.responses[('GET', endpoint)] = {'status_code': 503, 'body': {'detail': '任务状态暂时不可读'}}
+        self.page.get_by_role('button', name='刷新任务状态', exact=True).click()
+        expect(self.page.get_by_text('任务状态暂时不可读', exact=True)).to_be_visible(timeout=15000)
+        del self.responses[('GET', endpoint)]
+        self.page.get_by_role('button', name='刷新任务状态', exact=True).click()
+        expect(self.page.get_by_text(reason, exact=True)).to_have_count(0)
+        expect(self.page.get_by_text('任务状态暂时不可读', exact=True)).to_have_count(0)
+        expect(self.page.get_by_text('本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对', exact=True)).to_have_count(0)
+        expect(instruction).to_have_value('保留型号，用更自然的德语。')
+        self.assertEqual(len(submissions), 1, '刷新状态不得重新提交付费请求')
+
     def test_01_facebook_save_refresh_and_source_conflict_keep_the_draft(self):
         """Real local backend: three sections save atomically; new source gives 409."""
         self.open_task(self.fixtures.fb_id)
