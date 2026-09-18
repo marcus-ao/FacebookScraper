@@ -240,6 +240,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F2-2 原图完整性与修订 | 离线通过 | 实际 MIME/解码/大小/SHA、临时文件原子落盘、旧原图不覆盖、缺图可补、复用核对原哈希 | 真实 CDN 与图文样本 | `tests_storage_contract`、`tests_backfill`、`tests_fb_graph`、`tests_delta_logged_in` |
 | F2-2 IG 单图来源完整性与定点修复 | 离线通过 | 明确单图兼容空轮播字段；指定 capture 校验身份/原图，备份后只修三个完整性字段并同步派生索引 | 服务机指定帖执行与详情回读仍待真实联调 | `tests_parse`、`tests_ig_completeness_repair`：空字段/异常轮播、原字节备份、无关内容保留、坏图拒绝、中断续跑及实际素材闸；[操作步骤](MANUAL_STEPS.md#41-ig-单图被误标不完整时的离线修复) |
 | F2-2 回填窗口 | 离线通过 | `--days N` 按 `created_at` 收紧，窗口外计数可见；算不出日期的保留 | 真实回填会话 | `tests_backfill` [9]：窗口内外、无日期、边界当天、不带参数保持全量 |
+| F2-2 历史 IG 完整性自动核验 | 离线通过 | 普通监测/晨间对账在平台访问前核验本地 capture，备份后修复明确单图及单视频，拒绝无证据/冲突/坏图；状态与告警区分历史缺口和本轮处理 | 服务机 7 篇的 capture 及修复结果仍待真实联调 | `tests_archive_reconciliation`、`tests_ig_completeness_repair`：3 图+4 视频自动修复、幂等、故障恢复、只读状态、原账本保留；[说明](MANUAL_STEPS.md#42-历史-ig-完整性自动核验) |
 | F2-5 源图片变化 | 离线通过 | 指纹含每张实际字节、数量、顺序；人工劳动保留 | 可控来源样本 | `tests_content_recovery`：同名等长换字节、增删、换序；旧候选失效，已排期只提醒 |
 | F2-5 来源文字摘要统一 | 离线通过 | `source_text_sha256` 全链路统一 + AST 守卫；风险另存 raw `scan_text_sha256`，最终提交字节摘要不改 | 无 | `tests_hygiene`/`tests_risk_scan`/`tests_publication_recovery`：字段算法与高亮偏移、来源空白兼容 |
 | F2-4/F5 快照与补投影 | 离线通过 | Web/CLI/人工结转共享冻结，receipt 绑指纹，幂等补状态/镜像/通知 | 真实回执另验 | `tests_publication_recovery`：中断、重复恢复、当前文件变不改旧版 |

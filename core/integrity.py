@@ -160,19 +160,21 @@ def run_checks(rows: list[dict], incomplete: list[dict], entry: dict,
         })
 
     for kind, items, label, hint in (
-        ("incomplete", incomplete, "媒体不全",
-         "这些帖子的图片没下全，下次抓取会自动重试；一直不降就要人看了"),
+        ("incomplete", incomplete, "归档完整性待核验",
+         "范围为全账号历史归档，不等于本轮下载失败。可能是来源媒体列表未确认或本地图片不可用；"
+         "视频仅存元数据不等于下载失败。用 --status 查看逐帖原因；普通扫描不自动重试人工异常项"),
         ("undated", check_undated(rows), "没有可用日期",
          "它们无法参与连续性检查，是检查不到的盲区"),
     ):
-        prev = marks.get(kind)
-        prev = prev if isinstance(prev, int) else 0
+        previous = marks.get(kind)
+        prev = previous if type(previous) is int else 0
         if len(items) > prev:
             marks[kind] = len(items)
             findings.append({
                 "kind": kind,
-                "message": ("%s %s的帖子从 %d 条增加到 %d 条 —— %s"
-                            % (platform, label, prev, len(items), hint)),
+                "message": ("%s %s：%s —— %s" % (platform, label,
+                            ("首次检查发现 %d 条" % len(items) if type(previous) is not int else
+                             "上次记录 %d 条，当前 %d 条（非本轮前后差值）" % (prev, len(items))), hint)),
             })
         elif len(items) != prev:
             marks[kind] = len(items)          # 变少了：静默更新，不打扰
