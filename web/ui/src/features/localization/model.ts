@@ -2,7 +2,7 @@ import type { LocalizationDraft, TaskDetail } from '@/types/domain'
 
 export function editableFields(draft: LocalizationDraft) {
   return { body_de: draft.body_de, tags: draft.tags, hashtags_confirmed: draft.hashtags_confirmed,
-    links: draft.links, ig_cta: draft.ig_cta }
+    links: draft.links, ig_cta: draft.ig_cta, links_confirmed: draft.links_confirmed }
 }
 
 export function localizationBody(detail: TaskDetail, draft: LocalizationDraft) {
@@ -18,6 +18,7 @@ export function recoverDraft(previous: TaskDetail, latest: TaskDetail, draft: Lo
     tags: [...new Set([...latest.localization.protected_tags,
       ...draft.tags.filter(tag => !previous.localization.protected_tags.includes(tag))])],
     hashtags_confirmed: changed ? false : draft.hashtags_confirmed,
+    links_confirmed: changed ? false : draft.links_confirmed,
     links: latest.localization.links.map(link => {
       const old = draft.links.find(item => item.source_url === link.source_url)
       return old ? { ...link, target_url: old.target_url, confirmed: changed ? false : old.confirmed } : link

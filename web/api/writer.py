@@ -147,7 +147,7 @@ def save_tags(task_id: str, tags: list[str], *, source_text_sha256: str,
 
 def save_localization(task_id: str, fields: dict, *, source_text_sha256: str,
                       human_revision: str | None, review_revision: str | None,
-                      localization_revision: str | None) -> dict:
+                      localization_revision: str | None, confirmation_only: bool = False) -> dict:
     source = _source(task_id)
     clean = localization.normalize_fields(fields)
     with review.transaction(source.account_dir) as session:
@@ -166,6 +166,14 @@ def save_localization(task_id: str, fields: dict, *, source_text_sha256: str,
             raise localization.LocalizationConflict("本地化选择已有更新，请载入最新内容后再保存")
         if [item["source_url"] for item in clean["links"]] != [item["source_url"] for item in draft["links"]]:
             raise localization.LocalizationValidationError("原帖链接不应删除或替换，请在对应行填写德语落地页")
+        if confirmation_only:
+            if not translated.translation_is_current(truth, effective):
+                raise localization.LocalizationValidationError("正文版本已过期，请先编辑德语并复核保存，再确认分区")
+            current = localization.normalize_fields(draft)
+            if (any(clean[key] != current[key] for key in ("body_de", "tags", "ig_cta"))
+                    or [link["target_url"] for link in clean["links"]]
+                    != [link["target_url"] for link in current["links"]]):
+                raise localization.LocalizationValidationError("分区确认不能修改内容，请先编辑德语或载入最新内容")
         draft.update(clean, source_stale=False)
         result = localization.validate(draft)
         invalid = [item["message"] for item in result["issues"] if item["code"] in {

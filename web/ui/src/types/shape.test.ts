@@ -143,9 +143,9 @@ describe('GET /api/tasks/{id}（详情）', () => {
     expect(taskDetailActive.read_only).toBe(false)
   })
 
-  it('localization 十六个键齐全', () => {
+  it('localization 包含两个分区的确认状态', () => {
     ok(taskDetailActive.localization, LOCALIZATION_DRAFT_SHAPE, 'localization')
-    expect(Object.keys(taskDetailActive.localization)).toHaveLength(16)
+    expect(taskDetailActive.localization.links_confirmed).toBe(false)
   })
 
   it('text 九个键齐全，含三个提示词版本字段', () => {

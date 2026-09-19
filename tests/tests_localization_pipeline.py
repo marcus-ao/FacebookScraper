@@ -50,6 +50,9 @@ class LocalizationPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(compose.ComposeError, '落地页'):
             build()
         cfg()._d['publish']['link_map'] = {source_url: 'https://de.example/produkt'}
+        with self.assertRaisesRegex(compose.ComposeError, '请确认本篇的链接'):
+            build()
+        self.assertEqual(self.fixture.save_localization(links_confirmed=True).status_code, 200)
         post = build()
         self.assertIn('https://de.example/produkt', post.text_de)
         self.assertNotIn(source_url, post.text_de)
@@ -62,7 +65,7 @@ class LocalizationPipelineTests(unittest.TestCase):
         machine = translated.load_translated(self.account / 'translated.jsonl')[self.source['post_id']]
         draft = localization.effective_draft(self.account, self.source, machine)
         self.assertFalse(localization.validate(draft)['ready'])
-        draft.update(tags=['#Katzenliebe', '#Neakasa'], hashtags_confirmed=True)
+        draft.update(tags=['#Katzenliebe', '#Neakasa'], hashtags_confirmed=True, links_confirmed=True)
         human = translated.append_human_translation(self.account / 'translated_human.jsonl', self.source,
             localization.render(draft), expected_revision=None)
         localization.append_localization(self.account, self.source, draft, human_revision=human['revision'],

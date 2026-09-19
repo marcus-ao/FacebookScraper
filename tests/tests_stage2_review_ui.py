@@ -12,6 +12,7 @@ from uuid import uuid4
 from playwright.sync_api import expect
 
 from tests_browser_workflow import BrowserWorkflowTests, ROOT
+from browser_fixture import approval_options
 from localize import suggest
 from pipeline import refinement
 
@@ -153,7 +154,7 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         self.page.get_by_role("textbox", name="本篇语义标签").fill("#Katzenliebe")
         self.page.get_by_label("我已确认本篇使用的话题标签").check()
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill(target)
-        self.page.get_by_label("我已确认落地页适用于德国站").check()
+        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
         self.page.get_by_role("tab", name="正文对照", exact=True).click()
 
     def clipboard(self):
@@ -320,6 +321,119 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         self.assertEqual(saved['body_de'], 'Neue Bearbeitung waehrend Speichern.')
         self.assertEqual(saved['tags'], ['#Neakasa', '#Katzenzuhause'])
         self.assertEqual(saved['links'][0]['target_url'], 'https://de.example.invalid/new-edit')
+
+
+    def test_stage2_07_confirm_sections_without_entering_editor(self):
+        self.task_id = self.fixtures.add_post('in_neakasa.global', '3234567907', 'instagram')
+        source = self.fixtures.sources[self.task_id][0]
+        source['text'] = 'A clean home. #Neakasa #CatLover'
+        self.fixtures.write_source(self.task_id)
+        self.fixtures.write_machine(self.task_id, 'Ein sauberes Zuhause. #Neakasa #CatLover')
+        before = self.fixtures.detail(self.task_id)['localization_validation']['caption']
+        self.open_task(self.task_id)
+        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
+        links = self.page.get_by_label('我已确认本篇的链接与主页引导')
+        expect(tags).to_be_visible()
+        expect(links).to_be_visible()
+        expect(self.page.get_by_text('原帖没有链接。', exact=True)).to_be_visible()
+        for checkbox in (tags, links):
+            self.expected_puts += 1
+            with self.page.expect_response(lambda r: r.request.method == 'PUT' and r.url.endswith('/localization')):
+                checkbox.click()
+            expect(checkbox).to_be_checked()
+            expect(checkbox).to_be_enabled()
+            expect(self.page.get_by_role('button', name='编辑德语', exact=True)).to_be_visible()
+            expect(self.page.get_by_role('textbox', name='本篇语义标签')).to_have_count(0)
+        self.page.reload()
+        expect(tags).to_be_checked()
+        expect(links).to_be_checked()
+        saved = self.fixtures.detail(self.task_id)
+        self.assertTrue(saved['localization_validation']['ready'])
+        self.assertEqual(saved['localization_validation']['caption'], before)
+        self.assertEqual(saved['localization']['ig_cta'], '')
+        self.page.get_by_role('button', name='编辑德语', exact=True).click()
+        self.page.get_by_label('自定义 bio 引导').fill('Mehr dazu im Profil')
+        expect(links).not_to_be_checked()
+        expect(tags).to_be_checked()
+        self.page.get_by_role('button', name='放弃修改', exact=True).click()
+        expect(links).to_be_checked()
+
+    def test_stage2_08_confirmation_failure_and_conflict_do_not_claim_saved(self):
+        self.open_task(self.task_id)
+        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
+        endpoint = ('PUT', f'/api/tasks/{self.task_id}/localization')
+        self.responses[endpoint] = {'status_code': 503, 'body': {'detail': 'temporary failure'}}
+        tags.click()
+        expect(self.page.get_by_role('alert').filter(has_text='确认未保存')).to_be_visible()
+        expect(tags).not_to_be_checked()
+        self.assertFalse(self.fixtures.detail(self.task_id)['localization']['hashtags_confirmed'])
+        del self.responses[endpoint]
+        self.fixtures.sources[self.task_id][0]['text'] += ' Changed'
+        self.fixtures.write_source(self.task_id)
+        self.expected_puts += 1
+        tags.click()
+        expect(self.page.get_by_role('button', name='载入最新内容并保留我的修改')).to_be_visible()
+        expect(tags).not_to_be_checked()
+        self.page.get_by_role('button', name='载入最新内容并保留我的修改').click()
+        expect(tags).to_be_enabled()
+        self.expected_puts += 1
+        tags.click()
+        expect(self.page.get_by_role('alert').filter(has_text='请先编辑德语')).to_be_visible()
+        expect(tags).not_to_be_checked()
+        self.page.get_by_role('button', name='编辑德语', exact=True).click()
+        self.page.get_by_role('tab', name='正文对照', exact=True).click()
+        self.page.get_by_role('textbox', name='德语正文').fill('Erneut gepruefter Text.')
+        self.expected_puts += 1
+        self.save_draft()
+        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        self.expected_puts += 1
+        tags.click()
+        expect(tags).to_be_checked()
+
+    def test_stage2_09_facebook_confirmation_pending_and_locked_states(self):
+        mapping = self.fixtures.config._d['publish'].get('link_map', {})
+        self.addCleanup(self.fixtures.config._d['publish'].__setitem__, 'link_map', mapping)
+        self.fixtures.config._d['publish']['link_map'] = {
+            'https://us.example.invalid/product': 'https://de.example.invalid/product'}
+        self.responses[('GET', f'/api/tasks/{self.task_id}/approval-options')] = {'body': approval_options()}
+        self.open_task(self.task_id)
+        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        links = self.page.get_by_label('我已确认本篇的链接与主页引导')
+        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
+        before = self.fixtures.detail(self.task_id)['localization_validation']['caption']
+        expect(self.page.get_by_role('button', name='编辑确认无误', exact=True)).to_be_enabled()
+        self.expected_puts = 1
+        self.hold_saves = True
+        links.click()
+        expect(links).to_be_disabled()
+        expect(tags).to_be_disabled()
+        expect(self.page.get_by_role('button', name='编辑德语', exact=True)).to_be_disabled()
+        expect(self.page.get_by_role('button', name='编辑确认无误', exact=True)).to_have_count(0)
+        deadline = time.monotonic() + 5
+        while not self.held_saves and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+        self.assertEqual(len(self.held_saves), 1)
+        self.release_saves()
+        self.hold_saves = False
+        expect(links).to_be_checked()
+        expect(links).to_be_enabled()
+        saved = self.fixtures.detail(self.task_id)
+        self.assertTrue(saved['localization']['links'][0]['confirmed'])
+        self.assertEqual(saved['localization_validation']['caption'], before)
+        self.expected_puts += 1
+        links.click()
+        expect(links).not_to_be_checked()
+        expect(links).to_be_enabled()
+        self.assertFalse(self.fixtures.detail(self.task_id)['localization']['links_confirmed'])
+        for status, read_only in [('content_locked', False), ('pending_review', True), ('scheduled', False)]:
+            locked = self.fixtures.detail(self.task_id)
+            locked.update(status=status, read_only=read_only)
+            self.responses[('GET', f'/api/tasks/{self.task_id}')] = {'body': locked}
+            self.page.reload()
+            expect(links).to_be_disabled()
+            expect(tags).to_be_disabled()
 
 
 def load_tests(_loader, _tests, _pattern):

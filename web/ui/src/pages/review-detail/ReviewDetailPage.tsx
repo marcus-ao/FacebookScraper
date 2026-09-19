@@ -53,7 +53,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const total = source === 'review' ? rows.length : history.data?.pagination.total ?? 0
   const position = index < 0 ? '已移出当前筛选' : `${index + 1 + (source === 'history' ? (historyFilters.page - 1) * historyFilters.limit : 0)} / ${total}`
   const loc = useLocalization(detail, apply, refresh)
-  const approval = useApproval(detail, loc.editing, refresh)
+  const approval = useApproval(detail, loc.editing || loc.saving, refresh)
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
   const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
@@ -112,9 +112,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         {detail.images.length > 0 && <Tooltip title={unseen ? `还有 ${unseen} 张图片没查看，点击逐张核对；此提示不阻止排期` : '图片都看过了'}><Button type="text" size="small" onClick={() => changeTab('images')}>图片 {detail.images.length - unseen}/{detail.images.length}</Button></Tooltip>}
       </Space>
       <Space size="small" className={styles.actions ?? ''}>{loc.editing ? <><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存</Button></> : <>
-        {canEditTask(detail) && <Button onClick={loc.start}>编辑德语</Button>}
-        {!detail.read_only && <ApprovalAction controller={approval} />}
-        {!detail.read_only && <ReviewActions detail={detail} onChanged={apply} />}
+        {canEditTask(detail) && <Button disabled={loc.saving || loc.recovering} onClick={loc.start}>编辑德语</Button>}
+        {!detail.read_only && !loc.saving && <ApprovalAction controller={approval} />}
+        {!detail.read_only && !loc.saving && <ReviewActions detail={detail} onChanged={apply} />}
       </>}</Space>
     </header>
     <div className={styles.body}>
@@ -122,7 +122,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       {detail.read_only && <div className={styles.source}><span>作者：{AUTHOR_KIND_LABEL[detail.meta.author_kind]} {detail.meta.owner}</span><span>原帖发布：{formatDate(detail.meta.created_at)}</span>{detail.meta.permalink && <a href={detail.meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}</div>}
       {detail.storage && <StorageFacts storage={detail.storage} />}
       <div ref={setInitialContainer} />
-      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title="保存未完成，你的修改仍在编辑区，请重试" /> : null}
+      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} description={loc.error instanceof Error ? loc.error.message : undefined} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
       <Tabs activeKey={tab} onChange={changeTab} items={[{ key: 'text', label: '正文对照' }, { key: 'images', label: `图片 ${detail.images.length}` }, { key: 'localization', label: '话题标签与链接' }]} />
       <div hidden={tab !== 'text'}><TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
@@ -130,11 +130,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
         <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
           onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} /></div>
-      {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} onChange={loc.setDraft} onInsert={index => {
+      {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} saving={loc.saving || loc.recovering} onChange={loc.setDraft} onConfirm={next => void loc.confirm(next)} onInsert={index => {
         changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
       }} /></div>}
       {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images}
-        detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing}
+        detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing || loc.saving}
         maxImageCount={imageVersions.data?.max_image_count ?? null} imageModel={imageVersions.data?.image_model ?? ''}
         onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={setUnseen} /></div>}
       <div className={styles.counter}>
@@ -144,9 +144,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       </div>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
-      <CategoryEditor detail={detail} disabled={loc.editing} apply={apply} refresh={refresh} />
-      {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing} />}
-      {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing} refresh={refresh} onCandidate={adoptCandidate} initialContainer={initialContainer} />}
+      <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
+      {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />}
+      {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate} initialContainer={initialContainer} />}
       <DetailDrawers detail={detail} />
     </div>
   </article>

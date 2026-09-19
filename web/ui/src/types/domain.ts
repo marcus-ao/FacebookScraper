@@ -250,6 +250,7 @@ export interface LocalizationDraft {
   readonly protected_tags: readonly string[]
   readonly tags: readonly string[]
   readonly hashtags_confirmed: boolean
+  readonly links_confirmed: boolean
   readonly links: readonly LocalizationLink[]
   readonly ig_cta: string
   readonly ig_bio_url: string

@@ -53,6 +53,7 @@
    "#CatLovers"
   ],
   "hashtags_confirmed": false,
+  "links_confirmed": false,
   "links": [
    {
     "source_url": "https://example.invalid/7",

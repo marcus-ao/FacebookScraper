@@ -148,7 +148,7 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
     draft = {"platform": source["platform"], "body_de": current["body"], "source_body": original["body"],
              "source_tags": original["tags"], "protected_tags": protected, "tags": tags,
              "hashtags_confirmed": not bool([tag for tag in original["tags"] if tag not in protected]),
-             "links": links, "ig_cta": ig_cta,
+             "links": links, "ig_cta": ig_cta, "links_confirmed": False,
              "ig_bio_url": ig_bio_url, "cta_presets": list(CTA_PRESETS),
              "revision": record.get("revision") if record else None,
              "source_stale": bool(text_de and not translated.translation_is_current(source, entry)),
@@ -157,6 +157,8 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
     if bound:
         for key in ("body_de", "tags", "hashtags_confirmed", "links", "ig_cta"):
             draft[key] = copy.deepcopy(record[key])
+        # 旧记录保留人工选择，但缺少的分区确认不能推断为已确认。
+        draft["links_confirmed"] = record.get("links_confirmed", False)
         for link in draft["links"]:
             mapped = link_map.get(link["source_url"], "")
             link["mapped_url"] = mapped
@@ -189,6 +191,8 @@ def normalize_fields(fields: dict) -> dict:
         raise LocalizationValidationError("每个话题标签应为 # 开头的完整词，不含空格或标点")
     if type(fields.get("hashtags_confirmed")) is not bool:
         raise LocalizationValidationError("请明确话题标签是否已确认")
+    if type(fields.get("links_confirmed", False)) is not bool:
+        raise LocalizationValidationError("请明确链接与主页引导是否已确认")
     cleaned_links = []
     for item in links:
         if (not isinstance(item, dict) or not isinstance(item.get("source_url"), str)
@@ -200,7 +204,8 @@ def normalize_fields(fields: dict) -> dict:
     if not isinstance(cta, str):
         raise LocalizationValidationError("bio 引导话术须为文字")
     return {"body_de": body.strip(), "tags": [tag.strip() for tag in tags],
-            "hashtags_confirmed": fields["hashtags_confirmed"], "links": cleaned_links, "ig_cta": cta.strip()}
+            "hashtags_confirmed": fields["hashtags_confirmed"], "links": cleaned_links, "ig_cta": cta.strip(),
+            "links_confirmed": fields.get("links_confirmed", False)}
 
 
 LINK_PLACEHOLDER = re.compile(r'\{\{link([1-9][0-9]*)\}\}')
@@ -260,6 +265,8 @@ def validate(draft: dict) -> dict:
     semantic = [tag for tag in draft.get("source_tags", []) if tag not in protected]
     if (semantic or [tag for tag in tags if tag not in protected]) and not draft.get("hashtags_confirmed"):
         issue("hashtags_unconfirmed", "请确认本篇使用的话题标签")
+    if (draft.get("links") or draft.get("ig_cta")) and not draft.get("links_confirmed"):
+        issue("links_section_unconfirmed", "请确认本篇的链接与主页引导")
     if draft.get("platform") == "facebook":
         if any(not item.get("target_url") or not item.get("confirmed") for item in draft.get("links", [])):
             issue("links_unconfirmed", "部分德语落地页尚未填写或确认")

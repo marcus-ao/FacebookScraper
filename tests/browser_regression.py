@@ -149,7 +149,7 @@ def stage_d1(page, ui):
     page.get_by_role('button',name='保存',exact=True).click()
     expect(page.get_by_role('textbox',name='德语正文')).to_have_count(0)
     saved=[r for r in ui.requests if r['method']=='PUT'][-1]['body']
-    assert set(saved)=={'body_de','tags','hashtags_confirmed','links','ig_cta','source_text_sha256','human_revision','review_revision','localization_revision'}
+    assert set(saved)=={'body_de','tags','hashtags_confirmed','links_confirmed','links','ig_cta','source_text_sha256','human_revision','review_revision','localization_revision'}
     page.get_by_role('link',name='返回列表',exact=True).click()
     expect(page.locator(f'tr[data-task-id="{task_id}"]')).to_contain_text('Manuell geprüft')
     assert ui.count_list_gets()==1

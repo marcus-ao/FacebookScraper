@@ -644,6 +644,7 @@ class WebReviewTests(unittest.TestCase):
         draft = detail["localization"]
         return {"body_de": draft["body_de"], "tags": draft["tags"], "links": draft["links"],
                 "hashtags_confirmed": draft["hashtags_confirmed"], "ig_cta": draft["ig_cta"],
+                "links_confirmed": draft["links_confirmed"],
                 "source_text_sha256": detail["text"]["source_text_sha256"],
                 "human_revision": detail["text"]["human_revision"],
                 "review_revision": detail["review"]["revision"], "localization_revision": draft["revision"], **extra}
@@ -668,7 +669,7 @@ class WebReviewTests(unittest.TestCase):
         self.write_source()
         self.write_machine("Ein sauberes Zuhause. #Neakasa #CatLover")
         response = self.save_localization(body_de="Von Menschen geprüft.", tags=["#Neakasa", "#Katzenliebe"],
-            hashtags_confirmed=True, links=[{"source_url": "https://us.example/product",
+            hashtags_confirmed=True, links_confirmed=True, links=[{"source_url": "https://us.example/product",
                                             "target_url": "https://de.example/product", "confirmed": True}])
         self.assertEqual(response.status_code, 200, response.text)
         detail = response.json()
@@ -691,6 +692,28 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(len(self.human_rows()), 1)
         self.assertEqual(self.client.put(self.url + "/localization", json=old).status_code, 409)
         self.assertEqual(len(self.human_rows()), 1)
+
+    def test_confirmation_only_rejects_stale_body_without_appending_human_truth(self):
+        self.source['text'] += ' Source changed'
+        self.write_source()
+        result = self.save_localization(confirmation_only=True, hashtags_confirmed=True)
+        self.assertEqual(result.status_code, 400, result.text)
+        self.assertIn('请先编辑德语', result.text)
+        self.assertFalse((self.account / 'translated_human.jsonl').exists())
+        self.assertFalse((self.account / 'localization.jsonl').exists())
+        self.assertEqual(review.history(self.account), [])
+
+    def test_confirmation_only_rejects_outdated_prompt_or_changed_content(self):
+        rows = translated.load_translated(self.account / 'translated.jsonl')
+        old = rows[self.post_id]
+        old['prompt_version'] = translated.PROMPT_VERSION - 1
+        (self.account / 'translated.jsonl').write_text(json.dumps(old) + '\n', encoding='utf-8', newline='')
+        self.assertEqual(self.save_localization(confirmation_only=True, links_confirmed=True).status_code, 400)
+        self.assertFalse((self.account / 'translated_human.jsonl').exists())
+        self.write_machine('Ein sauberes Zuhause. #Neakasa')
+        self.assertEqual(self.save_localization(confirmation_only=True, body_de='Other body').status_code, 400)
+        self.assertFalse((self.account / 'translated_human.jsonl').exists())
+        self.assertEqual(self.save_localization(confirmation_only=True, links_confirmed=True).status_code, 200)
 
     def test_localization_incomplete_choice_can_save_but_not_claim_ready(self):
         self.source["text"] += " https://us.example/product #CatLover"
@@ -725,7 +748,7 @@ class WebReviewTests(unittest.TestCase):
         self.write_machine("Ein Zuhause. #Neakasa")
         long_body = "😀" * 2201
         tags = ["#Neakasa"] + ["#Tag%d" % index for index in range(30)]
-        response = self.save_localization(body_de=long_body, tags=tags, hashtags_confirmed=True,
+        response = self.save_localization(body_de=long_body, tags=tags, hashtags_confirmed=True, links_confirmed=True,
                                           ig_cta="Mehr Infos in unserem Profil 🔗")
         self.assertEqual(response.status_code, 200, response.text)
         detail = response.json()

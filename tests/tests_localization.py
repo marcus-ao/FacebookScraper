@@ -53,10 +53,12 @@ class LocalizationTests(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertTrue({"links_unconfirmed", "hashtags_unconfirmed"} <= {r["code"] for r in result["issues"]})
 
-    def test_config_mapping_is_accepted_override_requires_confirmation(self):
+    def test_config_mapping_still_requires_section_confirmation(self):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
         draft["tags"] = ["#Neakasa", "#M1Pro", "#Katzenliebe"]
         draft["hashtags_confirmed"] = True
+        self.assertFalse(loc.validate(draft)["ready"])
+        draft["links_confirmed"] = True
         self.assertTrue(loc.validate(draft)["ready"])
         rendered = loc.render(draft)
         self.assertIn("https://de.example/p", rendered)
@@ -91,7 +93,7 @@ class LocalizationTests(unittest.TestCase):
     def test_instagram_removes_urls_adds_cta_and_bio_missing_is_not_blocking(self):
         self.source["platform"] = "instagram"
         draft = self.draft()
-        draft.update(hashtags_confirmed=True, ig_cta="Mehr dazu im Profil 🔗")
+        draft.update(hashtags_confirmed=True, links_confirmed=True, ig_cta="Mehr dazu im Profil 🔗")
         rendered = loc.render(draft)
         self.assertEqual(loc.extract_urls(rendered), [])
         self.assertIn("Mehr dazu im Profil 🔗", rendered)
@@ -112,7 +114,7 @@ class LocalizationTests(unittest.TestCase):
     def test_instagram_body_keeping_a_profile_hint_warns_but_never_blocks(self):
         self.source["platform"] = "instagram"
         draft = self.draft()
-        draft.update(hashtags_confirmed=True, ig_cta="Link in Bio 🔗",
+        draft.update(hashtags_confirmed=True, links_confirmed=True, ig_cta="Link in Bio 🔗",
                      body_de="Sauber jetzt. Den Link in unserer Bio findest du oben.")
         result = loc.validate(draft)
         # 黄色提醒而非硬闸：误杀的代价是拒绝一次已经付过钱的产出。
@@ -158,6 +160,7 @@ class LocalizationTests(unittest.TestCase):
                 self.assertEqual(draft['links'], [])
                 self.assertEqual(draft['ig_cta'], loc.CTA_PRESETS[0])
                 self.assertEqual(loc.render(draft), 'Entdecke Neakasa M1 Pro.\n\n' + loc.CTA_PRESETS[0])
+                draft['links_confirmed'] = True
                 self.assertTrue(loc.validate(draft)['ready'])
 
     def test_facebook_source_profile_hint_does_not_add_instagram_cta(self):
@@ -186,7 +189,7 @@ class LocalizationTests(unittest.TestCase):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
         draft.update(platform="instagram", body_de="😀" * 2201,
                      tags=["#Neakasa", "#M1Pro"] + ["#tag%d" % n for n in range(29)],
-                     hashtags_confirmed=True, ig_cta="Link in Bio 🔗")
+                     hashtags_confirmed=True, links_confirmed=True, ig_cta="Link in Bio 🔗")
         result = loc.validate(draft)
         self.assertTrue(result["ready"])
         self.assertEqual(result["hashtag_count"], 31)
@@ -254,6 +257,36 @@ class LocalizationTests(unittest.TestCase):
         with (self.account / "localization.jsonl").open("ab") as f:
             f.write(b'\n{"broken":')
         self.assertEqual(loc.load_localizations(self.account)["123"]["revision"], row["revision"])
+
+    def test_empty_links_section_can_be_confirmed_without_adding_content(self):
+        for platform in ('facebook', 'instagram'):
+            with self.subTest(platform=platform):
+                self.source.update(platform=platform, text='Clean home.')
+                self.machine.update(text_de='Sauberes Zuhause.',
+                    source_text_sha256=translated.source_text_sha256(self.source['text']))
+                draft = self.draft()
+                self.assertFalse(draft.get('links_confirmed', False))
+                self.assertTrue(loc.validate(draft)['ready'])
+                draft['links_confirmed'] = True
+                self.assertTrue(loc.validate(draft)['ready'])
+
+    def test_links_confirmation_roundtrip_and_legacy_record_preserve_choices(self):
+        draft = self.draft()
+        draft.update(links_confirmed=True, ig_cta='Meine Auswahl')
+        row = self.save_local(draft)
+        self.assertTrue(self.draft(record=loc.load_localizations(self.account)['123'])['links_confirmed'])
+        row.pop('links_confirmed')
+        legacy = self.draft(record=row)
+        self.assertTrue(legacy['has_record'])
+        self.assertEqual(legacy['ig_cta'], 'Meine Auswahl')
+        self.assertFalse(legacy['links_confirmed'])
+        self.source['text'] += ' Updated'
+        self.assertFalse(self.draft(record={**row, 'links_confirmed': True})['links_confirmed'])
+
+    def test_links_confirmation_rejects_non_boolean_input(self):
+        for value in ('true', 1, None):
+            with self.subTest(value=value), self.assertRaises(loc.LocalizationValidationError):
+                loc.normalize_fields({**self.draft(), 'links_confirmed': value})
 
 if __name__ == "__main__":
     unittest.main()

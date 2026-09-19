@@ -564,6 +564,16 @@ npm/Python 边界为替身；覆盖连续源码更新后的旧产物替换、顺
 本机证据保留于上述工作树 `state/`，已按 SHA-256 核对复制到主检出同名目录；不随 Git 提交，清理前须保全。
 服务机自动修复后的真实数量与详情回读继续为 **待真实联调**；没有真实浏览器、模型、飞书或发布操作。
 
+### 1.18 审核分区直接确认（2026-09-19）
+
+分支 `codex/review-section-confirmations`，工作树 `.worktrees/review-section-confirmations`，基点 `1e15a12`；archive/state/.env 独立绑定，仅复用主检出 Python。标签确认原来只在编辑模式显示，Instagram 引导语没有对应确认状态。两个分区现可在浏览状态直接勾选／取消并保存，编辑时随草稿保存；Facebook 分区确认覆盖各落地页。空链接且无引导语可记录确认，不新增必做步骤。有链接或引导语的旧记录保留人工内容，并要求补确认。
+
+浏览确认使用 `confirmation_only` 请求，后端拒绝过期正文、旧机器提示词及夹带内容改动；不因勾选分区而重新认证过期正文。浏览确认保存期间禁用重复确认和编辑，隐藏冻结入口；编辑草稿保存期间的新输入继续保留。源文变化后重置对应确认，冻结、只读和终态仍不可编辑。
+
+**验证状态：离线通过。** [9/9 定向脚本](../state/offline-validation-20260919T123420Z/results.json)覆盖本地化 24 项、发布组装 3 项、Web 审校 54 项、冻结 12 项、后台发布 25 项、既有发布检查、hygiene，以及[基础浏览器 12 项](../state/offline-browser-20260919T123424Z-16088/report.json)和[文案浏览器 9 项](../state/offline-browser-20260919T123612Z-19756/report.json)。新增浏览器场景验证 IG 无链接直接确认／刷新、修改引导语后重新确认、失败与源文冲突、过期正文拒绝、FB 映射直接确认／取消、保存中禁用及只读／冻结／排期状态。另有[前端 105 项](../state/review-section-confirmations/frontend-final.log)、[TypeScript/Vite 构建](../state/review-section-confirmations/build-final.log)和[D1 保存／冲突契约](../state/ui-regression/browser-stage-d1.json)通过，保留已有大 chunk 提示。
+
+独立复审发现的过期正文误认证和确认保存期间可冻结均已修复并复核；[过期正文修前失败](../state/review-section-confirmations/stale-confirmation-before.log)与[修后通过](../state/review-section-confirmations/stale-confirmation-after.log)保留。所有写入使用临时归档；模型、剪贴板异常、冻结可用性和终态展示为替身，没有真实抓取、付费、飞书或发布操作。证据位于该工作树 `state/`，不随 Git 提交；清理前须保全。服务机更新和运营实际页面复验为 **待真实联调**，按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)执行。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

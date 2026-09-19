@@ -147,6 +147,7 @@ export const LOCALIZATION_DRAFT_SHAPE: ShapeSpec = {
   protected_tags: shape.array,
   tags: shape.array,
   hashtags_confirmed: shape.boolean,
+  links_confirmed: shape.boolean,
   links: shape.array,
   ig_cta: shape.string,
   ig_bio_url: shape.string,

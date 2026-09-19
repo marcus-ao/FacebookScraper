@@ -164,7 +164,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.get_by_role("textbox", name="本篇语义标签").fill("#Katzenliebe")
         self.page.get_by_label("我已确认本篇使用的话题标签").check()
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill("https://de.example.invalid/produkt")
-        self.page.get_by_label("我已确认落地页适用于德国站").check()
+        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
         self.save_draft()
         saved = self.fixtures.detail(self.fixtures.fb_id)
         self.assertEqual(saved["localization"]["tags"], ["#Neakasa", "#Katzenliebe"])
@@ -195,7 +195,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
         self.page.get_by_label("我已确认本篇使用的话题标签").check()
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill("https://de.example.invalid/neu")
-        self.page.get_by_label("我已确认落地页适用于德国站").check()
+        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
         self.save_draft()
         self.assertFalse(self.fixtures.detail(self.fixtures.fb_id)["text"]["stale"])
 
@@ -378,7 +378,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         link = 'https://de.example.invalid/inline'
         self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
         self.page.get_by_role('textbox', name='链接 1 德语落地页').fill(link)
-        self.page.get_by_label('我已确认落地页适用于德国站').check()
+        self.page.get_by_label('我已确认本篇的链接与主页引导').check()
         draft = self.fixtures.detail(self.fixtures.fb_id)['localization']
         expected = 'Details: ' + link + ' bitte lesen.\n\n' + ' '.join(draft['tags'])
         expect(self.page.get_by_text(re.compile(r'^发布文案 ' + str(len(expected)) + r' 字符'))).to_be_visible()

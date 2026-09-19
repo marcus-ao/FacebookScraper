@@ -220,9 +220,13 @@ async def put_localization(task_id: str, request: Request) -> JSONResponse:
         if revision is not None and (not isinstance(revision, str) or not revision.strip()):
             raise HTTPException(status_code=400, detail="文案版本无效，请重新打开这篇")
     source_version = _source_digest(body)
+    confirmation_only = body.get("confirmation_only", False)
+    if type(confirmation_only) is not bool:
+        raise HTTPException(status_code=400, detail="确认保存方式无效")
     return JSONResponse(writer.save_localization(task_id, body,
         source_text_sha256=source_version, human_revision=human_revision,
-        review_revision=_state_revision(body), localization_revision=local_revision))
+        review_revision=_state_revision(body), localization_revision=local_revision,
+        confirmation_only=confirmation_only))
 
 
 @app.put("/api/tasks/{task_id:path}/text_de")
