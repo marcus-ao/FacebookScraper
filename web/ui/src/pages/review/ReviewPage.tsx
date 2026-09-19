@@ -45,7 +45,7 @@ export function ReviewPage({ platform }: { platform: Platform }) {
     summaryNote: row => row.hard_alerts.some(alert => alert.code === 'unknown_collaborator')
       ? <span className={styles.thirdParty}>第三方作者 · 需授权初翻</span> : null,
     problem: row => row,
-    time: { title: '时刻 · 柏林', zone: 'berlin', at: row => row.schedule?.at ?? null },
+    time: { title: '排期时刻 · 北京', zone: 'business', at: row => row.schedule?.at ?? null },
     actions: { render: row => <ReviewActions detail={row} compact /> },
   })
   function change(key: string, value: string | undefined) {

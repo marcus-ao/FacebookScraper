@@ -57,7 +57,7 @@ const reviewColumns = () =>
   createPostColumns<ReviewRow>({
     columns: ['thumbnail', 'problem', 'summary', 'status', 'time', 'platform', 'tags', 'actions'],
     problem: (row) => row,
-    time: { title: '排期时刻', zone: 'berlin', at: (row) => row.schedule?.at ?? null },
+    time: { title: '排期时刻', zone: 'business', at: (row) => row.schedule?.at ?? null },
     actions: { render: () => <button type="button">更多</button> },
   })
 
