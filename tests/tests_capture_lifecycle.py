@@ -66,8 +66,8 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
             await self.scan([self.post('1'), self.post('2')])
         state = self.state.status()
         self.assertEqual(len(state['items']), 2)
-        self.assertTrue(all(i['status'] == 'manual' for i in state['items'].values()))
-        self.assertEqual(len(state['events']), 2)
+        self.assertEqual({i['status'] for i in state['items'].values()}, {'manual', 'deferred'})
+        self.assertEqual(len(state['events']), 1)
         self.assertEqual(self.ctx.request.get.await_count, 1)
 
     async def test_failed_images_save_text_zero_verified_and_no_automatic_retry(self):
@@ -146,6 +146,7 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
     def test_explicit_manual_detail_failure_records_outcome(self):
         post = self.post(source_media_complete=False)
         self.state.begin('original', [post], {}, self.now)
+        self.state.started(post, self.now)
         self.state.interrupt('original', self.now, 'fixture manual')
         c = config.Config()
         c._d['paths'].update(archive=str(self.root / 'archive'), state=str(self.root / 'state'))
@@ -164,6 +165,7 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
     def test_manual_quota_refusal_does_not_change_platform_failure_history(self):
         post = self.post(source_media_complete=False)
         self.state.begin('original', [post], {}, self.now)
+        self.state.started(post, self.now)
         self.state.interrupt('original', self.now, 'fixture manual')
         self.access.outcome('instagram', success=False, reason='previous source failure')
         c = config.Config()

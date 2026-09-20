@@ -9,6 +9,7 @@ from pathlib import Path
 from core.store import Archive, Post
 from core import paid_model
 from core.media import image_facts
+from core.parse import walk, is_fb_story
 
 # 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
 INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
@@ -30,6 +31,40 @@ class Collector:
         self.sources: list[str] = []                # 出过 payload 的接口，供排查
         self._tasks: set[asyncio.Task] = set()
         self.on_block = on_block
+        self.embedded_payloads = 0
+        self.incomplete_reads = 0
+
+    def add_document_json(self, scripts) -> None:
+        """只接收内嵌 Relay 的帖子数据，不持久化整页脚本或配置/凭据。"""
+        fields = {'__typename', 'post_id', 'message', 'text', 'creation_time', 'created_time',
+                  'url', 'permalink_url', 'actors', 'id', 'name', 'attachments', 'media',
+                  'styles', 'attachment', 'all_subattachments', 'subattachments', 'nodes',
+                  'data', 'count', 'page_info', 'has_next_page', 'uri', 'width', 'height'}
+        def project(value):
+            if isinstance(value, list):
+                return [project(v) for v in value]
+            if isinstance(value, dict):
+                return {k: project(v) for k, v in value.items() if k in fields or
+                        isinstance(v, dict) and isinstance(v.get('uri'), str) and 'width' in v and 'height' in v}
+            return value
+        for script in scripts:
+            try:
+                root = json.loads(script)
+            except (ValueError, TypeError):
+                continue
+            # 不保存包含帖子后代的祖先 data：同一祖先可能同时含登录 bootstrap。
+            for node in walk(root, lambda n: is_fb_story(n) or n.get('__typename') in ('Page', 'User', 'ProfileActionMessage')):
+                if is_fb_story(node):
+                    value = project({k: node[k] for k in ('post_id', 'message', 'creation_time', 'created_time',
+                        'url', 'permalink_url', 'actors', 'attachments') if k in node})
+                else:
+                    value = {k: node[k] for k in ('__typename', 'id', 'url') if k in node}
+                    if node.get('__typename') == 'ProfileActionMessage':
+                        value.update(uri=node.get('uri'), profile_owner={'id': (node.get('profile_owner') or {}).get('id')})
+                payload = {'data': value}
+                if payload not in self.payloads:
+                    self.payloads.append(payload)
+                    self.embedded_payloads += 1
 
     def _record_status(self, response) -> None:
         if response.status == 200 or not any(k in response.url for k in INTEREST):
@@ -46,14 +81,25 @@ class Collector:
         self._record_status(response)
         self._tasks.add(asyncio.create_task(self.on_response(response)))
 
-    async def drain(self) -> None:
+    async def drain(self, timeout=None) -> None:
         """等待所有已登记的响应体读取完成，并消费后台任务异常。"""
         if not self._tasks:
             return
         tasks, self._tasks = tuple(self._tasks), set()
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+        except BaseException:
+            self.incomplete_reads += sum(not task.done() for task in tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        self.incomplete_reads += len(pending)
+        for task in pending:
+            task.cancel()
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
-            if isinstance(result, BaseException):
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
                 print(f"    ! 响应处理失败：{type(result).__name__}: {result}")
 
     async def on_response(self, response) -> None:
@@ -94,6 +140,17 @@ class MediaRateLimited(RuntimeError):
     """媒体端明确限流；调用方须停下后续采集动作。"""
 
 
+def reuse_image(arc: Archive, post: Post, media) -> bool:
+    reusable = arc.reusable_media(post, media.url)
+    if reusable is None:
+        return False
+    path, facts = reusable
+    media.local_path = path.relative_to(arc.base).as_posix()
+    for key, value in facts.items():
+        setattr(media, key, value)
+    return True
+
+
 async def download_media(ctx, arc: Archive, post: Post, referer: str, *, check_stop=None) -> None:
     """复用浏览器请求栈下载静态媒体；签名 URL 须在当前运行内使用，视频只留元数据。"""
     downloads_complete = True
@@ -104,12 +161,7 @@ async def download_media(ctx, arc: Archive, post: Post, referer: str, *, check_s
             check_stop()
         if m.kind == "video":
             continue
-        reusable = arc.reusable_media(post, m.url)
-        if reusable is not None:
-            path, facts = reusable
-            m.local_path = path.relative_to(arc.base).as_posix()
-            for key, value in facts.items():
-                setattr(m, key, value)
+        if reuse_image(arc, post, m):
             continue
         try:
             resp = await ctx.request.get(m.url, headers={"Referer": referer})

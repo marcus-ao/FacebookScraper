@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 from uuid import uuid4
+from urllib.parse import parse_qsl, urlsplit
 from core import paid_model
 from core.config import cfg
 from core.media import image_facts
@@ -65,6 +66,24 @@ class Post:
     def to_row(self) -> dict:
         d = asdict(self)
         return d
+
+
+def same_media_locator(old: dict, new: Media) -> bool:
+    """只有同一媒体的签名刷新可复用；路径、变换参数或媒体身份变化仍需核验。"""
+    if old.get('kind') != new.kind:
+        return False
+    if old.get('source_media_id') and new.source_media_id and old['source_media_id'] != new.source_media_id:
+        return False
+    if old.get('url') == new.url:
+        return True
+    if not new.source_media_id or old.get('source_media_id') != new.source_media_id:
+        return False
+    def locator(url):
+        parts = urlsplit(url or '')
+        query = sorted((k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                       if k not in ('oh', 'oe') and not k.startswith('_nc_'))
+        return parts.scheme, parts.netloc, parts.path, query
+    return locator(old.get('url')) == locator(new.url)
 
 
 _SAFE_POST_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,199}\Z")
@@ -976,8 +995,9 @@ class Archive:
             old = self._current_row(post)
             if not isinstance(old, dict):
                 return None
+            candidate = next((m for m in post.media if m.url == url), None)
             for item in old.get('media') or []:
-                if not isinstance(item, dict) or item.get('url') != url:
+                if not isinstance(item, dict) or candidate is None or not same_media_locator(item, candidate):
                     continue
                 try:
                     path = resolve_media_path(self.base, old, item)
@@ -1213,7 +1233,7 @@ class Archive:
             if item.get('sha256') and media.sha256:
                 if item['sha256'] != media.sha256:
                     return True
-            elif item.get('url') != media.url:
+            elif item.get('url') != media.url and (media.kind != 'video' or not same_media_locator(item, media)):
                 return True
         return False
 

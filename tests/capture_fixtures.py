@@ -23,6 +23,7 @@ def record_capture_rows(runtime, rows, now, platform, *, code=0):
     def detector(_kind, _platform):
         candidates = ledger.begin('fixture-scan', posts, {r['post_id']: r for r in arc.rows()}, now)
         for post in candidates:
+            ledger.started(post, now)
             captured = next((fields for event, fields in rows if event == 'post_captured' and fields['post_id'] == post.post_id), None)
             if not captured:
                 continue

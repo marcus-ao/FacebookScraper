@@ -11,14 +11,14 @@ import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from uuid import uuid4
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from core import maintenance
 from core.archive_integrity import archive_report, reconcile_instagram
 from core.capture import (Collector, atomic_write_json, download_media,
-                          prune_captures_days, MediaRateLimited)
+                          prune_captures_days, MediaRateLimited, reuse_image)
 from core.capture_state import CaptureState, verified_images
 from core.chrome import attach, cdp_ready, launch
 from core.config import MonitorSchedule, cfg, per_platform
@@ -27,7 +27,7 @@ from core.integrity import parse_ts
 from core.monitor_access import AccessController, AccessDenied
 from core.monitoring import MonitoringJournal
 from core.notify import notify
-from core.parse import extract, merge_post, partition_by_owner
+from core.parse import extract, merge_post, partition_by_owner, walk
 from core.store import Archive, Media, Post
 from core.paid_model import FileLock
 
@@ -52,6 +52,7 @@ class DeltaConfig:
     request_gap_seconds: float = 8.0
     max_scrolls: int = 0
     first_screen_seconds: float = 6.0
+    first_screen_timeout_seconds: float = 18.0
     max_session_seconds: float = 300.0
     failure_budget: int = 3
     autostart_chrome: bool = True
@@ -63,6 +64,8 @@ class DeltaConfig:
     scan_id: str = ""
     source_failures: list[str] = field(default_factory=list)
     source_attempts: int = 0
+    deadline: float = 0.0
+    diagnostics: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, c=None) -> "DeltaConfig":
@@ -75,6 +78,7 @@ class DeltaConfig:
             request_gap_seconds=float(g("request_gap_seconds", 8.0)),
             max_scrolls=int(g("max_scrolls", 0)),
             first_screen_seconds=float(g("first_screen_seconds", 6.0)),
+            first_screen_timeout_seconds=float(g("first_screen_timeout_seconds", 18.0)),
             max_session_seconds=float(g("max_session_seconds", 300.0)),
             failure_budget=int(g("failure_budget", 3)),
             autostart_chrome=bool(g("autostart_chrome", True)),
@@ -319,6 +323,8 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
         if dcfg.access:
             dcfg.access.check(platform)
     handler = col.submit
+    started = time.monotonic()
+    deadline = dcfg.deadline or started + dcfg.max_session_seconds
     try:
         page.on("response", handler)
         guard()
@@ -328,6 +334,19 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
             raise DeltaBlocked(f'平台页面返回 {response.status}，探测身份已暂停', hard=True)
         # 首屏的接口响应是异步来的，goto 返回时通常还没到齐
         await _guarded_wait(dcfg.first_screen_seconds, guard)
+        dcfg.diagnostics['initial_response_payloads'] = len(col.payloads)
+        if platform == 'facebook':
+            # 首屏 Relay 可能在 HTML JSON 中；只读当前页面，不滚动、刷新或请求额外接口。
+            wait_until = min(started + max(dcfg.first_screen_seconds, dcfg.first_screen_timeout_seconds),
+                             dcfg.deadline or started + dcfg.max_session_seconds)
+            while True:
+                scripts = await _eval(page, "() => Array.from(document.querySelectorAll('script[type=\"application/json\"]'), s => s.textContent)", [])
+                col.add_document_json(scripts)
+                account = urlsplit(url).path.strip('/').split('/')[0]
+                own, _ = partition_by_owner(extract(col.payloads, platform, account, route='delta'), account)
+                if own or time.monotonic() >= wait_until or dcfg.first_screen_seconds == 0 or dcfg.run_kind == 'detail':
+                    break
+                await _guarded_wait(min(.2, max(0, wait_until - time.monotonic())), guard)
         screens, moved = await human_scroll(page, dcfg, guard)
         if screens and moved <= 0:
             print("[!] 滚了 %d 屏但页面没有移动（scrollY 未变）——"
@@ -335,13 +354,19 @@ async def scan_page(ctx, url: str, dcfg: DeltaConfig) -> tuple[Collector, str]:
         final_url = page.url
         page.remove_listener("response", handler)
         # 停止监听后 drain，避免页面关闭时取消未读响应。
-        await col.drain()
+        await col.drain(timeout=max(0, deadline - time.monotonic()))
+        guard()
         return col, final_url
     finally:
         try:
             page.remove_listener("response", handler)
-            await col.drain()
+            await col.drain(timeout=max(0, deadline - time.monotonic()))
         finally:
+            dcfg.diagnostics.update(page_seconds=round(time.monotonic() - started, 3),
+                response_payloads=len(col.payloads), embedded_payloads=col.embedded_payloads,
+                incomplete_response_reads=col.incomplete_reads,
+                timeline_seen=any(walk(col.payloads, lambda n: bool(n.get('post_id')) or 'timeline_list_feed_units' in n))
+                    if platform == 'facebook' else bool(col.payloads))
             await page.close()
 
 
@@ -362,6 +387,8 @@ class ScanResult:
     # 被丢弃、但作者是已知合作方的那些（core.integrity.check_dropped_partners）
     suspect: list[dict] = field(default_factory=list)
     skipped: dict[str, int] = field(default_factory=dict)
+    deferred: int = 0
+    outside_baseline: int = 0
 
     def summary(self) -> str:
         span = ("%s ~ %s" % (self.oldest_seen[:10], self.newest_seen[:10])
@@ -370,7 +397,7 @@ class ScanResult:
                 "· 丢弃 %d · 归档最新 %s"
                 % (self.new, self.upgraded, self.own, self.authored, self.collab, span,
                    self.rejected, self.newest_known[:10] or "—"))
-        return result + " · 发布范围外 " + " / ".join(
+        return result + f" · 基线前仅观察 {self.outside_baseline} 篇 · 尚未开始 {self.deferred} 篇" + " · 发布范围外 " + " / ".join(
             f"{label} {self.skipped.get(key, 0)}" for key, label in
             (("video", "视频"), ("mixed_media", "混合"),
              ("no_media", "无媒体"), ("no_text", "无正文")))
@@ -403,6 +430,9 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     请求节奏或滚动行为；``None`` 或 dry-run 时一个字也不写。
     """
     url = profile_url(platform, account)
+    started = time.monotonic()
+    dcfg.deadline = started + dcfg.max_session_seconds
+    dcfg.diagnostics.update(stage='homepage', budget_seconds=dcfg.max_session_seconds)
     lifecycle = None
     if dcfg.access and not dry_run:
         lifecycle = CaptureState(dcfg.access.path.parent)
@@ -433,6 +463,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
 
     posts = extract(col.payloads, platform, account, route="delta")
     if not posts:
+        if not any(walk(col.payloads, lambda n: bool(n.get('post_id')) or 'timeline_list_feed_units' in n)) and platform == 'facebook':
+            raise DeltaBlocked("捕获到 %d 段辅助响应，但未取得目标主页帖子时间线数据；请核对首屏加载诊断" % len(col.payloads))
+        if platform == 'instagram' and not any(walk(col.payloads, lambda n: bool(n.get('pk') or n.get('shortcode')))):
+            raise DeltaBlocked("捕获到辅助响应，但未取得目标主页帖子数据")
         raise DeltaBlocked("捕获到 %d 段响应但一篇都没解析出来 —— "
                            "解析器可能已经与真实结构不符" % len(col.payloads))
 
@@ -455,11 +489,34 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
         newest_known=max((r.get("created_at") or "" for r in known), default=""),
         payloads=len(col.payloads), skipped=scope_skip_counts(posts))
 
-    candidates = [post for post in sorted(posts, key=lambda p: p.created_at or '', reverse=True)
-                  if arc.should_append(post)]
+    prepared_at = time.monotonic()
+    dcfg.diagnostics.update(stage='prepare', observed=len(posts), capture_started=0, capture_finished=0)
+    known_by_id = {r['post_id']: r for r in known}
+    baseline = lifecycle.status()['baselines'][platform] if lifecycle else None
+    if baseline and baseline['account'] != account.lower():
+        raise ValueError('目标账号与监测基线不同，请先核对基线')
+    candidates = []
+    for post in sorted(posts, key=lambda p: p.created_at or '', reverse=True):
+        stamp = parse_ts(post.created_at)
+        if (baseline and post.post_id not in known_by_id and stamp is not None
+                and stamp < parse_ts(baseline['enabled_at']) - timedelta(days=baseline.get('lookback_days', 30))):
+            res.outside_baseline += 1
+            if facts is not None and not dry_run:
+                facts.fact('post_observed', utcnow(), platform=platform, scan_id=dcfg.scan_id,
+                           post_id=post.post_id, created_at=post.created_at, reason='outside_baseline')
+            continue
+        if post.post_id in known_by_id:
+            for media in post.media:
+                if media.kind == 'image':
+                    reuse_image(arc, post, media)
+            if lifecycle and lifecycle.reconcile_local(post, arc, utcnow()):
+                res.upgraded += 1
+                continue
+        if arc.should_append(post):
+            candidates.append(post)
     if lifecycle:
         candidates = lifecycle.begin(dcfg.scan_id, candidates,
-                                     {r['post_id']: r for r in known}, utcnow())
+                                     known_by_id, utcnow())
     # 先保存全部发现，再执行任何下载；第一篇中断也不能抹掉响应里的后续候选。
     for post in candidates:
         if facts is not None and not dry_run:
@@ -488,7 +545,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
             % (len(posts), account, len(rejected), floor, hint))
 
     try:
-        for post in candidates:
+        dcfg.diagnostics['prepare_seconds'] = round(time.monotonic() - prepared_at, 3)
+        capture_started_at = time.monotonic()
+        reserve_seconds = max(1.0, dcfg.request_gap_seconds)
+        for index, post in enumerate(candidates):
             was_known = arc.has(post.post_id)
             head = (post.text or "").replace("\n", " ")[:38]
             if dry_run:
@@ -498,7 +558,15 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
                 else:
                     res.new += 1
                 continue
+            if dcfg.deadline - time.monotonic() < reserve_seconds:
+                res.deferred = len(candidates) - index
+                break
+            post_started = time.monotonic()
+            dcfg.diagnostics.update(stage='capture', current_post=post.post_id,
+                capture_started=dcfg.diagnostics['capture_started'] + 1)
             post = await capture_post(ctx, platform, account, arc, dcfg, post, lifecycle=lifecycle)
+            reserve_seconds = max(reserve_seconds, time.monotonic() - post_started)
+            dcfg.diagnostics['capture_finished'] += 1
             imgs = verified_images(arc.base, post.to_row())
             vids = sum(1 for m in post.media if m.kind == "video")
             print("  + %s  %d图/%d视频  %s" % (post.post_id, imgs, vids, head))
@@ -518,7 +586,10 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
                     res.new += 1
     finally:
         if lifecycle:
-            lifecycle.interrupt(dcfg.scan_id, utcnow(), '本轮会话中断或预算耗尽，未处理候选已转人工')
+            lifecycle.interrupt(dcfg.scan_id, utcnow(), '已开始的采集被中断，请核对本地结果后人工处理')
+        dcfg.diagnostics.update(elapsed_seconds=round(time.monotonic() - started, 3),
+                                capture_seconds=round(time.monotonic() - capture_started_at, 3),
+                                deferred=res.deferred, outside_baseline=res.outside_baseline)
     return res
 
 
@@ -548,7 +619,7 @@ async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=Non
                 source_visit = True
                 dcfg.source_attempts += 1
                 detail, final = await scan_page(ctx, post.permalink,
-                    replace(dcfg, max_scrolls=0, run_kind='detail'))
+                    replace(dcfg, max_scrolls=0, run_kind='detail', diagnostics={}))
                 reason = login_wall_reason(final, detail.blocked_status())
                 if reason:
                     raise DeltaBlocked(reason, hard=True)
@@ -694,13 +765,15 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
     try:
         for platform in platforms:
             entry = state.setdefault(platform, blank_entry())
+            scan_config = None
             try:
                 access.check(platform)
                 c = cfg()
                 account = c["targets"][platform]
                 arc = Archive(c.archive_dir, "%s_%s" % (platform[:2], account))
                 facts = MonitoringJournal(c.state_dir, now=utcnow(), inspect_running=False)
-                scan_config = replace(dcfg, access=access, scan_id=uuid4().hex, source_failures=[], source_attempts=0)
+                scan_config = replace(dcfg, access=access, scan_id=uuid4().hex, source_failures=[], source_attempts=0,
+                                      deadline=0, diagnostics={})
                 res = await asyncio.wait_for(
                     delta_once(ctx, platform, account, arc, scan_config, dry_run=dry_run, facts=facts),
                     timeout=dcfg.max_session_seconds)
@@ -710,7 +783,13 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 continue
             except (Exception, SystemExit) as exc:
                 hard = isinstance(exc, DeltaBlocked) and exc.hard
-                msg = "%s: %s" % (type(exc).__name__, exc)
+                diagnostic = scan_config.diagnostics if scan_config is not None else {}
+                entry['last_scan_diagnostics'] = diagnostic
+                msg = ("整轮 %.0f 秒预算耗尽；阶段 %s，已开始 %d 篇、已完成 %d 篇，当前帖 %s" %
+                       (dcfg.max_session_seconds, diagnostic.get('stage', 'unknown'),
+                        diagnostic.get('capture_started', 0), diagnostic.get('capture_finished', 0),
+                        diagnostic.get('current_post', '—')) if isinstance(exc, asyncio.TimeoutError)
+                       else "%s: %s" % (type(exc).__name__, exc))
                 access.outcome(platform, success=False, reason=msg, hard=hard)
                 record_failure(entry, utcnow(), msg)
                 if hard:
@@ -728,6 +807,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                     break
                 continue
             if scan_config.source_failures:
+                entry['last_scan_diagnostics'] = scan_config.diagnostics
                 msg = '详情来源请求或解析失败：' + ', '.join(scan_config.source_failures)
                 access.outcome(platform, success=False, reason=msg)
                 record_failure(entry, utcnow(), msg)
@@ -735,6 +815,7 @@ async def _run_due(platforms: list[str], dcfg: DeltaConfig, state: dict,
                 rc = 1
                 continue
             access.outcome(platform, success=True)
+            entry['last_scan_diagnostics'] = scan_config.diagnostics
             print(res.summary() + ("（dry-run：仅安全与扫描事实已持久化）" if dry_run else ""))
             record_success(entry, utcnow(), res.new)
             entry.update(account=account, last_run_kind=dcfg.run_kind,
@@ -765,6 +846,9 @@ def _print_status(state: dict) -> None:
                  quiet_days(entry, now), int(entry.get("consecutive_failures") or 0),
                  "" if not entry.get("last_error") else
                  "\n           最后一次错误：%s" % entry["last_error"]))
+        if entry.get('last_scan_diagnostics'):
+            print(json.dumps({'platform': platform, 'last_scan_diagnostics': entry['last_scan_diagnostics']},
+                             ensure_ascii=False))
 
 
 def _parse_args(argv):
@@ -900,7 +984,9 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
                 status = CaptureState(path.parent).status()
                 print(json.dumps({'capture_revision': status['revision'], 'baselines': status['baselines'],
                     'manual_items': [{'key': key, 'reason': item.get('reason')} for key, item in status['items'].items()
-                                     if item['status'] == 'manual']}, ensure_ascii=False, indent=2))
+                                     if item['status'] == 'manual'],
+                    'deferred_items': [{'key': key, 'reason': item.get('reason')} for key, item in status['items'].items()
+                                       if item['status'] == 'deferred']}, ensure_ascii=False, indent=2))
             c = cfg()
             for platform in platforms:
                 account_dir = c.archive_dir / (platform[:2] + '_' + c['targets'][platform])

@@ -29,7 +29,7 @@ export function MonitorPanel({ data, busy, action }: { data: MonitorStatus | und
     {(key || scan) && <p><Link to="/runtime">查看全部采集记录</Link></p>}
     <Table<CaptureItem> rowKey="key" size="small" dataSource={[...items].reverse()} pagination={{ pageSize: 10 }} scroll={{ x: 820 }} columns={[
       { title: '原帖', render: (_, item) => <>{item.platform} · {item.post_id}<br />{categories[item.classification] ?? '时间待核对'}</> },
-      { title: '结果', render: (_, item) => <>{item.status === 'complete' ? '完整' : item.status === 'manual' ? '待人工' : '采集中'}<br />已校验 {item.saved_images ?? '未知'} / {item.source_media_count ?? '总数待核对'} 张{item.reason && <p>{item.reason}</p>}</> },
+      { title: '结果', render: (_, item) => <>{item.status === 'complete' ? '完整' : item.status === 'manual' ? '待人工' : item.status === 'deferred' ? '尚未开始，等待后续扫描' : '采集中'}<br />已校验 {item.saved_images ?? '未知'} / {item.source_media_count ?? '总数待核对'} 张{item.reason && <p>{item.reason}</p>}</> },
       { title: '发现 / 结束（北京时间）', render: (_, item) => <><ShanghaiTime at={item.first_seen_at} /><br /><ShanghaiTime at={item.finished_at} /><br />发现等待 {item.discovery_wait_seconds == null ? '未知' : `${Math.round(item.discovery_wait_seconds / 60)} 分钟`} · 本次抓取 {item.capture_seconds == null ? '未知' : `${Math.round(item.capture_seconds)} 秒`}</> },
       { title: '操作', render: (_, item) => <Space wrap>{item.archived && <Link to={`/history/${encodeURIComponent(item.account_dir)}/${encodeURIComponent(item.post_id)}`}>查看已存原帖</Link>}{item.permalink && <a href={item.permalink} target="_blank" rel="noreferrer">查看源帖</a>}{item.status === 'manual' && <Button disabled={busy || data.capture_revision === null} onClick={() => open(item)}>处理后尝试一次</Button>}</Space> },
     ]} />

@@ -311,6 +311,7 @@ class NotificationTests(unittest.TestCase):
         self.assertFalse(next(iter(ledger.status()['events'].values()))['acknowledged'])
         # Restart recovery closes the final pending candidate without losing its summary fact.
         if interrupted:
+            ledger.started(posts[1], self.now)
             ledger.recover_interrupted(self.now)
         else:
             ledger.finish(posts[1], arc, self.now, reason='fixture missing image')
