@@ -12,7 +12,7 @@ from core.integrity import parse_ts
 from core.media import image_facts
 from core.paid_model import FileLock, atomic_write_json
 from core.process_identity import current_worker
-from core.store import Archive, Post, resolve_media_path
+from core.store import Archive, Post, resolve_media_path, read_post_truth, same_media_locator
 
 
 class CaptureStateError(ValueError):
@@ -72,7 +72,7 @@ class CaptureState:
                     raise ValueError('invalid baseline')
             for key, item in data['items'].items():
                 if (not isinstance(item, dict) or item.get('key') != key
-                        or item.get('status') not in ('pending', 'complete', 'manual')
+                        or item.get('status') not in ('pending', 'complete', 'manual', 'deferred')
                         or not isinstance(item.get('source'), dict)):
                     raise ValueError('invalid capture item')
                 row = item['source']
@@ -118,7 +118,7 @@ class CaptureState:
             return data
 
     def begin(self, scan_id, posts, known, now):
-        """同一响应的候选在任何图片请求之前原子保存；未完成项只接受人工恢复。"""
+        """同一响应的候选在请求前保存；已尝试失败项仍须人工恢复。"""
         with FileLock(self.lock, busy_message='采集事实正在写入，请稍后重试'):
             data = self.status()
             candidates = []
@@ -139,13 +139,44 @@ class CaptureState:
                         'status': 'pending', 'classification': category,
                         'prior_revision': (previous or {}).get('content_revision') or
                                           (content_revision(known[post.post_id]) if post.post_id in known else None),
+                        'archived': post.post_id in known, 'saved_images': (previous or {}).get('saved_images'),
                         'last_result': (previous or {}).get('last_result'), 'recovery': False, 'worker': current_worker()}
                 data['items'][key] = item
                 candidates.append(post)
             self._save(data)
             return candidates
 
-    def finish(self, post: Post, arc: Archive, now, *, reason='', archived=False):
+    def reconcile_local(self, post: Post, arc: Archive, now) -> bool:
+        """人工项只接受同帖完整来源与已核验原图；不请求网络，不采用正文变化。"""
+        data = self.status()
+        key = post_key(post.platform, post.account, post.post_id)
+        item = data['items'].get(key)
+        if not item or item['status'] not in ('manual', 'deferred') or not arc.has(post.post_id):
+            return False
+        if (post.owner_conflict or post.source_media_complete is not True
+                or post.source_media_count != len(post.media)):
+            return False
+        indexed = next(r for r in arc.rows() if r['post_id'] == post.post_id)
+        old, _ = read_post_truth(arc.base, indexed)
+        # 不将另一作者、正文版本、媒体顺序或日期冲突当成完整性修复。
+        for source in (old, item['source']):
+            if any(source.get(k) != getattr(post, k) for k in
+                   ('platform', 'account', 'post_id', 'owner', 'text', 'coauthors')):
+                return False
+            if source.get('owner_conflict') or any(source.get(k) and source[k] != getattr(post, k)
+                                                 for k in ('created_at', 'permalink')):
+                return False
+            media = source.get('media') or []
+            if len(media) != len(post.media) or any(not same_media_locator(m, n) for m, n in zip(media, post.media)):
+                return False
+        if verified_images(arc.base, post.to_row()) != sum(m.kind == 'image' for m in post.media):
+            return False
+        post.media_complete = True
+        arc.append(post)  # 既有来源版本由 Archive 留存；人工文件和业务账本不参与写入。
+        self.finish(post, arc, now, archived=True, local_evidence=True)
+        return True
+
+    def finish(self, post: Post, arc: Archive, now, *, reason='', archived=False, local_evidence=False):
         with FileLock(self.lock, busy_message='采集事实正在写入，请稍后重试'):
             data = self.status()
             key = post_key(post.platform, post.account, post.post_id)
@@ -159,7 +190,9 @@ class CaptureState:
                         finished_at=now.isoformat(), saved_images=saved,
                         archived=archived, reason=reason or ('' if complete else '原文或图片未完整保存，请人工处理'))
             revision = content_revision(row)
-            category = ('recovered' if complete and item['recovery'] else item['classification'])
+            category = ('recovered' if complete and (item['recovery'] or local_evidence) else item['classification'])
+            if local_evidence:
+                item['resolution'] = 'verified_local_evidence'
             outcome = _digest([revision, complete, saved, post.source_media_complete, post.source_media_count, archived])
             # 签名刷新、移动目录和重复扫描不形成新的业务结果。
             changed = outcome != item.get('last_result') and not (
@@ -180,11 +213,15 @@ class CaptureState:
             self._save(data)
 
     def interrupt(self, scan_id, now, reason):
-        """调用方已结束该轮时，将尚未产出结果的候选转人工；不丢掉其发现事实。"""
+        """已开始但无结果须人工核对；未开始只延期，等待未来自然扫描的新证据。"""
         with FileLock(self.lock, busy_message='采集事实正在写入，请稍后重试'):
             data = self.status()
             for key, item in data['items'].items():
                 if item['scan_id'] != scan_id or item['status'] != 'pending':
+                    continue
+                if not item.get('attempt_started_at') and not item.get('recovery'):
+                    item.update(status='deferred', reason='本轮尚未开始；等待后续自然扫描，不主动补抓',
+                                finished_at=now.isoformat())
                     continue
                 item.update(status='manual', reason=reason, archived=False,
                             saved_images=0, finished_at=now.isoformat())
@@ -207,7 +244,7 @@ class CaptureState:
             if not item or item['status'] != 'manual':
                 raise CaptureStateError('该项当前不需要人工恢复')
             item.update(status='pending', recovery=True, recovery_reason=reason.strip(), scan_id=uuid4().hex,
-                        worker=current_worker())
+                        worker=current_worker(), attempt_started_at=None)
             self._save(data)
             return dict(item)
 

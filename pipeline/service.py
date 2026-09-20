@@ -152,7 +152,17 @@ class Runtime:
             events = snapshot['events']
             scans = {event['scan_id'] for event in events.values() if not event['acknowledged']}
             for scan in scans:
-                rows = [event for event in events.values() if event['scan_id'] == scan]
+                scan_rows = [event for event in events.values() if event['scan_id'] == scan]
+                keys = {event['key'] for event in scan_rows}
+                pending = any(item['status'] == 'pending' and (item['scan_id'] == scan or key in keys)
+                              for key, item in snapshot['items'].items())
+                rows = [event for event in scan_rows
+                        if (item := snapshot['items'].get(event['key'], {})).get('status') == event['status']
+                        and item.get('last_result') == event.get('last_result')]
+                if not rows:
+                    if not pending:
+                        ledger.acknowledge([event['event_id'] for event in scan_rows])
+                    continue
                 source = rows[0]['source']
                 cards = notifications.scan_cards('delta', source['platform'], source['account'], rows, {}, now)
                 if cards is None:
@@ -161,16 +171,16 @@ class Runtime:
                 for event_id, payload in saved:
                     self.outbox.enqueue('monitor_saved:' + event_id, 'monitor_saved', payload, now)
                 # 未终结的扫描保留未确认事件，维护重放才会生成最终一次摘要。
-                if any(item['scan_id'] == scan and item['status'] == 'pending'
-                       for item in snapshot['items'].values()):
+                if pending:
                     continue
                 self.outbox.enqueue('monitor_found:' + source['platform'] + ':' + scan, 'monitor_found', found, now)
-                manual = [event for event in rows if event['status'] == 'manual']
+                manual = [event for event in rows if event['status'] == 'manual'
+                          and snapshot['items'].get(event['key'], {}).get('status') == 'manual']
                 if manual:
                     self.outbox.enqueue('capture-manual:' + scan, 'system', {
                         'text': f"{source['platform']} 本轮 {len(manual)} 篇需要人工处理，已有内容仍保留。",
                         'run_id': scan, 'next_step': '打开运行详情核对逐帖原因，再授权一次恢复。'}, now)
-                ledger.acknowledge([row['event_id'] for row in rows])
+                ledger.acknowledge([row['event_id'] for row in scan_rows])
         except (CaptureStateError, OSError, ValueError, RuntimeError) as exc:
             notify.notify('监测播报未入队', type(exc).__name__ + '；事实保留，后续维护会重新入队。', popup=False)
 

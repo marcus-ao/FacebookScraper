@@ -27,6 +27,7 @@ reconcile_max_session_seconds = 90  # 单个平台扫描上限。
 processing_budget_min = 25  # 整批处理预算下限，另计两个平台扫描。
 request_gap_seconds = 8
 first_screen_seconds = 6
+first_screen_timeout_seconds = 18  # FB 未见目标帖时被动等候上限，从导航开始计时，仍受整轮预算限制。
 max_session_seconds = 300
 failure_budget = 3  # 连续失败次数，达到后停止。
 autostart_chrome = true

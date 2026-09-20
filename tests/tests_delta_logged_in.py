@@ -458,7 +458,7 @@ with tempfile.TemporaryDirectory() as d:
         asyncio.run(delta_once(ctx, "instagram", "acme_us", arc, test_cfg()))
         check(False, "解析出 0 篇必须中止")
     except DeltaBlocked as e:
-        check("解析器" in str(e), "解析出 0 篇：提示解析器可能失效，而不是静默结束")
+        check("未取得目标主页帖子数据" in str(e), "只有辅助响应：明确提示未取得帖子数据，不归咎于解析器")
 
 
 # ==========================================================================

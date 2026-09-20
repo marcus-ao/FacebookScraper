@@ -43,6 +43,8 @@
 
 **Instagram 响应结构。** `media_type=1` 的单图允许 `carousel_media` 为 `null` 或空数组，**字段存在本身不是轮播证据**。`media_type=8` 缺子项、未知类型或类型与轮播字段矛盾仍算不完整。视频 `kind=video` 且 `local_path=null` 是设计行为，不是下载失败。
 
+**夜间首屏与中断。** 普通轮次读内嵌帖子/身份 JSON 并被动等迟到接口，仍不滚动。截止前不启动预计来不及的下一篇：未开始记 `deferred`，已开始失败才是 `manual`。原图复用先核验本地字节；同媒体仅签名参数变化时零下载，路径/变换变化不吞掉。完整同帖来源与本地原图充分匹配才允许离线补日期/完整性，不采用冲突正文、归属或媒体。细节与离线证据见 [§1.20](#120-夜间监测首屏与采集恢复修复2026-09-20)。
+
 **模型调用名。** 正文当前是 `deepseek-flash`（旧 `deepseek-v4-flash` 已退役并暂时路由到新版），另允许 `deepseek-v4-pro`；退役名称在请求前直接拒绝。图片默认 `gpt-image-2`，可选 `gpt-image-2.5-flare` 与 `gpt-image-2.5-sunburst`。⛔ **笼统的 `gpt-image-2.5` 不是调用名**，两个变体不互相映射，费率和用量按完整型号分表；历史账本里的旧占位名不猜成某个变体。请求 Pro 却收到 Flash 仍报错并停止整批。
 
 **模型目录查询。** 带 Key 的 `GET /v1/models` 反映的是该 Key 的配置。合法空列表只能用同一网关、同一凭据补查 `GET /v1/models/{model}`，详情 `id` 必须精确一致；非空但缺型号、结构异常或查询失败都在付费前关闭本批，不靠付费 edits 试探。`model_verification=catalog` 只证明元数据确认，**不证明计费权限或远端实际路由**。
@@ -64,6 +66,63 @@
 `state/` 不随 Git 提交，本文的相对链接从主检出解析。⛔ **清理任何 worktree 之前，先确认它引用的证据不是只存在于那一个 worktree 里**——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。
 
 2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。`review-section-confirmations` 仍在，未纳入那次清理。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
+
+### 1.19 待审核列表按原帖时间降序（2026-09-19）
+
+分支 `codex/review-newest-first`，工作树 `.worktrees/review-newest-first`，基点 `f05f8bb`。两个平台的四个子分类原先沿用候选排期升序，无排期时按任务 ID 排列；现统一按原帖发布时间从新到旧展示，筛选、分页和详情前后导航继承此顺序。候选排期仍按旧帖优先分配。
+
+**验证状态：离线通过。** [修前回归](../state/review-newest-first/order-before.log)的 8 个平台／子分类场景均因顺序不符失败；[修后浏览器报告](../state/review-newest-first/browser-after/report.json)及同目录 8 张列表截图可复核。测试用 24 篇临时图文记录覆盖待我审、未就绪、已挂起、已处理，检查分类筛选、接口分页、跨时区原帖时间、前后导航及候选排期分配；[Web 审校 54 项](../state/review-newest-first/tests_web_review.log)、[历史 6 项](../state/review-newest-first/tests_history.log)、[查询索引 13 项](../state/review-newest-first/tests_query_index.log)和[前端构建](../state/review-newest-first/build.log)通过。构建保留已有大 chunk 提示。
+
+工作树 archive/state/.env 独立，测试写入临时归档，浏览器仅连接隔离本地服务，无真实账号、模型、抓取或发布操作。证据位于该工作树 `state/review-newest-first/`，不随 Git 提交，清理前须保全。服务机更新及业务人员复验为 **待真实联调**，见 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)。
+
+### 1.20 夜间监测首屏与采集恢复修复（2026-09-20）
+
+分支 `codex/monitor-capture-recovery`，工作树 `.worktrees/monitor-capture-recovery`，基点 `984f4c4`。
+用户提供服务机 `92e8718` 的持续运行日志与三份完整 capture；本轮修复基于当前主干，保留已有 IG 自动核验。
+归档与状态使用工作树默认独立路径，验证进一步使用临时目录，只复用主检出 Python，没有复制凭据。
+
+| 输入 | 原始捕获离线结果 | 能确认的边界 |
+|---|---|---|
+| `_capture_delta_1789866868.json` | 9 payload、0 帖子节点/目标帖 | 没取得帖子时间线；不能由此选定迟到、HTML 内嵌或页面未加载中的哪一种 |
+| `_capture_delta_1789860525.json` | 29 payload、9 目标帖、8 图/1 视频 | 时间线结构可解析；`122127190695379375` 已有完整单图来源及 `2026-09-16T05:43:50Z` 日期 |
+| `_capture_delta_1789857599.json` | 20 payload、59 帖、57 目标帖、2 拒绝；其中 35 篇早于捕获时刻前 30 天 | 四屏返回到五月的历史；日志/粘贴状态指向整轮预算取消，不证明某张图片长期卡住 |
+
+三份原始文件保留于用户 `D:\Download`，不入 Git；SHA-256、重放脚本和结果在
+[离线重放报告](../state/monitor-capture-recovery/replay.json)及同目录。FB 原响应与包装成页面 JSON 后的
+受控字段提取逐帖比较一致；失败样本现在明确提示未取得时间线。首屏读取内嵌帖子/身份 JSON 并被动等待
+迟到接口，默认最多从导航起 18 秒，普通轮次仍不滚动，整轮 90/300 秒及失败配额保持。
+
+用户确认使用固定的初始化基线起点 `enabled_at - lookback_days`：更早且未归档的帖只记观察事实，
+已有归档仍核对变化。重放使用**捕获时刻初始化的隔离基线**得到 22 篇处理、35 篇仅观察；
+服务机须用其真实已有基线，不能直接套这个数量。原图复用先核验本地字节，同媒体仅签名参数变化时
+零下载；路径/变换参数变化不吞掉。以原捕获构造签名刷新后的第二次观察为零请求、零旧帖处理，
+这不是两份真实连续捕获，不能据此断言用户每次重复处理都由签名引起。
+
+截止前不启动预计来不及的下一篇；未开始记 `deferred`，只接受后续自然扫描新证据，已开始失败及人工
+恢复前置失败仍为 `manual`。旧人工项不批量改写。完整同帖来源与本地原图充分匹配时可离线补日期/完整性，
+不采用冲突正文/归属/媒体，不触发新请求。目标 FB 帖用真实来源与合成原图重放为完整、零额外下载，
+人工文案字节保持；不能称为服务机原图已恢复。通知只新建当前结果的卡片，旧事件及已冻结发件箱保留。
+
+**验证状态：离线通过。** [新增回归最终 21 项、通知服务及通知兼容共 3/3 脚本](../state/offline-validation-20260920T022743Z/results.json)
+与[入口/生命周期/媒体/hygiene 6/6](../state/offline-validation-20260920T022153Z/results.json)
+包含真实隔离 Chromium 的内嵌 JSON 与延迟接口两场景，全部请求由本地路由拦截。
+[另外 12/12 脚本](../state/offline-validation-20260920T021406Z/results.json)覆盖归档核验、存储、解析、
+FB 身份/媒体、访问及调度；[存储/监测等前期 7/7](../state/offline-validation-20260920T021134Z/results.json)另存。
+前端运行页 12 项单测及 TypeScript/Vite 构建通过，保留既有大 chunk 提示；命令输出已核对。
+首轮新增回归 [8 项预期失败](../state/offline-validation-20260920T020601Z/results.json)、
+[人工恢复边界失败](../state/offline-validation-20260920T021306Z/results.json)、
+[内嵌身份与过时通知失败](../state/offline-validation-20260920T021603Z/results.json)、
+[响应读取收尾超时失败](../state/offline-validation-20260920T022015Z/results.json)、
+[同结果跨扫描漏报](../state/offline-validation-20260920T022509Z/results.json)与
+[通知与新采集交错漏报](../state/offline-validation-20260920T022708Z/results.json)均保留。
+通知兼容首轮旧夹具未登记开始便预期人工失败，已改为真实开始后模拟重启；最终兼容 23 项通过。
+[验证汇总](../state/monitor-capture-recovery/validation.json)逐脚本引用最近记录，不把多轮结果写成一次整库全绿。
+[独立复审](../state/monitor-capture-recovery/review.md)已关闭原四项及跨轮通知漏报；
+其后主代理另以失败/成功回归验证采集进行中不提前确认旧事件。
+
+证据在本工作树 `state/`，不随 Git 推送，清理前须保全。没有连接真实社媒/业务 Chrome、CDN、模型、飞书或发布。
+服务机普通首屏来源/到达时间、晨扫完整执行、原始图片与两篇未覆盖旧异常仍为 **待真实联调**；
+按 [MANUAL_STEPS §14 D](MANUAL_STEPS.md#d-核对事实与卡片)更新并在正常节奏复验。
 
 ## 2. 红线
 

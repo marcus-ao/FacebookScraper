@@ -76,7 +76,8 @@ def _monitor_status(state, now):
                 interrupted = item['status'] == 'pending' and worker_alive(item.get('worker')) is False
                 published, seen = parse_ts(row.get('created_at')), parse_ts(item['first_seen_at'])
                 started, finished = parse_ts(item.get('attempt_started_at')), parse_ts(item.get('finished_at'))
-                result['items'].append({'key': key, 'scan_id': item['scan_id'], 'status': 'manual' if interrupted else item['status'],
+                status = ('manual' if started or item.get('recovery') else 'deferred') if interrupted else item['status']
+                result['items'].append({'key': key, 'scan_id': item['scan_id'], 'status': status,
                     'post_id': row['post_id'], 'platform': row['platform'],
                     'account_dir': row['platform'][:2] + '_' + row['account'],
                     'classification': item['classification'], 'reason': item.get('reason'),

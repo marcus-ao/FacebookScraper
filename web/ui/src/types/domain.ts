@@ -780,7 +780,7 @@ export interface RuntimeSnapshot {
 export interface CaptureItem {
   readonly key: string
   readonly scan_id: string
-  readonly status: 'pending' | 'complete' | 'manual'
+  readonly status: 'pending' | 'complete' | 'manual' | 'deferred'
   readonly post_id: string
   readonly platform: Platform
   readonly account_dir: string

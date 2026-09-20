@@ -613,6 +613,8 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 ## 13. 更新并启动审校台
 
+Facebook、Instagram 待审核入口的四个子分类均按原帖发布时间从新到旧排列。更新后各选取不同发布时间的帖子，核对列表、分类／月份筛选及详情“上一篇／下一篇”顺序；表格中的“时刻 · 柏林”仍表示候选或已有排期，不作为列表排序依据。
+
 “话题标签与链接”页的两个分区均可直接勾选确认，无须先点“编辑德语”；等待“确认已保存”后，刷新应仍保持勾选。Facebook 先打开检查各落地页，再确认整个链接区；Instagram 核对引导语，也可确认“无链接／不添加引导语”。编辑标签、落地页或引导语会取消相应分区确认，随草稿保存。旧记录升级后，有链接或引导语的帖子须补一次分区确认；保存失败不算确认成功，版本冲突时载入最新内容后重新核对；正文版本已过期时，先进入“编辑德语”复核并保存正文。
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。
@@ -774,9 +776,29 @@ scripts\run_scheduler.bat --run
 
 连续观察至少 72 小时，覆盖 08:00、19:00、晨间和周末；不足则延长。记录平台、计划/实际时刻、skip reason、主页/详情配额、pause/hard-stop、候选/归档/卡片。核对 scheduler、CLI、`--if-stale` 共用 `next_due`；19:00 不重抽；重启不追补；普通/晨间不足 45 分钟合并；锁忙（退出码 75）不推进；统计不改变间隔。
 
-主页不超过 24 次/平台/滚动 24 小时；详情不超过 1 次/帖/扫描、3 次/平台/扫描、12 次/平台/滚动 24 小时。401/403/429 或登录/checkpoint/challenge 立即全 profile 停机且不再导航、滚动、下载；CDN 过期 403 仅单项失败，CDN 429 全局停机；三次普通失败暂停平台。失败、超额、超时立即待人工，普通扫描不重试。
+主页不超过 24 次/平台/滚动 24 小时；详情不超过 1 次/帖/扫描、3 次/平台/扫描、12 次/平台/滚动 24 小时。401/403/429 或登录/checkpoint/challenge 立即全 profile 停机且不再导航、滚动、下载；CDN 过期 403 仅单项失败，CDN 429 全局停机；三次普通失败暂停平台。已开始采集后失败、超额、超时待人工，普通扫描不重试；尚未开始项仅延期，见下节。
 
 ### D. 核对事实与卡片
+
+**夜间监测故障修复后的复验。** 在服务机停止旧调度器，先核对 `git status --short --branch`、
+`git rev-parse --short HEAD` 与 `tools.runtime status` 的实际归档/状态绑定，再更新到含本次修复的版本并重启。
+保留已有基线、访问配额、采集账本与原始 capture；不重新初始化基线或批量改写人工项。
+按持久 `next_due` 执行上节单轮命令，普通轮次仍只读首屏；晨间轮次等原定 06:30–07:30 窗口，不强制补跑。
+
+单轮后执行 `scripts\run_python.bat -m routes.delta --status`，保留输出及对应 `_capture_delta_*.json`：
+
+- Facebook：`last_scan_diagnostics` 中比较 `initial_response_payloads`、`embedded_payloads`、
+  `response_payloads`、`timeline_seen` 与 `page_seconds`，确认普通首屏取得目标帖子。
+  若仍只有辅助响应，准确记录“未取得目标主页帖子时间线数据”；不要增加滚动深度或反复手动访问。
+- 晨扫：核对 `prepare_seconds`、`capture_seconds`、`capture_started/finished`、`deferred` 与
+  `outside_baseline`。整轮仍为 90 秒；基线起点来自服务机已有 `enabled_at - lookback_days`，
+  不使用开发机重放示例的“22/35”作为服务机固定预期。
+- `deferred_items` 是尚未开始，等待下次自然响应，不是图片下载失败。`manual_items` 是需核验的已尝试项；
+  旧记录不会批量重置。完整同帖证据与本地原图匹配时可离线补齐，否则沿用下节一次人工恢复。
+- Facebook `122127190695379375` 可在后续自然响应再次提供完整来源时核验日期/完整性；
+  图片仍须与本地实际字节匹配。另两篇旧缺日期帖没有本次成功样本证据，不据此声称已恢复。
+
+开发机的真实 capture 重放与隔离浏览器均属于离线验证；服务机首屏数据到达路径、正常晨扫耗时及持续运行仍待真实联调。
 
 核对类别 new/historical/source_updated/recovered/time_unknown；原文、元数据、owner/coauthors、`items[key].source.media` 和媒体线索齐全。`source_media_complete` 与 `media_complete` 分开；后者要求每张静态图全图解码、SHA 和原子落盘。IG 重复封面/视频缩略图不计图片；每媒体一个尺寸、顺序不变；未知总数明确 unknown。revision 只由正文与有序实际媒体 SHA 改变。
 
