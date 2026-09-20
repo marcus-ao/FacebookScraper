@@ -204,20 +204,40 @@ G1 的真实录制结构验收不等于整套生产系统已激活：专用渠�
 生产读取器要求的关联在该页面上不存在。`instagram_story_preview_frame` 内出现 `neakasa.de`；
 这能定位 IG 预览，不能据此把聚合 ID 认定为独立 IG 或 FB 内容 ID。
 
-最新用户回传已包含 Facebook/Instagram 三阶段样本；
+首次切换日志包含 Facebook/Instagram 三阶段样本；
 [本地摘录](../state/planner-content-compatibility/story-detail-20260920/followup-observations.json)是从消息人工转录的观察摘要，非原始 DOM 文件。
 IG 就绪样本有无正文提示、18:39 元数据及 `neakasa.de` 的 Story 预览；Facebook 标签已选中，但
 `Loading preview` 在即时及两个所谓 settled 样本里一直可见。标题长度 10 的文本仍未知，不能猜成加载提示。
 工具仅检查标题/标签便宣布就绪是明确缺陷；现在同时检查可见的 `Loading preview`，超时保存最后状态并继续另一渠道，
 最终输出 PARTIAL。统计区自身的错误或进度条不阻止预览取证。日志 JSON 用 ASCII 转义，避免 PowerShell 管道损坏中点。
 
-这次仅收到 `tofu_metrics_query/TofuErrorQueryResult`（HTTP 200，错误标题/消息长度 38/71）；
+首次切换仅收到 `tofu_metrics_query/TofuErrorQueryResult`（HTTP 200，错误标题/消息长度 38/71）；
 它不证明 Facebook 没有发布，也没有提供独立内容 ID。首次内容可能在监听启动前已返回，这是待验证假设。
 `--reload` 在监听启动后仅重载已匹配的详情一次，采集首次加载自然返回的响应，以及该页面已有的惰性 JSON 数据；
 不执行嵌入脚本，不主动调用接口。`--responses` 单独使用仍只观察切换响应。
 两种来源都仅输出白名单对象 ID、类型、时间与账号关系；正文只保留长度，丢弃凭据字段，不访问 cookie、请求头或浏览器存储。
 响应到达时的标签名仅是时间上下文，不是渠道归属证明；仍需根据对象关系核验。数量、体积及等待均有界，
 嵌入 JSON 超过采集上限会在 EMBEDDED_SUMMARY 报告跳过数量。
+
+**首次加载补采已收到。** [原文及字段摘录](../state/planner-content-compatibility/story-first-load-20260920/summary.json)
+保全 250078 字节、53 条 JSON 记录，SHA-256 为 `e8550e119e3a86495b23a0d968783d0b246423182b319d5fcbf7cc56ca64dc93`。
+这次 Facebook settled 样本的预览已加载完成，不能继续沿用“FB 仍在加载”的结论。
+用户随后人工确认：FB 标题是 `Your Story`；IG 与 Total performance 均是 `This content has no text`。
+`Your Story` 只是界面标题，既不是正文，也不足以证明空正文。
+
+`data.tofu_entity.entity_info` 为 `TofuIGPostEntityInfo`，同对象 `ig_media.id=18084155825688886`
+严格等于详情的 content_id，且 `ig_media.permalink` 为 `neakasa.de` 的 Stories 链接。
+其 cross_posted_entities 包含 FB Story 以及相同 IG 媒体，因此 IG 原生身份和跨平台关系已有直接证据。
+Stories 链接末尾的公开 ID 与 ig_media.id 属不同字段，不强求相等。
+另外收到的 `BusinessFBStoryContent.id=1068553422207259`、`BusinessIGStoryContent.id=2112279096392067`
+是后台内容记录；它们虽与目标账号和 18:39 对应，但缺少与当前 FB 实体的直接连接，不能写入 native remote_ids。
+同理，其 creation_time 尚不能替代当前实体的渠道发布时间。统计错误不能证明内容不存在。
+
+IG 读取现在在新详情导航前被动监听自然响应，结合媒体 ID、Story permalink 账号、响应 title、
+选中的 IG 标签、IG 平台标记、已就绪 Story 预览及一致的渠道日期/时间核验。
+不依赖该页面没有提供的 aria-controls，不拿“选中标签并等待一会儿”单独证明共享标题归属。
+允许标签在标题之后加载；用时仍受原读取预算约束。一个渠道未完成时保留已核验变体并追加未知占位与诊断。
+FB 仍缺原生身份关联及正文证据；不会借用 IG 的 ID、空正文或另一个后台记录补齐。
 
 现有录制 191–204 还显示聚合 Post 切换渠道后，FB 为 19:17、IG 为 19:18；不能把聚合时间、
 正文或 `content_id` 复制成两个渠道记录。合作作者不能替代目标 owner；预览中的分享源同样不能替代。
@@ -229,7 +249,7 @@ IG 就绪样本有无正文提示、18:39 元数据及 `neakasa.de` 的 Story �
 部分结果单独保存 `partial_inventory/partial_observed_at`；此前完整数据与观测时间保留。
 槽位判断、排期回读和远端删除登记必须使用决策完整的数据。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
 
-**当前边界：共通契约与护栏离线通过；Story/Instagram 生产身份适配代码未完成。**
+**当前边界：IG 根媒体 Story 路径离线通过，待服务机单条联调；FB Story 与其它未覆盖类型仍为代码未完成。**
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
@@ -237,11 +257,17 @@ IG 就绪样本有无正文提示、18:39 元数据及 `neakasa.de` 的 Story �
 `tests_calendar_detail_probe` 的隔离回归覆盖可见元数据/Story 预览、脱敏、歧义拒绝、发布锁、
 延迟页签保持原选择、切换期间加载、缺失渠道不报成功、预览加载超时后继续 IG、首次详情重载响应/嵌入 JSON 与 PowerShell 管道转义；
 11 条定向测试、hygiene 与独立复审见 [取证工具验证](../state/planner-content-compatibility/story-detail-20260920/initial-load-validation.json)。
-这些结果只证明离线行为，截图中的聚合详情仍缺独立身份适配。
+这些既有结果只证明离线行为，新 IG 读取路径须另做服务机单条复验。
 
-Story 聚合及 IG 视图已收到，尚缺可用的 Facebook 预览及独立 ID 关系；本地语义浏览器夹具不是 Meta DOM 录制。
-按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 的补采命令使用修正后的工具，
-不再运行会漏采的旧版本。无需重新刷新月份或重录 G1。不得以部分结果可见冒充月历读取真实通过。
+[本次定向验证](../state/planner-content-compatibility/story-first-load-20260920/validation.json)通过 7 个脚本：
+Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条、缓存 15 条及 hygiene；共 70 条测试。
+独立复审发现并修复 IG 标签延迟挂载时提前退出的问题，700ms 延迟夹具已覆盖；复审收尾无阻断项。
+均为隔离夹具和临时数据，不升级真实验收。
+
+按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 使用 `--verify-reader`：
+只对当前详情的新建副本运行生产读取入口，输出已保留变体和缺失字段，并补采根实体/跨帖关系的字段结构。
+非数字 ID 若为 JSON 或 base64 JSON，只做有界解码再脱敏；此结果仅作诊断，绝不自动当作原生 ID。
+不再输出整页重复 DOM，不刷新月份、不重录 G1、不写月历缓存。部分结果不是整月真实通过。
 
 ## 2. 红线
 

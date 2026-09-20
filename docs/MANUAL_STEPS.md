@@ -511,34 +511,13 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 ### 8.1 月历更新、单条取证与后续复验
 
-本次交付包含内容分类、部分缓存、保护逻辑和只读取证工具；**Story/Instagram 真实身份适配仍为代码未完成**。
-更新主分支不会自动消除所有未适配项。当前人工目标是取得 9 月 4 日 18:39 Story 的独立内容对象关系，
-之后补适配再做整月验收。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
-不发帖、不排期、不调用模型，不删除缓存、归档或业务账本。
+本次已实现基于首次加载响应的 IG Story 身份核验，以及部分变体保留；FB Story 仍缺原生 ID 关联和正文证据。
+用户已确认 IG/Total performance 显示 `This content has no text`，Facebook 显示 `Your Story`。
+当前只复验这条详情；出现一个已核验 IG 变体和 FB 未完成诊断是预期结果，不算整月通过。
+保留 G1 文件、北京时间配置、既有月历 probe、缓存及业务数据，不重录 G1。
 
-**已回传聚合及 IG 页日志时的最短补采。** 现场已有 IG 预览，但 Facebook 的 `Loading preview`
-被旧工具误判为 settled；仅切换标签取得的统计错误响应也没有独立 ID。工作区无待处理源码修改、没有发布/排期/刷新在运行时，
-`git pull --ff-only origin main` 更新工具即可；本次补采不需要重启 Web 或刷新月历。
-在 9223 保持同一条 Story 详情打开并选择 Total performance，执行下面一段，将日志发回：
-
-```powershell
-Set-Location 'D:\Code\FacebookScraper'
-$DetailLog = Join-Path $env:TEMP ('planner-detail-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story --reload 2>&1 | Tee-Object -FilePath $DetailLog
-Write-Host "诊断日志：$DetailLog"
-```
-
-`--reload` 仅重新加载已匹配的这条详情一次，在加载前开始监听，包含首次响应和页面已有 JSON 数据的白名单采集；
-不会重跑月历。逐渠道输出 READ、即时与 settled 样本，等待必要标题/渠道选择及 `Loading preview` 消失，
-不等待统计数字。每次就绪等待最多 30 秒；预览超时输出 PARTIAL VIEW 和 timeout 样本，再继续采集另一渠道。
-最后 RESTORED 恢复原标签。缺渠道或恢复失败输出 PARTIAL，不会以 DONE 隐去缺失。
-不带 `--reload` 的 `--responses` 仍只观察切换响应。两类数据保留白名单对象 ID、类型、时间、
-账号关系与文字长度，不记录原始响应、正文、凭据或请求头，不执行页面 JSON，不主动调用接口。
-响应的 during_view 仅表示到达时正在观察的标签，不能单独证明该响应属于此渠道。
-即使取得 DONE，也只代表本次取证完成，不是整月读取通过；PARTIAL 同样保留日志，不连续重跑。
-
-1. 确认没有正在进行的发布或排期，在运行 Web 的 PowerShell 窗口按 `Ctrl+C`，正常停止旧 Web。
-   保留发布 Chrome 9223。另开 PowerShell，进入服务机源码目录并检查状态：
+1. 确认没有发布、排期或月历刷新正在运行；在旧 Web 的 PowerShell 按 `Ctrl+C` 正常停止服务。
+   保持发布 Chrome 9223 打开。另开 PowerShell 检查源码状态：
 
    ```powershell
    Set-Location 'D:\Code\FacebookScraper'
@@ -546,30 +525,56 @@ Write-Host "诊断日志：$DetailLog"
    git branch --show-current
    ```
 
-   若有待处理源码修改，保留输出并先处理其归属，不运行 `reset --hard`、`clean` 或覆盖文件。
-   `.env`、本机路径配置、`archive/`、`state/` 保持原样。
+   若有源码修改，先保留并处理其归属，不运行 `reset --hard`、`clean` 或覆盖文件。
+   `.env`、本机路径配置、`archive/` 和 `state/` 保持原样。
 
-2. 工作区干净时更新主分支；逐条执行，任一步报错就停止后续步骤：
+2. 工作区干净时逐条更新；任一步报错就停止后续步骤：
 
    ```powershell
    git fetch origin
    git switch main
    git pull --ff-only origin main
    git log -1 --oneline
-   Test-Path tools\probe_calendar_detail.py
+   scripts\run_python.bat tools\probe_calendar_detail.py --help
    ```
 
-   最后一条应为 `True`。若已在 main，`git switch main` 会提示当前分支；正常即可。
+   帮助中应包含 `--verify-reader`。此模式已自行监听新详情的首次响应，不与 `--reload` 或 `--responses` 混用。
 
-3. 重新启动 Web，必须使用会重建前端的入口：
+3. 在发布专用 Chrome（9223）中保留唯一的 9 月 4 日 18:39 Story 详情，核对
+   `Story · Published on: Fri Sep 4, 6:39pm`。已打开正确详情时不用重新进入月历。
+   可保持 Total performance；工具不会改变这个原页面的渠道选择。不能换用 9222 或 9224。
+
+4. 在 PowerShell 完整执行以下代码块一次，只复制代码，不带终端提示符：
+
+   ```powershell
+   Set-Location 'D:\Code\FacebookScraper'
+   $DetailLog = Join-Path $env:TEMP ('planner-reader-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+   scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story --verify-reader 2>&1 | Tee-Object -FilePath $DetailLog
+   Write-Host "诊断日志：$DetailLog"
+   ```
+
+   工具持发布锁、核验 profile，只为当前详情打开一个临时副本，调用生产读取入口，结束后关闭副本并回到原页。
+   不刷新整月、不写月历缓存、不登录、不发布、不排期、不调用模型。
+   只被动观察页面自然返回的响应；输出根实体/跨帖关系的字段结构、白名单 ID/类型/账号及文字长度。
+   非数字 ID 若为 JSON 或 base64 JSON，只做有界解码后再次脱敏；不执行内容，不输出任意字符串原值或凭据。
+   该解码结果只供补齐 FB 关联，不自动写入生产 remote_ids。
+
+5. 将该日志发回，重点看 `ENTITY_IDENTITY` 和 `READER_RESULT`。本条 IG 的预期结果为：
+   `remote_ids.instagram=18084155825688886`、`accounts.instagram=neakasa.de`、`placement=story`、
+   `caption_status=empty`、`caption_length=0`、`ui_at=2026-09-04T18:39:00`。
+   末尾仍应为 `PARTIAL`，缺失字段包含 `facebook_story_identity` 与 `facebook_story_caption`；退出码 2 表示尚未完整读取。
+   若 IG 也没有保留下来，或报其它缺失字段，保留输出，不连续重跑。
+   `STOP: matching detail pages: 0` 仅表示没匹配当前打开的详情；2 或更多表示不唯一。
+   发布锁忙时等待正在运行的操作结束，不删除锁文件。
+
+6. 单条复验后重新启动 Web，使用会重建前端的入口：
 
    ```powershell
    scripts\run_web.bat
    ```
 
-   等启动完成后打开 `http://127.0.0.1:8765`，浏览器按 `Ctrl+F5`。
-   保持这个终端运行，后面的诊断在另一个 PowerShell 执行。
-   当前先不重复点「刷新月历」；GET 只查询缓存，可用来核对服务已响应：
+   等启动完成后打开 `http://127.0.0.1:8765` 并按 `Ctrl+F5`，保持该终端运行。
+   另一个 PowerShell 可以只查询缓存：
 
    ```powershell
    Invoke-RestMethod 'http://127.0.0.1:8765/api/calendar' |
@@ -577,39 +582,11 @@ Write-Host "诊断日志：$DetailLog"
        ConvertTo-Json -Depth 6
    ```
 
-   旧失败缓存仍可能显示原错误，且 `cached_at` 可能为 null；重启本身不会产生成功读取。
+   旧失败缓存及 `cached_at=null` 可能仍在：单条验证不写缓存，重启也不会产生成功读取。
+   本轮先不要再点刷新月历；等 FB 关联补齐后再做下方整月复验。
 
-4. 在发布专用 Chrome（9223）中人工打开 Planner 的 2026 年 9 月，找到 9 月 4 日 18:39 的 Story 并进入详情。
-   核对 `Story · Published on: Fri Sep 4, 6:39pm` 和 `This content has no text`。
-   若有渠道页签，先选 `Total performance`；同一 Story 的详情只保留一个标签页。
-   已打开正确详情时无需重开。若发布 Chrome 没有运行，使用 `scripts\start_chrome_publish.bat` 并人工登录；
-   不能换成回填 9222 或探测 9224。
-
-5. 在第二个 PowerShell 执行一次只读取证；不需要复制长 Python 或手抄 content_id：
-
-   ```powershell
-   Set-Location 'D:\Code\FacebookScraper'
-   $DetailLog = Join-Path $env:TEMP ('planner-detail-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-   scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story 2>&1 |
-       Tee-Object -FilePath $DetailLog
-   Write-Host "诊断日志：$DetailLog"
-   ```
-
-   正常过程是 `START` → 脱敏 `OPEN_PAGE` → `FOUND: 2026-09-04 18:39 Story` → 各视图 READ/JSON → RESTORED → `DONE`。
-   工具持发布锁，核验 profile，只检查已打开页面；仅切换 Facebook/Instagram 统计页签并恢复原选择。
-   若开始时没有明确的渠道选择，只采集当前视图并保持后来出现的页签不变，结果为 PARTIAL。
-   不导航到新帖子、不自动登录、不触碰 Publish now/排期/编辑按钮。
-   正文只输出长度；URL 去除除数字内容/账号 ID 以外的查询参数，不读取 cookie、token 或请求头。
-
-   若返回 `STOP: matching detail pages: 0`，把 `OPEN_PAGE` 和 metadata 一并保留；这仅表示未匹配当前打开的详情，
-   不证明浏览器失效。若为 2 或更多，不让工具猜选；保留输出。发布锁忙或 profile 不符时停止，不删除锁文件。
-   不连续重复执行同一失败命令。
-
-6. 将第 3 步的 API 结果及第 5 步日志发回；它们是补齐真实身份适配所需的最小证据。
-   本轮做到此处即可，不以部分结果展示或离线夹具当作真实通过。
-
-**身份适配补齐后的整月复验。** 再按第 1–3 步更新并启动，人工保持发布 Chrome 登录，
-页面点一次「刷新月历」，完成后用第 3 步 GET 查询，不重复触发刷新。
+**身份适配补齐后的整月复验。** 再按上方更新及启动步骤操作，人工保持发布 Chrome 登录，
+页面点一次「刷新月历」，完成后用第 6 步 GET 查询，不重复触发刷新。
 成功要求 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
 `coverage.matches_current_month/grid_complete/entries_complete/channels_complete/decision_complete` 均为 true，
 `unresolved_count=0`，`cached_at` 更新为此次完成时间且 `partial_cached_at=null`。

@@ -1,0 +1,169 @@
+"""Replay the retained Story response paths in an isolated browser, never a live account."""
+import calendar
+import copy
+import contextlib
+import io
+import json
+import sys
+import unittest
+from datetime import date, time
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+from playwright.async_api import async_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.config import Config
+from publish import month_inventory as month
+from publish.business_suite import ProbeRequired
+from tools import probe_calendar_detail as probe
+
+
+# Paths and IDs are from the redacted 2026-09-20 first-load log, SHA-256
+# e8550e119e3a86495b23a0d968783d0b246423182b319d5fcbf7cc56ca64dc93.
+# Only relevant retained fields are replayed; this is not an unredacted response.
+SOURCE_ID = '18084155825688886'
+IG_INFO = {'__typename': 'TofuIGPostEntityInfo', 'title': '', 'media_type': 'PHOTOS',
+    'ig_media': {'id': SOURCE_ID,
+                 'permalink': 'https://www.instagram.com/stories/neakasa.de/3978703119637304396'}}
+ENTITY = {'data': {'tofu_entity': {'entity_info': {**IG_INFO,
+    'cross_posted_entities': [
+        {'entity_info': {'__typename': 'TofuFBStoryEntityInfo'}},
+        {'entity_info': IG_INFO}]}}}}
+BUSINESS = {'data': {'tofu_business_content': {'contents': [
+    {'__typename': 'BusinessFBStoryContent', 'id': '1068553422207259', 'creation_time': 1788518376,
+     'content_owner': {'__typename': 'Page', 'id': '739367289254011'}}]}}}
+ACCOUNTS = {'facebook': 'Neakasa Deutschland', 'instagram': 'neakasa.de'}
+
+# DOM is a semantic reconstruction of the logged roles/attributes, not raw HTML.
+DETAIL = '''<header><div role="heading" aria-level="3" id="caption">This content has no text</div>
+  <div id="metadata">Story · Published on: Fri Sep 4, 6:39pm</div><span id="platforms"></span></header>
+  <button role="tab" aria-selected="true" onclick="select(this)">Total performance</button>
+  <button role="tab" aria-selected="false" onclick="select(this)">Facebook</button>
+  <button role="tab" aria-selected="false" onclick="select(this)">Instagram</button>
+  <aside><h3>Feed preview</h3><div id="instagram_story_preview_frame"><div>neakasa.de</div>
+    <img id="instagram_story_preview_media"></div></aside>
+  <div role="progressbar">Metrics loading</div>
+  <script>function select(tab){
+    document.querySelectorAll('[role=tab]').forEach(n=>n.setAttribute('aria-selected','false'));
+    tab.setAttribute('aria-selected','true');
+    platforms.innerHTML='<img alt="'+tab.textContent+'">';
+  }fetch('/api/graphql/',{method:'POST'});</script>'''
+
+
+class StoryInsightsTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.pw = await async_playwright().start()
+        self.browser = await self.pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
+        self.context = await self.browser.new_context()
+        self.payload = copy.deepcopy(ENTITY)
+        self.detail_html = DETAIL
+        self.requests = []
+        async def route(request):
+            url = request.request.url
+            self.requests.append(url)
+            if '/api/graphql/' in url:
+                body = json.dumps(self.payload) + '\n' + json.dumps(BUSINESS)
+                await request.fulfill(content_type='application/json', body=body)
+            elif '/object_insights/' in url:
+                await request.fulfill(content_type='text/html; charset=utf-8', body=self.detail_html)
+            else:
+                await request.fulfill(content_type='text/html', body='<html></html>')
+        await self.context.route('**/*', route)
+        self.page = await self.context.new_page()
+        await self.page.goto('https://business.facebook.com/latest/content_calendar')
+        days = calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)
+        cells = ''.join(f'<div role="link" draggable="false"><span>{d.day}</span>' + (
+            f'<a href="/latest/insights/object_insights/?content_id={SOURCE_ID}">6:39 PM</a>'
+            if d == date(2026,9,4) else '') + '</div>' for d in days)
+        await self.page.set_content('<h1>September</h1><h1>2026</h1>' + cells)
+
+    async def asyncTearDown(self):
+        await self.browser.close()
+        await self.pw.stop()
+
+    async def inventory(self):
+        with patch.object(month, 'prepare', AsyncMock()), patch.object(month, 'accounts', return_value=ACCOUNTS):
+            return await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+
+    async def test_native_instagram_identity_survives_unresolved_facebook_crosspost(self):
+        result = await self.inventory()
+        verified = [card for card in result.cards if card.read_status == 'complete']
+        self.assertEqual(len(verified), 1)
+        card = verified[0]
+        self.assertEqual(dict(card.remote_ids), {'instagram': SOURCE_ID})
+        self.assertEqual(dict(card.accounts), {'instagram': 'neakasa.de'})
+        self.assertEqual(card.at.isoformat(), '2026-09-04T18:39:00+08:00')
+        self.assertEqual((card.placement, card.caption_status, card.rendered), ('story','empty',''))
+        self.assertEqual(card.relationships, ('cross_platform',))
+        self.assertEqual(card.source_content_id, SOURCE_ID)
+        self.assertEqual(len(result.cards), 2)
+        self.assertTrue(result.diagnostics)
+        self.assertFalse(result.decision_complete)
+        self.assertFalse(any('1068553422207259' in dict(c.remote_ids).values() for c in result.cards))
+        with self.assertRaises(ProbeRequired):
+            result.occupied_for_channel('instagram')
+        self.assertEqual(len(self.context.pages), 1)
+
+    async def test_another_media_or_permalink_owner_cannot_supply_instagram_identity(self):
+        for field,value in [('id','19999999999999'),
+                            ('permalink','https://www.instagram.com/stories/another.account/3978703119637304396')]:
+            with self.subTest(field=field):
+                self.payload = copy.deepcopy(ENTITY)
+                self.payload['data']['tofu_entity']['entity_info']['ig_media'][field] = value
+                result = await self.inventory()
+                self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+                self.assertFalse(result.decision_complete)
+
+    async def test_selected_tab_cannot_accept_a_stale_other_channel_header(self):
+        self.detail_html = DETAIL.replace("platforms.innerHTML='<img alt=\"'+tab.textContent+'\">';",
+            "platforms.innerHTML='<img alt=\"Facebook\">';")
+        result = await self.inventory()
+        self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+        self.assertFalse(result.decision_complete)
+
+    async def test_root_title_must_match_visible_caption_not_just_channel_selection(self):
+        self.payload['data']['tofu_entity']['entity_info']['title'] = 'Different caption'
+        result = await self.inventory()
+        self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+        self.assertFalse(result.decision_complete)
+
+    async def test_delayed_instagram_tab_keeps_the_verified_variant(self):
+        self.detail_html = DETAIL.replace("fetch('/api/graphql/',{method:'POST'});", """
+          const ig=document.querySelectorAll('[role=tab]')[2];ig.remove();
+          setTimeout(()=>document.body.append(ig),700);
+          fetch('/api/graphql/',{method:'POST'});""")
+        result = await self.inventory()
+        self.assertEqual([dict(c.remote_ids) for c in result.cards if c.read_status=='complete'],
+                         [{'instagram':SOURCE_ID}])
+        self.assertFalse(result.decision_complete)
+
+    async def test_preview_loading_and_changed_channel_time_cannot_be_accepted(self):
+        for extra in ["<h2>Loading preview</h2>",
+                      "<script>const previous=select;select=tab=>{previous(tab);metadata.textContent='Story · Published on: Fri Sep 4, 6:40pm'}</script>"]:
+            with self.subTest(extra=extra):
+                self.detail_html = DETAIL + extra
+                result = await self.inventory()
+                self.assertFalse(any(c.read_status=='complete' for c in result.cards))
+
+    async def test_verify_reader_uses_one_temporary_detail_and_keeps_the_original_tab(self):
+        await self.page.goto(f'https://business.facebook.com/latest/insights/object_insights/?content_id={SOURCE_ID}')
+        self.requests.clear()
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            with patch.object(month, 'accounts', return_value=ACCOUNTS):
+                complete=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),
+                                             kind='Story',timeout=5,verify_reader=True)
+        self.assertFalse(complete)
+        rows=[json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{')]
+        result=next(row['READER_RESULT'] for row in rows if 'READER_RESULT' in row)
+        self.assertEqual(result['variants'][0]['remote_ids'],{'instagram':SOURCE_ID})
+        self.assertEqual(result['variants'][0]['caption_length'],0)
+        self.assertIn('facebook_story_identity',result['missing_fields'])
+        self.assertEqual(len([url for url in self.requests if '/object_insights/' in url]),1)
+        self.assertEqual(len(self.context.pages),1)
+        self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+
+if __name__ == '__main__':
+    unittest.main()

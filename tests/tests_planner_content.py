@@ -59,6 +59,13 @@ class ContentTests(unittest.TestCase):
             self.parse(obs)
         self.assertEqual(error.exception.code, 'identity_unverified')
 
+    def test_facebook_your_story_title_is_not_caption_or_empty_caption_proof(self):
+        obs = self.observation()
+        obs.update(caption='Your Story', channel='facebook', owner='Neakasa Deutschland')
+        with self.assertRaises(content.DetailReadError) as error:
+            self.parse(obs)
+        self.assertIn('caption', error.exception.missing_fields)
+
     def test_collaborator_and_caption_mentions_cannot_replace_the_publishing_owner(self):
         obs = self.observation()
         obs.update(owner='neakasa.global', caption='neakasa.de', collaborators=['neakasa.de'])

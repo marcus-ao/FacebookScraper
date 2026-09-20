@@ -13,9 +13,10 @@ LABELS = {'Post': 'feed', 'Story': 'story', 'Reel': 'reel', 'Video': 'feed', 'Li
 
 class DetailReadError(ValueError):
     """A bounded diagnostic vocabulary without captions, page text or URLs."""
-    def __init__(self, code, *, placement='unknown', missing_fields=()):
+    def __init__(self, code, *, placement='unknown', missing_fields=(), variants=()):
         self.code, self.placement = code, placement
         self.missing_fields = tuple(missing_fields)
+        self.variants = tuple(variants)
         super().__init__(code)
 
 
@@ -46,6 +47,8 @@ def classify_published(observation, day, expected_accounts):
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('remote_id',))
     caption = observation.get('caption')
     if caption is None:
+        raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
+    if channel == 'facebook' and placement == 'story' and ' '.join(caption.split()) == 'Your Story':
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
     if ' '.join(caption.split()) == NO_TEXT:
         caption = ''

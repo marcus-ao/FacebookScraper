@@ -1,8 +1,11 @@
 """Bounded, passive content-identity evidence for the Planner detail diagnostic."""
 import asyncio
+import base64
 import json
 import re
 from urllib.parse import parse_qs, urlsplit, urlunsplit, urlencode
+
+from core.meta_json import response_documents
 
 
 IDS = {'id', 'content_id', 'post_id', 'story_id', 'media_id', 'owner_id', 'actor_id',
@@ -13,6 +16,11 @@ TIMES = {'creation_time', 'created_time', 'publish_time', 'published_time', 'sch
 KINDS = {'__typename', 'media_type', 'content_type', 'platform', 'status', 'is_published',
          'is_story', 'is_video', 'is_reel', 'is_crosspost', 'is_crossposted'}
 NAMES = {'Neakasa Deutschland', 'neakasa.de', 'neakasa.global', 'neakasa.tech'}
+
+
+def safe_field(key):
+    return bool(re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', key)) and not re.search(
+        r'token|secret|auth|session|cookie|password|credential', key, re.I)
 
 
 def content_fields(payload):
@@ -32,8 +40,7 @@ def content_fields(payload):
             return None
         result = {}
         for key, child in value.items():
-            if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', key) or re.search(
-                    r'token|secret|auth|session|cookie|password|credential', key, re.I):
+            if not safe_field(key):
                 continue
             if key in IDS and re.fullmatch(r'\d{6,30}', str(child)):
                 result[key] = str(child)
@@ -62,10 +69,58 @@ def content_fields(payload):
     return visit(payload)
 
 
+def entity_identity_fields(document):
+    """Expose missing identity field names/types only on the root entity relation.
+
+    Opaque IDs may encode JSON. Decode bounded JSON data (never execute it), then
+    apply the same redaction; decoded values are diagnostic evidence, not native IDs.
+    """
+    entity = (document.get('data') or {}).get('tofu_entity') if isinstance(document, dict) else None
+    budget = 500
+
+    def shape(node, key='', depth=0):
+        nonlocal budget
+        budget -= 1
+        if budget < 0 or depth > 8:
+            return {'type':'limit'}
+        if isinstance(node, dict):
+            return {name:shape(value,name,depth+1) for name,value in list(node.items())[:80]
+                    if safe_field(name) and name not in {'entity_insights','ads_info','lwi_info'}}
+        if isinstance(node, list):
+            return [shape(value,depth=depth+1) for value in node[:5]]
+        identity_key = key in IDS or bool(re.search(r'_id$|ID$',key))
+        if identity_key and re.fullmatch(r'\d{6,30}', str(node)):
+            return str(node)
+        if isinstance(node, str):
+            clean = content_fields({key:node})
+            if clean:
+                return clean[key] if key in clean else clean
+            result = {'type':'string','length':len(node)}
+            if identity_key and len(node) <= 8192:
+                candidates = [node]
+                try:
+                    candidates.append(base64.b64decode(node, validate=True).decode('utf-8'))
+                except (ValueError, UnicodeError):
+                    pass
+                for candidate in candidates:
+                    try:
+                        decoded = json.loads(candidate)
+                    except ValueError:
+                        continue
+                    if isinstance(decoded, (dict,list)):
+                        result['decoded'] = shape(decoded, depth=depth+1)
+                        break
+            return result
+        return {'type':type(node).__name__}
+
+    return shape(entity) if isinstance(entity, dict) else None
+
+
 class ResponseEvidence:
     """Listen only to responses already caused by the UI; arrival is not provenance."""
-    def __init__(self, page, emit):
+    def __init__(self, page, emit, *, identity_only=False):
         self.page, self.emit = page, emit
+        self.identity_only = identity_only
         self.view = 'initial'
         self.tasks = []
 
@@ -86,12 +141,12 @@ class ResponseEvidence:
             if len(raw) > 4_000_000:
                 self.emit({'RESPONSE_EVIDENCE': 'size_limit', 'during_view': view})
                 return
-            text = raw.decode('utf-8').removeprefix('for (;;);').strip()
-            try:
-                documents = [json.loads(text)]
-            except ValueError:
-                documents = [json.loads(line) for line in text.splitlines() if line.strip()]
-            for document in documents:
+            for document in response_documents(raw):
+                if self.identity_only:
+                    fields = entity_identity_fields(document)
+                    if fields:
+                        self.emit({'ENTITY_IDENTITY':fields, 'response_status':response.status})
+                    continue
                 fields = content_fields(document)
                 if fields:
                     self.emit({'RESPONSE_EVIDENCE': fields, 'during_view': view,

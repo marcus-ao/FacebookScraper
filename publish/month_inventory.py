@@ -19,6 +19,7 @@ from core.paid_model import atomic_write_json
 from core.store import assert_physical_direct_path
 from publish import business_suite as bs, selectors
 from publish import planner_content as content, published_details
+from publish.insights_evidence import InsightsEvidence
 from publish.channel_evidence import accounts, context_ids
 
 DAY_SELECTOR = '[role="link"][draggable="false"]'
@@ -43,6 +44,7 @@ ITEM_DATA_JS = r'''n => {
 class PlannerItemError(bs.PublishStepError):
     """Only structural context crosses the cache/API boundary, never exception text or URLs."""
     def __init__(self, row, item, stage, cause=None):
+        self.variants = cause.variants if isinstance(cause, content.DetailReadError) else ()
         self.diagnostic = {'date': row['date'].isoformat(), 'time': item['time'],
                            'item_index': item['index'], 'stage': stage,
                            'has_href': bool(item.get('href')),
@@ -236,7 +238,7 @@ def require_same_item(item, fresh):
         raise bs.PublishStepError('月历条目已读取的正文发生变化，请重新读取')
 
 
-async def read_item_detail(page, row, item, node, raw, *, timeout):
+async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -251,20 +253,37 @@ async def read_item_detail(page, row, item, node, raw, *, timeout):
                 or not re.fullmatch(r'\d{6,}', remote)):
             raise content.DetailReadError('unsupported_type', missing_fields=('detail_adapter',))
         detail = await page.context.new_page()
+        evidence = InsightsEvidence(detail, remote)
+        evidence.start()
+        observer = None
         try:
+            if observe_detail:
+                observer = observe_detail(detail)
             try:
                 await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             except BrowserError as exc:
                 raise content.DetailReadError('navigation_failed') from exc
-            if urlsplit(detail.url).path.rstrip('/') != parsed.path.rstrip('/'):
+            destination = urlsplit(detail.url)
+            if (destination.hostname != parsed.hostname or destination.path.rstrip('/') != parsed.path.rstrip('/')
+                    or parse_qs(destination.query).get('content_id') != [remote]):
                 raise content.DetailReadError('navigation_failed')
             await detail.bring_to_front()
-            variants = await published_details.read(detail, row, item, accounts(), timeout=timeout)
+            try:
+                variants = await published_details.read(detail, row, item, accounts(), timeout=timeout, evidence=evidence)
+            except content.DetailReadError as exc:
+                for variant in exc.variants:
+                    variant['source_content_id'] = remote
+                raise
             for variant in variants:
                 variant['source_content_id'] = remote
             return {'variants': variants}
         finally:
-            await detail.close()
+            try:
+                await evidence.finish()
+                if observer:
+                    await observer.finish()
+            finally:
+                await detail.close()
     spec = bs.require_readback_evidence()
     parsed = bs._entry_naive(raw, spec)
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
@@ -320,6 +339,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30):
                             'placement': exc.diagnostic['placement'],
                             'read_status': 'unsupported' if exc.diagnostic['code']=='unsupported_type' else
                                            'unavailable' if exc.diagnostic['code']=='permission_denied' else 'incomplete'}
+                material = {'variants': [*exc.variants, material]}
             if material is None:
                 continue
             for variant in material.get('variants', [material]):

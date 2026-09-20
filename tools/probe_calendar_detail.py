@@ -14,13 +14,15 @@ from core.chrome import attach
 from core.config import cfg
 from core.console import force_utf8
 from publish.journal import PublishOperationLock
+from publish.month_inventory import read_item_detail
+from publish.planner_content import DetailReadError
 from tools.calendar_detail_response import ResponseEvidence
 
 
 SNAPSHOT = r'''() => {
  const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
  const text=n=>(n.innerText||n.textContent||'').replace(/\s+/g,' ').trim();
- const fixed=/^(This content has no text|Feed preview|Loading(?: preview)?(?:\.{3}|…)?|Total performance|Facebook|Instagram|Neakasa Deutschland|neakasa\.(de|global|tech))$/;
+ const fixed=/^(This content has no text|Your Story|Feed preview|Loading(?: preview)?(?:\.{3}|…)?|Total performance|Facebook|Instagram|Neakasa Deutschland|neakasa\.(de|global|tech))$/;
  const meta=/(?:Post|Story|Reel|Video|Live)\s*·?\s*Published on:\s*\w{3}\s+\w{3}\s+\d{1,2},\s*\d{1,2}:\d{2}\s*[ap]m/i;
  const safe=t=>fixed.test(t)?t:(t.match(meta)?.[0]||'');
  const link=raw=>{try{
@@ -102,7 +104,35 @@ async def wait_view(page, channel, *, timeout):
         await asyncio.sleep(.2)
 
 
-async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, reload=False):
+async def verify_detail_reader(page, day, clock, *, timeout):
+    """Run the production detail entry point on one temporary copy; leave the source intact."""
+    def observe(detail):
+        observer = ResponseEvidence(detail, emit, identity_only=True)
+        observer.start()
+        return observer
+
+    result = {'complete': True, 'code': None, 'missing_fields': []}
+    print('VERIFY: reading one temporary copy with the production detail reader', flush=True)
+    try:
+        value = await read_item_detail(page, {'date':day}, {'href':page.url, 'time':clock.strftime('%I:%M %p').lstrip('0')},
+                                       None, '', timeout=timeout, observe_detail=observe)
+        variants = value['variants']
+    except DetailReadError as exc:
+        variants = exc.variants
+        result.update(complete=False, code=exc.code, missing_fields=list(exc.missing_fields))
+    finally:
+        await page.bring_to_front()
+    result['variants'] = [{key:variant[key] for key in ('channels','remote_ids','accounts','placement',
+                              'caption_status','read_status','source_content_id')}
+                         | {'ui_at':variant['ui_at'].isoformat(), 'caption_length':len(variant['text'])}
+                         for variant in variants]
+    emit({'READER_RESULT': result})
+    print('DONE: single detail reader complete' if result['complete'] else
+          'PARTIAL: verified variants retained; unresolved channels still block calendar decisions', flush=True)
+    return result['complete']
+
+
+async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, reload=False, verify_reader=False):
     target = re.compile(re.escape(kind) + r'\s*·?\s*Published on:\s*\w{3}\s+'
         + day.strftime('%b') + r'\s+' + str(day.day) + r',\s*'
         + clock.strftime('%I:%M').lstrip('0') + r'\s*' + clock.strftime('%p'), re.I)
@@ -125,6 +155,8 @@ async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, rel
         return False
     page = candidates[0]
     print(f'FOUND: {day.isoformat()} {clock:%H:%M} {kind}', flush=True)
+    if verify_reader:
+        return await verify_detail_reader(page, day, clock, timeout=timeout)
     names = ('Total performance', 'Facebook', 'Instagram')
     selected = [name.strip() for name in await page.get_by_role('tab', selected=True).all_inner_texts()
                 if name.strip() in names]
@@ -230,7 +262,7 @@ async def run(args):
             start_script=r'scripts\start_chrome_publish.bat', login_hint='DE publish')
         try:
             return await inspect(browser, day=args.date, clock=args.time, kind=args.kind,
-                                 responses=args.responses, reload=args.reload)
+                                 responses=args.responses, reload=args.reload, verify_reader=args.verify_reader)
         finally:
             await pw.stop()
 
@@ -245,7 +277,11 @@ def main():
                         help='Passively record allowlisted content fields from channel-switch responses; no extra requests')
     parser.add_argument('--reload', action='store_true',
                         help='Reload only the matched detail once; includes passive response and embedded JSON evidence')
+    parser.add_argument('--verify-reader', action='store_true',
+                        help='Read one temporary copy with production code; emit concise identity evidence and retained variants')
     args = parser.parse_args()
+    if args.verify_reader and (args.reload or args.responses):
+        parser.error('--verify-reader already observes its temporary detail; do not combine with --reload/--responses')
     try:
         return 0 if asyncio.run(run(args)) else 2
     except Exception as exc:

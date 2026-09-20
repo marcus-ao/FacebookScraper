@@ -220,9 +220,9 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
                 await month.read(self.page, ui_timezone='Asia/Shanghai',
                                  business_timezone='Asia/Shanghai', timeout=5)
 
-    async def test_textless_story_in_a_full_month_is_read_without_caption_or_metadata_author(self):
-        # Semantic fixture: screenshot supplies Story/no-text, recording 200 supplies
-        # heading roles. Independent Story identity is injected; its real DOM is missing.
+    async def test_textless_facebook_story_cannot_borrow_the_feed_identity_adapter(self):
+        # Story labels and a Feed permalink are insufficient. Even a permissive
+        # Feed identity stub must not bypass the native Story evidence path.
         await self.page.locator(month.DAY_SELECTOR).nth(5).evaluate('''el=>el.insertAdjacentHTML(
           'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=1804155825688886">6:39 PM</a>')''')
         await self.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
@@ -236,14 +236,13 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(published_details, 'preview_identity', AsyncMock(return_value={
                     'owner':'Neakasa Deutschland','remote_id':'654321'})):
             result = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
-        self.assertTrue(result.decision_complete)
+        self.assertFalse(result.decision_complete)
         self.assertEqual(len(result.cards), 1)
         card = result.cards[0]
-        self.assertEqual((card.placement, card.rendered, card.caption_status), ('story','','empty'))
-        self.assertEqual(dict(card.remote_ids), {'facebook':'654321'})
-        self.assertEqual(card.source_content_id, '1804155825688886')
+        self.assertEqual((card.placement, card.rendered, card.caption_status), ('story','','unknown'))
+        self.assertEqual(dict(card.remote_ids), {})
         self.assertEqual(card.at.isoformat(), '2026-09-04T18:39:00+08:00')
-        self.assertEqual(result.occupied_for_channel('facebook'), (card.at,))
+        self.assertEqual(result.diagnostics[0]['missing_fields'], ['instagram_channel_tab'])
 
     async def test_aggregate_views_require_independent_channel_identity_time_and_caption(self):
         # Contract fixture with channel-owned panels, not captured Meta Story DOM.

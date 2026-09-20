@@ -3,7 +3,7 @@ import asyncio
 import re
 import time
 
-from publish.planner_content import DetailReadError, classify_published, LABELS
+from publish.planner_content import DetailReadError, classify_published, LABELS, NO_TEXT
 
 
 async def header_snapshot(page):
@@ -138,7 +138,77 @@ async def read_view(page, row, item, expected_accounts, *, channel='', aggregate
         await asyncio.sleep(min(.2,max(0,deadline-time.monotonic())))
 
 
-async def read(page, row, item, expected_accounts, *, timeout=30):
+async def read_story(page, row, item, expected_accounts, baseline, evidence, *, timeout):
+    """Bind the recorded IG root media to its selected channel header and Story preview."""
+    deadline = time.monotonic()+timeout
+    tab = page.get_by_role('tab', name='Instagram', exact=True)
+    while await tab.count() != 1 or not await tab.is_visible():
+        if time.monotonic() >= deadline:
+            raise DetailReadError('identity_unverified', placement='story', missing_fields=('instagram_channel_tab',))
+        await asyncio.sleep(.2)
+    await tab.click(timeout=max(1, (deadline-time.monotonic())*1000))
+    previous, stable_since = None, time.monotonic()
+    last_error = DetailReadError('identity_unverified', placement='story', missing_fields=('instagram_story_identity',))
+    while True:
+        if len(evidence.identities) > 1:
+            raise DetailReadError('identity_unverified', placement='story', missing_fields=('consistent_story_identity',))
+        header = await header_snapshot(page)
+        identity = evidence.identities[0] if evidence.identities else None
+        preview = await page.evaluate(r'''() => {
+          const visible=n=>!!n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
+          const frames=[...document.querySelectorAll('#instagram_story_preview_frame')].filter(visible);
+          const loading=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')]
+            .some(n=>visible(n) && n.innerText.trim()==='Loading preview');
+          if(frames.length!==1 || loading) return null;
+          const frame=frames[0], media=[...frame.querySelectorAll('#instagram_story_preview_media')].filter(visible);
+          if(media.length!==1) return null;
+          return [...frame.querySelectorAll('div,span')].filter(n=>visible(n)&&!n.children.length)
+            .map(n=>n.innerText.trim()).filter(Boolean);
+        }''')
+        selected = await tab.count()==1 and await tab.get_attribute('aria-selected')=='true'
+        material = None
+        if identity and header and preview and selected and header['platforms']==['Instagram']:
+            caption = header['caption']
+            # The initial root header and selected IG header must agree. A tab
+            # switch alone cannot give a shared FB header IG provenance.
+            if (header['metadata'] != baseline['metadata'] or caption is None or
+                    (' '.join(caption.split()) == NO_TEXT and identity['title'] != '') or
+                    (' '.join(caption.split()) != NO_TEXT and caption != identity['title'])):
+                last_error = DetailReadError('identity_unverified', placement='story',
+                                            missing_fields=('story_header_binding',))
+            elif identity['owner'] not in preview:
+                last_error = DetailReadError('identity_mismatch', placement='story')
+            else:
+                related = identity['related_kinds']
+                observation = {**header, **identity, 'channel':'instagram', 'media_kind':'unknown',
+                               'relationships': ('cross_platform',) if 'TofuFBStoryEntityInfo' in related else ()}
+                try:
+                    material = classify_published(observation, row['date'], expected_accounts)
+                    if material['ui_at'].strftime('%I:%M %p').lstrip('0') != item['time'].lstrip('0'):
+                        raise DetailReadError('time_mismatch', placement='story')
+                except DetailReadError as exc:
+                    last_error, material = exc, None
+        signature = material
+        if signature != previous:
+            previous, stable_since = signature, time.monotonic()
+        if material and time.monotonic()-stable_since >= .6:
+            # Your Story is a UI title, not a verified FB caption or native ID.
+            # BusinessFBStoryContent.id cannot replace a native Story ID: deletion
+            # reconciliation compares native IDs and could otherwise infer absence.
+            if ('TofuFBStoryEntityInfo' in identity['related_kinds'] or
+                    await page.get_by_role('tab', name='Facebook', exact=True).count()):
+                raise DetailReadError('identity_unverified', placement='story',
+                                      missing_fields=('facebook_story_identity', 'facebook_story_caption'), variants=(material,))
+            if set(identity['related_kinds']) - {'TofuIGPostEntityInfo'}:
+                raise DetailReadError('identity_unverified', placement='story',
+                                      missing_fields=('related_story_identity',), variants=(material,))
+            return [material]
+        if time.monotonic() >= deadline:
+            raise last_error
+        await asyncio.sleep(.2)
+
+
+async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None):
     # Tabs may hydrate after DOMContentLoaded. Wait for the header before deciding
     # whether this is a single-channel view or an aggregate requiring each tab.
     deadline = time.monotonic()+timeout
@@ -150,6 +220,8 @@ async def read(page, row, item, expected_accounts, *, timeout=30):
             raise DetailReadError('structure_unknown', missing_fields=('published_header',))
         await asyncio.sleep(.2)
         header = await header_snapshot(page)
+    if evidence is not None and header['metadata'].split('·',1)[0].strip()=='Story':
+        return await read_story(page, row, item, expected_accounts, header, evidence, timeout=timeout)
     tabs = [(key,page.get_by_role('tab',name=label,exact=True))
             for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
     available = [(key,node) for key,node in tabs if await node.count()==1]

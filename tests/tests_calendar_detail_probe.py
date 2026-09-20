@@ -1,5 +1,6 @@
 """The diagnostic uses only isolated browser pages and temporary lock storage."""
 import contextlib
+import base64
 import io
 import json
 import sys
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
 from publish.journal import PublishOperationLock
 from tools import probe_calendar_detail as probe
+from tools.calendar_detail_response import entity_identity_fields
 
 
 PAGE = '''<header><h2>This content has no text</h2><span>Story · Published on: Fri Sep 4, 6:39pm</span></header>
@@ -240,6 +242,18 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         text=output.getvalue()
         self.assertTrue(text.isascii())
         self.assertEqual(json.loads(text)['metadata'],'Story · Published on: Fri Sep 4, 6:39pm')
+
+    async def test_identity_schema_exposes_id_relations_without_encoded_private_values(self):
+        opaque = base64.b64encode(json.dumps({'post_id':'765432109','page_id':'123456789',
+            'caption':'PRIVATE CAPTION','access_token':'SECRET_TOKEN'}).encode()).decode()
+        fields = entity_identity_fields({'data':{'tofu_entity':{'id':opaque,'entity_info':{
+            '__typename':'TofuFBStoryEntityInfo','title':'Your Story','unrecognized_id':'998877665',
+            'unknown_field':'PRIVATE VALUE','cookie':'SECRET_TOKEN'}}}})
+        self.assertEqual(fields['id']['decoded']['post_id'],'765432109')
+        self.assertEqual(fields['entity_info']['unrecognized_id'],'998877665')
+        self.assertEqual(fields['entity_info']['title'],{'title_length':10})
+        for private in (opaque,'PRIVATE CAPTION','PRIVATE VALUE','SECRET_TOKEN','access_token','cookie'):
+            self.assertNotIn(private,json.dumps(fields))
 
 
 if __name__ == '__main__':
