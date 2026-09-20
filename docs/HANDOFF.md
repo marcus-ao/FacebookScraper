@@ -204,13 +204,20 @@ G1 的真实录制结构验收不等于整套生产系统已激活：专用渠�
 生产读取器要求的关联在该页面上不存在。`instagram_story_preview_frame` 内出现 `neakasa.de`；
 这能定位 IG 预览，不能据此把聚合 ID 认定为独立 IG 或 FB 内容 ID。
 
-旧取证工具点击 Facebook 后，立即与一秒后的样本均没有可见 tab，标题仅记录长度 10；
-随后跳过 Instagram，仍打印 DONE。该缺陷已在隔离浏览器复现；日志没有保留这个标题的文本，
-不能宣称长度 10 一定是 Loading。新工具等待标题不再处于加载状态、目标渠道已选中及必要字段短暂稳定，
-采集即时/就绪两阶段，渠道或恢复失败记 PARTIAL。日志 JSON 用 ASCII 转义，避免 PowerShell 管道把中点解码成“路”。
-`--responses` 可选被动观察本次切换自然返回的 Business Suite GraphQL 响应，只保存白名单对象 ID、类型、
-时间与账号关系；正文仅保留长度，丢弃凭据字段，不访问 cookie、请求头或浏览器存储，不主动调用接口。响应到达时的标签名仅是时间上下文，
-不是渠道归属证明；仍需根据对象关系核验。响应数量、体积及等待均有界。
+最新用户回传已包含 Facebook/Instagram 三阶段样本；
+[本地摘录](../state/planner-content-compatibility/story-detail-20260920/followup-observations.json)是从消息人工转录的观察摘要，非原始 DOM 文件。
+IG 就绪样本有无正文提示、18:39 元数据及 `neakasa.de` 的 Story 预览；Facebook 标签已选中，但
+`Loading preview` 在即时及两个所谓 settled 样本里一直可见。标题长度 10 的文本仍未知，不能猜成加载提示。
+工具仅检查标题/标签便宣布就绪是明确缺陷；现在同时检查可见的 `Loading preview`，超时保存最后状态并继续另一渠道，
+最终输出 PARTIAL。统计区自身的错误或进度条不阻止预览取证。日志 JSON 用 ASCII 转义，避免 PowerShell 管道损坏中点。
+
+这次仅收到 `tofu_metrics_query/TofuErrorQueryResult`（HTTP 200，错误标题/消息长度 38/71）；
+它不证明 Facebook 没有发布，也没有提供独立内容 ID。首次内容可能在监听启动前已返回，这是待验证假设。
+`--reload` 在监听启动后仅重载已匹配的详情一次，采集首次加载自然返回的响应，以及该页面已有的惰性 JSON 数据；
+不执行嵌入脚本，不主动调用接口。`--responses` 单独使用仍只观察切换响应。
+两种来源都仅输出白名单对象 ID、类型、时间与账号关系；正文只保留长度，丢弃凭据字段，不访问 cookie、请求头或浏览器存储。
+响应到达时的标签名仅是时间上下文，不是渠道归属证明；仍需根据对象关系核验。数量、体积及等待均有界，
+嵌入 JSON 超过采集上限会在 EMBEDDED_SUMMARY 报告跳过数量。
 
 现有录制 191–204 还显示聚合 Post 切换渠道后，FB 为 19:17、IG 为 19:18；不能把聚合时间、
 正文或 `content_id` 复制成两个渠道记录。合作作者不能替代目标 owner；预览中的分享源同样不能替代。
@@ -227,12 +234,12 @@ G1 的真实录制结构验收不等于整套生产系统已激活：专用渠�
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
 [页面证据](../state/ui-regression/browser-stage-f.json)核对部分结果警示、旧缓存时间与无正文展示。
-`tests_calendar_detail_probe` 有 9 条隔离回归：可见元数据/Story 预览、脱敏、歧义拒绝、发布锁、
-延迟页签保持原选择、切换期间重载、缺失渠道不报成功、被动内容对象证据与 PowerShell 管道转义；
-定向结果和 hygiene 见 [取证工具验证](../state/planner-content-compatibility/story-detail-20260920/validation.json)。
+`tests_calendar_detail_probe` 的隔离回归覆盖可见元数据/Story 预览、脱敏、歧义拒绝、发布锁、
+延迟页签保持原选择、切换期间加载、缺失渠道不报成功、预览加载超时后继续 IG、首次详情重载响应/嵌入 JSON 与 PowerShell 管道转义；
+11 条定向测试、hygiene 与独立复审见 [取证工具验证](../state/planner-content-compatibility/story-detail-20260920/initial-load-validation.json)。
 这些结果只证明离线行为，截图中的聚合详情仍缺独立身份适配。
 
-Story 聚合 DOM 已收到，尚缺渠道切换完成后的视图及独立 ID 关系；本地语义浏览器夹具不是 Meta DOM 录制。
+Story 聚合及 IG 视图已收到，尚缺可用的 Facebook 预览及独立 ID 关系；本地语义浏览器夹具不是 Meta DOM 录制。
 按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 的补采命令使用修正后的工具，
 不再运行会漏采的旧版本。无需重新刷新月份或重录 G1。不得以部分结果可见冒充月历读取真实通过。
 

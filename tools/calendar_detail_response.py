@@ -100,6 +100,32 @@ class ResponseEvidence:
             self.emit({'RESPONSE_EVIDENCE': 'unreadable', 'during_view': view,
                        'read_error_type': type(exc).__name__})
 
+    async def embedded(self):
+        """Inspect inert JSON already in this detail document; never execute scripts."""
+        snapshot = await asyncio.wait_for(self.page.locator('script[type="application/json"]').evaluate_all('''nodes => {
+          let characters=0;const records=[];
+          for(const [index,node] of nodes.entries()){
+            const text=node.textContent||'';
+            if(index>=100||characters+text.length>4000000)continue;
+            characters+=text.length;records.push({index,text});
+          }
+          return {found:nodes.length,records};
+        }'''), 8)
+        emitted, invalid = 0, 0
+        for record in snapshot['records']:
+            try:
+                fields = content_fields(json.loads(record['text']))
+            except ValueError:
+                invalid += 1
+                continue
+            if fields:
+                emitted += 1
+                self.emit({'EMBEDDED_EVIDENCE': fields, 'script_index': record['index'],
+                           'during_view': self.view})
+        self.emit({'EMBEDDED_SUMMARY': {'found': snapshot['found'],
+                  'inspected': len(snapshot['records']), 'emitted': emitted, 'invalid': invalid,
+                  'skipped': snapshot['found']-len(snapshot['records'])}})
+
     async def finish(self):
         self.page.remove_listener('response', self.observe)
         if self.tasks:

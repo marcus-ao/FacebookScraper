@@ -512,26 +512,28 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 ### 8.1 月历更新、单条取证与后续复验
 
 本次交付包含内容分类、部分缓存、保护逻辑和只读取证工具；**Story/Instagram 真实身份适配仍为代码未完成**。
-更新主分支不会自动消除所有未适配项。当前人工目标是取得 9 月 4 日 18:39 Story 的 DOM，
+更新主分支不会自动消除所有未适配项。当前人工目标是取得 9 月 4 日 18:39 Story 的独立内容对象关系，
 之后补适配再做整月验收。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
 不发帖、不排期、不调用模型，不删除缓存、归档或业务账本。
 
-**已回传聚合页日志时的最短补采。** 现场已匹配目标 Story，但旧工具在 Facebook 切换期间漏采 Instagram，
-原来的 DONE 不表示各渠道已采齐。工作区无待处理源码修改、没有发布/排期/刷新在运行时，
+**已回传聚合及 IG 页日志时的最短补采。** 现场已有 IG 预览，但 Facebook 的 `Loading preview`
+被旧工具误判为 settled；仅切换标签取得的统计错误响应也没有独立 ID。工作区无待处理源码修改、没有发布/排期/刷新在运行时，
 `git pull --ff-only origin main` 更新工具即可；本次补采不需要重启 Web 或刷新月历。
 在 9223 保持同一条 Story 详情打开并选择 Total performance，执行下面一段，将日志发回：
 
 ```powershell
 Set-Location 'D:\Code\FacebookScraper'
 $DetailLog = Join-Path $env:TEMP ('planner-detail-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story --responses 2>&1 | Tee-Object -FilePath $DetailLog
+scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story --reload 2>&1 | Tee-Object -FilePath $DetailLog
 Write-Host "诊断日志：$DetailLog"
 ```
 
-新工具逐渠道输出 READ、即时与 settled 样本，等待必要标题/渠道选择就绪，不等待统计数字；
+`--reload` 仅重新加载已匹配的这条详情一次，在加载前开始监听，包含首次响应和页面已有 JSON 数据的白名单采集；
+不会重跑月历。逐渠道输出 READ、即时与 settled 样本，等待必要标题/渠道选择及 `Loading preview` 消失，
+不等待统计数字。每次就绪等待最多 30 秒；预览超时输出 PARTIAL VIEW 和 timeout 样本，再继续采集另一渠道。
 最后 RESTORED 恢复原标签。缺渠道或恢复失败输出 PARTIAL，不会以 DONE 隐去缺失。
-`--responses` 只被动观察页面切换本来返回的 GraphQL 响应，保留白名单对象 ID、类型、时间、
-账号关系与文字长度，不记录原始响应、正文、凭据或请求头，不主动调用接口。
+不带 `--reload` 的 `--responses` 仍只观察切换响应。两类数据保留白名单对象 ID、类型、时间、
+账号关系与文字长度，不记录原始响应、正文、凭据或请求头，不执行页面 JSON，不主动调用接口。
 响应的 during_view 仅表示到达时正在观察的标签，不能单独证明该响应属于此渠道。
 即使取得 DONE，也只代表本次取证完成，不是整月读取通过；PARTIAL 同样保留日志，不连续重跑。
 

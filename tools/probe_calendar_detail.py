@@ -7,7 +7,7 @@ import sys
 import time as monotonic_time
 from datetime import date, time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.chrome import attach
@@ -72,6 +72,7 @@ SNAPSHOT = r'''() => {
    links:nodes.filter(n=>n.matches('a[href]')).slice(0,40).map(info),
    story_previews:previews.map(n=>({node:info(n),children:[...n.querySelectorAll('*')].filter(visible).slice(0,30).map(info)})),
    readiness:{...header,caption_ready:!!header?.caption_ready,
+     preview_loading:nodes.some(n=>n.matches('[role=heading],h1,h2,h3,h4,h5,h6')&&/^Loading preview(?:\.{3}|…)?$/i.test(text(n))),
      selected_channels:nodes.filter(n=>n.matches('[role=tab][aria-selected=true]')&&/^(Total performance|Facebook|Instagram)$/.test(text(n))).map(text)},
    query_keys:[...new URL(location.href).searchParams.keys()].filter(k=>/^[a-z_]{1,40}$/.test(k)&&!/(token|secret|auth|session|cookie)/i.test(k))};
 }'''
@@ -83,7 +84,7 @@ def emit(value):
 
 
 async def wait_view(page, channel, *, timeout):
-    """Observe header/selection stability without waiting for unrelated metrics."""
+    """Observe header/selection stability and preview loading, not metrics loading."""
     deadline = monotonic_time.monotonic() + timeout
     previous, since = None, monotonic_time.monotonic()
     while True:
@@ -93,14 +94,15 @@ async def wait_view(page, channel, *, timeout):
         if signature != previous:
             previous, since = signature, monotonic_time.monotonic()
         selected = not channel or readiness['selected_channels'] == [channel]
-        if selected and readiness['caption_ready'] and monotonic_time.monotonic()-since >= .6:
+        if (selected and readiness['caption_ready'] and not readiness['preview_loading']
+                and monotonic_time.monotonic()-since >= .6):
             return value
         if monotonic_time.monotonic() >= deadline:
             raise TimeoutError('detail view not ready')
         await asyncio.sleep(.2)
 
 
-async def inspect(browser, *, day, clock, kind, timeout=30, responses=False):
+async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, reload=False):
     target = re.compile(re.escape(kind) + r'\s*·?\s*Published on:\s*\w{3}\s+'
         + day.strftime('%b') + r'\s+' + str(day.day) + r',\s*'
         + clock.strftime('%I:%M').lstrip('0') + r'\s*' + clock.strftime('%p'), re.I)
@@ -130,11 +132,25 @@ async def inspect(browser, *, day, clock, kind, timeout=30, responses=False):
     if original is None and await page.get_by_role('tab').count():
         print('STOP: selected channel tab is unknown; no tabs were changed', flush=True)
         return False
-    evidence = ResponseEvidence(page, emit) if responses else None
+    original_url = urlsplit(page.url)
+    original_id = parse_qs(original_url.query).get('content_id', [])
+    if reload and (original is None or original_url.path.rstrip('/') != '/latest/insights/object_insights'
+                   or len(original_id) != 1 or not re.fullmatch(r'\d{6,30}', original_id[0])):
+        print('STOP: reload requires one identified detail and a restorable channel selection', flush=True)
+        return False
+    evidence = ResponseEvidence(page, emit) if responses or reload else None
     if evidence:
         evidence.start()
     complete = True
     try:
+        if reload:
+            evidence.view = 'reload'
+            print('RELOAD: this matched detail once; observing initial content responses', flush=True)
+            await page.reload(wait_until='domcontentloaded', timeout=timeout*1000)
+            current_url = urlsplit(page.url)
+            if (current_url.hostname != original_url.hostname or current_url.path.rstrip('/') != original_url.path.rstrip('/')
+                    or parse_qs(current_url.query).get('content_id', []) != original_id):
+                raise RuntimeError('detail changed on reload')
         for channel in (None, 'Facebook', 'Instagram'):
             view = channel or 'initial'
             if evidence:
@@ -148,37 +164,45 @@ async def inspect(browser, *, day, clock, kind, timeout=30, responses=False):
                 # A click temporarily removes all channel tabs in the live Story.
                 # Absence during hydration does not prove the other channel absent.
                 await tab.click(timeout=timeout*1000)
-            print(f'READ: {view}; waiting for header and channel selection', flush=True)
+            print(f'READ: {view}; waiting for header, channel selection and preview loading', flush=True)
             initial = await asyncio.wait_for(page.evaluate(SNAPSHOT), 8)
             initial.update(view=view, phase='immediate', frame=0)
             emit(initial)
             try:
-                value = await wait_view(page, channel or original, timeout=timeout)
+                for sample in range(2):
+                    # Reload may reset the selected tab. Preserve the original
+                    # for restoration and observe the new initial view as-is.
+                    value = await wait_view(page, channel or (None if reload else original), timeout=timeout)
+                    value = dict(value, view=view, phase='settled', sample=sample, frame=0)
+                    emit(value)
+                    for index, frame in enumerate(page.frames):
+                        if frame == page.main_frame:
+                            continue
+                        try:
+                            value = await asyncio.wait_for(frame.evaluate(SNAPSHOT), 8)
+                            value.update(view=view, phase='settled', sample=sample, frame=index)
+                            emit(value)
+                        except Exception as exc:
+                            complete = False
+                            emit({'view': view, 'frame': index, 'read_error_type': type(exc).__name__})
             except TimeoutError:
-                print(f'STOP: {view} did not become ready; inspection is partial', flush=True)
+                print(f'PARTIAL VIEW: {view} did not become ready; retaining final state', flush=True)
                 complete = False
-                break
-            for sample in range(2):
-                if sample:
-                    value = await wait_view(page, channel or original, timeout=timeout)
-                value = dict(value, view=view, phase='settled', sample=sample, frame=0)
-                emit(value)
-                for index, frame in enumerate(page.frames):
-                    if frame == page.main_frame:
-                        continue
-                    try:
-                        value = await asyncio.wait_for(frame.evaluate(SNAPSHOT), 8)
-                        value.update(view=view, phase='settled', sample=sample, frame=index)
-                        emit(value)
-                    except Exception as exc:
-                        complete = False
-                        emit({'view': view, 'frame': index, 'read_error_type': type(exc).__name__})
+                value = await asyncio.wait_for(page.evaluate(SNAPSHOT), 8)
+                emit(dict(value, view=view, phase='timeout', frame=0))
+            finally:
+                if reload and channel is None:
+                    await evidence.embedded()
     except Exception as exc:
         complete = False
         emit({'stage':'channel_inspection','read_error_type':type(exc).__name__})
     finally:
         try:
             if original:
+                current_url = urlsplit(page.url)
+                if reload and (current_url.hostname != original_url.hostname or current_url.path.rstrip('/') != original_url.path.rstrip('/')
+                        or parse_qs(current_url.query).get('content_id', []) != original_id):
+                    raise RuntimeError('cannot restore a different detail')
                 if evidence:
                     evidence.view = 'restore'
                 await page.get_by_role('tab', name=original, exact=True).click(timeout=timeout*1000)
@@ -206,7 +230,7 @@ async def run(args):
             start_script=r'scripts\start_chrome_publish.bat', login_hint='DE publish')
         try:
             return await inspect(browser, day=args.date, clock=args.time, kind=args.kind,
-                                 responses=args.responses)
+                                 responses=args.responses, reload=args.reload)
         finally:
             await pw.stop()
 
@@ -219,6 +243,8 @@ def main():
     parser.add_argument('--kind', choices=('Post', 'Story', 'Reel', 'Video', 'Live'), default='Story')
     parser.add_argument('--responses', action='store_true',
                         help='Passively record allowlisted content fields from channel-switch responses; no extra requests')
+    parser.add_argument('--reload', action='store_true',
+                        help='Reload only the matched detail once; includes passive response and embedded JSON evidence')
     args = parser.parse_args()
     try:
         return 0 if asyncio.run(run(args)) else 2

@@ -152,6 +152,57 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Instagram',output.getvalue())
         self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
 
+    async def test_loading_preview_is_partial_but_other_channel_is_still_collected(self):
+        # The live Facebook header was stable while Loading preview persisted;
+        # Instagram then had a visible Story preview despite a metrics error.
+        await self.page.evaluate('''() => {const original=window.select;
+          window.select=tab=>{original(tab);
+            document.querySelector('#preview-loading')?.remove();
+            if(tab.textContent==='Facebook')document.body.insertAdjacentHTML('beforeend',
+              '<section id="preview-loading"><h2>Loading preview</h2><div role="progressbar"></div></section>');
+          };document.body.insertAdjacentHTML('beforeend',
+            '<section><h3>Metrics unavailable</h3><div role="progressbar"></div></section>');}''')
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story',timeout=1)
+        self.assertFalse(result)
+        records=[json.loads(s) for s in output.getvalue().splitlines() if s.startswith('{')]
+        self.assertFalse(any(r.get('view')=='Facebook' and r.get('phase')=='settled' for r in records))
+        stalled=next(r for r in records if r.get('view')=='Facebook' and r.get('phase')=='timeout')
+        self.assertTrue(stalled['readiness']['preview_loading'])
+        self.assertTrue(any(r.get('view')=='Instagram' and r.get('phase')=='settled' for r in records))
+        self.assertNotIn('DONE:',output.getvalue())
+        self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+    async def test_single_detail_reload_observes_initial_responses_and_embedded_identity(self):
+        payload={'data':{'story':{'__typename':'Story','id':'765432109',
+            'owner':{'id':'123456789','username':'neakasa.de','access_token':'SECRET_TOKEN'},
+            'caption':'PRIVATE INITIAL CAPTION','creation_time':1788518340}}}
+        body=PAGE + '<script type="application/json">'+json.dumps(payload)+'</script>' + '''
+          <script>fetch('/api/graphql/?secret=SECRET_TOKEN',{method:'POST'})</script>'''
+        document_requests=[]
+        async def document(route):
+            document_requests.append(route.request.url)
+            await route.fulfill(content_type='text/html; charset=utf-8',body=body)
+        await self.context.route('**/latest/insights/object_insights/**',document)
+        await self.context.route('**/api/graphql/**',lambda route: route.fulfill(
+            content_type='application/json',body=json.dumps(payload)))
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story',reload=True)
+        self.assertTrue(result)
+        self.assertEqual(document_requests,[self.page.url])
+        text=output.getvalue()
+        records=[json.loads(s) for s in text.splitlines() if s.startswith('{')]
+        self.assertTrue(any(isinstance(r.get('RESPONSE_EVIDENCE'),dict) and r['during_view'] in {'reload','initial'} for r in records))
+        embedded=next(r['EMBEDDED_EVIDENCE'] for r in records if isinstance(r.get('EMBEDDED_EVIDENCE'),dict))
+        self.assertEqual(embedded['data']['story']['owner']['id'],'123456789')
+        self.assertEqual(embedded['data']['story']['id'],'765432109')
+        for private in ('SECRET_TOKEN','PRIVATE INITIAL CAPTION','access_token'):
+            self.assertNotIn(private,text)
+        self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+        self.assertFalse(await self.page.evaluate('window.submitted'))
+
     async def test_passive_content_evidence_redacts_credentials_and_keeps_identity_relationships(self):
         payload={'data':{'node':{'__typename':'Story','id':'987654321',
             'owner':{'id':'123456789','username':'neakasa.de','access_token':'SECRET_TOKEN'},
