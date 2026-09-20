@@ -1158,15 +1158,29 @@ async def _open_channel_dialogs(
             name=str(attrs.get("dialog_name") or ""), exact=False).first
         # 无详情弹窗时保留渠道未知，由调用方决定是否完整。
         await dialog.wait_for(state="visible", timeout=_ms(timeout))
-        rendered = await _node_text(dialog)
-        match = pattern.search(rendered)
-        remote = _regex_remote_id(match) if match else ""
-        for channel in ("facebook", "instagram"):
-            marker = str(attrs.get("%s_marker" % channel) or "")
-            token = str(attrs.get("%s_account_token" % channel) or "")
-            if marker and marker in rendered and remote and evidence_token_present(
-                    rendered, token):
-                found[channel] = remote
+        deadline = time.monotonic() + timeout
+        previous, stable_since = None, time.monotonic()
+        while True:
+            rendered = await _node_text(dialog)
+            match = pattern.search(rendered)
+            remote = _regex_remote_id(match) if match else ""
+            current = {}
+            for channel in ("facebook", "instagram"):
+                marker = str(attrs.get("%s_marker" % channel) or "")
+                token = str(attrs.get("%s_account_token" % channel) or "")
+                if marker and marker in rendered and remote and evidence_token_present(rendered, token):
+                    current[channel] = remote
+            # Recorded snapshots 181-184 show ID/channel before the preview account.
+            # Metrics outside this preview do not determine post readiness.
+            ready = current if 'Loading preview' not in rendered else {}
+            if ready != previous:
+                previous, stable_since = ready, time.monotonic()
+            if ready and time.monotonic() - stable_since >= .4:
+                found = ready
+                break
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
     except Exception:                                 # noqa: BLE001
         pass
     finally:

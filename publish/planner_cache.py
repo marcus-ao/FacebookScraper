@@ -59,7 +59,8 @@ def _guard(path: Path, _role: str = "target") -> Path:
 
 def _empty() -> dict:
     return {"version": 1, "observed_at": None, "last_attempt_at": None,
-            "refresh_status": "idle", "refresh_error": None, "inventory": None}
+            "refresh_status": "idle", "refresh_error": None, "refresh_diagnostic": None,
+            "inventory": None}
 
 
 def _serialize(inventory: RemoteSlotInventory) -> dict:
@@ -179,15 +180,17 @@ async def refresh_cache(path: Path, reader, *, state_dir: Path,
             inventory_from_cache({"inventory": data})
             observed = _moment(now or clock())
             record.update(inventory=data, observed_at=observed.isoformat(),
-                          refresh_status="refreshed", refresh_error=None)
+                          refresh_status="refreshed", refresh_error=None, refresh_diagnostic=None)
         except Exception as exc:
             code = ("timeout" if isinstance(exc, TimeoutError) else
                     "coverage_unavailable" if isinstance(exc, ProbeRequired) else "read_failed")
-            record.update(refresh_status="failed", refresh_error=code)
+            diagnostic = exc.diagnostic if isinstance(exc, month_inventory.PlannerItemError) else None
+            record.update(refresh_status="failed", refresh_error=code, refresh_diagnostic=diagnostic)
             if corrupt:
                 # 失败读取不能用空壳抹去原文件；后续成功完整读取可以重建缓存。
                 return {**read_cache(path, now=attempted), "refresh_status": "failed",
-                        "refresh_error": code, "last_attempt_at": attempted.isoformat()}
+                        "refresh_error": code, "refresh_diagnostic": diagnostic,
+                        "last_attempt_at": attempted.isoformat()}
         atomic_write_json(path, record, guard=_guard)
         if record['refresh_status'] == 'refreshed':
             record_publication(state_dir, inventory, observed)

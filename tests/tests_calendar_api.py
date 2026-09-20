@@ -16,6 +16,7 @@ from publish.business_suite import ProbeRequired, RemotePlannerCard, RemoteSlotI
 from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
 from publish.journal import PublishOperationLock  # noqa: E402
 from publish import planner_cache  # noqa: E402
+from publish.month_inventory import PlannerItemError  # noqa: E402
 from web.api import calendar  # noqa: E402
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
@@ -171,6 +172,20 @@ class CalendarApiTests(unittest.TestCase):
         read.assert_awaited_once()
         page.close.assert_awaited_once()
         pw.stop.assert_awaited_once()
+
+    def test_failed_item_exposes_its_location_without_exception_or_caption_text(self):
+        self.populate()
+        failure = PlannerItemError({'date': date(2026, 9, 30)},
+            {'index': 0, 'time': '5:30 PM', 'text': 'private caption'}, 'item_ready')
+        with patch('web.api.calendar.read_live_inventory', AsyncMock(side_effect=failure)):
+            response = self.client.post('/api/calendar/refresh')
+        self.assertEqual(response.status_code, 502)
+        data = response.json()
+        self.assertEqual(data['refresh_diagnostic']['stage'], 'item_ready')
+        self.assertIn('2026-09-30', data['error'])
+        self.assertIn('5:30 PM', data['error'])
+        self.assertNotIn('private caption', response.text)
+        self.assertEqual(data['cached_at'], NOW.isoformat())
 
 
 if __name__ == "__main__":

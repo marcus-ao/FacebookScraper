@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from publish.business_suite import RemotePlannerCard, RemoteSlotInventory  # noqa: E402
 from publish.journal import PublishOperationLock  # noqa: E402
+from publish.month_inventory import PlannerItemError  # noqa: E402
 from publish.planner_cache import read_cache, refresh_cache, inventory_from_cache  # noqa: E402
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
@@ -85,6 +86,22 @@ class PlannerCacheTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
         self.assertIsNone(result["observed_at"])
         self.assertIsNone(inventory_from_cache(result))
+
+    def test_item_failure_retains_safe_location_and_clears_it_after_success(self):
+        self.refresh(AsyncMock(return_value=inventory()))
+        failure = PlannerItemError({'date': date(2026, 9, 30)},
+            {'index': 0, 'time': '5:30 PM', 'text': 'private body',
+             'href': 'https://example.test/?token=secret', 'labels': ['private caption']}, 'item_ready')
+        result = self.refresh(AsyncMock(side_effect=failure), NOW + timedelta(minutes=1))
+        self.assertEqual(result['refresh_diagnostic']['date'], '2026-09-30')
+        self.assertEqual(result['refresh_diagnostic']['time'], '5:30 PM')
+        self.assertEqual(result['refresh_diagnostic']['stage'], 'item_ready')
+        self.assertEqual(result['observed_at'], NOW.isoformat())
+        self.assertEqual(inventory_from_cache(result).cards, inventory().cards)
+        for private in ('private body', 'private caption', 'token=secret'):
+            self.assertNotIn(private, self.path.read_text())
+        result = self.refresh(AsyncMock(return_value=inventory()), NOW + timedelta(minutes=2))
+        self.assertIsNone(result['refresh_diagnostic'])
 
     def test_success_timestamp_is_read_completion_not_attempt_start(self):
         completed = NOW + timedelta(minutes=2)

@@ -24,6 +24,30 @@ DAY_SELECTOR = '[role="link"][draggable="false"]'
 RECOMMENDATION = 'Recommendations are based on when your followers were most active on Instagram and Facebook respectively in the last 7 days.'
 TIME_PATTERN = re.compile(r'\b(\d{1,2}:\d{2}\s*[AP]M)\b')
 FILENAME = 'planner_controls.json'
+# Click 225 in the bound 2026-09-20 recording targets a time-only link; the
+# caption is on its third ancestor. Never climb into a day or a sibling card.
+ITEM_DATA_JS = r'''n => {
+  const labels=[];
+  const cell=n.parentElement.closest('[role="link"][draggable="false"]');
+  for(let p=n; p && p!==cell; p=p.parentElement) {
+    if(p!==n && [...p.querySelectorAll('[role="link"],a')].some(x=>x!==n && !n.contains(x))) break;
+    const label=p.getAttribute('aria-label');
+    if(label && !labels.includes(label)) labels.push(label);
+  }
+  return {text:n.innerText,aria:n.getAttribute('aria-label')||'',labels,
+    href:n.getAttribute('href')||n.querySelector('a[href]')?.getAttribute('href')||''};
+}'''
+
+
+class PlannerItemError(bs.PublishStepError):
+    """Only structural context crosses the cache/API boundary, never exception text or URLs."""
+    def __init__(self, row, item, stage):
+        self.diagnostic = {'date': row['date'].isoformat(), 'time': item['time'],
+                           'item_index': item['index'], 'stage': stage,
+                           'has_href': bool(item.get('href')),
+                           'text_length': len(item.get('text', '')),
+                           'label_count': len(item.get('labels', []))}
+        super().__init__(f"月历条目读取失败：{self.diagnostic['date']} {item['time']}（{stage}）")
 
 
 def dates_for_cells(month: date, numbers: list[int]) -> tuple[date, ...]:
@@ -79,8 +103,7 @@ async def read_grid(page, *, timeout=30):
             # Top-level descendant links represent one card; nested wrappers repeat its time.
             items = await cell.evaluate('''el => [...el.querySelectorAll('[role="link"],a')]
               .filter(n=>n.parentElement.closest('[role="link"],a')===el)
-              .map((n,index)=>({index,text:n.innerText,aria:n.getAttribute('aria-label')||'',
-                href:n.getAttribute('href')||n.querySelector('a[href]')?.getAttribute('href')||''}))''')
+              .map((n,index)=>({index,...(''' + ITEM_DATA_JS + ''')(n)}))''')
             extra = await cell.get_by_role('button').all_inner_texts()
             if any(' '.join(label.replace('\u200b', '').split()) not in {'Schedule', 'Create'} for label in extra):
                 raise bs.PublishStepError('日期格存在未处理的展开控件，月历读取不完整')
@@ -122,9 +145,93 @@ async def is_recommendation(page, item, *, timeout=1.5):
 
 
 async def read_item(page, row, item, *, timeout=30):
+    stage = 'item_ready'
+    try:
+        ready = await ready_item(page, row, item, timeout=timeout)
+        if ready is None:
+            return None
+        node, raw = ready
+        stage = 'published_detail' if item['href'] else 'scheduled_detail'
+        return await read_item_detail(page, row, item, node, raw, timeout=timeout)
+    except Exception as exc:
+        raise PlannerItemError(row, item, stage) from exc
+    finally:
+        # Hover cards must not contaminate the final month sweep or the next slot.
+        await page.mouse.move(0, 0)
+
+
+async def ready_item(page, row, item, *, timeout):
+    """Re-read the card and bind a newly opened hover link to its caption and grid time."""
     node = item_locator(page, row, item)
-    if not item['href'] and await is_recommendation(page, node):
-        return None
+    deadline = time.monotonic() + timeout
+    fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, timeout * 1000))
+    require_same_item(item, fresh)
+    spec = None
+    before_hover = set()
+    if not fresh['href']:
+        spec = bs.require_readback_evidence()
+        before_hover = set(await page.get_by_role('link').all_inner_texts())
+        if await is_recommendation(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic()))):
+            return None
+    previous, stable_since = None, time.monotonic()
+    expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
+    while True:
+        fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, (deadline - time.monotonic()) * 1000))
+        require_same_item(item, fresh)
+        raw = ''
+        if not fresh['href']:
+            spec = spec or bs.require_readback_evidence()
+            candidates = [fresh['aria'], fresh['text'], *fresh['labels']]
+            # The recorded hover preview is itself a link, outside the time node.
+            # A link already visible before hovering cannot establish this association.
+            captions = [' '.join(label.split()) for label in fresh['labels']
+                        if not TIME_PATTERN.fullmatch(' '.join(label.split()))]
+            for text in await page.get_by_role('link').all_inner_texts():
+                normalized = ' '.join(text.split())
+                match = re.search(spec.attributes['datetime_regex'], normalized)
+                if text not in before_hover and match and normalized[:match.start()].strip() in captions:
+                    candidates.append(normalized)
+            complete = set()
+            for text in candidates:
+                text = ' '.join(text.split())
+                parsed = bs._entry_naive(text, spec)
+                if parsed is not None:
+                    if parsed != expected:
+                        raise bs.PublishStepError('月历日期格与条目完整时刻不一致')
+                    match = re.search(spec.attributes['datetime_regex'], text)
+                    if match and text[:match.start()].strip():
+                        complete.add(text)
+            if len(complete) > 1:
+                raise bs.PublishStepError('月历条目出现多个不同的完整正文')
+            raw = next(iter(complete), '')
+        value = (fresh, raw)
+        if value != previous:
+            previous, stable_since = value, time.monotonic()
+        if (fresh['href'] or raw) and time.monotonic() - stable_since >= .4:
+            # Hydration is accepted only after checking the original slot identity;
+            # read() compares this refreshed DOM snapshot with the final sweep.
+            item.update(fresh)
+            return node, raw
+        if time.monotonic() >= deadline:
+            raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
+        await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
+
+
+def require_same_item(item, fresh):
+    clocks = TIME_PATTERN.findall(' '.join(fresh['text'].split()))
+    if not clocks:
+        clocks = TIME_PATTERN.findall(' '.join(fresh['aria'].split()))
+    if clocks != [item['time']] or (item['href'] and fresh['href'] != item['href']):
+        raise bs.PublishStepError('月历条目的时刻或链接已变化，请重新读取')
+    known = {' '.join(text.split()) for text in
+             [item.get('text', ''), item.get('aria', ''), *item.get('labels', [])]
+             if text.strip() and not TIME_PATTERN.fullmatch(' '.join(text.split()))}
+    current = {' '.join(text.split()) for text in [fresh['text'], fresh['aria'], *fresh['labels']]}
+    if not known.issubset(current):
+        raise bs.PublishStepError('月历条目已读取的正文发生变化，请重新读取')
+
+
+async def read_item_detail(page, row, item, node, raw, *, timeout):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -142,32 +249,50 @@ async def read_item(page, row, item, *, timeout=30):
         try:
             await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             await detail.bring_to_front()
-            # Direct URLs render a page; in-place navigation wraps the same content in a dialog.
-            dialog = detail.locator('body')
-            # Metrics can continue loading after the post itself is fully observed.
-            label = dialog.get_by_text(re.compile(r'Published on:'))
-            await label.wait_for(timeout=timeout * 1000)
-            header = await label.evaluate('''el => ({text:el.innerText,
-              platforms:[...el.parentElement.querySelectorAll('img[alt]')].map(n=>n.alt),
-              authors:[...el.querySelectorAll('strong')].map(n=>n.textContent)})''')
-            channels = published_channels(header, row['date'], item['time'])
-            heading = dialog.get_by_role('heading', level=3).first
-            caption = await heading.inner_text()
+            channels, caption = await published_detail(detail, row, item, timeout=timeout)
             return {'channels': channels, 'remote_ids': {channels[0]: remote} if len(channels) == 1 else {},
                     'text': caption, 'delivery': 'published', 'detail_url': url}
         finally:
             await detail.close()
     spec = bs.require_readback_evidence()
-    raw = ' '.join((item.get('aria') or item.get('text') or '').split())
     parsed = bs._entry_naive(raw, spec)
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     if parsed is None or parsed != expected:
         raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
     remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout)
+    if not remote_ids:
+        raise bs.PublishStepError('排期详情未就绪或缺少目标账号、渠道与远端 ID')
     match = re.search(spec.attributes['datetime_regex'], raw)
     caption = raw[:match.start()].strip() if match else raw
     return {'channels': tuple(sorted(remote_ids)), 'remote_ids': remote_ids,
             'text': caption, 'delivery': 'scheduled'}
+
+
+async def published_detail(page, row, item, *, timeout):
+    """Wait on post metadata and caption stability, without waiting for metric loaders."""
+    deadline = time.monotonic() + timeout
+    previous, stable_since = None, time.monotonic()
+    label = page.get_by_text(re.compile(r'Published on:'))
+    heading = page.get_by_role('heading', level=3).first
+    while True:
+        value = None
+        if await label.count() == 1 and await heading.count():
+            header = await label.evaluate('''el => ({text:el.innerText,
+              platforms:[...el.parentElement.querySelectorAll('img[alt]')].map(n=>n.alt),
+              authors:[...el.querySelectorAll('strong')].map(n=>n.textContent)})''')
+            caption = await heading.inner_text()
+            if caption.strip() and any(author.strip() for author in header['authors']) and header['platforms']:
+                value = (header, caption)
+        if value != previous:
+            previous, stable_since = value, time.monotonic()
+        if value and time.monotonic() - stable_since >= .4:
+            channels = published_channels(value[0], row['date'], item['time'])
+            if not channels:
+                raise bs.PublishStepError('已发布详情账号或渠道不符')
+            return channels, value[1]
+        if time.monotonic() >= deadline:
+            raise bs.PublishStepError('已发布详情的正文、日期、账号或渠道尚未完整就绪')
+        await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
 
 
 def published_channels(header, day, clock):
@@ -185,7 +310,7 @@ def published_channels(header, day, clock):
     channels = tuple(channel for channel, label in (('facebook', 'Facebook'), ('instagram', 'Instagram'))
                      if label in markers)
     identity = ' '.join(header['authors'])
-    if identity and not all(re.search(r'(?<![\w.])' + re.escape(accounts()[channel]) + r'(?![\w.])', identity)
+    if not identity.strip() or not all(re.search(r'(?<![\w.])' + re.escape(accounts()[channel]) + r'(?![\w.])', identity)
                             for channel in channels):
         return ()
     return channels

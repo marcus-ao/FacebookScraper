@@ -19,13 +19,23 @@ from publish.business_suite import PublishStepError
 TOOLTIP_SLOT = ('<div role="link" onmouseenter="tip.hidden=false" onmouseleave="tip.hidden=true">'
                 '{clock} AM<img alt="Instagram"></div>')
 TOOLTIP = '<div role="tooltip" id="tip" hidden>' + month.RECOMMENDATION + '</div>'
+CAPTION = 'This is a manual test.😊 #SmartPetFeeder #CatLovers #NeakasaRiko'
+ENTRY = CAPTION + ' September 30, 2026, 5:30 PM'
+SPEC = SimpleNamespace(attributes={
+    'datetime_regex': r'(?P<date>[A-Z][a-z]+ \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
+    'date_format': '%B %d, %Y', 'time_format': '%I:%M %p',
+    'dialog_role': 'dialog', 'dialog_name': 'Post details',
+    'remote_id_regex': r'ID:\s*(?P<remote_id>\d{6,})',
+    'facebook_marker': "Facebook's Feed", 'facebook_account_token': 'Neakasa Deutschland',
+    'instagram_marker': 'Instagram feed', 'instagram_account_token': 'neakasa.de'})
 
 
 class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.pw = await async_playwright().start()
         self.browser = await self.pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
-        self.page = await self.browser.new_page()
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
         days = calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)
         cells = ''.join(f'<div role="link" draggable="false"><span>{d.day}</span></div>' for d in days)
         await self.page.set_content('<h1>Planner</h1><h1>September</h1><h1>2026</h1>'
@@ -91,6 +101,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         # A short budget cannot flip this one: every way the hover can go wrong also reports False.
         self.assertFalse(await month.is_recommendation(self.page, slots, timeout=.3))
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
+        await self.page.set_content('<div role="link" draggable="false">15'
+                                    '<div role="link">10:00 AM</div></div>')
         # Refusing to confirm must cost the run an error, never a silently skipped scheduled post.
         with patch.object(month, 'is_recommendation', AsyncMock(return_value=False)), \
                 patch.object(month.bs, 'require_readback_evidence', return_value=SimpleNamespace(
@@ -98,7 +110,7 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
                                 'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})):
             with self.assertRaises(PublishStepError):
                 await month.read_item(self.page, row, {'index': 0, 'href': '', 'text': '10:00 AM',
-                                                       'time': '10:00 AM', 'aria': '10:00 AM'})
+                                                       'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=.5)
 
     async def test_conflict_inventory_contains_unknown_channel_cards(self):
         rows = [{'date': date(2026, 9, 15), 'items': [{'index': 0, 'time': '10:00 AM'}]}]
@@ -115,6 +127,7 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(month, 'accounts', return_value={'instagram': 'neakasa.de', 'facebook': 'Neakasa Deutschland'}):
             self.assertEqual(month.published_channels(header, date(2026, 9, 5), '11:09 AM'), ('instagram',))
             self.assertEqual(month.published_channels(dict(header, authors=['neakasa.deals']), date(2026, 9, 5), '11:09 AM'), ())
+            self.assertEqual(month.published_channels(dict(header, authors=['']), date(2026, 9, 5), '11:09 AM'), ())
             with self.assertRaises(PublishStepError):
                 month.published_channels(header, date(2026, 9, 4), '11:09 AM')
 
@@ -126,6 +139,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
         item = {'index': 0, 'href': '', 'text': '1:00 AM', 'time': '1:00 AM',
                 'aria': 'Full caption September 15, 2026, 2:00 AM'}
+        await self.page.set_content('<div role="link" draggable="false">15'
+            '<div role="link" aria-label="Full caption September 15, 2026, 2:00 AM">1:00 AM</div></div>')
         spec = SimpleNamespace(attributes={
             'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
             'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})
@@ -133,8 +148,101 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(month.bs, 'require_readback_evidence', return_value=spec), \
                 patch.object(month.bs, '_open_channel_dialogs', AsyncMock()) as open_detail:
             with self.assertRaises(PublishStepError):
-                await month.read_item(self.page, row, item)
+                await month.read_item(self.page, row, item, timeout=.5)
             open_detail.assert_not_called()
+
+    async def mount_scheduled_card(self, *, delay=120, entry=ENTRY):
+        # Recorded click 225: the time link has no href/aria; its third ancestor owns the caption.
+        # Snapshot 180 adds a full-date link on hover; 181-184 show the delayed preview.
+        await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''(cell, data) => {
+          cell.insertAdjacentHTML('beforeend', `<div aria-label="${data.caption}"><div><div>
+            <div role="link" id="slot">5:30\u202fPM</div></div></div></div>`);
+          const slot=document.getElementById('slot');
+          slot.onmouseenter=()=>{window.tipTimer=setTimeout(()=>{
+            if(!document.getElementById('full')) document.body.insertAdjacentHTML('beforeend',
+              `<div id="full" role="link">${data.entry}</div>`);
+          },data.delay)};
+          slot.onmouseleave=()=>{clearTimeout(window.tipTimer);document.getElementById('full')?.remove()};
+          slot.onclick=()=>{
+            document.body.insertAdjacentHTML('beforeend', `<div role="dialog" aria-label="Post details">
+              Post details ID: 2059528092104126 Facebook's Feed <span id="loading">Loading preview</span></div>`);
+            setTimeout(()=>{document.getElementById('loading').outerHTML='<article>Neakasa Deutschland September 30 at 5:30 PM Preview</article>'},350);
+          };
+          document.onkeydown=e=>{if(e.key==='Escape')document.querySelector('[role=dialog]')?.remove()};
+        }''', {'caption': CAPTION, 'entry': entry, 'delay': delay})
+
+    async def test_recorded_time_child_reads_parent_caption_and_delayed_hover_entry(self):
+        await self.mount_scheduled_card(delay=1700)
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            result = await month.read(self.page, ui_timezone='Asia/Shanghai',
+                                      business_timezone='Asia/Shanghai', timeout=5)
+        self.assertEqual(len(result.cards), 1)
+        self.assertEqual(result.cards[0].rendered, CAPTION)
+        self.assertEqual(result.cards[0].remote_ids, (('facebook', '2059528092104126'),))
+        self.assertEqual(result.cards[0].at.isoformat(), '2026-09-30T17:30:00+08:00')
+        self.assertTrue(result.channels_complete)
+        self.assertEqual(await self.page.get_by_role('dialog').count(), 0)
+
+    async def test_delayed_card_label_is_reread_instead_of_reusing_time_only_snapshot(self):
+        await self.mount_scheduled_card()
+        rows = await month.read_grid(self.page, timeout=5)
+        await self.page.locator('#slot').evaluate('(el, text)=>el.setAttribute("aria-label",text)', ENTRY)
+        with patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            result = await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=5)
+        self.assertEqual(result['text'], CAPTION)
+        self.assertEqual(result['channels'], ('facebook',))
+
+    async def test_unrelated_hover_entry_cannot_supply_a_time_only_cards_evidence(self):
+        await self.mount_scheduled_card(entry=ENTRY.replace(CAPTION, CAPTION + ' different post'))
+        rows = await month.read_grid(self.page, timeout=5)
+        with patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            with self.assertRaises(PublishStepError):
+                await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=4)
+
+    async def test_sibling_card_label_is_not_borrowed_and_changed_caption_is_not_hydration(self):
+        await self.mount_scheduled_card()
+        rows = await month.read_grid(self.page, timeout=5)
+        await self.page.locator('#slot').evaluate('el=>el.parentElement.parentElement.parentElement.setAttribute("aria-label","Changed caption")')
+        await self.page.locator('#slot').evaluate('''el=>el.onmouseenter=()=>{
+          document.getElementById('full')?.remove();
+          document.body.insertAdjacentHTML('beforeend','<div id="full" role="link">Changed caption September 30, 2026, 5:30 PM</div>');
+        }''')
+        with patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            with self.assertRaises(PublishStepError):
+                await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=4)
+        await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''cell=>{
+          cell.innerHTML='<span>30</span><div><div aria-label="Sibling caption"><div role="link">4:30 PM</div></div><div role="link">5:30 PM</div></div>';
+        }''')
+        rows = await month.read_grid(self.page, timeout=5)
+        self.assertEqual(rows[31]['items'][1]['labels'], [])
+
+    async def test_actual_edit_during_detail_read_still_invalidates_the_month(self):
+        await self.mount_scheduled_card()
+        await self.page.locator('#slot').evaluate('''el=>el.addEventListener('click',()=>{
+          setTimeout(()=>el.textContent='6:30 PM',100);
+        })''')
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            with self.assertRaisesRegex(PublishStepError, '远端月历已更新'):
+                await month.read(self.page, ui_timezone='Asia/Shanghai',
+                                 business_timezone='Asia/Shanghai', timeout=5)
+
+    async def test_published_detail_waits_for_caption_author_and_platform_but_not_metrics(self):
+        await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''el=>el.insertAdjacentHTML(
+          'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=12345678">5:30 PM</a>')''')
+        await self.page.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body='''<div><span>Post · Published on: Wed Sep 30, 5:30pm</span></div>
+              <h3></h3><div role="progressbar">Metrics still loading</div><script>
+              setTimeout(()=>{document.querySelector('h3').textContent='Complete caption';
+                document.querySelector('span').insertAdjacentHTML('beforeend',' · <strong>Neakasa Deutschland</strong>');
+                document.querySelector('span').parentElement.insertAdjacentHTML('beforeend','<img alt="Facebook">');},500);
+              </script>'''))
+        rows = await month.read_grid(self.page, timeout=5)
+        with patch.object(month, 'accounts', return_value={'facebook': 'Neakasa Deutschland'}):
+            result = await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=4)
+        self.assertEqual(result['text'], 'Complete caption')
+        self.assertEqual(result['remote_ids'], {'facebook': '12345678'})
 
 
 if __name__ == '__main__':

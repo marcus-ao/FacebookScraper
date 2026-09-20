@@ -84,10 +84,17 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
         # 坏账本必须显式失败，不能当成「本地没有排期」继续画（HANDOFF 红线 9）。
         local_error = str(exc)
     unavailable = _readiness()
+    diagnostic = snapshot.get('refresh_diagnostic')
+    error = _ERRORS.get(snapshot.get('refresh_error'))
+    if error and diagnostic:
+        stages = {'item_ready': '条目日期与正文', 'scheduled_detail': '排期详情',
+                  'published_detail': '已发布详情'}
+        error += ' 条目 %s %s，读取阶段：%s。' % (
+            diagnostic['date'], diagnostic['time'], stages.get(diagnostic['stage'], '条目读取'))
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
             "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable"} or
                      bool(snapshot.get("observed_at") and not matches),
-            "error": _ERRORS.get(snapshot.get("refresh_error")),
+            "error": error, "refresh_diagnostic": diagnostic,
             "refresh_status": snapshot.get("refresh_status"),
             "age_seconds": snapshot.get("age_seconds"), "cards": cards,
             "local": local_layer, "local_error": local_error,

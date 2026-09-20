@@ -509,6 +509,36 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 未来真实 UI 改动导致运行时定位失效时再定位具体变化；无需定期重录或重新填写 18 项观察。
 录制工具及 `--fill-notes` 保留作可选诊断用途；本次无须执行。
 
+### 8.1 月历读取修复后的服务机复验
+
+本节只复验月历读取，不发帖、不排期、不调用模型。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
+服务机正常停止旧 Web，在 `D:\Code\FacebookScraper` 确认 `git status --short` 没有待处理的源码修改，再执行：
+
+```powershell
+git fetch origin
+git switch codex/planner-item-readiness
+git pull --ff-only
+scripts\run_web.bat
+```
+
+`run_web.bat` 会重建前端，保持该启动方式。发布 Chrome 9223 保持人工登录且没有其他发布操作。
+打开月历点一次「刷新」，完成后在另一个 PowerShell 查询结果（GET 只查询，不再触发第二次刷新）：
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8765/api/calendar' |
+    Select-Object status, refresh_status, cached_at, error, coverage, refresh_diagnostic |
+    ConvertTo-Json -Depth 6
+```
+
+正常应为 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
+`coverage.matches_current_month` 与 `channels_complete` 均为 true，`cached_at` 更新到此次读取完成时间。
+仍在 2026 年 9 月时，完整格子范围应为 `2026-08-30` 至 `2026-10-03`；确认 9 月 30 日 17:30 的手工帖子仍在列表中。
+真实条数取决于服务机当时内容，不预设固定条数；`partial` 或保留旧数据均不算本次完整读取通过。
+
+若失败，只需保留这一份查询结果，优先看 `refresh_diagnostic` 的日期、时刻和阶段
+（`item_ready` / `scheduled_detail` / `published_detail`）。不要连续重跑相同失败命令、重录 G1 或开启后台刷新尝试修复。
+诊断不包含正文、cookie、token、请求头或 URL 参数。开发机隔离测试不能代替本节真实结果。
+
 ## 9. 真实发布前的最终确认
 
 在可能提交 Business Suite 的动作之前，先准备两篇实际联调内容（FB-only 一篇、IG-only 一篇），每篇给用户审查：
