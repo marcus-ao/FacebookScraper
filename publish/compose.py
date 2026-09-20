@@ -226,6 +226,16 @@ def _parse_probe_number(observations: dict, key: str, *, integer: bool):
         raise ComposeError("G1 probe 的 %s 不是有效实测数字：%r" % (key, raw)) from exc
 
 
+def probe_observation_gaps(data: dict) -> tuple[str, ...]:
+    """发布硬闸和只读报告共用必填观察项，不把录制完成当成人工复核。"""
+    observations = data.get('observations')
+    if not isinstance(observations, Mapping):
+        observations = {}
+    return tuple(key for key in _PROBE_REQUIRED_OBSERVATIONS
+                 if not isinstance(observations.get(key), str)
+                 or not observations[key].strip())
+
+
 def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
     """严格发布只接受 config 明确审核过的真实、完整 G1 记录。"""
     c = cfg()
@@ -273,9 +283,7 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
     observations = data.get("observations")
     if not isinstance(observations, dict):
         raise ComposeError("G1 probe 缺少人工观察记录")
-    missing = [key for key in _PROBE_REQUIRED_OBSERVATIONS
-               if not isinstance(observations.get(key), str)
-               or not observations[key].strip()]
+    missing = probe_observation_gaps(data)
     if missing:
         raise ComposeError("G1 probe 尚未完成必填观察：%s" % "、".join(missing))
 
@@ -306,14 +314,10 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
         raw_screenshot = item.get("screenshot")
         if not isinstance(raw_screenshot, str):
             raise ComposeError("G1 probe 第 %d 条交互没有截图" % sequence)
-        screenshot = Path(raw_screenshot).resolve(strict=False)
         try:
-            assert_physical_direct_path(
-                screenshot_dir, screenshot, kind="file", label="G1 交互截图")
-        except ArchivePathError as exc:
-            raise ComposeError("G1 probe 截图路径不安全：%s" % exc) from exc
-        if not screenshot.is_file() or screenshot.stat().st_size <= 0:
-            raise ComposeError("G1 probe 第 %d 条交互截图不存在/为空" % sequence)
+            evidence.screenshot_path(raw_screenshot, expected.name, state_dir)
+        except (OSError, ValueError) as exc:
+            raise ComposeError("G1 probe 第 %d 条交互截图无效：%s" % (sequence, exc)) from exc
         event_types.add(event_type)
     if "click" not in event_types or not event_types.intersection({"input", "change"}):
         raise ComposeError("G1 probe 必须同时覆盖点击与输入/变更事件")
@@ -335,14 +339,10 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
         raw_final_shot = final.get("screenshot")
         if not isinstance(raw_final_shot, str) or not raw_final_shot.strip():
             raise ComposeError("G1 probe v2 的 final 语义快照缺少遮罩截图")
-        final_shot = Path(raw_final_shot).resolve(strict=False)
         try:
-            assert_physical_direct_path(
-                screenshot_dir, final_shot, kind="file", label="G1 final 截图")
-        except ArchivePathError as exc:
-            raise ComposeError("G1 probe v2 final 截图路径不安全：%s" % exc) from exc
-        if not final_shot.is_file() or final_shot.stat().st_size <= 0:
-            raise ComposeError("G1 probe v2 的 final 遮罩截图不存在/为空")
+            evidence.screenshot_path(raw_final_shot, expected.name, state_dir)
+        except (OSError, ValueError) as exc:
+            raise ComposeError("G1 probe v2 final 截图无效：%s" % exc) from exc
     return data
 
 

@@ -367,7 +367,8 @@ TypeScript/Vite 构建通过**；整库包含基础/图片浏览器 10 项及文
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |
 | F5-8 ZIP/人工结转 | 离线通过 | 包完整后 `handed_off`；缺德语图标原图；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |
 | F5-9 发布锁/不确定恢复 | 离线通过 | Web/CLI/Planner 同锁，中断只补证据充分投影，不重提 | 真实 Planner 核对另验 | `tests_publication_recovery`：重复恢复、缺冻结版、ambiguous 阻塞 |
-| S2-1 单渠道控件录证 | 待真实联调 | `channel_controls.json` 与被动 probe 已删除，需用 `tools/probe_channels.py` 重录 | 9223 会话 | 重录只证明渠道/目标控件，不证明提交验收 |
+| S2-1 单渠道控件录证 | 待真实联调 | 2026-09-20 被动 probe 已收到；专用 `channel_controls.json` 仍须重录，FB 成功截图中 Story 开启 | 9223 会话 | 控件名称采集与迁移校验修复为离线通过，见 [HANDOFF §1.21](HANDOFF.md#121-g1-录证迁移与静态控件名称2026-09-20)；不升级为单渠道提交验收 |
+| S2-1 G1 录制与人工约束 | 待真实联调 | 新录制支持 IG 10 图、30 标签、排期提示 20 分钟至 29 天；observations 为空，时区/画幅/正文计数等未证实 | 服务机 UI 与人工复核 | `tests_publish_probe_contract` 验搬迁、缺图缓存失效、静态名称与输入脱敏；真实缺项按 [MANUAL_STEPS §8](MANUAL_STEPS.md#8-录制单渠道-business-suite-证据) 补齐 |
 | S2-1 单渠道/全文/身份/时刻回读 | 离线通过 | 业务层直接接 `month_inventory`/`month_readback`，精确全文/完整月份/唯一渠道 remote ID；P1/P2 复审关闭 | 新受控排期真实验收另列 | `tests_publish` 末 15 项定点通过；不从旧双渠道 journal 推新 G8 |
 | **S2-1 远端 scheduled 图片读取** | **代码未完成** | **尚无真实排期详情图片控件证据，适配器未实现**；须受控排期录证后补数量/顺序/来源图片绑定 | 有效样本、具体提交确认、真实详情控件 | 编辑器两图核验不能关闭；完成适配/失败闭合测试后再验远端图片 |
 | S2-1 G8 媒体验收闸 | 离线通过 | 同时要求全文相等、`remote_images_verified`、正整数媒体数及有序 source SHA 与冻结清单一致；严格结构拒绝伪通过 | 远端适配尚缺 | 只有 `scheduled`/ID/编辑器图不足，历史 `scheduled` 继续防重 |

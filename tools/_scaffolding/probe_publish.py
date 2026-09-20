@@ -55,6 +55,8 @@ _ELEMENT_STRING_FIELDS = {
     "explicit_role": 128,
     "aria_label": 500,
     "aria_labelledby": 500,
+    "labelledby_text": 500,
+    "label_text": 500,
     "data_testid": 500,
     "name": 500,
     "placeholder": 500,
@@ -211,8 +213,15 @@ def _safe_payload(payload: object, session_id: str) -> dict | None:
             clean = dict(row)
             clean["visible_text"] = ""
             clean["visible_text_truncated"] = False
-            clean["accessible_name"] = str(
-                clean.get("aria_label") or clean.get("placeholder") or "")
+            if clean.get("contains_editable_descendant") is True:
+                clean["aria_label"] = ""
+            labels = (("aria-label", clean.get("aria_label")),
+                      ("aria-labelledby", clean.get("labelledby_text")),
+                      ("label", clean.get("label_text")),
+                      ("placeholder", clean.get("placeholder")))
+            source, name = next(((source, name) for source, name in labels if name), ("", ""))
+            clean["accessible_name"] = name
+            clean["accessible_name_source"] = source
             redacted.append(clean)
         candidates = redacted
         target = candidates[0]
@@ -462,16 +471,18 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
     }
     return element.getClientRects().length > 0;
   };
-  const textWithoutEditableDescendants = (element) => {
+  const textWithoutEditableDescendants = (element, includeHidden = false) => {
     if (!(element instanceof Element)
         || element.matches(valueSelector)
-        || !isVisible(element)) return "";
+        || (!includeHidden && !isVisible(element))) return "";
     const chunks = [];
     const walker = document.createTreeWalker(
       element, NodeFilter.SHOW_TEXT,
       {acceptNode: (node) => {
         const parent = node.parentElement;
-        if (!parent || parent.closest(valueSelector) || !isVisible(parent)) {
+        if (!parent || parent.closest(valueSelector)
+            || parent.closest('script, style, template')
+            || (!includeHidden && !isVisible(parent))) {
           return NodeFilter.FILTER_REJECT;
         }
         return String(node.nodeValue || '').trim()
@@ -506,20 +517,16 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
     const chunks = [];
     for (const id of raw.split(/\s+/).filter(Boolean)) {
       const node = document.getElementById(id);
-      if (node) chunks.push(textWithoutEditableDescendants(node));
+      if (node) chunks.push(textWithoutEditableDescendants(node, true));
     }
     return compact(chunks.join(" ")).text;
   };
 
   const associatedLabelText = (element) => {
-    const chunks = [];
-    if (element.labels) {
-      for (const label of element.labels) {
-        chunks.push(textWithoutEditableDescendants(label));
-      }
-    }
+    const labels = new Set(element.labels || []);
     const parentLabel = element.closest?.("label");
-    if (parentLabel) chunks.push(textWithoutEditableDescendants(parentLabel));
+    if (parentLabel) labels.add(parentLabel);
+    const chunks = [...labels].map(label => textWithoutEditableDescendants(label));
     return compact(chunks.join(" ")).text;
   };
 
@@ -538,10 +545,11 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
     const tag = String(element.tagName || "").toLowerCase();
     const explicitRole = element.getAttribute("role") || "";
     const hasEditableDescendant = containsEditableDescendant(element);
-    const ariaLabel = (redactEditableText || hasEditableDescendant)
+    const ariaLabel = hasEditableDescendant
       ? "" : (element.getAttribute("aria-label") || "");
-    const labelled = redactEditableText ? "" : labelledByText(element);
-    const label = redactEditableText ? "" : associatedLabelText(element);
+    // 输入值与静态名称分开：清空标签会让 date/time/channel 控件无法回查。
+    const labelled = labelledByText(element);
+    const label = associatedLabelText(element);
     let visible = redactEditableText ? "" : textWithoutEditableDescendants(element);
     const type = element.getAttribute("type") || "";
     if (tag === "input" && ["button", "reset", "submit"].includes(type.toLowerCase())) {
@@ -565,6 +573,8 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
       explicit_role: explicitRole,
       aria_label: ariaLabel,
       aria_labelledby: element.getAttribute("aria-labelledby") || "",
+      labelledby_text: labelled,
+      label_text: label,
       data_testid: element.getAttribute("data-testid") || "",
       name: element.getAttribute("name") || "",
       placeholder,
@@ -595,7 +605,7 @@ INSTALL_FUNCTION = r"""({sessionId, bindingName}) => {
       'input, textarea, select, [contenteditable=""], [contenteditable="true"], ' +
       '[role="textbox"], [role="combobox"], [role="searchbox"]'
     );
-    // 输入目标的祖先 innerText 同样会包含正文；整条祖先链都只保留结构属性。
+    // 输入目标与祖先不取 innerText；静态标签仅取排除可编辑后代后的文字。
     const redactEditableText = Boolean(editable);
     let depth = 0;
     while (element && depth < 8) {
@@ -1347,7 +1357,7 @@ def _print_notes_hint(dump_path: Path) -> None:
     print("  · 但 `--strict` 真实发布**需要**它们：那几个数字只能你亲眼看 UI 得到，")
     print("    按实际控件填写约束，不使用未经核验的值。")
     print("  · 什么时候想填都行，不用重录：")
-    print("      .venv\\Scripts\\python.exe tools\\probe_publish.py --fill-notes %s"
+    print("      scripts\\run_python.bat -m tools._scaffolding.probe_publish --fill-notes %s"
           % dump_path)
 
 
@@ -1886,7 +1896,10 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--no-notes", action="store_true",
         help=argparse.SUPPRESS)      # 兼容旧写法；现在本来就是默认行为
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.set_note and not args.fill_notes:
+        parser.error('--set-note 必须同时指定 --fill-notes <DUMP>；未启动浏览器录制')
+    return args
 
 
 def _run_with_bounded_shutdown(awaitable):

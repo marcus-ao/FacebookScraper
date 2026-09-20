@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+from core.store import assert_physical_direct_path
 
 from publish.selectors import (REGISTRY, SIGNALS, EvidenceSignal, Locator,
                                account_value_from_text,
@@ -39,13 +41,44 @@ def _parse_aware(value: object) -> datetime | None:
     return parsed
 
 
-# 仅缓存校验成功结果；mtime 或大小变化后重查。
+# 仅缓存 JSON 结构；截图每次回查，迁移或删除证据后不能沿用旧结论。
 _DUMP_CACHE: dict[tuple, tuple[dict, str]] = {}
 
 
 def clear_dump_cache() -> None:
     """测试用：换了 dump 文件内容后强制重新校验。"""
     _DUMP_CACHE.clear()
+
+
+def screenshot_path(raw: str, source_dump: str, dumps_dir: Path) -> Path:
+    """从同名本轮目录回查截图；保留原始 dump，不依赖录制机器的绝对路径。"""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("没有截图路径")
+    recorded = PurePosixPath(raw.replace('\\', '/'))
+    directory = Path(source_dump).stem + '_screenshots'
+    if ('..' in recorded.parts or recorded.parent.name != directory
+            or ':' in recorded.name or not recorded.name.lower().endswith('.png')):
+        raise ValueError("截图不属于本轮直属截图目录")
+    root = Path(dumps_dir).absolute()
+    shots = assert_physical_direct_path(
+        root, root / directory, kind='directory', label='probe 截图目录')
+    shot = assert_physical_direct_path(
+        shots, shots / recorded.name, kind='file', label='probe 截图')
+    if not shot.is_file() or shot.stat().st_size <= 0:
+        raise ValueError("本轮截图不存在或为空：%s" % shot)
+    return shot
+
+
+def _has_final_screenshot(data: dict, source_dump: str, dumps_dir: Path) -> bool:
+    for row in data['snapshots']:
+        if row.get('reason') != 'final' or row.get('screenshot_error') not in {None, ''}:
+            continue
+        try:
+            screenshot_path(row.get('screenshot'), source_dump, dumps_dir)
+        except (OSError, ValueError):
+            continue
+        return True
+    return False
 
 
 def validate_v2_dump(source_dump: str, dumps_dir: Path
@@ -66,7 +99,10 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
     except OSError:
         cache_key = None
     if cache_key is not None and cache_key in _DUMP_CACHE:
-        return _DUMP_CACHE[cache_key]
+        cached = _DUMP_CACHE[cache_key]
+        if _has_final_screenshot(cached[0], source_dump, dumps_dir):
+            return cached
+        return None, "v2 dump 没有位于本轮截图目录内的有效 final 遮罩截图"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -106,21 +142,7 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
               if isinstance(row, dict) and row.get("reason") == "final"]
     if not finals:
         return None, "v2 dump 缺少停止录制时的 final 快照"
-    screenshot_dir = (Path(dumps_dir) / (Path(source_dump).stem + "_screenshots"))
-    valid_final = False
-    for row in finals:
-        raw = row.get("screenshot")
-        if row.get("screenshot_error") not in {None, ""} or not isinstance(raw, str):
-            continue
-        shot = Path(raw).resolve(strict=False)
-        try:
-            shot.relative_to(screenshot_dir.resolve(strict=False))
-        except ValueError:
-            continue
-        if shot.is_file() and shot.stat().st_size > 0:
-            valid_final = True
-            break
-    if not valid_final:
+    if not _has_final_screenshot(data, source_dump, dumps_dir):
         return None, "v2 dump 没有位于本轮截图目录内的有效 final 遮罩截图"
     if cache_key is not None:
         _DUMP_CACHE[cache_key] = (data, "")
@@ -500,4 +522,3 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
             return True, ""
     return False, ("证据不在同一页面，或顺序不是账号 → 提交 → 成功 → "
                    "Planner 就绪 → 卡片 → final")
-

@@ -28,8 +28,7 @@ from pipeline.settings import (AUTONOMY_LEVELS as AUTONOMY_LEVELS,      # noqa: 
                                pipeline_settings)
 from core import paid_requests                      # noqa: E402
 from core.heartbeat import HeartbeatSettings, heartbeat_status  # noqa: E402
-from publish.compose import (                        # noqa: E402
-    _PROBE_REQUIRED_OBSERVATIONS as required)
+from publish.compose import probe_observation_gaps   # noqa: E402
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
                             DAILY_TASK, SCHEDULER_TASK, _task_state)
 from publish.capabilities import checks as capability_checks  # noqa: E402
@@ -495,12 +494,7 @@ def _probe_observation_gaps() -> tuple[str, ...]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return ("probe dump 读不了：%s" % exc,)
-    observations = data.get("observations")
-    if not isinstance(observations, Mapping):
-        observations = {}
-    return tuple(key for key in required
-                 if not isinstance(observations.get(key), str)
-                 or not observations[key].strip())
+    return probe_observation_gaps(data)
 
 
 def _publish_gate_states() -> list[tuple[str, bool, str]]:

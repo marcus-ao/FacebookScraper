@@ -228,15 +228,14 @@ def derive_account_context(data: dict, dump: str, facebook: str,
                     "facebook_account_token": facebook,
                     "facebook_account_regex": pattern,
                     "instagram_not_provable_here":
-                        "composer 上不存在 IG 帐号名；IG 由 G6c 回读证明",
+                        "本信号只核验 FB 预览；IG 须独立核验渠道与回读",
                 })
             return Derived("composer_account_context", True,
                            "第 %d 条快照 · %s/%r"
                            % (snapshot["sequence"], spec.role, name), spec,
                            warnings=(
-                               "composer 上没有 IG 帐号名（实测），"
-                               "所以提交前只能证明 FB。IG 少了会在 G6c 回读时"
-                               "被抓到并转人工，不会误记 scheduled。",))
+                               "本项只核验 FB 账号语义；IG 仍须独立渠道控件与详情回读，"
+                               "不能从 FB 信号推断 IG 已通过。",))
     return Derived(
         "composer_account_context", False,
         "composer 页面上找不到目标 FB 主页显示名 %r" % facebook,
@@ -553,10 +552,9 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
                 "planner_scheduled_card", False,
                 "找不到 %s 的详情弹窗（要能同时读到 %r 与 ID: <数字>）"
                 % (channel, token),
-                how="补录时在内容日历上把那条排期**两个渠道各点开一次**："
-                    "点条目 → 弹出 Post details → 等预览加载完（账号名和正文"
-                    "出现）→ 关掉 → 点同一时刻的另一条条目再来一次。"
-                    "FB 与 IG 是两个独立对象，各有各的弹窗。")
+                how="只读打开该渠道已经存在的独立排期，等 Post details 的账号、"
+                    "正文与 ID 加载完整。FB 与 IG 各自使用独立单渠道样本，"
+                    "不要求同帖或同一时刻；新增样本须先确认具体发布内容。")
         dialogs[channel] = found
     month = _derive_visible_month(data, after_order)
     if month is None:
@@ -859,8 +857,7 @@ def report(data: dict, facebook: str, instagram: str) -> None:
                         where[key].append(entry)
         print("  %-8s %r" % (label, token))
         if not where:
-            print("      ⛔ **整份 dump 里一次都没出现**"
-                  " —— 这个值在这个 UI 上不存在，重录也不会有")
+            print("      这份 dump 未录到该账号；不能据此判断真实 UI 没有该控件。")
         for key, entries in where.items():
             print("      %-9s %s" % (key, "、".join(entries[:5])
                                      + ("…" if len(entries) > 5 else "")))
@@ -940,6 +937,15 @@ def main(argv: list[str] | None = None) -> int:
     print("  [OK] %s · %d 条交互 / %d 条被动快照"
           % (source.name, len(data["interactions"]), len(data["snapshots"])))
 
+    from publish.compose import probe_observation_gaps
+    missing_observations = probe_observation_gaps(data)
+    print("\n=== G1 人工观察项 ===")
+    if missing_observations:
+        print("  [缺] %s" % "、".join(missing_observations))
+        print("  使用 --fill-notes <dump> 填写实测记录；不能以录制完成代替审核。")
+    else:
+        print("  [OK] 必填项已填写；数值、时区、profile 与配置签字仍由发布预检校验。")
+
     if args.report:
         report(data, facebook, instagram)
         return 0
@@ -950,19 +956,19 @@ def main(argv: list[str] | None = None) -> int:
     checks = verify_derived(results, dumps_dir)
     ok = _print_results(results, checks)
 
-    if not ok:
-        print("⛔ 至少一项推不出来或回查不过，发布校验保持关闭。")
-        print("   按上面每条的「补录」提示重录一次，再跑一次 --check。")
+    if not ok or (args.check and missing_observations):
+        print("⛔ 发布证据尚不完整；不能据此开启生产发布。")
+        print("   先核对缺项：正文提示可用 --caption 补充，缺少的实际证据再补录。")
         return 1
     if args.check:
-        print("✅ 这份 dump 足以解锁发布提交。下一步：")
-        print("   .venv\\Scripts\\python.exe tools\\probe_signals.py --emit %s"
-              % source)
+        print("五项信号已回查，人工观察项已填写；这不是完整生产验收。下一步：")
+        print("   保留本次命令的 dump、--caption 和 --success-name，将 --check 改为 --emit。")
+        print("   然后运行 scripts\\run_pipeline.bat preflight 核对全部发布条件。")
         return 0
 
     emit(results, source.name, GENERATED)
     print("✅ 已写 %s" % GENERATED.relative_to(ROOT))
-    print("   还差最后一步：把 config.toml 的 [publish].ui_probe_dump 填成")
+    print("   完成人工约束复核后，把 config.toml 的 [publish].ui_probe_dump 填成")
     print("   %s —— 那是人工审核这份证据的签字栏，程序不替你填。" % source.name)
     return 0
 
@@ -984,7 +990,7 @@ def _status() -> int:
             print("  [开] %-22s 证据齐全并已回查" % label)
     print("-" * 72)
     if ok:
-        print("✅ 三道闸全开：run_publish_post.bat --submit 会真的点提交。")
+        print("三项信号已回查；全部发布条件仍须运行 scripts\\run_pipeline.bat preflight 核验。")
     else:
         print("⛔ 闸是关的，--submit 会在碰浏览器之前失败闭合（这是对的）。")
         print("   录一份 v2 dump 之后跑："

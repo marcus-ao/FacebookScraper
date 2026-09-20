@@ -455,7 +455,13 @@ scripts\run_python.bat -m tools.layout reindex-db
 
 ## 8. 录制单渠道 Business Suite 证据
 
-**2026-09-14 运行数据整库清空之后，这里一份证据都没有了。** 原来的 `publish_probe_*.json`、`channel_controls.json`、`planner_controls.json` 和月历截图随 `state/` 一起删除，`config.toml` 的 `[publish].ui_probe_dump` 与 `ui_constraints_verified` 也已退回未签字状态。所以 preflight 的 G6/G6c 现在全关——要走到真实发布，下面这套录证得从零做一遍。
+**当前录制为 `publish_probe_20260920_100921_378853.json`，尚不足以开启生产发布。**
+2026-09-14 清库删掉的旧 probe、渠道/月历控件证据不能复用。本次可回查的事实及缺项见
+[HANDOFF §1.21](HANDOFF.md#121-g1-录证迁移与静态控件名称2026-09-20)。
+`[publish].ui_probe_dump` 与 `ui_constraints_verified` 仍未签字。
+
+JSON 与同名 `_screenshots` 目录一起复制，目录层级和图片名保持不变；无需手改 JSON 中的旧机器绝对路径。
+这只允许离线审查证据，真实发布仍校验原录制 profile 与端口，不能把服务机录制改署名给开发机。
 
 ```powershell
 scripts\run_python.bat -m tools._scaffolding.probe_publish
@@ -470,15 +476,33 @@ scripts\run_python.bat -m tools._scaffolding.probe_publish
 - 发布/排期详情的只读渠道证据和公开状态，不明确则 unknown；
 - final 快照和遮罩截图。
 
-**那 14 个只能人亲眼量的 UI 上限**（图片数、画幅比、正文与标签上限、定时上下限）录制器证明不了，`preflight` 的第 2 项会逐条列出还差哪些。用 `--set-note KEY=VALUE` 一次填完，未知或畸形的键会当场报错、不会静默丢弃：
+**18 个必填观察项**涵盖入口、时区、定时窗口与输入行为、成功提示，以及 IG 图片数、画幅、正文和标签
+限制及拒绝行为。`--report` / `--check` 与 preflight 共用缺项判据。录制默认不填写观察项；
+已由截图/语义明确证明的数值可以按出处复核后补填，未知值留空，不套 API 限制或历史笔记。
+给已有 dump 填写时必须同时指定 `--fill-notes`；未知、畸形的键或缺失 dump 参数会报错：
 
 ```powershell
-scripts\run_python.bat -m tools._scaffolding.probe_publish --set-note <KEY>=<实测值>
+scripts\run_python.bat -m tools._scaffolding.probe_publish --fill-notes state\<新的_probe_dump>.json --set-note "<KEY>=<实测值>"
 ```
 
 录完之后把 `config.toml` 的 `[publish].ui_probe_dump` 填成新 dump 的文件名，`ui_constraints_verified` 改回 `true`。⛔ 换 dump 就要重新量：这一位签的是"那份 dump 里的观察项有人亲眼看过"，不是"这个项目量过一次"。
 
-本轮已经观察到已发布详情的渠道图标、`Published on` 与合作作者信息，以及两个未来 time-only 条目实际为推荐时段并已排除。实际 inventory 在 2026-09-13T05:01:33Z 返回 ready：8 月 30 日至 10 月 3 日的 35 格、4 条公开帖、3 个独立 IG remote ID；这只覆盖本次已观察月份。只有完成第 9 节具体内容确认后，才把一次 Schedule、成功 dialog、该渠道卡片/全文/时刻/remote ID 的回读录入提交验收；`Publish`/`Publish now` 不用于验证。
+**针对 2026-09-20 录制的剩余步骤：**
+
+1. 保留现有 FB 远端任务 `2059528092104126`，不为补证再次提交。当前记录可证明 IG 图片上限 10、
+   标签上限 30、排期提示 20 分钟至 29 天；不能由此推断 UI 时区、画幅、正文计数方式或 FB 窗口。
+2. 更新录制器后，在服务机 9223 补录日期/时间/渠道静态名称，核对 UI 时区与剩余约束；
+   旧录制已清空的名称无法靠回填恢复。只读查看已有排期详情不需要创建新排期。
+3. 分别准备 FB-only 与 IG-only 表单，关闭 Story/Threads/Boost 后运行
+   `scripts\run_python.bat -m tools.probe_channels facebook` 或 `instagram`；
+   完整月份与日期格用 `scripts\run_python.bat -m tools.probe_calendar` 录证。
+   被动录制不生成这两份专用控件文件。
+4. FB 与 IG 用各自独立样本，不要求同文案、同一时刻。缺 IG 已有排期时，新增样本先按第 9 节确认。
+   远端图片控件、完整正文及图片数量/顺序仍须补证并完成适配，才算单渠道真实验收。
+
+清库前的 2026-09-13 月历记录已失去可复核文件，不作为本次验收。只有完成第 9 节具体内容确认后，
+才把一次 Schedule、成功 dialog、该渠道卡片/全文/时刻/remote ID 的回读录入提交验收；
+`Publish`/`Publish now` 不用于验证。
 
 清库前做过一次编辑器媒体观察：放入明确不可发布的技术文案与 2 张历史原图，核验了缩略图的数量、顺序与视觉一致性，未点 Schedule / Publish / Finish later / Cancel。**发布浏览器里可能还留着那份草稿**，接手时先识别现场，不要直接提交。缩略图检查只证明编辑器侧准备状态，不替代远端排期卡片里的最终图片证据。
 
@@ -486,9 +510,11 @@ scripts\run_python.bat -m tools._scaffolding.probe_publish --set-note <KEY>=<实
 
 ```powershell
 scripts\run_probe_signals.bat --report state\<新的_probe_dump>.json
+scripts\run_probe_signals.bat --check state\<新的_probe_dump>.json --caption "测试帖正文里的一小句"
 ```
 
 开发者和业务人员共同复核 dump 后才能回填定位。截图里的可见文字若没有 role/accessible name，不算定位证据。
+`--check` 的信号结果不能替代完整发布预检；缺少 `--caption` 时可补参数重新检查，无须重录整次操作。
 
 ## 9. 真实发布前的最终确认
 
