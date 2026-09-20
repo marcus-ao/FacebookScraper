@@ -32,7 +32,9 @@ class CalendarApiTests(unittest.TestCase):
         self.state = Path(self.temp.name) / "state"
         self.path = self.state / "planner_cache.json"
         config = Config()
+        self.config = config
         config._d["paths"]["state"] = str(self.state)
+        config._d["publish"]["ui_timezone"] = WINDOW.ui_timezone
         for name, value in (("web.api.calendar.cfg", config),
                             ("web.api.calendar.current_time", NOW),
                             ("web.api.calendar.configured_window", WINDOW),
@@ -104,6 +106,18 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(data["coverage"]["visible_start"], "2026-09-01")
         self.assertTrue(data["coverage"]["matches_current_month"])
         self.assertTrue(data["advisory_only"])
+
+    def test_beijing_ui_uses_the_confirmed_month_without_a_measured_platform_limit(self):
+        self.config._d['publish']['ui_timezone'] = 'Asia/Shanghai'
+        window = ScheduleWindow('accepted-probe', timedelta(0), None, 'Asia/Shanghai')
+        with patch('web.api.calendar.configured_window', return_value=window):
+            data = self.client.get('/api/calendar').json()
+        self.assertEqual(data['ui_timezone'], 'Asia/Shanghai')
+        self.assertEqual(data['display_start'], '2026-09-01T00:00:00+08:00')
+        self.assertEqual(data['display_end_exclusive'], '2026-10-01T00:00:00+08:00')
+        self.assertTrue(data['bounds']['facebook']['available'])
+        self.assertEqual(data['bounds']['facebook']['earliest'], NOW.isoformat())
+        self.assertEqual(data['bounds']['instagram']['end_exclusive'], '2026-09-30T16:00:00+00:00')
 
     def test_missing_probe_disables_picker_and_refresh_without_changing_old_cache(self):
         self.populate()

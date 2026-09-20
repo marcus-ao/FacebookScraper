@@ -19,7 +19,7 @@ from publish import journal                                  # noqa: E402
 from publish import records                                  # noqa: E402
 from publish import workflow                                 # noqa: E402
 from publish.compose import (ComposeError,                   # noqa: E402
-                             _validated_probe_dump, compose_post)
+                             require_probe_evidence, compose_post)
 
 
 def _now_stamp() -> str:
@@ -93,19 +93,13 @@ def _pending_blocks_force(row: dict | None) -> bool:
 
 
 def _resolve_ui_timezone(strict: bool) -> str:
-    """读取 UI 时区；严格模式须与人工记录一致。"""
+    """采用已确认的发布设备时区；运行时另核对设备偏移。"""
     name = (cfg().get("publish", "ui_timezone", "") or "").strip()
     if not name:
         raise SystemExit(bs.describe_gap("ui_timezone"))
-    if not strict:
-        return name
-    data = _validated_probe_dump(())
-    observed = str((data.get("observations") or {}).get("ui_timezone") or "")
-    if name not in observed:
-        raise SystemExit(
-            "[publish].ui_timezone = %r 与 G1 dump 里那条人工观察对不上：%r。\n"
-            "  这两处必须一致——UI 时区是这一步唯一的真相来源。"
-            % (name, observed))
+    bs.resolve_ui_timezone(name)
+    if strict:
+        require_probe_evidence()
     return name
 
 
@@ -184,7 +178,7 @@ def main(argv=None) -> int:
     parser.add_argument("--account", default=None,
                         help="只在这一个账号归档目录里找，如 in_neakasa.tech")
     parser.add_argument("--strict", action="store_true",
-                        help="要求 G1 已完成并人工复核"
+                        help="要求控件录制已接受且文件可回查"
                              "（[publish].ui_constraints_verified = true）")
     parser.add_argument("--force", action="store_true",
                         help="允许越过 prepared 草稿提示继续；不能越过"

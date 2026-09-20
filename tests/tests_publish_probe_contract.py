@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from datetime import timedelta
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from publish import compose, evidence
 from publish.locator_types import EvidenceSignal, Locator
 from publish_fixtures import verified_probe_config
 from tools._scaffolding import probe_publish, probe_signals
+from tools import publish_post
 
 
 class ProbeFilesTest(unittest.TestCase):
@@ -54,7 +56,8 @@ class ProbeFilesTest(unittest.TestCase):
                 self.assertIsNotNone(data, detail)
                 with patch.object(compose, 'cfg', return_value=self.config):
                     constraints, window = compose.verified_constraints_from_config('instagram')
-                self.assertEqual(constraints.max_images, 5)
+                self.assertIsNone(constraints.max_images)
+                self.assertIsNone(window.max_ahead)
                 self.assertEqual(self.path.read_bytes(), before)
 
     def test_missing_screenshot_invalidates_a_cached_success(self):
@@ -122,22 +125,45 @@ class ProbeFilesTest(unittest.TestCase):
         self.shot.unlink()
         self.assertIsNone(evidence.validate_v2_dump(self.path.name, self.state)[0])
 
-    def test_portability_does_not_approve_missing_observations_or_another_profile(self):
+    def test_empty_observations_do_not_block_g1_but_wrong_browser_role_does(self):
         self.save_paths(r'D:\old\publish_probe_fixture_screenshots\masked.png')
-        observations = self.data['observations']
         self.data['observations'] = {}
         self.path.write_text(json.dumps(self.data), encoding='utf-8')
+        self.config._d['publish']['ui_timezone'] = 'Asia/Shanghai'
         with patch.object(compose, 'cfg', return_value=self.config):
-            with self.assertRaisesRegex(compose.ComposeError, '必填观察'):
-                compose.verified_constraints_from_config('instagram')
-        self.data['observations'] = observations
+            limits, window = compose.verified_constraints_from_config('instagram')
+            self.assertIsNone(limits.max_caption_length)
+            self.assertIsNone(limits.min_aspect_ratio)
+            self.assertEqual(window.min_ahead, timedelta(0))
+            self.assertIsNone(window.max_ahead)
+            self.assertEqual(window.ui_timezone, 'Asia/Shanghai')
+            with patch.object(publish_post, 'cfg', return_value=self.config):
+                self.assertEqual(publish_post._resolve_ui_timezone(True), 'Asia/Shanghai')
+            compose._match_probe_measurements(self.data, limits, window)
+            with self.assertRaisesRegex(compose.ComposeError, '实测数字'):
+                compose._match_probe_measurements(self.data,
+                    compose.InstagramConstraints(self.path.name, max_images=100), None)
         self.data['profile_dir'] = str(Path(self.temp.name) / 'other-profile')
         self.path.write_text(json.dumps(self.data), encoding='utf-8')
         with patch.object(compose, 'cfg', return_value=self.config):
             with self.assertRaisesRegex(compose.ComposeError, '专用 profile'):
                 compose.verified_constraints_from_config('instagram')
 
-    def test_signal_report_lists_missing_g1_observations_without_modifying_evidence(self):
+    def test_copied_probe_keeps_publish_role_across_host_usernames(self):
+        self.data['profile_dir'] = r'C:\Users\another-user\publish-profile'
+        self.path.write_text(json.dumps(self.data), encoding='utf-8')
+        with patch.object(compose, 'cfg', return_value=self.config):
+            self.assertEqual(compose.require_probe_evidence()['cdp_port'], 9223)
+
+    def test_missing_state_preflight_does_not_create_a_directory(self):
+        missing = Path(self.temp.name) / 'absent-state'
+        self.config._d['paths']['state'] = str(missing)
+        with patch.object(compose, 'cfg', return_value=self.config):
+            with self.assertRaises(compose.ComposeError):
+                compose.require_probe_evidence()
+        self.assertFalse(missing.exists())
+
+    def test_signal_report_does_not_request_optional_measurements(self):
         self.data['observations'] = {'instagram_max_images': '10'}
         self.path.write_text(json.dumps(self.data), encoding='utf-8')
         before = self.path.read_bytes()
@@ -145,9 +171,31 @@ class ProbeFilesTest(unittest.TestCase):
         with redirect_stdout(output):
             result = probe_signals.main(['--report', str(self.path)])
         self.assertEqual(result, 0)
-        self.assertIn('instagram_max_caption_length', output.getvalue())
-        self.assertIn('schedule_min_ahead_seconds', output.getvalue())
+        self.assertIn('不阻塞', output.getvalue())
+        self.assertNotIn('--fill-notes', output.getvalue())
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_facebook_detail_can_supply_shared_structure_without_claiming_instagram_receipt(self):
+        template = self.data['snapshots'][0]
+        self.data['snapshots'] = [dict(template,
+            page_url='https://business.facebook.com/latest/content_calendar',
+            semantic_items=[
+                {'role': 'heading', 'accessible_name': 'September'},
+                {'role': 'heading', 'accessible_name': '2026'},
+                {'role': 'link', 'accessible_name': 'Sample caption September 30, 2026 5:30 PM'},
+                {'role': 'dialog', 'accessible_name': "Post details ID: 123456789 Facebook's Feed Test Page Sample caption"},
+            ])]
+        self.path.write_text(json.dumps(self.data), encoding='utf-8')
+        result = probe_signals.derive_planner_card(self.data, self.path.name,
+            'Test Page', 'test.ig', 'Sample caption')
+        self.assertTrue(result.ok, result.detail)
+        spec = result.spec
+        self.assertEqual(spec.attributes['instagram_detail_basis'], 'shared_facebook_structure')
+        self.assertEqual(evidence.verify_signal(spec, self.state), (True, ''))
+        self.assertEqual(evidence._channel_dialogs(self.data['snapshots'], spec, 'instagram'), [])
+        self.data['snapshots'][0]['semantic_items'].pop()
+        self.path.write_text(json.dumps(self.data), encoding='utf-8')
+        self.assertFalse(evidence.verify_signal(spec, self.state)[0])
 
 
 class ProbeLabelsTest(unittest.TestCase):

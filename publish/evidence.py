@@ -369,7 +369,7 @@ def _visible_month(items: list[dict], spec: EvidenceSignal) -> bool:
 
 
 def _verify_planner_structure(items: list[dict], spec: EvidenceSignal) -> str:
-    """核验正文时刻条目、独立渠道详情及可见月份；不证明远端图片。"""
+    """核验录制中的详情结构；共享结构不代表另一个渠道已有发布回执。"""
     attrs = spec.attributes
     missing = [key for key in PLANNER_REQUIRED if not attrs.get(key)]
     if missing:
@@ -382,11 +382,14 @@ def _verify_planner_structure(items: list[dict], spec: EvidenceSignal) -> str:
     for channel in ("facebook", "instagram"):
         found = _channel_dialogs(items, spec, channel)
         if not found:
+            if (channel == 'instagram' and ids.get('facebook')
+                    and attrs.get('instagram_detail_basis') == 'shared_facebook_structure'):
+                continue
             return ("找不到 %s 的详情弹窗（要求同一串里含渠道标记 %r、目标账号"
                     " token 与 remote id）" % (
                         channel, attrs.get("%s_marker" % channel)))
         ids[channel] = {remote for _row, remote in found}
-    shared = ids["facebook"] & ids["instagram"]
+    shared = ids["facebook"] & ids.get("instagram", set())
     if shared:
         return ("FB 与 IG 读到同一个 remote id %s —— 两个渠道必须是两个独立"
                 "远端对象，相同说明渠道标记没有真正区分开"

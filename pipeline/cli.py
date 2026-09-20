@@ -28,7 +28,7 @@ from pipeline.settings import (AUTONOMY_LEVELS as AUTONOMY_LEVELS,      # noqa: 
                                pipeline_settings)
 from core import paid_requests                      # noqa: E402
 from core.heartbeat import HeartbeatSettings, heartbeat_status  # noqa: E402
-from publish.compose import probe_observation_gaps   # noqa: E402
+from publish.compose import require_probe_evidence   # noqa: E402
 from tools.schedule import (ALIVE_TASK, CATCHUP_TASK,  # noqa: E402
                             DAILY_TASK, SCHEDULER_TASK, _task_state)
 from publish.capabilities import checks as capability_checks  # noqa: E402
@@ -483,20 +483,6 @@ def run_status(dirs: list[Path], now: datetime | None = None,
 
 # 预检
 
-def _probe_observation_gaps() -> tuple[str, ...]:
-    """`ui_constraints_verified` 到底还差哪几个观察项。判据借 compose 的，不另写。"""
-
-    configured = cfg().get("publish", "ui_probe_dump", "")
-    if not isinstance(configured, str) or not configured.strip():
-        return ("[publish].ui_probe_dump 为空",)
-    path = ROOT / cfg().get('paths', 'state', 'state') / configured.strip()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return ("probe dump 读不了：%s" % exc,)
-    return probe_observation_gaps(data)
-
-
 def _publish_gate_states() -> list[tuple[str, bool, str]]:
     """复用 business_suite 发布校验；导入不启动浏览器。"""
     return [(item['name'], item['available'], item['reason'] or '证据已回查') for item in capability_checks()]
@@ -564,15 +550,16 @@ def run_preflight(days: int = 90, now: datetime | None = None) -> int:
         ready = ready and ok
         print("    %s %-22s %s" % ("[开]" if ok else "[关]", label, detail))
 
-    verified = cfg().get("publish", "ui_constraints_verified", False) is True
-    gaps = () if verified else _probe_observation_gaps()
+    try:
+        require_probe_evidence()
+        verified, detail = True, '控件录制已核验；UI 边界测量不阻塞，IG 共通结构沿用 FB。'
+    except ValueError as exc:
+        verified, detail = False, str(exc)
     ready = ready and verified
-    print("\n[2] [publish].ui_constraints_verified = %s" % str(verified).lower())
-    if not verified:
-        print("    还差 %d 个只能人亲眼量的观察项：" % len(gaps))
-        for key in gaps:
-            print("      - %s" % key)
-        print("    填法：docs/MANUAL_STEPS.md 第 8 节（probe_publish 的 --set-note）")
+    print("\n[2] G1 控件录制：%s（ui_constraints_verified = %s）" % (
+        '通过' if verified else '未通过',
+        str(cfg().get('publish', 'ui_constraints_verified', False)).lower()))
+    print("    %s" % detail)
 
     blockers = assisted.activation_blockers(state_dir)
     scheduled_refs = len(assisted.journal.scheduled_source_refs(state_dir))

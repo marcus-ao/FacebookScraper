@@ -395,7 +395,7 @@ with contextlib.redirect_stdout(out):
     code = P.run_preflight(days=7)
 text = out.getvalue()
 check("G6/G6c 三道发布校验" in text and "ui_constraints_verified" in text,
-      "预检覆盖发布证据闸与 14 个 UI 上限那一位")
+      "预检覆盖发布信号及已接受控件录制，不要求 UI 边界测量")
 check("G8 真机证据" in text and "激活边界" in text and "计划任务" in text,
       "预检覆盖 GO_LIVE 上剩下的每一步，不用人再去对照文档")
 check("会怎么走" in text and "不在图文发布范围" in text,

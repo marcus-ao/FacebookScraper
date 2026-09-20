@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
 from PIL import Image, UnidentifiedImageError
@@ -33,27 +33,6 @@ Platform = Literal["facebook", "instagram"]
 CaptionLengthMode = Literal["codepoints", "utf16_units", "utf8_bytes"]
 WarningSink = Callable[[str], None]
 
-_PROBE_REQUIRED_OBSERVATIONS = (
-    "business_suite_entry_url",
-    "ui_timezone",
-    "schedule_min_ahead",
-    "schedule_max_ahead",
-    "schedule_min_ahead_seconds",
-    "schedule_max_ahead_seconds",
-    "schedule_input_behavior",
-    "success_signal",
-    "instagram_min_aspect_ratio",
-    "instagram_max_aspect_ratio",
-    "instagram_max_images",
-    "instagram_max_caption_length",
-    "instagram_caption_length_mode",
-    "instagram_max_hashtags",
-    "instagram_aspect_ratio_rejection",
-    "instagram_image_count_rejection",
-    "instagram_caption_length_rejection",
-    "instagram_hashtag_rejection",
-)
-
 
 class ComposeError(ValueError):
     """待发帖未通过离线硬闸。"""
@@ -61,7 +40,7 @@ class ComposeError(ValueError):
 
 @dataclass(frozen=True)
 class InstagramConstraints:
-    """由 probe 注入的 UI 限制；None 表示未知，严格发布时拒绝缺失项。"""
+    """可选的实测限制；未测量的项目交给当次 Business Suite UI 校验。"""
 
     probe_dump: str
     min_aspect_ratio: float | None = None
@@ -105,37 +84,26 @@ class InstagramConstraints:
                     "codepoints", "utf16_units", "utf8_bytes"}):
             raise ValueError("未知正文计数方式：%s" % self.caption_length_mode)
 
-    def complete(self) -> bool:
-        """G0b 点名的四类约束是否都已有真实值。"""
-        return all(value is not None for value in (
-            self.min_aspect_ratio,
-            self.max_aspect_ratio,
-            self.max_images,
-            self.max_caption_length,
-            self.caption_length_mode,
-            self.max_hashtags,
-        ))
-
 
 @dataclass(frozen=True)
 class ScheduleWindow:
-    """G1 实测的 Business Suite UI 定时窗口。"""
+    """排期窗口；max_ahead=None 表示平台上限由当次 UI 校验。"""
 
     probe_dump: str
     min_ahead: timedelta
-    max_ahead: timedelta
+    max_ahead: timedelta | None
     # 窗口携带 UI 时区，用于月界判断。
     ui_timezone: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.probe_dump, str) or not self.probe_dump.strip():
             raise ValueError("定时窗口必须写明来自哪份 G1 probe dump")
-        if not isinstance(self.min_ahead, timedelta) or not isinstance(
-                self.max_ahead, timedelta):
+        if not isinstance(self.min_ahead, timedelta) or (self.max_ahead is not None
+                and not isinstance(self.max_ahead, timedelta)):
             raise ValueError("定时窗口上下限必须是 timedelta")
         if self.min_ahead < timedelta(0):
             raise ValueError("定时窗口下限不得为负数")
-        if self.max_ahead < self.min_ahead:
+        if self.max_ahead is not None and self.max_ahead < self.min_ahead:
             raise ValueError("定时窗口上限不得早于下限")
         if not isinstance(self.ui_timezone, str) or not self.ui_timezone.strip():
             raise ValueError("定时窗口必须写明 UI 时区；跨月上限只能在 UI 时区里判")
@@ -226,27 +194,17 @@ def _parse_probe_number(observations: dict, key: str, *, integer: bool):
         raise ComposeError("G1 probe 的 %s 不是有效实测数字：%r" % (key, raw)) from exc
 
 
-def probe_observation_gaps(data: dict) -> tuple[str, ...]:
-    """发布硬闸和只读报告共用必填观察项，不把录制完成当成人工复核。"""
-    observations = data.get('observations')
-    if not isinstance(observations, Mapping):
-        observations = {}
-    return tuple(key for key in _PROBE_REQUIRED_OBSERVATIONS
-                 if not isinstance(observations.get(key), str)
-                 or not observations[key].strip())
-
-
-def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
-    """严格发布只接受 config 明确审核过的真实、完整 G1 记录。"""
+def require_probe_evidence(probe_dumps: tuple[str, ...] = ()) -> dict:
+    """核验已审核的录制文件和浏览器角色，不要求人工测量 UI 边界。"""
     c = cfg()
     if c.get("publish", "ui_constraints_verified", False) is not True:
         raise ComposeError(
-            "[publish].ui_constraints_verified 仍为 false；必须先人工完成并复核 G1")
+            "[publish].ui_constraints_verified 仍为 false；尚未接受这份控件录制")
     configured = c.get("publish", "ui_probe_dump", "")
     if not isinstance(configured, str) or not configured.strip():
         raise ComposeError("[publish].ui_probe_dump 为空；严格发布不能伪造 G1 来源")
 
-    state_dir = Path(c.state_dir).resolve(strict=False)
+    state_dir = (PROJECT_ROOT / c.get('paths', 'state', 'state')).resolve(strict=False)
     expected = _probe_path(configured, state_dir)
     if (expected.parent != state_dir
             or not expected.name.startswith("publish_probe_")
@@ -275,17 +233,11 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
     if data.get("cdp_port") != c.publish_debug_port:
         raise ComposeError("G1 probe 不是从 [publish] 调试端口记录的")
     raw_profile = data.get("profile_dir")
+    # 录制可搬到另一台机器；核对专用 profile 身份，不绑定旧机器的用户名。
     if (not isinstance(raw_profile, str)
-            or os.path.normcase(str(Path(raw_profile).resolve(strict=False)))
-            != os.path.normcase(str(c.publish_profile_dir.resolve(strict=False)))):
+            or PureWindowsPath(raw_profile).name.casefold()
+            != c.publish_profile_dir.name.casefold()):
         raise ComposeError("G1 probe 不是从 [publish] 专用 profile 记录的")
-
-    observations = data.get("observations")
-    if not isinstance(observations, dict):
-        raise ComposeError("G1 probe 缺少人工观察记录")
-    missing = probe_observation_gaps(data)
-    if missing:
-        raise ComposeError("G1 probe 尚未完成必填观察：%s" % "、".join(missing))
 
     interactions = data.get("interactions")
     if not isinstance(interactions, list) or len(interactions) < 7:
@@ -348,56 +300,35 @@ def _validated_probe_dump(probe_dumps: tuple[str, ...]) -> dict:
 
 def verified_constraints_from_config(
         platform: Platform) -> tuple[InstagramConstraints, ScheduleWindow]:
-    """从配置指定且经人工复核的 dump 构建并校验发布约束。"""
+    """核验控件录制；未知 UI 限制不成为内容和排期的配置门槛。"""
     if platform not in {"facebook", "instagram"}:
         raise ComposeError("未知发布平台：%r" % platform)
-    data = _validated_probe_dump(())
-    observations = data["observations"]
+    require_probe_evidence()
     configured = str(cfg().get("publish", "ui_probe_dump", ""))
     ui_timezone = str(cfg().get("publish", "ui_timezone", "") or "").strip()
     if not ui_timezone:
         raise ComposeError(
             "[publish].ui_timezone 为空；跨月排期上限只能在 UI 时区里判，"
             "不填就没法确定排期落在 composer 日历的哪个月")
-    window = ScheduleWindow(
-        configured,
-        timedelta(seconds=_parse_probe_number(
-            observations, "schedule_min_ahead_seconds", integer=True)),
-        timedelta(seconds=_parse_probe_number(
-            observations, "schedule_max_ahead_seconds", integer=True)),
-        ui_timezone,
-    )
-    # 未明确单渠道约束时仍须核验 IG 限制，来源平台不能代替目标渠道。
-    limits = InstagramConstraints(
-        probe_dump=configured,
-        min_aspect_ratio=_parse_probe_number(
-            observations, "instagram_min_aspect_ratio", integer=False),
-        max_aspect_ratio=_parse_probe_number(
-            observations, "instagram_max_aspect_ratio", integer=False),
-        max_images=_parse_probe_number(
-            observations, "instagram_max_images", integer=True),
-        max_caption_length=_parse_probe_number(
-            observations, "instagram_max_caption_length", integer=True),
-        caption_length_mode=str(
-            observations["instagram_caption_length_mode"]),
-        max_hashtags=_parse_probe_number(
-            observations, "instagram_max_hashtags", integer=True),
-    )
+    resolve_ui_timezone(ui_timezone)
+    window = ScheduleWindow(configured, timedelta(0), None, ui_timezone)
+    limits = InstagramConstraints(probe_dump=configured)
     return limits, window
 
 
 def _match_probe_measurements(data: dict,
                               limits: InstagramConstraints | None,
-                              window: ScheduleWindow) -> None:
+                              window: ScheduleWindow | None) -> None:
     """注入值必须与 dump 里人工实测并复核的结构化值逐项一致。"""
-    observations = data["observations"]
-    observed_min_seconds = _parse_probe_number(
-        observations, "schedule_min_ahead_seconds", integer=True)
-    observed_max_seconds = _parse_probe_number(
-        observations, "schedule_max_ahead_seconds", integer=True)
-    if (window.min_ahead.total_seconds() != observed_min_seconds
-            or window.max_ahead.total_seconds() != observed_max_seconds):
-        raise ComposeError("注入的定时窗口与 G1 probe 实测秒数不一致")
+    observations = data.get("observations") or {}
+    if window is not None:
+        for key, actual in (("schedule_min_ahead_seconds", window.min_ahead),
+                            ("schedule_max_ahead_seconds", window.max_ahead)):
+            if actual is None or (key == 'schedule_min_ahead_seconds' and actual == timedelta(0)):
+                continue
+            observed = _parse_probe_number(observations, key, integer=True)
+            if actual.total_seconds() != observed:
+                raise ComposeError("注入的定时窗口与 G1 probe 实测秒数不一致")
     if limits is None:
         return
     numeric_pairs = (
@@ -408,6 +339,8 @@ def _match_probe_measurements(data: dict,
         ("instagram_max_hashtags", limits.max_hashtags, True),
     )
     for key, actual, integer in numeric_pairs:
+        if actual is None:
+            continue
         observed = _parse_probe_number(observations, key, integer=integer)
         if integer:
             matches = actual == observed
@@ -416,7 +349,8 @@ def _match_probe_measurements(data: dict,
                 float(actual), float(observed), rel_tol=1e-12, abs_tol=1e-12)
         if not matches:
             raise ComposeError("注入的 %s 与 G1 probe 实测值不一致" % key)
-    if limits.caption_length_mode != observations["instagram_caption_length_mode"]:
+    if (limits.caption_length_mode is not None
+            and limits.caption_length_mode != observations.get("instagram_caption_length_mode")):
         raise ComposeError("注入的 IG 正文计数方式与 G1 probe 不一致")
 
 
@@ -838,9 +772,11 @@ def _validate_schedule(post_id: str, scheduled_at: datetime,
     _aware(now, "now")
     delta = (scheduled_at.astimezone(timezone.utc)
              - now.astimezone(timezone.utc))
+    if delta <= timedelta(0):
+        raise _fail(post_id, "排期必须晚于当前时刻")
     if delta < window.min_ahead:
         raise _fail(post_id, "排期早于 G1 实测 UI 下限（%s）" % window.probe_dump)
-    if delta > window.max_ahead:
+    if window.max_ahead is not None and delta > window.max_ahead:
         raise _fail(post_id, "排期晚于 G1 实测 UI 上限（%s）" % window.probe_dump)
     _validate_schedule_month(post_id, scheduled_at, now, window.ui_timezone)
 
@@ -876,6 +812,7 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
         raise _fail(post_id, "post.json 的 platform/account 与账号归档目录不一致")
 
     if require_verified_ui_constraints:
+        supplied_limits, supplied_window = instagram_constraints, schedule_window
         if schedule_window is None or instagram_constraints is None:
             configured_limits, configured_window = (
                 verified_constraints_from_config(source_platform))
@@ -884,12 +821,12 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
         if schedule_window is None:  # 类型与失败闭合的双保险
             raise _fail(post_id, "严格发布缺少 G1 实测定时窗口")
         probe_sources = [schedule_window.probe_dump]
-        if instagram_constraints is None or not instagram_constraints.complete():
-            raise _fail(post_id, "严格发布缺少 G1 的四类完整 IG 实测约束")
-        verified_limits = instagram_constraints
-        probe_sources.append(instagram_constraints.probe_dump)
-        probe_data = _validated_probe_dump(tuple(probe_sources))
-        _match_probe_measurements(probe_data, verified_limits, schedule_window)
+        if instagram_constraints is not None:
+            probe_sources.append(instagram_constraints.probe_dump)
+        probe_data = require_probe_evidence(tuple(probe_sources))
+        # 兼容显式注入的旧实测契约；默认路径不要求、不推测这些数字。
+        if supplied_window is not None or supplied_limits is not None:
+            _match_probe_measurements(probe_data, supplied_limits, supplied_window)
 
     text_de = _load_current_translation(arc, source)
     original_text_de = text_de
@@ -913,28 +850,10 @@ def compose_post(post_id: str, scheduled_at: datetime, *,
             % ("、".join("第 %d 张" % (index + 1) for index in missing),
                "\n".join(commands)))
 
-    # 当前发布目标固定包含 Instagram；来源为 Facebook 也不能跳过这道限制。
-    if instagram_constraints is None:
-        message = ("IG 画幅/图片数/正文长度/标签数尚无 G1 实测值；"
-                   "非严格模式会照常往下走，composer 可能自己拒。"
-                   "要在碰浏览器之前拦住，用 --strict")
-        if require_verified_ui_constraints:
-            raise _fail(post_id, message)
-        warnings.append(message)
-    else:
-        if require_verified_ui_constraints and not instagram_constraints.complete():
-            raise _fail(post_id, "IG 约束不完整；必须补齐 G1 的四类实测值")
+    if source_platform == 'instagram' and instagram_constraints is not None:
         _validate_instagram(post_id, text_de, dimensions, instagram_constraints)
 
-    if schedule_window is None:
-        # Graph API 上限不能当作 Business Suite UI 实测约束。
-        message = ("定时窗口尚无 G1 实测值；config.toml 的 10 分钟/75 天只是 API 占位，"
-                   "代码不会拿它们当 Business Suite UI 事实 —— "
-                   "排的时刻是否落在 UI 允许的窗口内，目前只能你自己看")
-        if require_verified_ui_constraints:
-            raise _fail(post_id, message)
-        warnings.append(message)
-    else:
+    if schedule_window is not None:
         _validate_schedule(
             post_id, scheduled_at, schedule_window,
             now or datetime.now(timezone.utc))

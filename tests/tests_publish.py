@@ -257,6 +257,7 @@ class VerifiedProbeConfig:
 
     def get(self, section, key, default=None):
         values = {
+            ("paths", "state"): str(self.state_dir),
             ("publish", "ui_constraints_verified"): self._verified,
             ("publish", "ui_probe_dump"): str(self._dump),
             ("publish", "require_all_media_de"): False,
@@ -411,8 +412,8 @@ with tempfile.TemporaryDirectory() as d:
           "compose 调用本身也把原作者告警送到输出")
     check(post.scheduled_at is WHEN,
           "排期保留调用方显式时区，不做本机隐式转换")
-    check(any("G1" in warning for warning in post.warnings),
-          "尚无 UI 实测约束时不假绿，明确记录 G1 仍待完成")
+    check(not any("G1" in warning for warning in post.warnings),
+          "未测量的 UI 边界不再制造 G1 阻塞警告")
 
 
 print("\n[] compose 的用户入口：tools/compose_publish.py")
@@ -790,20 +791,17 @@ with tempfile.TemporaryDirectory() as d:
         auto_post = compose_post(
             "fixture-post", WHEN, archive_root=root, now=NOW,
             require_verified_ui_constraints=True, warning_sink=None)
-        fb_target_ig_blocked = raises(
-            ComposeError,
-            lambda: compose_post(
+        fb_post = compose_post(
                 "fixture-fb-too-many", WHEN, archive_root=root, now=NOW,
-                require_verified_ui_constraints=True, warning_sink=None),
-            "图片数")
+                require_verified_ui_constraints=True, warning_sink=None)
     finally:
         compose_module.cfg = original_cfg
     check(len(post.image_paths) == 2,
           "审核过且数值一致的完整 probe 才能严格组装，空白可选 FB slug 不阻塞")
     check(len(auto_post.image_paths) == 2,
-          "strict 模式会从 config 审核的 dump 自动构造窗口/IG 约束，不再要求 CLI 手工注入")
-    check(fb_target_ig_blocked,
-          "FB canonical 仍会同时发到 IG，因此严格发布不能按来源平台绕过 IG 图片上限")
+          "strict 模式核验控件证据，不再要求 CLI 手工注入 UI 边界")
+    check(len(fb_post.image_paths) == 6,
+          "独立 FB 帖子不受旧 IG 人工图片上限影响")
     check(not any("尚无 G1" in item or "只是 API 占位" in item
                   for item in post.warnings),
           "严格组装不再携带『约束未知』假绿警告")

@@ -25,6 +25,27 @@ def inventory(*entries, start=date(2026, 9, 1), end=date(2026, 9, 30)):
 
 
 class PlanningTests(unittest.TestCase):
+    def test_unmeasured_platform_window_uses_beijing_month_without_inventing_limits(self):
+        now = datetime.fromisoformat('2026-09-01T10:00:00+08:00')
+        window = ScheduleWindow('accepted-probe', timedelta(0), None, 'Asia/Shanghai')
+        rows = RemoteSlotInventory((), 'Asia/Shanghai', date(2026, 9, 1), date(2026, 9, 30),
+                                   cards=(), cards_loaded=True)
+        bounds = calendar_bounds(now, window=window)
+        self.assertEqual(bounds.earliest, now)
+        self.assertEqual(bounds.end_exclusive, datetime.fromisoformat('2026-10-01T00:00:00+08:00'))
+        for target in (now + timedelta(minutes=1), now + timedelta(days=29, hours=5)):
+            self.assertTrue(evaluate_slot(target, 'facebook', rows, now=now, window=window).allowed)
+        self.assertFalse(evaluate_slot(now, 'facebook', rows, now=now, window=window).allowed)
+
+        target = now + timedelta(minutes=90)
+        occupied = RemotePlannerCard(at=target, channels=('facebook',), rendered='fixture')
+        rows = RemoteSlotInventory((target,), 'Asia/Shanghai', date(2026, 9, 1), date(2026, 9, 30),
+                                   cards=(occupied,), cards_loaded=True)
+        result = evaluate_slot(target, 'facebook', rows, now=now, window=window)
+        self.assertEqual(len(result.suggestions), 3)
+        for suggestion in result.suggestions:
+            self.assertTrue(evaluate_slot(suggestion, 'facebook', rows, now=now, window=window).allowed)
+
     def test_configured_window_reuses_verified_local_probe_and_preserves_missing_evidence(self):
         with patch("publish.planning.verified_constraints_from_config", return_value=(None, WINDOW)) as load:
             self.assertEqual(configured_window("facebook"), WINDOW)

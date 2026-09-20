@@ -527,7 +527,7 @@ def _derive_visible_month(data: dict, after_order: int
 def derive_planner_card(data: dict, dump: str, facebook: str,
                         instagram: str, caption_hint: str = "",
                         after_order: int = 0) -> Derived:
-    """真实 Planner 的排期证据：条目 + 两个渠道弹窗 + 可见月份。"""
+    """从实际条目、详情和月份推导结构，IG 可复用已接受的 FB 共通结构。"""
     if not _norm(caption_hint):
         return Derived(
             "planner_scheduled_card", False,
@@ -548,6 +548,8 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
     for channel, token in (("facebook", facebook), ("instagram", instagram)):
         found = _derive_channel_dialog(data, channel, token, after_order)
         if found is None:
+            if channel == 'instagram' and 'facebook' in dialogs:
+                continue
             return Derived(
                 "planner_scheduled_card", False,
                 "找不到 %s 的详情弹窗（要能同时读到 %r 与 ID: <数字>）"
@@ -564,8 +566,9 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
             how="补录时保持日历页面停留久一点，让月份标题渲染出来。")
     month_seq, month_role, month_fmt, year_role, year_fmt = month
     sequences = tuple(sorted({entry_seq, month_seq,
-                              dialogs["facebook"][0],
-                              dialogs["instagram"][0]}))
+                              *(dialog[0] for dialog in dialogs.values())}))
+    instagram_marker = (dialogs['instagram'][3] if 'instagram' in dialogs
+                        else _CHANNEL_MARKERS['instagram'][0])
     spec = EvidenceSignal(
         key="planner_scheduled_card",
         step="G6c 排期回读（推导自 v2 被动语义）",
@@ -585,8 +588,10 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
             "remote_id_regex": _REMOTE_ID_REGEX,
             "facebook_marker": dialogs["facebook"][3],
             "facebook_account_token": facebook,
-            "instagram_marker": dialogs["instagram"][3],
+            "instagram_marker": instagram_marker,
             "instagram_account_token": instagram,
+            "instagram_detail_basis": ('recorded' if 'instagram' in dialogs
+                                       else 'shared_facebook_structure'),
             "visible_month_role": month_role,
             "visible_month_format": month_fmt,
             "visible_year_role": year_role,
@@ -594,9 +599,11 @@ def derive_planner_card(data: dict, dump: str, facebook: str,
         })
     return Derived(
         "planner_scheduled_card", True,
-        "条目第 %d 条快照 · %s/%r；FB 弹窗第 %d 条 · IG 弹窗第 %d 条 · "
+        "条目第 %d 条快照 · %s/%r；FB 弹窗第 %d 条 · IG %s · "
         "月份第 %d 条" % (entry_seq, entry_role, sample,
-                          dialogs["facebook"][0], dialogs["instagram"][0],
+                          dialogs["facebook"][0],
+                          ('弹窗第 %d 条' % dialogs['instagram'][0] if 'instagram' in dialogs
+                           else '按用户确认复用 FB 详情结构；不声明 IG 历史排期成功'),
                           month_seq),
         spec,
         warnings=("entry_probe_text 用的是这次测试帖的正文片段，只是"
@@ -781,7 +788,7 @@ def emit(results: list[Derived], dump: str, target: Path) -> None:
     text = "".join(body)
     compile(text, str(target), "exec")            # 写之前先证明它能解析
     tmp = target.with_suffix(".py.tmp")
-    tmp.write_text(text, encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8", newline="")
     tmp.replace(target)
 
 
@@ -937,14 +944,9 @@ def main(argv: list[str] | None = None) -> int:
     print("  [OK] %s · %d 条交互 / %d 条被动快照"
           % (source.name, len(data["interactions"]), len(data["snapshots"])))
 
-    from publish.compose import probe_observation_gaps
-    missing_observations = probe_observation_gaps(data)
-    print("\n=== G1 人工观察项 ===")
-    if missing_observations:
-        print("  [缺] %s" % "、".join(missing_observations))
-        print("  使用 --fill-notes <dump> 填写实测记录；不能以录制完成代替审核。")
-    else:
-        print("  [OK] 必填项已填写；数值、时区、profile 与配置签字仍由发布预检校验。")
+    print("\n=== G1 验收范围 ===")
+    print("  UI 边界测量为可选审计资料，observations 为空不阻塞。")
+    print("  IG 允许复用 FB 共通详情结构；每次实际提交仍须独立回读账号、渠道、正文和 ID。")
 
     if args.report:
         report(data, facebook, instagram)
@@ -956,20 +958,19 @@ def main(argv: list[str] | None = None) -> int:
     checks = verify_derived(results, dumps_dir)
     ok = _print_results(results, checks)
 
-    if not ok or (args.check and missing_observations):
+    if not ok:
         print("⛔ 发布证据尚不完整；不能据此开启生产发布。")
         print("   先核对缺项：正文提示可用 --caption 补充，缺少的实际证据再补录。")
         return 1
     if args.check:
-        print("五项信号已回查，人工观察项已填写；这不是完整生产验收。下一步：")
+        print("G1 共通控件与五项结构信号已回查；这不是各渠道真实发布验收。下一步：")
         print("   保留本次命令的 dump、--caption 和 --success-name，将 --check 改为 --emit。")
         print("   然后运行 scripts\\run_pipeline.bat preflight 核对全部发布条件。")
         return 0
 
     emit(results, source.name, GENERATED)
     print("✅ 已写 %s" % GENERATED.relative_to(ROOT))
-    print("   完成人工约束复核后，把 config.toml 的 [publish].ui_probe_dump 填成")
-    print("   %s —— 那是人工审核这份证据的签字栏，程序不替你填。" % source.name)
+    print("   [publish].ui_probe_dump 应指向 %s；不需要补录 UI 边界。" % source.name)
     return 0
 
 

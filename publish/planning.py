@@ -50,7 +50,7 @@ def audience_local(target: datetime) -> dict:
 
 
 def configured_window(platform: str) -> ScheduleWindow:
-    """复用本地已录证窗口；缺 dump/实测值时保持异常，供日期控件说明不可用。"""
+    """使用已确认的 UI 时区；平台提前量上限交给实际排期界面。"""
     return verified_constraints_from_config(platform)[1]
 
 
@@ -61,8 +61,10 @@ def calendar_bounds(now: datetime, *, window: ScheduleWindow) -> CalendarBounds:
     start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     end = start.replace(year=start.year + (start.month == 12), month=start.month % 12 + 1)
     start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
-    return CalendarBounds(max(start, utc_now + window.min_ahead),
-                          min(end - timedelta(microseconds=1), utc_now + window.max_ahead),
+    latest = end - timedelta(microseconds=1)
+    if window.max_ahead is not None:
+        latest = min(latest, utc_now + window.max_ahead)
+    return CalendarBounds(max(start, utc_now + window.min_ahead), latest,
                           start, end, window.ui_timezone)
 
 
@@ -83,7 +85,7 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
     bounds = calendar_bounds(now, window=window)
     if not bounds.start_inclusive <= utc_target < bounds.end_exclusive:
         return SlotDecision(False, "outside_ui_month")
-    if not bounds.earliest <= utc_target <= bounds.latest:
+    if utc_target <= aware_utc(now) or not bounds.earliest <= utc_target <= bounds.latest:
         return SlotDecision(False, "outside_window")
     if ui_time_is_ambiguous(utc_target, window.ui_timezone):
         return SlotDecision(False, "ambiguous_ui_time")
@@ -111,7 +113,8 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
     for distance in range(int(horizon.total_seconds() // 60) + 2):
         for sign in ((1,) if distance == 0 else (1, -1)):
             candidate = anchor + timedelta(minutes=sign * distance)
-            if (not bounds.earliest <= candidate <= bounds.latest or not covered(candidate)
+            if (candidate <= aware_utc(now)
+                    or not bounds.earliest <= candidate <= bounds.latest or not covered(candidate)
                     or any(abs(candidate - at) < gap for at in (*occupied, *suggestions))
                     or ui_time_is_ambiguous(candidate, window.ui_timezone)):
                 continue
