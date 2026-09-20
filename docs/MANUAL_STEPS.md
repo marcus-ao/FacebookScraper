@@ -1,6 +1,6 @@
 # 人工操作指南
 
-**2026-09-20 试运营上线。服务机已装好，这一轮的动作是：拉取当前 `main` 并重启 → 复验 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) 那张表 → 人工重新回填 FB 原图（[第 4 节](#4-为当前目标建立归档)）→ 四机器人在服务机自检（[§2.1](#21-配置同群四个机器人)）→ 72 小时试运行（[第 14 节](#14-阶段一真实验收监测与原帖抓取)，不带 `--process`）。** 打开内容处理另有四条硬前置（[§14.1](#141-打开内容处理抓到就翻译和出图)），真实排期还要先录发布证据（[第 8 节](#8-录制单渠道-business-suite-证据)、[第 16 节](#16-阶段三真实验收冻结排期与自动发布)）。
+**2026-09-20 试运营上线。服务机已装好，这一轮的动作是：先只读数抓取积压（[§2.1](#21-配置同群四个机器人)）→ 拉取含 `[feishu].enabled = true` 的 `main` 并重启 → 复验 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) 那张表 → 人工重新回填 FB 原图（[第 4 节](#4-为当前目标建立归档)）→ 四机器人在服务机自检（[§2.1](#21-配置同群四个机器人)）→ 写入外部看门狗 `HEARTBEAT_URL`（[§2.2](#22-外部心跳)，不是审校台网址）→ 72 小时试运行（[第 14 节](#14-阶段一真实验收监测与原帖抓取)，不带 `--process`）。** ⛔ **拉代码不会改 `control/host.json`，也不会把 Web 部署到 `10.66.4.9`；办公入口以实例 host.json 为准。** 打开内容处理另有四条硬前置（[§14.1](#141-打开内容处理抓到就翻译和出图)），真实排期还要先录发布证据（[第 8 节](#8-录制单渠道-business-suite-证据)、[第 16 节](#16-阶段三真实验收冻结排期与自动发布)）。日历、云盘镜像、标签热度本轮仍关着。
 
 1–13 节是分主题的长期参考，第 14–17 节是排成顺序的现场流程。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。
 
@@ -45,6 +45,7 @@
 | `FEISHU_WEBHOOK_PUBLISH` | 新帖发布推送机器人：待审、排期成功 |
 | `FEISHU_WEBHOOK_ALERT` | 状态告警推送机器人：积压、排期失败、晨间摘要、系统异常 |
 | 上述变量各加 `_SECRET` | 对应机器人的签名密钥。不填就必须在该机器人配置关键词 |
+| `HEARTBEAT_URL` | 外部缺席告警接收地址，必须 HTTPS；不写进 `config.toml` |
 
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
@@ -53,14 +54,22 @@
 
 ### 2.1 配置同群四个机器人
 
-用户已建好四个机器人。逐个核对现有机器人即可，不重复创建：
+用户已建好四个机器人。逐个核对现有机器人即可，不重复创建。`config.toml` 里 `[feishu].enabled` 已经是 `true`。
+
+⛔ **服务机第一次加载这份配置之前，先只读数积压，不要重启。** 飞书关闭期间抓取事件不会被确认；重启后下一轮维护会按扫描把 `acknowledged=false` 的事件一次性入队。在服务机业务目录执行：
+
+```powershell
+scripts\run_python.bat -c "import json; from pathlib import Path; from core.config import cfg; p = cfg().state_dir / 'capture_state.json'; data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}; events = [e for e in (data.get('events') or {}).values() if isinstance(e, dict) and e.get('acknowledged') is False]; scans = {e.get('scan_id') for e in events}; print('unacknowledged_events', len(events)); print('scans', len(scans))"
+```
+
+记下事件数和扫描数。文件不存在则积压为 0。这是只读，不要改 `capture_state.json`。数完再拉代码、停旧 Web、用 `scripts\run_web.bat` 重启。
 
 1. 进入同一业务群 → 群设置 → 群机器人，分别打开四个自定义机器人；
 2. 核对名称为「新帖检测推送机器人」「新帖爬取推送机器人」「新帖发布推送机器人」「状态告警推送机器人」，与上表对应；
 3. 安全设置里勾**签名校验**，把密钥和 webhook 地址一起抄下来。两种校验的区别：
    - **签名校验**（推荐）：和卡片内容无关，改文案不会失效；
    - **关键词**：卡片里必须出现该词。要用就设成 `Neakasa`（当前卡片标题里有），但请记住这个约束只写在群设置里，**以后改标题会静默失效**；
-4. 四个地址及各自签名密钥填进实际运行绑定的 `.env`。`FEISHU_WEBHOOK_OPS/TECH` 已停用，不能把一个旧地址复制到多个新角色。然后人工自检——这一步会**由四个机器人各发一条消息**：
+4. 四个地址及各自签名密钥填进**服务机**实际运行绑定的 `.env`。`FEISHU_WEBHOOK_OPS/TECH` 已停用，不能把一个旧地址复制到多个新角色。然后在**服务机**人工自检——这一步会**由四个机器人各发一条消息**：
 
 ```powershell
 scripts\run_python.bat -m pipeline notifications --self-test
@@ -79,6 +88,16 @@ scripts\run_python.bat -m pipeline notifications
 **未知结果不自动重发。** 超时、5xx、响应无法解析或进程中断会留在 `uncertain`。在群里核对机器人、扫描时刻和内容，再按 delivery ID 与当前 version 登记；已送达填核对说明，确认未送达才恢复。明确限流或拒绝的请求会退避 15 分钟。不要删除发件箱或更改角色来“重试”。
 
 旧发件箱会在写入投递流程时升级为版本 2：已送达记录保留旧角色且不重发；从未尝试的记录转当前阶段；旧未知结果先核对。确认旧通道未送达后，有效内容才转当前机器人，原卡与旧 ID 保留；部分过期卡只补仍有效的内容。当前主工作区在本轮整合前没有 `feishu_outbox.json`，升级行为由隔离夹具验证。
+
+⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`。** 飞书开关是共享的，四个 webhook 是真的，会往业务群发卡片。
+
+### 2.2 外部心跳
+
+`[heartbeat].enabled` 已经是 `true`。调度进程每隔 `interval_minutes` 对 `HEARTBEAT_URL` 发一次空 HTTPS POST；缺席由外部服务告警，本机飞书在关机时帮不上忙。
+
+1. 在外部心跳服务建一个检查，过期阈值按 `stale_after_minutes`（默认 45）设；
+2. 把 HTTPS 地址写入**服务机** `.env` 的 `HEARTBEAT_URL`。地址可能带 token，不要贴进 config、截图、日志或版本库；
+3. 没配时进程不崩，状态记 `missing_url`，外部观察者收不到心跳。配错成 HTTP 或带用户名密码时记 `invalid_url`。
 
 ## 3. 登录三个专用 Chrome
 

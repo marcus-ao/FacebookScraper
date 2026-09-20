@@ -1,6 +1,6 @@
 # 项目交接
 
-**现场同步至 2026-09-19，代码基点 `f05f8bb`。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
+**现场同步至 2026-09-20。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
 
@@ -12,7 +12,7 @@
 
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
-**外部依赖缺口。** 四个群机器人已由用户建好并确认分工，但 `[feishu].enabled` 仍是 `false`，翻开关前先读 §1.1 末尾那两条。外部心跳未启用。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。
+**外部依赖。** `[feishu].enabled = true`，非受管 `base_url` 为 `http://10.66.4.9:8765`；服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度、`ui_constraints_verified` 仍关着，不是漏开。
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
@@ -29,11 +29,11 @@
 | 审校台 | 用过。减少动画偏好下三点菜单跑到 `y=-7296`，已修；当时服务机在跑修复前的 CSS，启动脚本已补构建步骤 |
 | 仍未解决 | `/api/refinements/task/...` 返回 500。本机 FB/IG 隔离样例都是 200，未复现；需要服务机 Python 日志里该请求的 Traceback 末尾、异常类型和错误说明，遮去密钥 |
 
-上线前按顺序做：服务机拉 `main` 并正常停旧 Web 后重启 → 复验上表六项 → 人工重新回填 FB 原图 → 四机器人在**服务机**自检（2026-09-15 那次在开发机上做的，不算）→ 72 小时试运行且不带 `--process`。打开 `--process` 的四条硬前置见 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图)。
+上线前按顺序做：服务机先只读数抓取积压 → 拉含这份配置的 `main` 并正常停旧 Web 后重启（必须走 `scripts/run_web.bat`）→ 复验上表六项 → 人工重新回填 FB 原图 → 四机器人在**服务机**自检（2026-09-15 那次在开发机上做的，不算）→ 写入 `HEARTBEAT_URL` → 72 小时试运行且不带 `--process`。打开 `--process` 的四条硬前置见 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图)。
 
-⚠️ **翻 `[feishu].enabled` 之前先只读数一遍积压。** 抓取事件在落档时就以 `acknowledged=false` 写进 `capture_state.json`，而负责确认它们的 `enqueue_capture_results()` 在飞书关闭时第一行就返回。开关一翻，下一轮维护会把积压事件一次性入队。
+⚠️ **`[feishu].enabled` 已经是 `true`。** 抓取事件在落档时就以 `acknowledged=false` 写进 `capture_state.json`，飞书关闭时 `enqueue_capture_results()` 第一行就返回、不会确认它们。服务机第一次加载这份配置（拉代码并重启）之后，下一轮维护会把积压事件按扫描一次性入队。只读数一遍的步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 
-⚠️ **没有「只在服务机开飞书」这个选项。** `config.local.toml` 被白名单锁定，只能绑 `[paths]` 与 `[runtime]`，两台机器共用同一份 `config.toml`。而 `enabled = true` 会校验 `[feishu].base_url`，开发机读到空串就让所有飞书入口抛错；服务机设了 `FBSCRAPER_CONTROL_DIR`，走 `control/host.json` 的 `public_base_url` 不受影响。
+⚠️ **没有「只在服务机开飞书」这个选项。** `config.local.toml` 被白名单锁定，只能绑 `[paths]` 与 `[runtime]`，两台机器共用同一份 `config.toml`。非受管入口读 `[feishu].base_url`；服务机设了 `FBSCRAPER_CONTROL_DIR`，卡片链接走 `control/host.json` 的 `public_base_url`。⛔ **`[feishu].base_url` 不是监听地址**，`git pull` 也不会改 `host.json`。⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`**——四个 webhook 是真的，会往业务群发卡片。
 
 ### 1.2 已交付修复留下的硬约束
 
@@ -63,7 +63,7 @@
 
 `state/` 不随 Git 提交，本文的相对链接从主检出解析。⛔ **清理任何 worktree 之前，先确认它引用的证据不是只存在于那一个 worktree 里**——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。
 
-2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场），另有 **36 条只存在于 `ci-browser-shutdown`、`instagram-single-image-completeness`、`review-menu-position`、`review-section-confirmations` 四个工作树**，尚未复制到主检出。本节改写时移除了这些指向取不到文件的链接。要重新引用，先把证据复制到主检出 `state/` 同名目录并按 SHA-256 核对。
+2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。`review-section-confirmations` 仍在，未纳入那次清理。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
 
 ## 2. 红线
 
@@ -111,7 +111,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 **联调素材只有半份。** 服务机 IG 有 21 篇归档，FB 那批图文帖还缺原图；开发机归档为空，出不了素材。两篇具体内容的准备见 [MANUAL_STEPS §9](MANUAL_STEPS.md#9-真实发布前的最终确认)。
 
-**没有异地备份，也没有外部心跳。** 两条都在 §1 写了，都是本轮明确接受的敞口。
+**没有异地备份。** `[heartbeat].enabled` 已开，还缺服务机 `.env` 的 `HEARTBEAT_URL`；没配时只记 `missing_url`，外部观察者收不到心跳。云盘镜像仍延期，备份只能靠人外拷（§1）。
 
 **一个业务前置没动：** IG 的 bio 聚合页还没建，`[publish].ig_bio_url` 是空的，链接区显示「未配置」。见 [MANUAL_STEPS §6.1](MANUAL_STEPS.md#61-上线前的一个业务前置ig-的-bio-聚合页)。
 

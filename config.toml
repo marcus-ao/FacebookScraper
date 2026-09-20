@@ -211,8 +211,13 @@ snooze_default_days = 3  # 上海工作日，按周一至周五计。
 # 同一业务群按 detect/capture/publish/alert 四个阶段角色投递。
 # 四个机器人地址与各自签名密钥只在本机 .env（见 MANUAL_STEPS 第 2 节）。
 # FEISHU_APP_ID / FEISHU_APP_SECRET 现在只给 [mirror] 的云盘用，不参与发消息。
-enabled = false
-base_url = ""  # 非受管入口；受管通知使用 host.json 的 public_base_url。URL 不含凭据、查询参数或锚点。
+# ⛔ enabled 已开：服务机第一次加载这份配置之前，先只读数 capture_state.json 里
+# acknowledged=false 的事件；下一轮维护会按扫描把它们一次性入队。
+enabled = true
+# 非受管卡片里的审校台链接。⚠️ 它不绑定监听地址，git pull / 更新运行包也不会改
+# 服务机 control/host.json。受管实例读 host.json 的 public_base_url
+#（安装模板 ops/service-machine.network.json）。URL 不含凭据、查询参数或锚点。
+base_url = "http://10.66.4.9:8765"
 scan_reports = true  # 每轮的发现与落档卡分别由检测、爬取机器人发送；无新帖不推。
 keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 
@@ -240,8 +245,10 @@ Magic1 = ["NeakasaMagic1"]
 Riko = ["RIKO"]
 
 [heartbeat]
-enabled = false
-url_env = "HEARTBEAT_URL"  # 心跳地址的环境变量名；缺席告警由外部服务负责。
+# 开关已开。HEARTBEAT_URL 是外部看门狗的 HTTPS ping 地址（healthchecks.io 一类），
+# 不是审校台 http://10.66.4.9:8765。没配时 tick 记 missing_url，不崩进程。
+enabled = true
+url_env = "HEARTBEAT_URL"  # 心跳地址的环境变量名；缺席告警由外部服务负责。URL 不写入本文件。
 interval_minutes = 5
 timeout_seconds = 3
 stale_after_minutes = 45  # 外部心跳缺席阈值，不代表内容处理成功。
