@@ -9,9 +9,9 @@ import re
 import sys
 import unittest
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,6 +126,76 @@ class BrowserWorkflowTests(unittest.TestCase):
             self.page.get_by_role("button", name="保存", exact=True).click()
         self.assertEqual(result.value.status, 200, result.value.text())
         expect(self.page.get_by_role("button", name="编辑德语", exact=True)).to_be_visible()
+
+    def test_12_review_lists_show_newest_sources_before_older_posts(self):
+        """Real API + React: all platform queues, paging and adjacent navigation."""
+        from core import review, translated
+        from core.store import Archive, Media, Post
+
+        base = (datetime.now(timezone.utc) - timedelta(days=2)).replace(microsecond=0)
+        queues = [('review', 'pending_review'), ('not_ready', 'not_ready'),
+                  ('snoozed', 'snoozed'), ('processed', 'skipped')]
+        expected = {}
+        for platform_index, (platform, account, owner) in enumerate([
+                ('facebook', 'fa_neakasaofficial', 'neakasaofficial'),
+                ('instagram', 'in_neakasa.global', 'neakasa.global')]):
+            archive = Archive(self.fixtures.root / 'archive', account)
+            for queue_index, (queue, status) in enumerate(queues):
+                ids = {}
+                # Neither insertion order nor IDs represent publication order.
+                for age_index, suffix in [(1, '9'), (0, '8'), (2, '7')]:
+                    moment = base + timedelta(hours=age_index)
+                    if age_index == 2:
+                        moment = moment.astimezone(timezone(timedelta(hours=-7)))
+                    post_id = f'880{platform_index}{queue_index}{suffix}'
+                    source_text = 'Offline ordering fixture ' + post_id
+                    archive.append(Post(post_id, platform, owner, source_text,
+                                        moment.isoformat(), owner=owner, tags=['OrderFixture'],
+                                        media=[Media('https://example.invalid/order.jpg', 'image')]))
+                    source = next(row for row in archive.rows() if row['post_id'] == post_id)
+                    ids[age_index] = account + '/' + post_id
+                    digest = translated.source_text_sha256(source_text)
+                    if status != 'not_ready':
+                        with (archive.base / 'translated.jsonl').open('a', encoding='utf-8') as stream:
+                            stream.write(json.dumps({'post_id': post_id, 'text_de': 'Sortierprobe ' + post_id,
+                                'model': 'offline-fixture', 'prompt_version': translated.PROMPT_VERSION,
+                                'translated_at': base.isoformat(), 'source_text_sha256': digest}) + '\n')
+                    if status in {'snoozed', 'skipped'}:
+                        review.transition(archive.base, source, status, expected_revision=None,
+                                          expected_source_sha256=digest, reason='Offline ordering fixture')
+                expected[(platform, queue)] = [ids[2], ids[1], ids[0]]
+
+        for platform in ('facebook', 'instagram'):
+            for queue, status in queues:
+                with self.subTest(platform=platform, queue=queue):
+                    ids = expected[(platform, queue)]
+                    params = {'platform': platform, 'tag': 'OrderFixture', 'status': status}
+                    response = self.fixtures.client.get('/api/tasks', params=params)
+                    self.assertEqual(response.status_code, 200)
+                    rows = response.json()['tasks']
+                    self.assertEqual([row['id'] for row in rows], ids)
+                    if queue == 'review':
+                        # Existing oldest-first slot allocation survives the display change.
+                        slots = [row['schedule']['at'] for row in reversed(rows)]
+                        self.assertEqual(slots, sorted(slots))
+                        self.assertEqual(len(set(slots)), 3)
+                    for page, task_id in enumerate(ids, 1):
+                        payload = self.fixtures.client.get('/api/tasks', params={**params, 'page': page, 'limit': 1}).json()
+                        self.assertEqual(payload['pagination']['total'], 3)
+                        self.assertEqual([row['id'] for row in payload['tasks']], [task_id])
+
+                    search = urlencode({'queue': queue, 'tag': 'OrderFixture'})
+                    self.page.goto(self.fixtures.base_url + '/review/' + platform + '?' + search)
+                    table_rows = self.page.locator('tr[data-task-id]')
+                    expect(table_rows).to_have_count(3)
+                    self.assertEqual(table_rows.evaluate_all("rows => rows.map(row => row.dataset.taskId)"), ids)
+                    self.page.screenshot(path=str(self.artifacts / f'order-{platform}-{queue}.png'), full_page=True)
+                    table_rows.first.click()
+                    expect(self.page.get_by_role('button', name='上一篇', exact=True)).to_be_disabled()
+                    self.page.get_by_role('button', name='下一篇', exact=True).click()
+                    expect(self.page).to_have_url(re.compile('/review/' + re.escape(ids[1]) + r'\?'))
+                    self.page.get_by_role('button', name='上一篇', exact=True).click()
+                    expect(self.page).to_have_url(re.compile('/review/' + re.escape(ids[0]) + r'\?'))
 
     def test_11_refinement_rejection_explains_cause_and_refresh_clears_only_after_success(self):
         endpoint = '/api/refinements/task/' + self.fixtures.ig_id

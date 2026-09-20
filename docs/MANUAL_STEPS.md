@@ -594,6 +594,8 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 ## 13. 更新并启动审校台
 
+Facebook、Instagram 待审核入口的四个子分类均按原帖发布时间从新到旧排列。更新后各选取不同发布时间的帖子，核对列表、分类／月份筛选及详情“上一篇／下一篇”顺序；表格中的“时刻 · 柏林”仍表示候选或已有排期，不作为列表排序依据。
+
 “话题标签与链接”页的两个分区均可直接勾选确认，无须先点“编辑德语”；等待“确认已保存”后，刷新应仍保持勾选。Facebook 先打开检查各落地页，再确认整个链接区；Instagram 核对引导语，也可确认“无链接／不添加引导语”。编辑标签、落地页或引导语会取消相应分区确认，随草稿保存。旧记录升级后，有链接或引导语的帖子须补一次分区确认；保存失败不算确认成功，版本冲突时载入最新内容后重新核对；正文版本已过期时，先进入“编辑德语”复核并保存正文。
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。

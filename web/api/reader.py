@@ -294,7 +294,7 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
                now: datetime | None = None, status: str | None = None,
                tag: str | None = None, month: str | None = None, platform: str | None = None,
                scope: str = 'review', page: int = 1, limit: int | None = None) -> dict:
-    """读取任务列表，按候选时刻及来源时间排序。"""
+    """读取任务列表，按原帖发布时间从新到旧展示。"""
     if scope == 'history':
         return history_tasks(now=now, status=status, tag=tag, month=month, platform=platform, page=page, limit=limit or 50)
     ctx = _Context(days=days, now=now)
@@ -313,7 +313,8 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
     allocated = ctx.allocate_slots(pending)
 
     tasks: list[dict] = []
-    for source in ordered:
+    # 候选排期仍按旧帖优先分配；列表按原帖时间倒序，与排期时刻分开。
+    for source in reversed(ordered):
         task_id = task_id_of(source)
         alerts, details = _hard_alerts(source, ctx.rules)
         author_kind, author_flag = _author_kind(source, details, alerts)
@@ -339,11 +340,6 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
             "status": states[source.ref]["status"],
         })
 
-    def sort_key(item: dict):
-        at = (item["schedule"] or {}).get("at")
-        return (0, at, "") if at else (1, "", item["id"])
-
-    tasks.sort(key=sort_key)
     states_seen = review.STATUSES | {STATUS_NOT_READY}
     counts = {state: sum(item["status"] == state for item in tasks) for state in states_seen}
     # 两个平台各自成为独立入口，角标要按平台分开数——列表可能只加载了其中一边。

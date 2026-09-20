@@ -574,6 +574,14 @@ npm/Python 边界为替身；覆盖连续源码更新后的旧产物替换、顺
 
 独立复审发现的过期正文误认证和确认保存期间可冻结均已修复并复核；[过期正文修前失败](../state/review-section-confirmations/stale-confirmation-before.log)与[修后通过](../state/review-section-confirmations/stale-confirmation-after.log)保留。所有写入使用临时归档；模型、剪贴板异常、冻结可用性和终态展示为替身，没有真实抓取、付费、飞书或发布操作。证据位于该工作树 `state/`，不随 Git 提交；清理前须保全。服务机更新和运营实际页面复验为 **待真实联调**，按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)执行。
 
+### 1.19 待审核列表按原帖时间降序（2026-09-19）
+
+分支 `codex/review-newest-first`，工作树 `.worktrees/review-newest-first`，基点 `f05f8bb`。两个平台的四个子分类原先沿用候选排期升序，无排期时按任务 ID 排列；现统一按原帖发布时间从新到旧展示，筛选、分页和详情前后导航继承此顺序。候选排期仍按旧帖优先分配。
+
+**验证状态：离线通过。** [修前回归](../state/review-newest-first/order-before.log)的 8 个平台／子分类场景均因顺序不符失败；[修后浏览器报告](../state/review-newest-first/browser-after/report.json)及同目录 8 张列表截图可复核。测试用 24 篇临时图文记录覆盖待我审、未就绪、已挂起、已处理，检查分类筛选、接口分页、跨时区原帖时间、前后导航及候选排期分配；[Web 审校 54 项](../state/review-newest-first/tests_web_review.log)、[历史 6 项](../state/review-newest-first/tests_history.log)、[查询索引 13 项](../state/review-newest-first/tests_query_index.log)和[前端构建](../state/review-newest-first/build.log)通过。构建保留已有大 chunk 提示。
+
+工作树 archive/state/.env 独立，测试写入临时归档，浏览器仅连接隔离本地服务，无真实账号、模型、抓取或发布操作。证据位于该工作树 `state/review-newest-first/`，不随 Git 提交，清理前须保全。服务机更新及业务人员复验为 **待真实联调**，见 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
