@@ -516,8 +516,8 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 ```powershell
 git fetch origin
-git switch codex/planner-item-readiness
-git pull --ff-only
+git switch main
+git pull --ff-only origin main
 scripts\run_web.bat
 ```
 
