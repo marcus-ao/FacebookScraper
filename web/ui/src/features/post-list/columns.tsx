@@ -40,7 +40,7 @@ export type PostColumnKey = (typeof POST_COLUMN_KEYS)[number]
 
 export interface TimeColumnSpec<T> {
   readonly title: string
-  readonly zone: 'berlin' | 'shanghai'
+  readonly zone: 'business' | 'shanghai'
   readonly at: (row: T) => string | null
   readonly width?: number
 }
@@ -153,7 +153,7 @@ export function createPostColumns<T extends PostRowBase>(
           title: spec.title,
           width: spec.width ?? layout.timeColumnWidth,
           render: (_value: unknown, row: T) =>
-            spec.zone === 'berlin' ? (
+            spec.zone === 'business' ? (
               <BusinessTime at={spec.at(row)} />
             ) : (
               <ShanghaiTime at={spec.at(row)} />

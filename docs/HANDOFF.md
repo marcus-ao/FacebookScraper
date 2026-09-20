@@ -1,578 +1,71 @@
 # 项目交接
 
-**交接记录：2026-09-12 成文；存储、同群四机器人与阶段一实施同步至 2026-09-15（§1.1–1.3），图片、分平台本地化、整体复审、自动部署与局域网访问同步至 2026-09-16（§1.4–1.8、§1.10），排期整合及服务机网络配置同步至 2026-09-17（§1.9–1.10），Facebook 作者身份与图片空目录修复同步至 2026-09-18（§1.13–1.14），其余现场记录截至 2026-09-14。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。
+**现场同步至 2026-09-20。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
 
-**2026-09-14 运行数据已整库清空，项目处在"从零逐阶段打磨"的起点。** 下面描述的是清空之后的真实状态，不是历史记录。
+**2026-09-19。开发机只做代码与离线回归，服务机是唯一真实运行业务的机器，两台各一份 `archive/state`。** 2026-09-20 试运营上线。[REQUIREMENTS §10.1–§10.4](REQUIREMENTS.md#10-五阶段验收状态) 已按业务决定标记 `真实通过*`；⛔ **那个星号表示"按决定标记、当时没有可复核证据"**，判据与限制见 [REQUIREMENTS §0](REQUIREMENTS.md#0-状态词)，不要把它读成普通的真实通过。
 
-**数据绑定。** 主干没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。2026-09-16 复核：归档仍为 0 篇，审校、付费、发布、采集与处理批次的业务账本及激活边界均未建立；`state/` 已保存后续各轮离线测试证据，不能再按“空目录”删除。副本工作区可能用忽略入库的 `config.local.toml` 指回同一份数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
+**开发机（本仓库）。** 没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。归档 0 篇；`state/` 保留离线证据及本次服务机 G1 录制，没有任何业务账本——`published.jsonl`、`paid_requests.jsonl`、`pipeline_state.json`、`feishu_outbox.json` 都不存在。激活边界未激活，四个计划任务未注册，G1 录制及共通信号已通过；专用渠道/月历能力和 G8 仍按各自证据判断，见 §1.21。⚠️ 副本工作区可能用忽略入库的 `config.local.toml` 指回别的数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
 
-**这意味着什么：**
+**审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`；构建产物不入版本库。⛔ **源码检出重启 Web 必须走 `scripts/run_web.bat`**——它每次按锁文件装依赖再构建。直接跑 Uvicorn 会继续提供旧产物，这个坑真实发生过：服务机 `git pull` 后重启，页面仍是修复前的 CSS。带 `release.json` 的运行包用包内前端，不需要 Node。
 
-| 项目 | 清空后的状态 |
-|---|---|
-| 归档 | 0 篇。FB 47 + 冻结 `.tech` 1,020 已删除，原图 CDN URL 带签名有时效，重抓不回来 |
-| 激活边界 | 未激活（`state/pipeline_state.json` 已删） |
-| 发布账本 | 空。原 45 条尝试记录（含 18 条可能已提交）已删，防重保护随之消失 |
-| 付费账本 | 空。原 12 行、3 笔共 US$0.274 已删 |
-| 持久停机记录 | 已删。IG `.global` 与 Google Trends 的 HTTP 429 停机标记不复存在，新访问状态缺失时拒绝浏览器访问，必须先显式初始化；删除旧记录不授权新的访问 |
-| G1 / 发布能力 | 2026-09-20 现有录制已接受，G1 关闭，见 §1.21；渠道/月历能力与 G8 按各自证据判断 |
+**浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
-**审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`。清理后依赖与构建产物须按 [Web 构建说明](../web/README.md#构建与启动) 重建，不入版本库。本地 `config.local.toml` 只接续 archive/state，不选择前端。
-
-**浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内），清库没有动它们，登录态应仍在。登录态是否有效仍须人在对应 profile 核对。2026-09-14 删除了旧 429 记录，当前没有可复核的持久平台阻断证据。
-
-**外部依赖缺口。** 用户已在同一业务群创建检测、爬取、发布、状态告警四个 webhook 机器人，并确认分工（[FUNCTIONALITY §4.4 F4-1/F4-2](FUNCTIONALITY.md)）。**2026-09-15 用户已在群里收到四个机器人的自检响应**——通道可达，但这不证明真实探测往返、运营可见性或审校链接可点。运营可达的审校 URL 仍待核验，`127.0.0.1:8765` 不能作为其他机器的卡片入口。
-
-⛔ **云盘镜像本轮明确延期**（2026-09-15 业务决定，见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）。`[mirror].enabled = false` 是这个决定，不是缺口；代码、目录规则与恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷。外部心跳同样未启用；模型和企业流程仍待联调。
+**外部依赖。** `[feishu].enabled = true`，非受管 `base_url` 为 `http://10.66.4.9:8765`；服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
-### 1.1 原始帖子存储实施现场（2026-09-15）
+### 1.1 服务机现状与上线前的未完项
 
-本次从 `main b400c030332f4596fec1dd3bcc1f5f3d4f7512b1` 创建分支 **`codex/raw-post-storage`**，当时在独立 worktree 里实施，用忽略入库的 `config.local.toml` 单独绑定该 worktree 的 `archive/`、`state/`、`.env`，只复用主工作区的 `.venv/Scripts/python.exe`。测试未绑定主工作区真相源。**该 worktree 已于 2026-09-15 清理，证据迁至主检出 `state/`**；分支内容此前已并入 `main`。
+服务机已部署并跑过真实抓取和真实模型调用。下表是用户提供的服务机输出（2026-09-18）；本机没有那份业务目录，**不能替它下结论，开发机跑出来的结果也不是它的结果**。
 
-本轮边界是“抓取结果 → 本地原帖 → SQLite/飞书派生 → 可见状态与恢复”，对应原五阶段里的 F2 存储部分。监测预算、人工登录、付费处理与发布闸沿用既有契约；整体业务上线仍须逐阶段验收。
-
-| 层 | 本次实施重点 | 证据边界 |
-|---|---|---|
-| 本地 | 新目录北京时间、规范型号别名及分类来源、完整图像解码/实际 SHA、原子落盘、旧字节/历史保留、带意图记录的分类移动及恢复 | 临时目录内验证；没有新抓取真实 FB/IG 帖子 |
-| SQLite | 版本 2 三表、实际列/关系/JSON/媒体字节校验、候选库验证后替换、坏媒体单项降级、旧目录月份与分页兼容 | 隔离 SQLite，不能证明恢复后的业务库或大量图片性能 |
-| 飞书 | 冻结字节及媒体可用性判版本、只改分类只移动、逐操作回执、未知结果暂停、分页元数据核对、分片进度与人工 resolve | FakeDrive/MockTransport；目标权限、实际上传与移动仍待真实联调 |
-| 入口 | 帖子详情按当前帖展示独立存储状态，运行页展示全局积压/最近成功/待核对及安全错误原因，CLI status/preflight/run/resolve | 查询不上传；状态是本地回执记录，不表示实时远端回查 |
-
-独立审查已复现并补回归的边界包括：历史原图在改分类后失联；带图分类移动误增版本；SQL 列被改但 JSON 未改仍被判一致；北京时间跨月列表漏帖；单篇错误路径拖垮全历史查询；最终源校验失败时旧库已被替换；单篇误用其他帖云盘完成状态；缺图恢复相同 SHA 被去重跳过；移动回执丢失/旧异步任务无法结转；认证延迟压缩移动限速；复用图片掩盖已有哈希不符；旧目录被重算时间；不完整轮播随文案修订退化；自动分类未随源文修订更新。
-
-本地定向证据：[7 个归档相关脚本](../state/offline-validation-20260915T064836Z/results.json)；数据库/详情修复证据：[5 个脚本](../state/offline-validation-20260915T065039Z/results.json)。这些记录只对应各自运行时的代码，最终交付以本节末的整库回归记录为准。新 `tests_storage_flow` 将 FB 单图、IG 多图夹具依次送入实际解析、下载、本地归档、镜像假服务和历史数据库，比较身份、正文、顺序及哈希，并禁止 HTTP 外连、核查未生成付费/发布账本。
-
-目标为[用户指定的飞书目录](https://genhigh.feishu.cn/drive/folder/TsQef8msClS2i6dlzpfcpfn6nAc)。仅配置目标标识，镜像关闭——**这是 2026-09-15 的延期决定，不是待办**。官方建目录、上传、移动、列表和任务查询文档已于 2026-09-15 核对；动态页面正文通过官方 `document_portal/v1/document/get_detail` 读取。具体权限、接口限制与受控验收步骤在 [MANUAL_STEPS §7.1](MANUAL_STEPS.md#71-原帖云盘接入与恢复)，开启前不执行。没有真实云端写入，也没有启用调度、付费处理或发布。
-
-**存储提交 `47b14b7` 的回归（2026-09-15）；后续整合以 §1.2 为准：**
-
-| 检查 | 结果与证据 |
+| 项目 | 现状 |
 |---|---|
-| 全量 Python 离线 | **69/69 脚本通过**，包括浏览器工作流、历史分页、审校/发布兼容和新增存储链路；[结果及逐脚本日志入口](../state/offline-validation-20260915T071730Z/results.json) |
-| 前端单测 | **26 个测试文件、511 项测试通过**；本任务已核对命令输出，原始 stdout 未另存磁盘 |
-| 前端构建 | TypeScript 与 Vite 生产构建通过，先于浏览器回归；保留已有的大于 500 kB chunk 提示 |
-| Hygiene | 独立运行通过，全量记录中也有 [hygiene 日志](../state/offline-validation-20260915T071730Z/tests_hygiene.log) |
-| 汇总 | [本机核验记录](../state/storage-validation-20260915.json)，含命令、证据范围和外部验收缺口 |
+| IG `neakasa.global` | 归档 21 篇。本轮采集 12 篇完整；7 篇历史记录来源完整性未确认（3 篇图片 `saved`、4 篇视频 `metadata_only`），由自动核验在访问平台前处理 |
+| FB `neakasaofficial` | 图文帖先被作者身份误拒（16 篇），后因 Comet 附件结构落成 `media=[]` 空媒体。两处解析都已修复，⛔ **但代码不会把图片找回来**——原图要人在 9222 按同一日期窗口重新回填 |
+| 真实翻译 | 调用过，失败：旧模型名 `deepseek-v4-flash` 已于 2026-09-10 退役。已改 `deepseek-flash`，**至今没有一次成功的真实产出** |
+| 真实出图 | 调用过，失败：`/v1/models` 返回合法空列表。已加精确详情补查，**至今没有一次成功的真实产出** |
+| 审校台 | 用过。减少动画偏好下三点菜单跑到 `y=-7296`，已修；当时服务机在跑修复前的 CSS，启动脚本已补构建步骤 |
+| 仍未解决 | `/api/refinements/task/...` 返回 500。本机 FB/IG 隔离样例都是 200，未复现；需要服务机 Python 日志里该请求的 Traceback 末尾、异常类型和错误说明，遮去密钥 |
 
-首轮整库 [68/69 记录](../state/offline-validation-20260915T070810Z/results.json)保留：旧 replay 夹具在归档前制造 hardlink，被新增归档保护提前拒绝。夹具改为正常入档后模拟外部替换，并显式解码 Windows junction 命令输出；生产保护未放宽，[定向回归](../state/offline-validation-20260915T071716Z/results.json)和最终整库均通过。上述结论均为**离线通过**，不升级为真实账号、飞书权限或业务上线验收。
+上线前按顺序做：服务机先只读数抓取积压 → 拉含这份配置的 `main` 并正常停旧 Web 后重启（必须走 `scripts/run_web.bat`）→ 复验上表六项 → 人工重新回填 FB 原图 → 四机器人在**服务机**自检（2026-09-15 那次在开发机上做的，不算）→ 写入 `HEARTBEAT_URL` → 72 小时试运行且不带 `--process`。打开 `--process` 的四条硬前置见 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图)。
 
-### 1.2 存储与同群四机器人整合（2026-09-15）
+⚠️ **`[feishu].enabled` 已经是 `true`。** 抓取事件在落档时就以 `acknowledged=false` 写进 `capture_state.json`，飞书关闭时 `enqueue_capture_results()` 第一行就返回、不会确认它们。服务机第一次加载这份配置（拉代码并重启）之后，下一轮维护会把积压事件按扫描一次性入队。只读数一遍的步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 
-在同一隔离 worktree 中将存储提交 `47b14b7` 与远端 `main b727ca4` 的 webhook 实现整合（合并提交 `d854f72`），再按用户确认的四机器人分工完善路由。未改动主工作区的运行凭据或业务真相源。
+⚠️ **没有「只在服务机开飞书」这个选项。** `config.local.toml` 被白名单锁定，只能绑 `[paths]` 与 `[runtime]`，两台机器共用同一份 `config.toml`。非受管入口读 `[feishu].base_url`；服务机设了 `FBSCRAPER_CONTROL_DIR`，卡片链接走 `control/host.json` 的 `public_base_url`。⛔ **`[feishu].base_url` 不是监听地址**，`git pull` 也不会改 `host.json`。⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`**——四个 webhook 是真的，会往业务群发卡片。
 
-- `monitor_found→detect`，`monitor_saved→capture`，`ready/scheduled→publish`，`backlog/schedule_failed/morning/system→alert`。卡片标题与四张自检卡标明对应机器人；同群符合预期，地址重复由 `duplicate_bot_targets` 报告并阻止发送。
-- 发件箱模式版本升为 2：事件冻结收件角色，发送与 30 天归档读取同一份路由。接手时主工作区 `state/feishu_outbox.json` 不存在；仍为旧记录实现安全迁移，已送达不重发、未尝试改走新阶段、未知结果先人工核对。旧原卡与裁决记录保留。
-- webhook 无远端去重。发送意图先持久化为未知；超时、进程中断、5xx 或无法确认的响应不自动重放，只有明确拒绝才退避重试。人工确认旧通道未送达后结转当前阶段，避免多个旧角色重复补发同一新机器人；合并卡部分过期时只补仍有效内容。
-- 运行页同时保留原帖存储与云盘恢复状态，增加四机器人配置摘要；查看状态不上传、不投递、不暴露地址或签名密钥。取消原“两组隔离”要求的理由与噪声控制措施明确记在 [FUNCTIONALITY §0.2 与 F4-2](FUNCTIONALITY.md)，配置及真实核对步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
+### 1.2 已交付修复留下的硬约束
 
-独立代码复审复现了“两个旧收件人结转后重复补发”和“部分过期合并卡仍落到旧角色”两项问题；[失败证据](../state/offline-validation-20260915T082933Z/results.json)、[修复后定向证据](../state/offline-validation-20260915T082950Z/results.json)均保留。复审随后独立核对一次投递、仅含有效内容及到期归档，未发现新的阻断项。
+按主题记，不按分支和日期记——**这些是踩过的坑，退回去就会重犯**。逐项验收状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)。
 
-**整合回归（2026-09-15，全部使用隔离数据）：**
+**Facebook 响应结构。** Comet 的图片 URL 不在附件外层：`attachments[].media` 可能只有类型和 ID，单图实际在 `styles.attachment.media.photo_image`，相册在 `styles.attachment.all_subattachments.nodes`。相册按内部节点顺序逐项取，外层封面不另算一张。⚠️ 只有宽高、没有 `uri` 的 `viewer_image` **不是可下载地址**。缺 `attachments` 字段表示"数量未知"，只有明确的空数组才表示没有附件；已知图片不能被空片段覆盖。作者身份只接受同批响应里的明确关联——同一作者或主页对象的 ID↔URL，或 `ProfileActionMessage.profile_owner.id` 与 `/messages/t/<用户名>/` 的绑定；不从显示名、目标配置或帖子 permalink 推断，未关联的数字 ID 仍然拒绝。
 
-| 检查 | 结果与证据 |
-|---|---|
-| 全量 Python 离线 | **71/71 脚本通过**；[结果及逐脚本日志](../state/offline-validation-20260915T083421Z/results.json) |
-| 前端单测 | **26 个测试文件、511 项测试通过**；已核对命令输出，原始 stdout 未另存 |
-| 前端构建 | TypeScript 与 Vite 生产构建通过，先于浏览器回归；已有的大于 500 kB chunk 提示保留 |
-| 独立浏览器回归 | **12/12 组通过**，含运行页四机器人状态、重复地址提示、恢复交互与存储状态；[完整报告](../state/ui-regression/browser-stage-all.json) |
-| Hygiene | 全量记录中通过；文档收尾后再次独立核验，见下方汇总 |
-| 汇总 | [本机整合核验记录](../state/storage-four-bot-validation-20260915.json)，记录命令、证据边界及 Git 交付结果 |
+**Instagram 响应结构。** `media_type=1` 的单图允许 `carousel_media` 为 `null` 或空数组，**字段存在本身不是轮播证据**。`media_type=8` 缺子项、未知类型或类型与轮播字段矛盾仍算不完整。视频 `kind=video` 且 `local_path=null` 是设计行为，不是下载失败。
 
-以上 `state/` 证据**已于 2026-09-15 随 storage worktree 清理迁到主检出的 `state/`**，本文的相对链接从主检出解析。它不随 Git 提交，所以清理任何 worktree 之前都要先确认本文引用的证据不是只存在于那一个 worktree 里——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。代码状态为**离线通过**。未运行真实 webhook 自检、FB/IG 采集、模型请求或发布；四机器人真实发送者、运营可见性与链接、飞书云盘应用授权和文件哈希验收均为**待真实联调**。
+**夜间首屏与中断。** 普通轮次读内嵌帖子/身份 JSON 并被动等迟到接口，仍不滚动。截止前不启动预计来不及的下一篇：未开始记 `deferred`，已开始失败才是 `manual`。原图复用先核验本地字节；同媒体仅签名参数变化时零下载，路径/变换变化不吞掉。完整同帖来源与本地原图充分匹配才允许离线补日期/完整性，不采用冲突正文、归属或媒体。细节与离线证据见 [§1.20](#120-夜间监测首屏与采集恢复修复2026-09-20)。
 
-### 1.3 阶段一实施现场（2026-09-15）
+**模型调用名。** 正文当前是 `deepseek-flash`（旧 `deepseek-v4-flash` 已退役并暂时路由到新版），另允许 `deepseek-v4-pro`；退役名称在请求前直接拒绝。图片默认 `gpt-image-2`，可选 `gpt-image-2.5-flare` 与 `gpt-image-2.5-sunburst`。⛔ **笼统的 `gpt-image-2.5` 不是调用名**，两个变体不互相映射，费率和用量按完整型号分表；历史账本里的旧占位名不猜成某个变体。请求 Pro 却收到 Flash 仍报错并停止整批。
 
-本轮从 `435adc2` 建立 `codex/tweet-monitor-capture-design`，worktree 为 `D:\VSCodeWorkspace\Facebook\FacebookScraper\.worktrees\tweet-monitor-capture-design`。archive/state/.env 独立绑定，仅复用主工作区 `.venv` 解释器。改动保留在该 worktree，未提交、未合并或推送；主工作区保持干净。
+**模型目录查询。** 带 Key 的 `GET /v1/models` 反映的是该 Key 的配置。合法空列表只能用同一网关、同一凭据补查 `GET /v1/models/{model}`，详情 `id` 必须精确一致；非空但缺型号、结构异常或查询失败都在付费前关闭本批，不靠付费 edits 试探。`model_verification=catalog` 只证明元数据确认，**不证明计费权限或远端实际路由**。
 
-阶段一代码为 **离线通过**：FB `neakasaofficial` 与 IG `neakasa.global` 独立采集并保留真实合作关系；9222 人工 30 天回填建立独立监测基线；9224 普通轮次只读主页首屏，晨间 06:30–07:30 随机滚 2–4 屏。每天含周末按北京时间 08–19 点 45–75 分钟、19–08 点 135–225 分钟运行，共享持久下一次访问时刻。主页限 24 次/平台/滚动 24 小时；详情限 1 次/帖/轮、3 次/平台/轮、12 次/平台/滚动 24 小时。缺初始化、坏状态和平台阻断拒绝继续访问。
+**Windows 文件占用。** 图片预览会占住旧文件，曾阻止跨格式上传；只对共享冲突限时重试，不放宽业务版本检查。部署安装也复现过目录重命名占用，只重试本地重命名最多 3 秒，**仍然拒绝覆盖既有版本**。
 
-所有候选在下载前持久化，仅来源列表不完整者允许一次匹配详情；详情与主页证据合并。失败转人工，普通轮次不重试未完成任务。实际已校验文件数、来源列表完整性与本地媒体完整性分别保存。逐帖卡异步入持久发件箱，检测及人工汇总等全轮候选终结后冻结。网络条件相关功能已移除；实际请求失败与平台停机护栏保留。
+**测试 HTTP 宿主的事件循环。** Python 3.12.9 的 Windows Proactor 在连接清理遇到 `WinError 10054` 时，`socket.shutdown()` 抛异常会跳过 `close()` 和 transport detach，让 Uvicorn 的 `wait_closed()` 一直等——CI 里的表现是业务断言全过、宿主退不出来、制品不产出。⛔ **修法是 `tests/http_fixture.py` 用 `asyncio.Runner` 走 Selector 循环，不要改全局事件循环策略**（Playwright 子进程仍需 Windows 默认循环），也不要靠忽略退出错误放行制品。
 
-| 验证 | 结果与证据 |
-|---|---|
-| 最终全量 Python 离线 | **74/74 脚本通过**；[逐脚本结果及日志入口](../state/offline-validation-20260915T121317Z/results.json) |
-| 独立 hygiene | **9 组通过**；[日志](../state/stage1-hygiene.log) |
-| 前端单测 | **26 个文件、511 项通过**；[日志](../state/stage1-ui-tests.log) |
-| 前端生产构建 | TypeScript/Vite 通过，先于浏览器回归；[日志](../state/stage1-ui-build.log)。已有的大于 500 kB chunk 提示保留 |
-| 隔离浏览器回归 | **9/9 场景通过**，包括逐帖定位和一次恢复；[报告与截图](../state/offline-browser-20260915T121321Z-33388/report.json)；没有真实外部操作 |
-| 独立复审 | 访问控制审查的 3 项问题已关闭；整体审查的 4 项代码问题及文档问题全部关闭；[最终定向复审](../state/stage1-final-rereview-report.md)另行验证 9/9 关键用例 |
-| 汇总 | [本机阶段一验证记录](../state/stage1-validation-20260915.json)，含测试、数据边界及真实联调缺口 |
+**减少动画偏好下的弹层定位。** 全局把 `transition-duration` 设成非零的 `0.01ms !important`，会让弹层的同步测量读到 `-1000vh` 的过渡起点，菜单跑到屏幕外（隔离 Chromium 实测 `y=-7300`）。⛔ **过渡时间必须是 `0s`**，动画时长可以留 `0.01ms`；机制见[上游 #618](https://github.com/react-component/trigger/issues/618)。
 
-审查修复覆盖：详情响应丢失主页已知字段/部分媒体；扫描结束前冻结不完整摘要；未知 IG 结构误报完整；详情普通失败被轮次成功覆盖；无来源访问的人工尝试误清失败计数。首次失败和修复后证据保存在本 worktree 的 `state/`，不随 Git 提交；最终交付以本节列出的整库结果为准。
+**上传绕过刷新等待的测试写法。** 按钮禁用时直接设置隐藏文件输入会绕过页面的刷新等待，得到 409。测试要点击可用按钮后经文件选择器上传，不放宽业务版本检查，也不自动重试。
 
-本 worktree 的 archive 为空；真实访问状态、采集基线、调度、发件箱均未初始化。`.env` 为占位符，没有复制真实凭据。未运行真实平台、飞书、模型、标签或发布。30 天人工回填、真实 FB 多图/IG 轮播及合作关系、四机器人发送者与链接、自然新帖和正常节奏的 72 小时试运行继续为 **待真实联调**；按 [MANUAL_STEPS §14](MANUAL_STEPS.md#14-阶段一真实验收监测与原帖抓取) 执行，不能以夹具或一次历史采集替代。
+**开发代理的 Host。** Vite 代理改写 Host 之后与浏览器 Origin 不符，会被来源检查拒绝；开发代理保留原 Host。
 
-### 1.4 图片阶段复审现场（2026-09-16）
+**CI 环境的三个坑。** job 级表达式取不到 `runner.temp`，要在 runner 启动后的步骤里写 `GITHUB_ENV`；runner 的账户临时目录是 `RUNNER~1` 短路径，要在 runner 下显式创建临时目录；生产运行标识不能在普通单测之前注入，否则单测会进维护状态。
 
-在 `claude/social-post-image-generation-e10530` 的原 worktree 内复审 `7d9b875...5acbdfb` 并修复，
-沿用该 worktree 独立的 archive/state/.env 绑定，只复用主检出解释器。范围是用户编号的阶段二、
-本文档 F3 的正文与图片本地化；德语、正文 DeepSeek、图片 GPT-Image、每图最多受理 3 次优化的约定保持。
+### 1.3 证据边界
 
-修复覆盖：下载按钮及 ZIP 说明与人工交接分开；人工图在后端受理和执行前禁止优化；免费换版不计预算；
-历史用量按记录模型计价；历史版本独立预览及人工正文版本兼容；上传失败保留旧图与旧选择；连续上传立即换图。
-人工上传明确选择追加到 `media_de/manual_uploads.jsonl`，不进入程序图片所有权账本；即便上传的是过去的生成图，
-审校和发布也采用本次人工决定。该记录与图片一同备份、迁移。上传/换版持生成锁，排队优化复核审校版本。
+`state/` 不随 Git 提交，本文的相对链接从主检出解析。⛔ **清理任何 worktree 之前，先确认它引用的证据不是只存在于那一个 worktree 里**——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。
 
-| 检查 | 当前结果与证据 |
-|---|---|
-| 定向回归 | **16/16 用例通过**；[最终运行日志](../state/offline-validation-20260916T070233Z/tests_image_workflow_review.log) |
-| 隔离浏览器 | **10/10 场景通过**，第 10 场景用实际本地 API 完成预览→采用→下载→连续跨格式上传→人工标记及禁用优化；[报告与截图](../state/offline-browser-20260916T070237Z-27016/report.json) |
-| 前端单测 | **27 个文件、523 项通过**；[日志](../state/stage2-review-ui-tests.log) |
-| 前端构建 | TypeScript/Vite 通过；[日志](../state/stage2-review-ui-build.log)，保留已有的大于 500 kB chunk 提示 |
-| 全量 Python 离线 | **75/75 脚本通过**，含 hygiene、发布兼容与浏览器工作流；[逐脚本结果及日志](../state/offline-validation-20260916T070233Z/results.json) |
-| 汇总 | [本机图片阶段复审验证记录](../state/stage2-review-validation-20260916.json)，含代码基点、测试与真实联调边界 |
-
-[修复前 11 项失败证据](../state/offline-validation-20260916T063724Z/results.json)保留，用于核对缺陷是否真实复现。
-[首轮整库 74/75](../state/offline-validation-20260916T065120Z/results.json)暴露 Windows 预览占用旧图阻止跨格式上传，
-修复仅对共享冲突 32/33 限时重试，最终整库及定向失败注入均通过。证据保存在主检出的 `state/`，不随 Git 提交；原 worktree 的本机文件保全见 §1.7。
-所有测试使用临时归档、合成图片或假服务；本 worktree 无真实帖子，没有模型付费、平台登录、抓取、消息或发布操作。
-本轮只支持 **离线通过**：两模型的真实契约与费率、德语图版面及语义、业务上传图在远端排期中的采用仍为 **待真实联调**，
-按 [MANUAL_STEPS §5](MANUAL_STEPS.md#5-付费模型操作) 与发布确认流程执行；浏览器夹具不升级这些结论。
-
-### 1.5 阶段二分平台本地化复审（2026-09-15；证据 UTC 2026-09-16）
-
-复审与修复使用 `stage2-platform-split-translation`，原独立 worktree 为 `.worktrees/stage2-platform-split`。
-接手时提交为 `301a00b`、工作树干净；与 `7d9b875` 比较原有八个实施提交。该 worktree 的
-`config.local.toml` 只复用主检出解释器，归档与状态独立，测试进一步使用临时数据。
-
-主要修复：建议输入冻结点击时的编辑正文，生成与采用使用同一正文版本；语法建议保留人工定价和标签；
-IG 无 URL 的 bio 引导转入独立 CTA；列表及积压提醒的平台计数一致；剪贴板失败有明确回退。
-文本、图像和英文风险预扫均禁止 SDK 在统一账本外自动重试；超时或 5xx 进入不确定状态后须先核账。
-`processing-preview` 复用实际处理资格和图片规划，显示逐篇作用域及费用参考；风险预扫与 reasoning
-费用未包含在参考小计中，不能把小计当作完整费用或预算上界。
-`--run --process --once` 等待当前处理批次及完成后的通知汇总投递，再关闭运行时；保留离岗静默，
-不额外扫描或唤醒其它任务。`tests_scheduler` 使用隔离 Runtime 与假模型/飞书验证退出前收到当轮待审卡。
-
-[预览夹具证据](../state/stage2-platform-split/stage2-processing-preview.json)与[阶段二浏览器记录](../state/stage2-platform-split/offline-browser-20260916T065723Z-18940/report.json)
-按哈希复制到主检出及本 worktree 的 `state/stage2-platform-split/`；原记录保留，不随 Git 提交。
-最终回归以 [REQUIREMENTS §10.3](REQUIREMENTS.md#103-阶段三本地化风险标签与恢复) 为准；
-[复审核验汇总](../state/stage2-platform-split/stage2-review-validation.json)记录独立提交 `a8f4a6e` 的 78/78 脚本、前端 530 项及本地提交信息；合并结果另行验证。
-所有模型/剪贴板回执均为离线替身，本地 API 与浏览器交互使用隔离夹具；没有真实抓取、付费、飞书投递或发布。
-真实德语质量、图片效果、供应商账单、运营访问 URL、德国落地页和 IG 聚合页仍为 **待真实联调**。
-
-### 1.6 阶段二整合验收（2026-09-16）
-
-在分平台 worktree 中整合文案提交 `a8f4a6e` 与图片主干 `ec4621e`。共享图片规划保留画幅带排序与
-人工图片不可优化的约定；详情页同时保留文案建议、准确复制、历史图片预览/采用和上传替换。
-预览费用按当前图片模型区分，未知费用不当作零。当时用 `gpt-image-2.5` 占位验证跨模型估算；
-当前准确调用名已按 §1.14 更正为 Flare/Sunburst，不能把旧占位名用于真实请求。
-
-合并后的代码为 **离线通过**：Python **79/79 脚本**（含处理预览 16 项），前端 **29 个文件、542 项**及
-TypeScript/Vite 构建通过。整库包含基础浏览器 10 项与文案交互 5 项，均使用最终构建和临时归档；
-模型、剪贴板异常、飞书与平台回执为离线替身，没有真实业务外部操作。各项真实联调边界继续沿用 §1.4–1.5。
-
-[全量结果与逐脚本日志](../state/stage2-platform-split/offline-validation-20260916T074332Z/results.json)、
-[基础及图片浏览器记录](../state/stage2-platform-split/offline-browser-20260916T074335Z-17524/report.json)、
-[文案浏览器记录](../state/stage2-platform-split/offline-browser-20260916T074807Z-21648/report.json)与
-[整合及 Git 交付汇总](../state/stage2-platform-split/merge-validation-20260916.json)保存在主检出的
-`state/stage2-platform-split/`，不随 Git 提交。按文件哈希复制，未覆盖图片分支已有的同名日志；
-原报告里的绝对路径保持原样，副本中保留同目录日志与截图，主检出可独立复核。
-
-### 1.7 阶段二整体复审与分支收尾（2026-09-16）
-
-按用户要求，以 `35da19b` 中已整合的文案与图片实现为整体复审；范围是抓取结果进入处理、
-正文编辑/建议/重写、图片生成/换版/上传、下载及发布素材衔接。没有启动真实抓取、模型、消息或发布。
-
-本轮复现并修复：完整抓取结果在部分失败/人工恢复后漏入队；未采用文案候选使已选图片失效并要求再次
-付费；审校判过期图片仍被发布组装采用；图片优化写盘失败丢失当前选择；保存等待期间新编辑被清空；
-唯一历史版本入口隐藏；冻结账号仍可换版；下载包遗漏最终平台链接/CTA；旧提示词文案候选仍可采用。
-
-完整采集结果与入队回执原子关联，重启不重新受理；中断恢复仍只结转、不隐含重放。图片保留同源有效
-生成依据，显式优化仍用当前正文，源文/原图/prompt 变更仍需复核。失败图片请求保留费用及次数，上一
-选择继续有效。保存只确认已提交快照；下载、复制及发布使用相同的文案渲染规则。
-
-**最终验证：离线通过。** Python **80/80 脚本**，包含新增图片连续操作 7 项、抓取→处理与去重恢复回归；
-前端 **29 个文件、547 项**，TypeScript/Vite 构建通过。最终构建下基础/图片浏览器 **10/10**、文案编辑
-浏览器 **6/6** 通过，另有 D5 对旧/缺 prompt 候选禁用及恢复不重发的定向浏览器证据。
-所有来源、图片和账本均为隔离夹具，模型/剪贴板异常/外部回执为替身；这不证明真实德语质量、图片效果、
-供应商用量或业务账号发布可用。真实联调仍按 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图) 执行。
-
-证据集中在主检出 `state/stage2-integrated-audit/`，不随 Git 提交：
-
-- [全量 Python 结果](../state/stage2-integrated-audit/offline-validation-20260916T084710Z/results.json)、[前端单测](../state/stage2-integrated-audit/ui-tests.log)、[构建日志](../state/stage2-integrated-audit/spec-ui-build.log)。
-- [基础/图片浏览器](../state/stage2-integrated-audit/offline-browser-20260916T084717Z-9668/report.json)、[文案编辑浏览器](../state/stage2-integrated-audit/offline-browser-20260916T085221Z-31384/report.json)、[D5 定向浏览器](../state/stage2-integrated-audit/spec-ui/browser-stage-d5.json)。
-- [交付与保全汇总](../state/stage2-integrated-audit/validation.json)记录最终提交、推送、分支/worktree 清理及文件哈希。`worktrees/text/` 与 `worktrees/image/` 保留两个 worktree 的完整 state、归档目录及本机配置；原报告生成路径不改写，按汇总内路径映射定位现存副本。
-
-只清理用户指定的 `stage2-platform-split-translation`、`claude/social-post-image-generation-e10530`。
-清理前核对主干包含其提交、工作树无未提交改动，并逐文件核对备份哈希；其它排期 worktree 保留。
-
-### 1.8 Windows 自动部署实施（2026-09-16）
-
-从 `4ecc564` 建立独立 `.worktrees/service-auto-update`，分支 `codex/service-auto-update`；archive/state/.env 均为隔离绑定，只复用主检出 Python。实现提交 `ab560c7` 已快进并入 `main`，包含 Actions 部署包、维护协议、受管进程、轮询回退与页面协调；未注册真实服务机任务。
-
-固定控制器、各版本及共享数据分开。代码回退不恢复旧账本和人工稿；两个运营偏好保存在共享状态。
-原子登记涵盖排队及执行生命周期；调度与 Web 自行退出，维护验证不触发真实抓取、模型、飞书或排期。
-页面统一保护正文、设置、优化指令、审校对话框与自定义排期，失联草稿保持阻塞；冻结期间仍可明确选择留在本页或放弃草稿后离开。
-
-独立复查中复现并关闭：调度心跳先于初始化、偏好 CAS 快照竞态、预告期间回退/模式变更竞态、普通重启恢复错误版本、失败候选每秒重试、旧 CLI 跨切换受理、故障版回退后重装循环，以及横幅跳转丢稿和确认框被维护冻结。实际安装还复现 Windows 目录重命名占用；仅重试本地重命名最多 3 秒，仍拒绝覆盖既有版本。
-
-原实施证据已迁入主检出 `state/service-auto-update/worktree/state/`，不随 Git 提交：
-
-- [完整 Python 隔离回归：88/88](../state/service-auto-update/worktree/state/offline-validation-20260916T104828Z/results.json)。
-- [最终前端单测：31 文件 / 566 项](../state/service-auto-update/worktree/state/deployment-implementation/frontend-final-tests.log)、[TypeScript/Vite 构建](../state/service-auto-update/worktree/state/deployment-implementation/frontend-final-build.log)。
-- [版本化浏览器：12/12 组](../state/service-auto-update/worktree/state/deployment-implementation/browser-all-final.log)、[部署页面：6/6 场景](../state/service-auto-update/worktree/state/deployment-implementation/frontend-browser.json)。
-- [发布包、安装入口与 hygiene 定向复验](../state/service-auto-update/worktree/state/offline-validation-20260916T110734Z/results.json)、[控制器回退 25 项](../state/service-auto-update/worktree/state/offline-validation-20260916T111226Z/tests_deployment_controller.log)。
-- [本机 Windows 完整部署演练：4/4](../state/service-auto-update/worktree/state/deployment-implementation/wr-20260916-04/report.json)、[逐阶段日志](../state/service-auto-update/worktree/state/deployment-implementation/windows-rehearsal-04.log)：实际离线安装 61.94 秒，A→B 切换 3.031 秒，健康失败恢复 6.094 秒，中断恢复 7.110 秒。预告及失败截止时间由夹具加速，测量不代表正式服务机停顿保证；11 份共享数据哈希不变，9 个受管启动确认退出，3 个独立最终路径环境的导入与 `pip check` 通过。
-- [图片操作完整浏览器复验：10/10](../state/service-auto-update/worktree/state/offline-validation-20260916T111007Z/tests_browser_workflow.log)、[最终静态路由与资源检查](../state/service-auto-update/worktree/state/deployment-implementation/static-cutover.json)。
-- [最终独立复查](../state/service-auto-update/worktree/state/deployment-implementation/final-integration-review.md)；保留失败及修复后的证据，不把重试前的失败报告改写为成功。
-
-上述代码和隔离场景为 **离线通过**；GitHub 托管工作流的实际结果以本节交付核验记录为准。正式服务机计划任务/登录重启、真实飞书与业务仍为 **待真实联调**。前端保留已有大 chunk 提示；一次临时 HTTP 退出超时和图片提示等待失败的记录保留，定向及浏览器分组复验通过。没有真实通知、抓取、模型付费或发布操作。
-
-交付前在最终实现提交上重新完成 **88/88 Python 脚本**和前端 **566 项**；[最终全量结果](../state/service-auto-update/worktree/state/offline-validation-20260916T112659Z/results.json)保留。快进合并后按锁文件重装主检出前端依赖，[566 项单测](../state/service-auto-update/main-ui-tests.log)、[生产构建](../state/service-auto-update/main-ui-build-final.log)、[静态路由演练](../state/service-auto-update/main-static-cutover.json)和[6 项部署页面场景](../state/deployment-implementation/frontend-browser.json)均通过；首次构建缺依赖的失败日志保留。
-
-清理前已核对 **83,603 个文件的 SHA-256**，原 `state/`、本机配置、构建产物与依赖完整保全至 `state/service-auto-update/worktree/`，7 个目录联接改指向同一保全目录内的依赖。原报告绝对路径不改写，旧 worktree 根路径按[保全记录](../state/service-auto-update/preservation.json)映射；迁移后的虚拟环境仅作证据，不作为可搬移环境启动。
-[交付核验记录](../state/service-auto-update/validation.json)保存最终提交、远端状态和本次分支/worktree 清理结果；其余排期 worktree 保留。
-
-[首次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091541154)在构建前拒绝 job 级 `runner.temp` 表达式；修正为 runner 启动后的 PowerShell 步骤写入 `GITHUB_ENV`。`actionlint 1.7.12` 已[复现原错误](../state/service-auto-update/workflow-lint-before.log)，[修正后通过](../state/service-auto-update/workflow-lint-after.log)，实际步骤也在隔离环境文件上验证。托管测试与制品产出仍以对应提交的工作流结果为准。
-[第二次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35091838093)完成锁定依赖与浏览器安装后，复现 3 项单测因提前注入生产运行标识而进入维护状态的环境差异。工作流改为先运行普通模式单测，再为生产构建生成版本标识；[相同环境复现](../state/service-auto-update/ui-ci-environment-negative.log)和[修正后 566 项通过](../state/service-auto-update/ui-ci-environment-positive.log)均保留。受管模式继续由专门单测与实际构建浏览器场景覆盖。
-[第三次托管运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35092261582)的前端检查和构建通过，Python 为 84/88：runner 的账户临时目录使用 `RUNNER~1` 短路径，影响三组采集夹具与安装路径断言。已用本机 8.3 别名[复现全部 4 组失败](../state/service-auto-update/short-temp-negative.log)，CI 改用 runner 下明确创建的临时目录，实际工作流步骤配置后[4/4 通过](../state/service-auto-update/short-temp-positive.log)。业务目录保护未放宽；托管环境与本机环境的原始日志均保留。
-
-### 1.9 排期分支整合核验（2026-09-17）
-
-排期分支的五个提交保留内容冻结、北京时间选期、异步提交进度、本地月历、公开观察与人工撤销登记。
-原现场中已人工整合的三个冲突文件保留，再合入主干阶段二与 Windows 自动部署；
-运营设置继续存入共享偏好，业务时区取配置，付费账本月界不变。
-
-整合修复包括：冻结图片在上传或采用历史版本前拒绝写入；平台计数包含冻结状态；
-异步发布在 HTTP 202 返回后仍独立登记维护操作，完成或取消后才释放；详情按冻结快照恢复
-提交进度，刷新可继续轮询，核实撤销后不显示旧成功。独立复审发现项已关闭。
-
-隔离定向五个脚本、前端 **31 文件 / 581 项**及 TypeScript/Vite 构建通过。
-浏览器 **11/11** 场景通过，含提交期间刷新后继续轮询；首次定位器整段文本匹配失败的原日志保留。
-全量首轮 **88/89**，仅上述浏览器定位器失败，修正后该组 **11/11** 通过；全部 **89 个脚本**已有通过记录。
-[全量原始结果](../state/schedule-integration-20260917/worktree/state/offline-validation-20260917T031811Z/results.json)与
-[浏览器修复后结果](../state/schedule-integration-20260917/worktree/state/offline-validation-20260917T032100Z/results.json)同时保留。
-结论为 **离线通过**；真实控件与账号继续 **待真实联调**，远端排期图片读取适配器仍为 **代码未完成**。
-未运行真实抓取、模型、消息、发布或服务机部署。
-
-本机证据保全根目录为主检出 `state/schedule-integration-20260917/`：
-`pre-merge/` 留存接手时的索引、补丁与三个冲突文件；`worktree/` 保留原排期工作区源码、
-state、配置、依赖与构建产物，旧报告的 worktree 绝对路径按此映射。
-[逐文件 SHA-256 清单](../state/schedule-integration-20260917/preservation.json)及
-[整合交付记录](../state/schedule-integration-20260917/validation.json)不随 Git 提交。
-
-### 1.10 局域网访问实施（2026-09-16）
-
-2026-09-16 实施时用户确认：服务机尚未首次部署，2–5 人同权使用受控办公网 HTTP，暂不登录、不记录个人身份，继续 `actor: null`。实施分支 `codex/lan-access` 的局域网初版提交为 `162d107`，基于 `b70b786`；工作区 `.worktrees/lan-access` 使用隔离测试数据。初版为 **离线通过**；[原始验证汇总](../state/lan-access-validation.json)保留。下表记录纳入真实网络配置和排期主干后的交付验证，远端提交与构建以[交付记录](../state/lan-delivery-validation.json)为准。
-
-用户本次授权配置、提交并推送该分支。已将 `origin/main f659581` 的排期实现纳入分支：保留冻结/选期/后台提交生命周期及北京时间设置；两处文档章节冲突保留双方内容，局域网手册改为第 17 节。新增排期夹具补齐真实网段的受管网络配置，验证远程 HTTP 202 返回后后台操作仍阻止维护切换。
-
-用户随后明确交付目标为合入并推送 `main`，服务机拉取主分支测试。实现提交 `b464ad5` 的 [GitHub Windows release](https://github.com/marcus-ao/FacebookScraper/actions/runs/35180707812) 已成功，产出可下载的运行包；网络配置只在版本库的 `ops/service-machine.network.json`，不随制品发布。主分支发布结果需核对对应 main 运行，不能用功能分支成功代替。服务机从拉取 main、校验同 SHA 制品到安装的操作见 [MANUAL_STEPS §17.6](MANUAL_STEPS.md#176-拉取主分支后在服务机调试)。源码拉取不修改受管配置，首次安装仍使用新的隔离目录。
-
-原局域网实施覆盖持久网络配置、受管监听、来源/同源检查、非安全 HTTP 前端、多标签页维护、统一飞书链接及防火墙步骤。当时使用 WLAN / `10.66.3.157` / `255.255.255.0` / 网关 `10.66.3.254`，入口 `http://10.66.3.157:8765`、允许来源 `10.66.3.0/24`；这些地址仅用于解释下方历史证据，不再作为当前安装参数。
-
-**当前网络（2026-09-17 用户最新确认）：** 服务机在同一办公 Wi-Fi 内的 IPv4 已由 `10.66.4.35` 变为 `10.66.4.9`，沿用 WLAN / `255.255.255.0` / 网关 `10.66.4.254`。旧地址仅为历史 DHCP 采样，固定地址尚未落实。安装配置 `ops/service-machine.network.json` 采用入口 `http://10.66.4.9:8765`，只允许 `10.66.4.0/24`；开发机 `10.66.4.12` 在允许范围内。已安装实例仍读取自己的 `control/host.json`，须按 [MANUAL_STEPS §17.4.1](MANUAL_STEPS.md#1741-已有实例改为当前办公网) 维护改址。新网络的 DHCP 地址保留、防火墙生效、两台办公电脑访问、跨夜及登录恢复均为 **待真实联调**，旧网络证据不能替代。
-
-当前 `10.66.4.9` 安装配置为 **离线通过**：[定向结果与日志](../state/offline-validation-20260917T115347Z/results.json)记录宿主 19 项、后台排期 25 项、Web 访问 12 项及 hygiene 9 组全部通过。使用临时实例、空凭据、ASGI 模拟客户端及假外部服务；没有服务机改址、防火墙变更或真实抓取、模型、飞书、发布操作。证据保存在 `codex/service-network-10-66-4` 独立工作树的 `state/`，并已按 SHA-256 核对复制到主检出的同名目录；原日志路径保持不变，主检出可从同目录日志复核。证据不随 Git 交付，清理前须保全。此前 `10.66.4.35` 的[历史定向结果](../state/offline-validation-20260917T100526Z/results.json)保留，不能作为新地址的现场可达性证据。
-
-`control/host.json` 是网络配置唯一来源；受管健康由匹配 PID/创建时间及启动标识的心跳报告实际监听，配置与进程不一致拒绝 readiness。来源检查先于业务登记，代理头解释关闭，部署状态只输出页面所需字段。独立复审发现并修复了 Vite 代理改写 Host 后与浏览器 Origin 不符的问题，开发代理保留原 Host；防火墙脚本复审没有遗留阻断项。
-
-| 检查 | 结果与证据 |
-|---|---|
-| 完整 Python 离线 | **91/91 脚本通过**；[逐脚本日志](../state/offline-validation-20260917T035654Z/results.json)，覆盖配置、部署、维护、后台排期及 LAN 检查 |
-| 前端单测与构建 | **31 个文件、587 项通过**；[单测日志](../state/lan-delivery-frontend-tests.log)、[TypeScript/Vite 构建](../state/lan-delivery-frontend-build.log)。保留已有大 chunk 提示 |
-| 浏览器主流程与静态入口 | **12/12 组通过**；[主流程报告](../state/ui-regression/browser-stage-all.json)、[18 个 HTTP 入口与深链刷新](../state/cutover-lan-delivery.json) |
-| 部署页面及 HTTP 专项 | [部署协调 6/6](../state/deployment-implementation/frontend-browser.json)、[非安全 HTTP 7/7](../state/offline-lan-20260917T035402Z-36044/report.json)，5 个独立客户端及同浏览器多标签页 |
-| Windows 实际受管实例 | [完整重跑 4/4](../state/windows-lan-delivery-recheck/report.json)：3 个最终路径环境、9 个受管启动确认退出、11 份共享文件及网络配置不变、源码无漂移 |
-| 工作流与复审 | `actionlint 1.7.12` [通过](../state/lan-delivery-actionlint.log)；独立复审核对 17 项访问/维护拒绝及 4 个 PowerShell 指南代码块，安装引导不依赖尚未安装的第三方包 |
-| 汇总 | [交付记录](../state/lan-delivery-validation.json)，包含代码指纹、远端提交/构建及现场验收缺口 |
-
-本机 Windows 演练监听 `0.0.0.0` 临时端口，允许来源为文档保留网段，不把开发机作为业务入口；预检用独立回环端口。成功切换阶段实测约 3.9 秒，仅代表这套无业务负载夹具；回退与中断恢复使用推进的逻辑时限，不承诺服务机耗时。测试没有修改本机防火墙、注册计划任务、使用业务 Chrome profile 或发送飞书/模型/发布请求。飞书链接以假消息验证生成地址，实际点击仍须现场验收。
-
-新增 LAN 浏览器检查已纳入发布工作流。合并后发布触发已收回到只有 `main`：功能分支不再产出与生产同形的制品，`codex/lan-access` 那次门禁结果记录于交付证据。真实办公网络、至少两台实体客户端及持续运行均为 **待真实联调**，按 [MANUAL_STEPS §17](MANUAL_STEPS.md#17-办公局域网接入) 留证。上述证据已从 `.worktrees/lan-access` 保全到主检出 `state/`，覆盖前的同名旧浏览器报告存于 `state/pre-lan-evidence-backup-*`；`state/` 不随 Git 提交，删除即导致相应结论降级。
-
-整合定向首次 [6/7](../state/offline-validation-20260917T035133Z/results.json) 暴露新增排期夹具缺少受管网络配置；补全后改用旧网段 `10.66.3.42` 的 ASGI 模拟客户端和同源请求，[后台排期 25 项通过](../state/offline-validation-20260917T035334Z/results.json)。同时修正部署浏览器旧“柏林”标签定位器为当前“北京”；此前 [main 云端运行](https://github.com/marcus-ao/FacebookScraper/actions/runs/35178546562) 正是在该定位器失败，本分支 6 项浏览器检查已通过。
-
-[Windows 首次安装失败现场](../state/windows-lan-delivery/report.json)保留：临时 probe 维护文件替换遇到 `WinError 5`，尚无业务进程；同路径稍后可正常原子写入，新目录完整重跑通过。没有将失败目录当作成功安装，不断言系统短暂拒绝的具体来源。若服务机复现，保留目录与日志，核对文件占用及权限后处理，不删除共享数据或放宽进程保护。
-
-### 1.11 Windows CI 浏览器宿主退出诊断（2026-09-17）
-
-`main bbeb3b5` 的 [发布运行 35218364147](https://github.com/marcus-ao/FacebookScraper/actions/runs/35218364147)
-在 D3 图片断言通过后，隔离 HTTP 宿主退出失败；打包和运行包上传均未执行。
-Python 3.12.9 的 Windows Proactor 连接清理遇到 `WinError 10054` 时，
-`socket.shutdown()` 异常跳过 `close()` 和 server transport detach，导致 Uvicorn 的
-`wait_closed()` 持续等待；不是 D3 业务断言失败，也不能通过忽略退出错误放行制品。
-
-修复工作树为 `.worktrees/ci-browser-shutdown`，分支 `codex/ci-browser-shutdown`。
-仅复用主检出 Python，archive/state/.env 独立绑定；GitHub 原始日志与摘要核验后的失败 ZIP
-保存在该工作树 `state/ci-browser-shutdown/`。其中 `reset-negative.log` 用真实 HTTP 宿主和
-socket 关闭边界故障注入复现同一错误：请求与连接集合已空，server 仍挂接 1 个 transport。
-自然重跑 D3 曾通过，不能代替这个确定性失败证据。
-
-测试 HTTP 宿主统一通过 `tests/http_fixture.py` 的 `asyncio.Runner` 使用 Selector 循环，
-不改全局事件循环策略，Playwright 子进程仍用 Windows 默认循环；运行服务的宿主不变。
-`tests_browser_fixture` 的 2 项回归校验关闭异常后线程/端口释放，以及宿主运行期间真实异步
-子进程可用；在锁定 Uvicorn 0.52.4 和声明的最低版本 0.30.0 均通过，兼容验证只解包 wheel，
-没有改动开发环境依赖。对应日志为 `reset-runner-positive.log`、`uvicorn-030-regression.log`。
-
-首轮定向 [3/4 记录](../state/offline-validation-20260917T124605Z/results.json)还保留了连续上传
-得到 409 的测试失败。诊断确认旧测试会在按钮禁用时直接设置隐藏文件输入，绕过页面的刷新
-等待；`upload-diagnostic-2.log` 记录了这一行为。上传测试改为点击可用按钮后经文件选择器
-上传，保留两次 200、图片刷新、人工标记及无付费断言，不放宽业务版本检查，也不自动重试。
-
-最终修复为 **离线通过**，证据均在上述工作树，未使用业务数据或真实外部服务：
-
-| 检查 | 结果与证据 |
-|---|---|
-| 定向脚本 | [4/4](../state/offline-validation-20260917T125835Z/results.json)：宿主 2 项、浏览器工作流 11 项、文案交互 6 项、Hygiene 9 组 |
-| 完整 CI 浏览器步骤 | [12/12 主流程](../state/ui-regression/browser-stage-all.json)、[18 个 HTTP 入口与深链](../state/ci-browser-shutdown/final-cutover.json)、[部署页面 6 项](../state/deployment-implementation/frontend-browser.json)、[LAN 7 项](../state/offline-lan-20260917T130702Z-38800/report.json)；四个命令连续退出 0 |
-| 构建与复审 | 当前前端生产构建通过；运行输入指纹与构建一致，独立复审无遗留阻断；[本机汇总](../state/ci-browser-shutdown/validation.json) |
-
-修复代码提交为 `a9909e5`；本机验证时，远端 `main bbeb3b5` 的上述托管运行仍失败且只有
-失败证据制品。用户已确认合并并推送，后续提交、main 工作流与制品核验回执记入上述本机汇总。
-托管构建恢复须核对新 main 的完整 SHA、工作流成功结论及 `fbscraper-windows` 包身份；
-本地通过不替代这三项证据。服务机部署与真实业务继续为 **待真实联调**。
-
-### 1.12 DeepSeek Flash 模型名修复（2026-09-17）
-
-分支 `codex/deepseek-flash-model`，工作树 `.worktrees/deepseek-flash-model`；独立 archive/state/.env，
-只复用主检出的 Python 解释器。用户提供的服务机日志对应旧名称 `deepseek-v4-flash` 请求、
-`deepseek-flash` 响应；[官方更新说明](https://api-docs.deepseek.com/zh-cn/updates/)确认旧模型于
-2026-09-10 退役并暂时兼容路由到 V4.1 Flash。默认配置和白名单已改用当前名称，Pro 仍允许；
-不匹配提示只陈述实际请求/响应并指向官方说明，不把所有名称变化断言成异常回退。
-
-状态为 **离线通过**：[翻译回归](../state/offline-validation-20260918T024929Z/results.json)通过，
-覆盖当前 Flash 的实际 SDK + MockTransport 请求、旧失败留账后单篇成功、Pro 收到 Flash 拒绝、
-旧两次拒绝阻止第三次请求。[相关定向记录](../state/offline-validation-20260918T024853Z/results.json)
-中的其余 7 个脚本通过：付费账本、初次翻译、风险扫描、优化、建议、标签及 hygiene；该次翻译
-唯一失败是新断言误写终态名称，改成既有 `accepted` 后单独复验通过。修复前同症状的
-[失败复现](../state/offline-validation-20260918T024714Z/results.json)保留。证据位于上述工作树
-`state/`，不随 Git 交付，清理前须保全。
-
-没有修改费用账本、任务标识、提示词版本、保守估算费率或两次拒绝上限；没有新增付费请求。
-本机隔离夹具不能证明服务机账单或该帖真实译文通过，当前也没有服务机账本可供判断是否已达
-拒绝上限。真实复验为 **待真实联调**，按 [MANUAL_STEPS §5.4](MANUAL_STEPS.md#54-deepseek-flash-模型名升级后的单篇复验)
-先核账、确认来源许可与预算，再对指定单篇执行；`--check` 本身付费，不作为必跑前置。
-
-### 1.13 Facebook 作者身份修复（2026-09-18）
-
-分支 `codex/facebook-owner-identity`，工作树 `.worktrees/facebook-owner-identity`，基点 `64f1422`。
-16 条用户拒绝记录的直接原因是 `id:61591381265280` 与 `neakasaofficial` 直接比较；
-过滤在图片下载之前。同帖媒体较全的数字 ID 片段还会掩盖另一片段的已知用户名。
-
-用户随后提供的真实捕获前缀含 `ProfileActionMessage.profile_owner.id = 61591381265280`，
-同一对象的 `uri` 为 `https://www.facebook.com/messages/t/neakasaofficial/`。
-[精简身份夹具](../tests/fixtures/facebook_profile_identity.json)保留这条绑定与外层结构，
-删除无关联系信息、密钥配置、CDN 查询串和界面字段；搭配的 story 为构造样例，不能称为完整真实帖重放。
-用户给出的 `122125125675379375` 归档确实有 `kind=video`、`source_media_id=3751016248369637`，
-`local_path=null` 符合视频只存元数据的契约；没有证据证明该帖被误判为纯文字。
-
-解析器仅用作者对象、明确主页对象及消息动作的 ID/URL 关联规范化 owner，保存 `owner_evidence`。
-跨片段、滚动进度和详情补图共用该结果，冲突记录 `owner_conflict` 并阻止详情下载；
-未提供身份关联的数字 ID 仍拒绝，不从目标配置、显示名或帖子链接放行。
-
-**验证状态：离线通过。** [最终 12/12 个定向脚本结果与逐脚本日志](../state/offline-validation-20260918T030307Z/results.json)
-覆盖身份回归（12 项）、解析、回填、增量入口与离线重放、采集生命周期与媒体、归档链路、下游来源检查、replay 和 hygiene。
-所有写入使用临时归档、合成图片及假传输，没有真实浏览器、CDN、模型、飞书或发布操作。
-失败复现保存在同工作树 `state/offline-validation-20260918T025331Z/`，真实前缀修复前失败保存在
-`state/offline-validation-20260918T025714Z/`；这些本机日志不随 Git 提交，清理工作树前须保全。
-
-独立只读复审发现并关闭“旧拒绝记录按 post_id 去重吞掉新详情冲突证据”：拒绝账目按身份判据去重，
-不同证据追加，旧行保留；[失败复现](../state/offline-validation-20260918T030102Z/results.json)与
-[修复后定向结果](../state/offline-validation-20260918T030130Z/results.json)均保留。最终增量入口回归同时
-验证 URL 解析兼容项目既有下划线账号格式；独立复核无遗留阻断项。
-
-与主干 `193e990`（DeepSeek Flash 修复）整合后，[13/13 个定向脚本通过](../state/offline-validation-20260918T031033Z/results.json)，
-包含上述抓取回归及翻译测试；业务代码无冲突，交接文档保留两项修复并调整章节编号。
-本节引用的测试证据已按 SHA-256 核对复制到主检出 `state/` 的同名目录，原工作树副本保留；
-日志内运行时绝对路径不改写。合并验证仍为隔离夹具，不替代服务机部署或真实补抓。
-
-**待真实联调：** 尚无服务机业务目录，未向其补入那 16 篇图文帖的图片。完整捕获的解析与单图下载证据见下，
-服务机全部图片 URL 有效性、实际文件与人工处理结果仍须核验。部署代码不会自动改写历史拒绝列表或恢复缺图；按
-[MANUAL_STEPS §14 的误拒核验与恢复](MANUAL_STEPS.md#facebook-误拒记录的核验与恢复)执行。
-
-**缺图续查（2026-09-18）。** 用户重跑后的 `122123783349379375/post.json` 已有正确作者和身份依据，
-但 `media=[]`、两层 completeness 均为 `true`、`source_media_count=0`。因此该帖在下载前已没有媒体项，
-不能归因为 CDN 下载失败。截图只证明目录没有图片，不能证明原始响应中的附件位置。
-在同一工作树基于主干 `e22c9b1` 复现并修复：缺附件字段误判完整空帖、空片段覆盖部分图片、
-旧完整空档阻止部分图片补入。明确空数组仍支持纯文案帖；视频身份保持不变。
-[失败复现](../state/offline-validation-20260918T070515Z/results.json)和
-[6/6 定向脚本通过](../state/offline-validation-20260918T070545Z/results.json)均为隔离构造响应；
-归档用例实际写入合成 PNG，并核验旧来源历史、人工分类和人工稿保留。
-[另外 5/5 入口、生命周期、存储链路及 hygiene 脚本通过](../state/offline-validation-20260918T070957Z/results.json)，
-独立复审未发现本次补丁的新增阻断项。上述证据保留在工作树，并按 SHA-256 核对复制到主检出 `state/`，
-未接入服务机数据。该轮代码为 **离线通过**，当时仍缺完整 story，未据此宣称现场图片已恢复。
-
-**完整捕获核验。** 用户现已提供 `D:\Download\_capture_1789714625.json`，3,381,341 字节、78 个 payload，
-SHA-256 为 `302dff3727f9c92ea3590a0356e83b2b7e278832f585e6ea569625b73e80b7dc`。
-对该文件重放 `8b88fda` 得到 21 帖、0 图片、5 视频、16 空媒体帖；真实缺口是
-`attachments[].media` 仅含类型/ID，而图片 URL 位于 `styles.attachment.media.photo_image`，
-两篇相册分别在 `styles.attachment.all_subattachments.nodes` 中包含 5 和 4 项。
-解析器现解包明确的 Photo/Album renderer，再复用逐媒体选图与完整性检查；不递归收集整帖的任意图片。
-
-[完整捕获前后比较](../state/facebook-media-capture-20260918/comparison.json)确认修后仍为 21 帖、0 拒绝，
-恢复 23 图片、保留 5 视频，全部来源列表完整，无空媒体帖。以捕获时刻计算最近 30 天则为 12 帖、13 图片，
-其它 9 帖仍受日期窗口过滤；不能把整份捕获数量当成 30 天归档数量。
-完整捕获还走过临时归档补入验证：23 次假图片响应实际生成 23 个文件，旧空档可升级，人工分类与旧来源历史保留。
-[真实精简夹具](../tests/fixtures/facebook_media_styles.json)包含单图、两篇相册和视频的原始嵌套结构，
-CDN URL 改成 `cdn.invalid`，移除追踪、评论和无关主页资料；
-[修前失败](../state/offline-validation-20260918T071943Z/results.json)与
-[修后 4/4 定向脚本通过](../state/offline-validation-20260918T072011Z/results.json)可复核。
-[入口、生命周期、存储链路及 hygiene 另外 5/5 脚本通过](../state/offline-validation-20260918T072228Z/results.json)，
-合计 9 个定向脚本。独立复审重放全文件及反转顺序，核对两篇相册逐项 ID、未知 renderer 和残缺降级，
-未发现阻断项；[独立 4/4 脚本记录](../state/offline-validation-20260918T072212Z/results.json)另存。
-
-另以无浏览器、无 Cookie 的 Playwright 请求上下文调用实际下载器，只实测目标帖
-`122123783349379375` 的一个 CDN URL；[下载记录](../state/facebook-media-capture-20260918/cdn-check/result.json)
-及其同目录隔离归档保留 512×640、39,748 字节 JPEG，SHA-256 为
-`a29b5287b76eaf1e1dc9151c571daf9f668e01f00bebd46bfe7c6cfc2831f60f`，人工图像核对为 IFA 海报。
-这是捕获附件提供的尺寸，不证明已取得平台原始最大分辨率；也不代表其它 22 张图或服务机整轮回填验收。
-代码及完整捕获重放状态为 **离线通过**；服务机完整补抓仍为 **待真实联调**。
-本次报告、定向日志及单图隔离归档均保留在工作树，并按 SHA-256 核对复制到主检出 `state/`；
-报告中的运行时绝对路径不改写。完整原始 capture 保持用户提供的位置，不随 Git 提交。
-整合主干 `d1f5880` 的 Instagram 单图修复后，[5/5 定向脚本通过](../state/offline-validation-20260918T072609Z/results.json)，
-覆盖 Facebook 媒体、共用解析、Instagram 单帖修复、存储链路及 hygiene；两边功能和文档均保留。
-
-### 1.14 图片模型空目录修复（2026-09-18）
-
-分支 `codex/image-model-catalog`，工作树 `.worktrees/image-model-catalog`，基点 `5bb1751`。
-archive/state/.env 独立绑定，只复用主检出的 Python。用户提供的服务机诊断为 HTTP 200、
-顶层 `data/object`、`data` 是列表、有效模型 ID 数为 0；未提供条目总数或原始响应，
-因此不能断言 `data` 一定为空，也不能确认是 Key 配置还是供应商目录故障。
-
-[供应商模型管理文档](https://docs.aihubmix.com/cn/api/Models-API)明确带 Key 的列表反映 token
-配置，并提供精确型号详情。旧实现把空列表、坏结构与非空缺型号都归为模型不可用。
-现仅对合法空列表补查同一端点、同一凭据的 `/v1/models/{model}`，要求详情 `id` 精确匹配；
-其它失败仍在付费前关闭本批，缓存失败不逐图重试。保留原模型、提示词、费率和 `catalog`
-记录语义；它证明元数据确认，不证明实际远端路由。edits 返回不同模型仍拒绝并保留用量。
-
-状态为 **离线通过**：[修复前失败复现](../state/offline-validation-20260918T033152Z/results.json)，
-[修复后定向结果](../state/offline-validation-20260918T033241Z/results.json)为 3/3 脚本通过，
-包含新增模型目录 9 项、原图片测试与付费账本。使用实际 SDK + MockTransport、合成图片和
-临时账本，验证空列表→精确详情→一次 edits、目录异常零付费、失败缓存、预算与响应模型拒绝。
-[相关回归 4/4](../state/offline-validation-20260918T033446Z/results.json)补验图片生成依据、图片工作流、
-来源许可与 hygiene，共 7 个定向脚本通过；未改前端或运行全量。§5.5 免费诊断代码块另以
-MockTransport 执行，确认仅两个 GET、无 edits。证据位于本工作树 `state/`，不随 Git 交付，清理前须保全。
-
-没有使用服务机凭据、上传业务图片或新增付费请求。当前 Key 的详情响应和该图真实生成、
-德语质量、账单为 **待真实联调**；按 [MANUAL_STEPS §5.5](MANUAL_STEPS.md#55-图片模型目录为空时的核验与单图复验)
-先免费查元数据，再在已有来源许可与预算内单图复验。文案翻译无需重做。
-
-**2.5 型号更正（同分支后续）：** 用户提供的 [Flare](https://aihubmix.com/model/gpt-image-2.5-flare)
-与 [Sunburst](https://aihubmix.com/model/gpt-image-2.5-sunburst) 官方页确认调用名分别为
-`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`，两者公开 token 费率均为文本输入 5、
-图片输入 8、图片输出 30 USD / 百万 token。白名单与费率表按两个精确型号保存，拒绝旧占位名
-`gpt-image-2.5`，默认仍是 `gpt-image-2`。旧账本不改写，不将未知旧型号猜成某个变体；
-保留按记录型号计费、预览不借用其它型号样本的规则。此次只校正型号与费率来源，
-两款模型的真实 edits、usage、尺寸及德语图效果仍为 **待真实联调**。
-
-型号更正为 **离线通过**：[更正前回归失败](../state/offline-validation-20260918T033900Z/results.json)，
-[更正后 6/6 定向脚本通过](../state/offline-validation-20260918T034012Z/results.json)，覆盖模型目录
-12 项（含两变体的 SDK 请求/响应/账本身份及笼统名称拒绝）、图片处理、图片工作流、
-处理预览、付费账本与 hygiene。仍使用隔离数据及 MockTransport，没有真实付费请求。
-
-### 1.15 减少动画模式下的审校菜单定位
-
-分支 `codex/review-menu-position`，工作树 `.worktrees/review-menu-position`，基点 `4b8516c`。
-用户现场菜单已打开但 `y=-7296`。隔离 Chromium 在 `prefers-reduced-motion: reduce`、
-827×730 视口下复现 `x=729, y=-7300`，没有前端异常；普通动画模式通过。
-全局非零 `transition-duration: 0.01ms !important` 使弹层同步测量读到 `-1000vh` 的过渡起点；
-[上游 #618](https://github.com/react-component/trigger/issues/618)描述同一机制，本次结论以本地前后对照为依据。
-过渡时间改为 `0s`，动画时长仍为 `0.01ms`，保留减少动画偏好及菜单业务条件。
-
-状态为 **离线通过**：[修复前失败日志](../state/review-menu-position/browser-before.log)、
-[修复后浏览器报告](../state/ui-regression/browser-stage-review_menu.json)记录 24 个组合：
-普通/减少动画、827/1366 宽度、列表四种可处理状态及 FB/IG 详情。菜单项完全进入视口、
-点击打开对话框、取消返回焦点、列表重新展开和点击外部关闭均通过；未发送业务写请求。
-原失败组合修复后为 `x=729, y=199`；[减少动画截图](../state/ui-regression/review-menu-reduced-motion.png)保留。
-[相关前端 48 项](../state/review-menu-position/ui-tests.log)与
-[TypeScript/Vite 构建](../state/review-menu-position/build-after.log)通过，构建仍有既有大 chunk 提示。
-[既有列表流程 C](../state/review-menu-position/browser-list.log)、
-[详情冲突恢复 I](../state/review-menu-position/browser-detail.log)及
-[hygiene 9 组](../state/review-menu-position/hygiene.log)通过，独立只读复审无遗留阻断项。
-测试使用临时归档、合成图片与独立浏览器 profile，没有接入业务 Chrome、模型、飞书或发布。
-本节证据在上述工作树的 `state/`，不随 Git 交付，清理工作树前须保全。
-
-附件另报 `/api/refinements/task/...` 返回 500。本机 FB/IG 隔离样例均为
-[HTTP 200](../state/review-menu-position/capabilities-check.log)，未复现，未修改该接口。
-服务机菜单复验及这条 500 的 Traceback 取证为 **待真实联调**，按
-[MANUAL_STEPS 第 13 节](MANUAL_STEPS.md#13-更新并启动审校台)执行；不能宣称此 CSS 修复解决了后端 500。
-
-**源码启动补验。** 用户确认服务机只执行 `git pull`、停止旧 Web 后重新运行 `scripts/run_web.bat`，
-没有执行前端构建。旧脚本仅启动 Uvicorn，Git 忽略 `web/ui/dist`，因此重启继续提供旧 CSS；
-本机主检出也保留了 `index-DOeRiS6m.css` 中的 `.01ms` 规则。上面的 CSS 回归先手动构建，
-没有覆盖这个实际启动入口，不能证明拉取源码后重启已生效。
-
-源码版 `run_web.bat` 现每次按锁文件安装依赖并构建，全部成功后才启动 Python；缺 Node/npm、
-安装或构建失败会退出并明确报错。带 `release.json` 的运行包使用包内前端，继续不要求 Node。
-[启动修复前失败](../state/review-menu-startup/launcher-before.log)与
-[修复后 5 项通过](../state/review-menu-startup/launcher-after.log)使用真实 Windows 批处理和临时目录，
-npm/Python 边界为替身；覆盖连续源码更新后的旧产物替换、顺序、失败停止、空格路径与参数转发、
-运行包跳过构建。状态为 **离线通过**，服务机运行该入口及页面复验仍为 **待真实联调**。
-另将本机主检出的旧前端产物复制到隔离工作树，再执行真实 `scripts/run_web.bat --help`：
-[安装、构建与 Uvicorn 入口日志](../state/review-menu-startup/real-launch-build.log)通过；
-`--help` 只用于构建后退出，不启动业务服务。
-[旧 CSS](../state/review-menu-startup/stale-build-before.json)已替换为
-[含 `0s` 的新 CSS](../state/review-menu-startup/fresh-build-after.json)。用这次脚本生成的产物运行
-[24 个菜单组合](../state/review-menu-startup/browser-report.json)和
-[18 个实际 FastAPI HTTP 入口及深链刷新](../state/review-menu-startup/static-http.json)均通过；
-[hygiene 9 组](../state/review-menu-startup/hygiene.log)通过。
-这些 HTTP/浏览器检查仍用临时归档与合成图片；服务机地址本机访问超时，没有远程部署或真实页面验收。
-本次续修证据在同工作树 `state/review-menu-startup/`，旧菜单证据保留。
-
-### 1.16 Instagram 单图完整性与优化错误提示修复
-
-分支 `codex/instagram-single-image-completeness`，工作树 `.worktrees/instagram-single-image-completeness`，基点 `e22c9b1`。archive/state/.env 独立绑定，仅复用主检出 Python。用户提供的服务机字段摘要为 `media_type=1`、`__typename=XDTMediaDict`、`product_type=feed`、`carousel_media=null`；旧解析器按字段存在性进入轮播分支，导致已校验单图仍被素材硬闸拒绝。没有拿到服务机完整 capture 或业务目录。
-
-明确单图现兼容空轮播字段，真实轮播缺子项及矛盾类型仍不完整。单帖命令 `tools.repair_ig_completeness` 默认预览，执行前核对指定 capture 的同帖证据和既有原图；备份原字节及修复依据后只改三个完整性字段，追加 manifest 并重建两个展示索引。不改原文、原图、人工记录、业务账本、采集历史或通知。manifest/索引中断可用原命令继续；服务机步骤见 [MANUAL_STEPS §4.1](MANUAL_STEPS.md#41-ig-单图被误标不完整时的离线修复)。
-
-页面直接展示 API 错误原因。刷新失败保留错误，成功后清除本地提交提示并保留优化要求；状态刷新不再提交生成。409 后详情刷新异常也被捕获，原拒绝原因不被吞掉。
-
-状态为 **离线通过**：
-
-| 检查 | 证据与边界 |
-|---|---|
-| 解析失败复现 | [修复前结果](../state/offline-validation-20260918T065437Z/results.json)记录单图 `null`/空数组错误判为不完整；样本由用户字段摘要构造，不是完整真实响应重放 |
-| 定向后端 | [7/7 脚本](../state/offline-validation-20260918T070250Z/results.json)：解析、单帖修复 5 项、采集媒体、存储链路/状态、优化及 hygiene；临时归档、合成图片、假传输，无外部请求 |
-| 浏览器 | [修复前失败](../state/refinement-browser-before.log)、[修复后通过](../state/refinement-browser-after.log)、[报告及截图](../state/offline-browser-20260918T070054Z-20376/report.json)；真实本地 API/构建页面，409/503 使用浏览器响应夹具，验证原因、保留输入、失败/成功刷新及仅一次 POST |
-| 前端与入口 | [相关前端 92 项](../state/ui-tests.log)、[TypeScript/Vite 构建](../state/ui-build-after.log)通过；保留既有大 chunk 提示。`scripts/run_python.bat -m tools.repair_ig_completeness --help` 入口通过 |
-
-独立只读复审未发现阻断项，并另行运行解析回归及 5 项单帖修复测试通过。本节证据保存在上述工作树 `state/`，不随 Git 交付，清理前须保全。服务机 `3984612646028833441` 的实际修复、详情回读以及真实模型请求仍为 **待真实联调**；代码部署不自动改写旧 `post.json`，也不代表付费功能已真实验收。
-
-### 1.17 历史 Instagram 完整性自动核验（2026-09-18）
-
-分支 `codex/instagram-archive-reconciliation`，工作树 `.worktrees/instagram-archive-reconciliation`，
-基点 `92e8718`；archive/state/.env 独立绑定，只复用主检出的 Python。
-用户服务机输出确认 21 篇归档中 7 篇历史记录来源完整性未确认，3 篇图片为 `saved`、
-4 篇视频为 `metadata_only`，均为 `not_in_capture_state`；本轮采集的 12 篇均为 `complete`。
-这是用户提供的字段摘要，本机没有该服务机目录或这批 IG capture，不能据此证明 7 篇都可离线修复。
-
-当前监测与晨间对账在访问平台、清理 capture 前，自动用账号目录已有 capture 核验历史误标。
-单图及单视频共用指定单帖工具的核验/备份实现；所有匹配片段一致、身份/URL/媒体 ID 匹配、
-本地图片实际校验通过才修三个完整性字段及 manifest。无证据、坏文件、矛盾类型、真实轮播和
-坏图片保留，输出逐帖原因；不自动重抓历史、不改变访问配额、采集历史、通知或业务账本。
-真相更新后由现有展示入口刷新索引；已写真相但 manifest 中断可继续同步。
-
-`--status` 增加全归档实际文件诊断与采集状态；扫描“修复旧帖”改为“处理已有帖”。
-告警区分首次观察与上次保存计数，不把来源列表问题和视频元数据说成图片下载失败，
-也不再承诺异常项下次自动重抓。自动处理及剩余缺口解释见 [MANUAL_STEPS §4.2](MANUAL_STEPS.md#42-历史-ig-完整性自动核验)。
-
-**验证状态：离线通过。** [修复前失败复现](../state/offline-validation-20260918T114435Z/results.json)
-与 [8 项新增回归通过](../state/offline-validation-20260918T114954Z/results.json)使用临时归档、
-合成图片与构造 capture，覆盖 3 图+4 视频自动修复、只读状态、幂等、缺证据/冲突/坏图拒绝、
-坏 capture、manifest 中断后 capture 消失仍可恢复、dry-run 和晨间共用入口。
-[12 个相关脚本的定向记录](../state/offline-validation-20260918T115046Z/results.json)中 11 个直接通过，
-增量测试唯一失败来自旧断言在整行 JSON 中搜索 ID `222`，会被 `archived_at` 小数秒偶然命中；
-改为比较 `post_id` 集合后，[增量入口与 hygiene 2/2 通过](../state/offline-validation-20260918T115206Z/results.json)。
-全部 12 个脚本已有通过记录，覆盖新增自动核验、旧单帖工具、告警、解析、媒体、采集生命周期、
-调度及恢复、存储链路与展示索引。本轮未改前端，没有运行本机全量。
-独立只读复审无阻断项，另以隔离夹具确认归档锁占用时零写入、单图及单视频的矛盾总数拒绝。
-本机证据保留于上述工作树 `state/`，已按 SHA-256 核对复制到主检出同名目录；不随 Git 提交，清理前须保全。
-服务机自动修复后的真实数量与详情回读继续为 **待真实联调**；没有真实浏览器、模型、飞书或发布操作。
-
-### 1.18 审核分区直接确认（2026-09-19）
-
-分支 `codex/review-section-confirmations`，工作树 `.worktrees/review-section-confirmations`，基点 `1e15a12`；archive/state/.env 独立绑定，仅复用主检出 Python。标签确认原来只在编辑模式显示，Instagram 引导语没有对应确认状态。两个分区现可在浏览状态直接勾选／取消并保存，编辑时随草稿保存；Facebook 分区确认覆盖各落地页。空链接且无引导语可记录确认，不新增必做步骤。有链接或引导语的旧记录保留人工内容，并要求补确认。
-
-浏览确认使用 `confirmation_only` 请求，后端拒绝过期正文、旧机器提示词及夹带内容改动；不因勾选分区而重新认证过期正文。浏览确认保存期间禁用重复确认和编辑，隐藏冻结入口；编辑草稿保存期间的新输入继续保留。源文变化后重置对应确认，冻结、只读和终态仍不可编辑。
-
-**验证状态：离线通过。** [9/9 定向脚本](../state/offline-validation-20260919T123420Z/results.json)覆盖本地化 24 项、发布组装 3 项、Web 审校 54 项、冻结 12 项、后台发布 25 项、既有发布检查、hygiene，以及[基础浏览器 12 项](../state/offline-browser-20260919T123424Z-16088/report.json)和[文案浏览器 9 项](../state/offline-browser-20260919T123612Z-19756/report.json)。新增浏览器场景验证 IG 无链接直接确认／刷新、修改引导语后重新确认、失败与源文冲突、过期正文拒绝、FB 映射直接确认／取消、保存中禁用及只读／冻结／排期状态。另有[前端 105 项](../state/review-section-confirmations/frontend-final.log)、[TypeScript/Vite 构建](../state/review-section-confirmations/build-final.log)和[D1 保存／冲突契约](../state/ui-regression/browser-stage-d1.json)通过，保留已有大 chunk 提示。
-
-独立复审发现的过期正文误认证和确认保存期间可冻结均已修复并复核；[过期正文修前失败](../state/review-section-confirmations/stale-confirmation-before.log)与[修后通过](../state/review-section-confirmations/stale-confirmation-after.log)保留。所有写入使用临时归档；模型、剪贴板异常、冻结可用性和终态展示为替身，没有真实抓取、付费、飞书或发布操作。证据位于该工作树 `state/`，不随 Git 提交；清理前须保全。服务机更新和运营实际页面复验为 **待真实联调**，按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)执行。
+2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。`review-section-confirmations` 仍在，未纳入那次清理。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
 
 ### 1.19 待审核列表按原帖时间降序（2026-09-19）
 
@@ -663,12 +156,14 @@ FB 身份/媒体、访问及调度；[存储/监测等前期 7/7](../state/offli
 [原始证据只读验收](../state/publish-probe-g1/g1_acceptance.json)通过 G1、账号、提交、回读、
 FB/IG 窗口和严格 CLI 时区入口，379 张引用截图与原 JSON 哈希均未改变。
 代码回归使用隔离文件、假服务及本地 Chromium；没有连接真实 Chrome、登录、发帖、排期或改写业务账本。
-本机证据在本工作树 `state/publish-probe-g1/`，原录制在主检出 `state/`，均不随 Git 推送。
+本机报告及相关测试日志已按 SHA-256 保全到主检出的 `state/`，清单见
+`state/publish-probe-g1/integration-preservation.json`；原录制保留原位，均不随 Git 推送。
 
 [本轮验证汇总](../state/publish-probe-g1/g1-validation.json)：12 个相关脚本的最终结果全部通过，
 覆盖发布/v2、录证契约、规划、批准、单渠道、月历读取/回读/API、预检、运行状态与 hygiene。
 初轮月历夹具依赖旧美西默认值，固定其历史时区并补北京时间用例后复跑通过；原失败日志保留。
-独立复审发现的当前时刻建议和可选约束注入问题均已修复并补回归。文本换行、diff 已核验。
+独立复审发现的当前时刻建议和可选约束注入问题均已修复并补回归。文本换行、diff 已核验。与当前主分支上线配置整合后，
+[录证、预检、规划、月历 API 与 hygiene 5/5 定向回归](../state/offline-validation-20260920T034413Z/results.json)通过。
 
 G1 的真实录制结构验收不等于整套生产系统已激活：专用渠道/月历文件、实际单渠道回执和远端图片读取
 分别由对应能力与 G8 管理。FB 样本的 Story 曾开启，不能据此声明仅 Feed 真实提交通过。
@@ -712,36 +207,34 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 ## 4. 当前关键缺口
 
-逐项状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，代码与真实验收分开列。下面是摘要，不沿用旧缺口快照：
+逐项状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)。这里只列真正还缺的东西，不复述已经做完的部分。
 
-- 已补严格审校账本读取、模型恢复、源图内容指纹、冻结快照/恢复投影、历史分页/旧详情、SQLite 实际一致性和 runtime binding；原历史/索引读取另有真实证据，最终全量加相关补跑已通过。
-- scheduler 已有 install/status/disable/enable；月度样本/覆盖不足保留、双平台整批截止预算、模型/标签周采样/远端 I/O 独立执行器已有定向证据。批次 operation_id 与付费成本关联，CAS 恢复不重发付费请求。实际安装/停用/恢复未验收。
-- 处理 P50/P95 和晨间就绪率、源发帖至首次待审的 source_created_at/post_content_ready 关联已通过 6 项 runtime_status 测试，源发帖指标含发现等待，不为旧数据补造事实。
-- 风险路径与三类采样已有离线验证。IG 采样遵守 C7 持久停机、仅接受明确同名 hashtag 容器的累计 count。Trends 新增 CSV 专属被动控件、完整摘要上下文、BOM/CRLF/周月解析；恢复共享锁并要求 `trends-status` 的 revision。新增 4 项审查修复的 11 项导出测试通过，T1–T4 复审已关闭；真实 CSV/模型/平台采样仍未验收。⛔ **标签热度推荐 2026-09-15 起明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)），`[hashtags].enabled = false` 是决定不是缺口，采集器代码保留不删。
-- 阶段二本轮补上：翻译提示词按渠道渲染（IG 删掉原文的 bio 引导句，见第 8 节）、审校台按平台分成两个入口、一键复制服务端算好的成品文案、模型给只读优化建议交人逐条决定。**法语明确延期**，本轮不做 locale 抽象。
-- 设置只开放两项 CAS，原注释/受控说明已经展示，版本化浏览器对保存与冲突做了隔离本地后端验证。当前翻译 prompt 7、图片 prompt 3；2026-09-16 业务归档仍为空，历史样本不作当前可发布素材。`stale=false` 与 `machine_current` 分开解释，不从版本差异推断图文件历史或自动重译。
-- 飞书按帖聚合/阶段路由/晨报/有效首图状态与摘要、原卡冻结/人工 resolve、多收件人部分失效漏发和镜像周期包/大证据独立版本已有离线验证。当前角色有效原卡补送保留投递 ID；旧角色结转及部分失效保留旧 cancelled 卡，只给漏收者生成仍有效的新提醒。企业投递和恢复仍待权限。
-- 完整月历实际读取本次已真实通过，公开观察按 remote ID，不按时钟；业务层直接使用 month_inventory/month_readback，旧 Business Suite 接口仅保留兼容。新提交全文/唯一渠道/资产/remote ID/时刻因果和窗口/DST 已离线验证、P1/P2 复审关闭。远端 scheduled 详情图片适配器仍未实现，须受控排期获取真实控件后补齐；编辑器缩略图检查不替代它。G8 要求全文相等、远端媒体验证及有序 source SHA 与冻结清单一致，旧 scheduled 仍防重。
-- 第八批 API 已接历史 range/page/total、来源/快照指纹、风险/三来源元信息、恢复/设置和 Web/CLI 共用五阶段只读状态。
-- 历史交接六项已逐项补上：canonical source_text_sha256/AST 守卫，风险 raw scan_text_sha256 保留偏移；补扫中途过期仍跑普通探测并给技术/晨间告警；付费恢复；outbox 默认 30 天完整终态组件按 SHA 归档且主状态保留去重；FB 光标 {{linkN}} 与 /check 最终计数；消除重复 alias。`afb6784` 为调度过期修复，`923091f` 为飞书终态归档，最终整合在 `565f17c`；共同回归已单列。
-- 两个平台都没有任何可提交的联调素材：归档已清空，此前准备的 FB 待制作包也一并删除。`.global` 回填、企业飞书/云盘/外部心跳与运营完整流程仍依赖人工会话、权限和具体发布确认。
-- 审校台前端已收敛为单一 React 应用。深链接刷新由 `web/api/app.py::SinglePageFiles` 保住，契约钉在 `tests/tests_spa_static.py`；历史页首屏缩略图成本是已知待观察项（数字见 §7）。
-- 最新阶段二整合 Python **79/79**、前端 **542 项**及生产构建、浏览器 **15/15** 已通过，证据见 §1.6。这些测试跑在隔离夹具上，证明代码契约成立，不证明任何外部系统可用。
-- 一项留待跟进的性能观察：清库前在 1,067 篇归档上，冻结账号详情页首次打开 8.6 秒、刷新 4.1 秒，其余页面 0.4–3.2 秒。数据重建到相当规模后要重新量，别把空库上的"很快"当成结论。
+**发布侧是最长的一段，而且两头互相咬住。** `publish/` 的远端 scheduled 详情图片读取适配器**尚未实现**，G8 媒体闸因此不会通过——它要求全文相等、`remote_images_verified`、正整数媒体数以及有序 source SHA 与冻结清单一致，只有 `scheduled`、remote ID 或编辑器缩略图都不够。G1 已绑定现有录制并通过（§1.21），不再要求从零录制或补测 UI 边界。⛔ **必须先真实排出一张卡片，才能录到那张详情页的图片控件证据，再补适配器**；顺序见 [MANUAL_STEPS §16](MANUAL_STEPS.md#16-阶段三真实验收冻结排期与自动发布)。
 
-2026-09-14/15 阶段一打磨的成果只有离线证据：本地 tag 母目录布局、回填 `--days` 窗口、消息通道改走群自建机器人、帖子文件夹名改成业务可读的四段，以及本轮把监测重做成共享访问预算下的「发现即抓取」。**这些都不证明真实探测往返或真实新帖链路可用**；用户已在群里收到四个机器人的自检响应，真实探测、运营可达链接和首次回填仍待完成，云盘按 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界) 延期。
+**没有一次成功的真实付费产出。** 真实翻译和真实出图各失败过一次（§1.1），修复后尚未复验。连带两条阈值也标不了：`[image].dhash_max_distance` 与 `change_ratio_warn` 都是 `-1`，必须用首批真实产出分组标定，见 [MANUAL_STEPS §5.2](MANUAL_STEPS.md#52-标定图内文字到底改没改的告警线)。
+
+**联调素材只有半份。** 服务机 IG 有 21 篇归档，FB 那批图文帖还缺原图；开发机归档为空，出不了素材。两篇具体内容的准备见 [MANUAL_STEPS §9](MANUAL_STEPS.md#9-真实发布前的最终确认)。
+
+**没有异地备份。** `[heartbeat].enabled` 已开，还缺服务机 `.env` 的 `HEARTBEAT_URL`；没配时只记 `missing_url`，外部观察者收不到心跳。云盘镜像仍延期，备份只能靠人外拷（§1）。
+
+**一个业务前置没动：** IG 的 bio 聚合页还没建，`[publish].ig_bio_url` 是空的，链接区显示「未配置」。见 [MANUAL_STEPS §6.1](MANUAL_STEPS.md#61-上线前的一个业务前置ig-的-bio-聚合页)。
+
+**一个未复现的线上错误：** `/api/refinements/task/...` 在服务机返回 500，本机取不到 Traceback（§1.1）。
+
+⛔ **下面这些是决定，不是缺口，不要去补实现：** 云盘镜像、法语、德语标签热度推荐、登录/RBAC/真实 actor、视频加工、FB/IG 内容复用、`supervised` 与无人审核发布、发布任务队列、飞书卡片缩略图与远端去重。判据见 [REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)。
+
+**一项留待跟进的性能观察：** 清库前在 1,067 篇归档上，冻结账号详情页首次打开 8.6 秒、刷新 4.1 秒，其余页面 0.4–3.2 秒。数据重建到相当规模后要重新量，别把空库上的"很快"当成结论。历史页首屏缩略图成本另见[第 7 节](#7-审校台缩略图实测)。
 
 ⚠️ **`legal_size()` 的 16 像素量化会把正好压线的原图推出 IG 画幅带。** 候选排序原先第一键是宽度取整
 误差，画幅偏差只排第二，而它完全不知道发布侧那条 4:5 ~ 1.91:1 的窗口。实测：`1440x1800`（正好 4:5）
 量化成 `1440x1808`，比值 0.7965 掉出 4:5；`640x800` 量化成 `720x912`，比值 0.7895 同样掉出，还附带
 1.13 倍放大。两者的形变分别只有 0.442% 和 1.316%，都在 `aspect_drift_warn_percent = 2.0`（818 张归档
-标定）以下，**告警不会响**——原帖发得出去，德语版发不出去，而且今天连报错都没有，因为 G6/G6c 全关。
+标定）以下，**告警不会响**——原帖发得出去，德语版发不出去，该风险由图片输出质量和实际发布界面核验，不要求为关闭 G1 重新测量画幅。
 
 修法是排序加一个前置键"源图在带内而候选出带 → 排到最后"，带由 `[image].preferred_aspect_band` 给出。
 修后两例分别落到 `1440x1792`（0.8036）与 `736x912`（0.8070），形变 0.446% / 0.877%，仍远低于告警线。
 ⛔ **它只重排候选，从不拒绝**，也不修正原图本身就在带外的比值（`1536x2048`、`1200x628` 结果不变）——
-那是擅自改画面。这条带来自 2026-09-01 历史观察，dump 已删，所以只能当偏好不能当闸；有已签字 probe
-dump 时以 probe 为准。
+那是擅自改画面。这条带来自 2026-09-01 历史观察，只作为生成偏好；G1 不要求人工测量或配置发布画幅边界。
 
 ⚠️ **模型把原图原样退回来，原先所有闸都会放行。** `validate_output()` 查尺寸、格式、纯色占位图和
 dHash 距离，而 **dHash 越小越"好"**——原样退回的距离正好是 0，`dhash_max_distance` 又是 `-1`（关闭）。

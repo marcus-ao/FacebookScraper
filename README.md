@@ -1,6 +1,6 @@
 # FB / IG 内容本地化
 
-归档美国站 Facebook / Instagram 图文，生成德语文案和图片，供运营审校并选择柏林时间，通过 Meta Business Suite 创建单渠道排期。
+归档美国站 Facebook / Instagram 图文，生成德语文案和图片，供运营审校并按北京时间选择发布时刻，通过 Meta Business Suite 创建单渠道排期。审校台会在每个时刻旁并排显示德国受众的柏林当地时刻。
 
 ## 安装与启动
 
@@ -13,7 +13,7 @@ npm.cmd --prefix web/ui run build
 scripts\run_web.bat
 ```
 
-审校台地址为 <http://127.0.0.1:8765>。日常启动只需最后一条命令；前端开发与故障定位见 [web/README.md](web/README.md)。
+审校台本地地址为 <http://127.0.0.1:8765>。受管服务机办公入口是 `http://10.66.4.9:8765`，写在实例的 `control/host.json`，不由 `[feishu].base_url` 部署。日常启动只需最后一条命令；前端开发与故障定位见 [web/README.md](web/README.md)。
 
 业务配置在 [config.toml](config.toml)，密钥按 [.env.example](.env.example) 填入 `.env`。接续已有数据时使用 [config.local.example.toml](config.local.example.toml) 绑定本机路径，恢复步骤见操作指南。
 

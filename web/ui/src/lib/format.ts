@@ -56,7 +56,7 @@ export function calendarDays(start: string, end: string): (string | null)[] {
   return days
 }
 
-// 显示字符串携带的柏林墙上时刻，不转换为浏览器本地时区。
+// 显示字符串携带的业务墙上时刻（当前是北京），不转换为浏览器本地时区。
 export function formatSchedule(iso: string | null | undefined): string | null {
   if (!iso) return null
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)

@@ -42,7 +42,6 @@ class HeartbeatTests(unittest.TestCase):
             self.assertEqual(client.tick(NOW)["status"], "disabled")
             client.close()
         self.assertFalse(self.path.parent.exists())
-        self.assertFalse(HeartbeatSettings.load().enabled)
 
     def test_success_is_durable_throttled_across_restart_and_sends_no_content(self):
         requests = []

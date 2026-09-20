@@ -644,7 +644,7 @@ export interface CalendarPayload {
 
 
 export interface EditableSettings {
-  /** 1–12 个不重复的柏林 HH:MM。 */
+  /** 1–12 个不重复的业务时区 HH:MM；业务时区当前是北京。 */
   readonly default_times: readonly string[]
   /** 1–30 个上海工作日。 */
   readonly snooze_default_days: number

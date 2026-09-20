@@ -1,16 +1,16 @@
 # 人工操作指南
 
-**本周先按[第 15 节](#15-服务机部署与日常更新)把服务机装起来，再在服务机上按[第 14 节](#14-阶段一真实验收监测与抓取)做阶段一（监测与抓取）的真实验收。** 1–13 节是分主题的长期参考；第 14 节把与阶段一相关的挑出来排成一条可以照着走的线，第 15 节是一次性的装机顺序和日常更新动作。
+**2026-09-20 试运营上线。服务机已装好，这一轮的动作是：先只读数抓取积压（[§2.1](#21-配置同群四个机器人)）→ 拉取含 `[feishu].enabled = true` 的 `main` 并重启 → 复验 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) 那张表 → 人工重新回填 FB 原图（[第 4 节](#4-为当前目标建立归档)）→ 四机器人在服务机自检（[§2.1](#21-配置同群四个机器人)）→ 写入外部看门狗 `HEARTBEAT_URL`（[§2.2](#22-外部心跳)，不是审校台网址）→ 72 小时试运行（[第 14 节](#14-阶段一真实验收监测与原帖抓取)，不带 `--process`）。** ⛔ **拉代码不会改 `control/host.json`，也不会把 Web 部署到 `10.66.4.9`；办公入口以实例 host.json 为准。** 打开内容处理另有四条硬前置（[§14.1](#141-打开内容处理抓到就翻译和出图)），真实排期还要先录发布证据（[第 8 节](#8-录制单渠道-business-suite-证据)、[第 16 节](#16-阶段三真实验收冻结排期与自动发布)）。日历、云盘镜像、标签热度本轮仍关着。
 
-本文件列人工依赖与操作顺序（2026-09-15 起开发机与服务机分开，分工见第 15 节），存储说明同步至 2026-09-15。**原主工作区的 `archive/` 与 `state/` 是实际业务数据**，审校写入会落到真实账本。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。五阶段与八批工作已接受，不重复申请普通文件修改/离线验证权限。
+1–13 节是分主题的长期参考，第 14–17 节是排成顺序的现场流程。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。
 
-当前 Stage 1 worktree 的 archive 为空，state 只有隔离测试报告，`.env` 是占位符；没有复制真实凭据，也没有运行真实平台或飞书请求。2026-09-14 删除了旧 429 证据，不能把历史观察当成当前持久停机状态。9223 的 Business Suite 观察和后续发布约束继续按第 8–10 节执行。
+⚠️ **两台机器不要混。** 服务机的 `shared/archive`、`shared/state` 是实际业务数据，审校写入会落到真实账本；开发机归档为空，只做代码与离线回归。在开发机上跑出来的结果不是服务机的结论。
 
 ## 1. 接续运行数据前先备份和核验
 
-主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本的绑定以 `config.local.toml` 和运行状态为准。本轮 `codex/raw-post-storage` 位于 `.worktrees/storage`，单独绑定该目录中的 archive/state/.env，只复用主工作区 Python 解释器，未接主工作区业务数据。不能把这种隔离假定到其他副本。
+主干直接按 `config.toml` 的 `[paths]` 读同目录的 archive/state；副本的绑定以 `config.local.toml` 和运行状态为准，⚠️ **接手任何副本前先看那个文件指向哪里**，不能假定副本一定是隔离的。
 
-⛔ 2026-09-14 已按业务决定把 archive/state 整库清空且**没有备份**，现在两个目录都是空的。这条决定是一次性的：**以后再接续或恢复，仍然必须先备份再动**，下面这套核验步骤照做。
+⛔ 2026-09-14 曾按业务决定把开发机的 archive/state 整库清空，且**没有备份**。那是一次性决定；**以后再接续或恢复，仍然必须先备份再动**，下面这套核验步骤照做。服务机的业务数据现在是真的，更要照做。
 
 以后再次接续或恢复时，先停止旧调度器与写入进程，备份完整 archive/state，另包含运行 `config.toml`、存在时的 `config.local.toml`、本机 `.env` 的受控副本和解释器位置/版本记录。备份凭据单独控制访问，不放公共云盘或证据报告；不要只复制 manifest/SQLite。
 
@@ -45,6 +45,7 @@
 | `FEISHU_WEBHOOK_PUBLISH` | 新帖发布推送机器人：待审、排期成功 |
 | `FEISHU_WEBHOOK_ALERT` | 状态告警推送机器人：积压、排期失败、晨间摘要、系统异常 |
 | 上述变量各加 `_SECRET` | 对应机器人的签名密钥。不填就必须在该机器人配置关键词 |
+| `HEARTBEAT_URL` | 外部缺席告警接收地址，必须 HTTPS；不写进 `config.toml` |
 
 ⛔ **地址本身带 token，等于密钥。** 不要贴进 config、截图、日志或版本库。
 
@@ -53,14 +54,22 @@
 
 ### 2.1 配置同群四个机器人
 
-用户已建好四个机器人。逐个核对现有机器人即可，不重复创建：
+用户已建好四个机器人。逐个核对现有机器人即可，不重复创建。`config.toml` 里 `[feishu].enabled` 已经是 `true`。
+
+⛔ **服务机第一次加载这份配置之前，先只读数积压，不要重启。** 飞书关闭期间抓取事件不会被确认；重启后下一轮维护会按扫描把 `acknowledged=false` 的事件一次性入队。在服务机业务目录执行：
+
+```powershell
+scripts\run_python.bat -c "import json; from pathlib import Path; from core.config import cfg; p = cfg().state_dir / 'capture_state.json'; data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}; events = [e for e in (data.get('events') or {}).values() if isinstance(e, dict) and e.get('acknowledged') is False]; scans = {e.get('scan_id') for e in events}; print('unacknowledged_events', len(events)); print('scans', len(scans))"
+```
+
+记下事件数和扫描数。文件不存在则积压为 0。这是只读，不要改 `capture_state.json`。数完再拉代码、停旧 Web、用 `scripts\run_web.bat` 重启。
 
 1. 进入同一业务群 → 群设置 → 群机器人，分别打开四个自定义机器人；
 2. 核对名称为「新帖检测推送机器人」「新帖爬取推送机器人」「新帖发布推送机器人」「状态告警推送机器人」，与上表对应；
 3. 安全设置里勾**签名校验**，把密钥和 webhook 地址一起抄下来。两种校验的区别：
    - **签名校验**（推荐）：和卡片内容无关，改文案不会失效；
    - **关键词**：卡片里必须出现该词。要用就设成 `Neakasa`（当前卡片标题里有），但请记住这个约束只写在群设置里，**以后改标题会静默失效**；
-4. 四个地址及各自签名密钥填进实际运行绑定的 `.env`。`FEISHU_WEBHOOK_OPS/TECH` 已停用，不能把一个旧地址复制到多个新角色。然后人工自检——这一步会**由四个机器人各发一条消息**：
+4. 四个地址及各自签名密钥填进**服务机**实际运行绑定的 `.env`。`FEISHU_WEBHOOK_OPS/TECH` 已停用，不能把一个旧地址复制到多个新角色。然后在**服务机**人工自检——这一步会**由四个机器人各发一条消息**：
 
 ```powershell
 scripts\run_python.bat -m pipeline notifications --self-test
@@ -79,6 +88,16 @@ scripts\run_python.bat -m pipeline notifications
 **未知结果不自动重发。** 超时、5xx、响应无法解析或进程中断会留在 `uncertain`。在群里核对机器人、扫描时刻和内容，再按 delivery ID 与当前 version 登记；已送达填核对说明，确认未送达才恢复。明确限流或拒绝的请求会退避 15 分钟。不要删除发件箱或更改角色来“重试”。
 
 旧发件箱会在写入投递流程时升级为版本 2：已送达记录保留旧角色且不重发；从未尝试的记录转当前阶段；旧未知结果先核对。确认旧通道未送达后，有效内容才转当前机器人，原卡与旧 ID 保留；部分过期卡只补仍有效的内容。当前主工作区在本轮整合前没有 `feishu_outbox.json`，升级行为由隔离夹具验证。
+
+⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`。** 飞书开关是共享的，四个 webhook 是真的，会往业务群发卡片。
+
+### 2.2 外部心跳
+
+`[heartbeat].enabled` 已经是 `true`。调度进程每隔 `interval_minutes` 对 `HEARTBEAT_URL` 发一次空 HTTPS POST；缺席由外部服务告警，本机飞书在关机时帮不上忙。
+
+1. 在外部心跳服务建一个检查，过期阈值按 `stale_after_minutes`（默认 45）设；
+2. 把 HTTPS 地址写入**服务机** `.env` 的 `HEARTBEAT_URL`。地址可能带 token，不要贴进 config、截图、日志或版本库；
+3. 没配时进程不崩，状态记 `missing_url`，外部观察者收不到心跳。配错成 HTTP 或带用户名密码时记 `invalid_url`。
 
 ## 3. 登录三个专用 Chrome
 
@@ -314,7 +333,7 @@ scripts\run_images.bat --account in_neakasa.global --post-id 3987885751693561790
 
 ## 6. 审校台人工检查
 
-开发机 API 跑在 [127.0.0.1:8765](http://127.0.0.1:8765)，绑定真实数据。2026-09-13T07:13:27Z 首页、历史、2020 年冻结详情和运行状态四个 GET 均为 200，冻结详情与运行状态只读。可直接打开本机页面；**这不证明运营机器能访问。** 下列构建/启动步骤供后续停止或更新服务时使用，已有实例运行时不重复占用端口。
+开发机 API 跑在 [127.0.0.1:8765](http://127.0.0.1:8765)，绑定开发机自己的 archive/state（当前为空，所以列表也是空的）。⚠️ **本机页面能打开不证明运营机器能访问**，运营入口按[第 17 节](#17-办公局域网接入)从业务电脑验收。下列构建/启动步骤供停止或更新服务时使用，已有实例运行时不重复占用端口。
 
 开发机构建唯一 React 前端（见第 13 节）：
 
@@ -514,7 +533,7 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 点击后进程退出、回读失败或 remote ID 不一致时，不要重试。查 `published.jsonl`、Planner 和冻结快照，按不确定提交处理。
 
-当前还保留一条旧双渠道不确定账目：attempt `d9853906-57d9-437c-9f71-4ed72d103a81`、post `3965025107383038890`、2026-09-09 10:00 +02:00，缺 remote ID 和快照。需人工核对原提交现场/平台记录，当前月历没卡不能判成未提交；先保留该账目，不再次点击，也不把它算作本轮单渠道验收。
+⛔ **开发机的 `published.jsonl` 已随 2026-09-14 清库删除，那条旧双渠道不确定账目连同防重记录一起没了。** 所以「本地查不到这一篇」不能当作「没提交过」——历史上可能有已提交但本地无记录的尝试。服务机建立自己的发布账本之后，以它为准；两边账本不合并。
 
 ## 10. 激活边界
 
@@ -528,7 +547,7 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 本节用于未接入部署控制器的独立检出。受管服务机按[第 15 节](#15-服务机部署与日常更新)安装唯一控制器任务，通过 `deployment mode` 管理调度，不并行安装这里的旧任务。
 
-本轮已实际只读运行 `python -m tools.schedule scheduler-status`，返回 `FBScraperScheduler: 未注册`，退出码 0。当前 8765 端口的 Web 服务已经启动，常驻监测任务仍未安装；两个进程的状态不能混用。
+⚠️ **Web 进程在跑不代表常驻监测任务已安装**，两个进程的状态不能混用。开发机当前四个计划任务都是未注册。
 
 `tools.schedule install` 是旧每日组合。常驻 scheduler 当前已有下列入口，先做只读预览与安装演练：
 
@@ -556,7 +575,7 @@ npm.cmd --prefix web/ui run build
 scripts\run_python.bat -m tools.test_offline
 ```
 
-`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——**它不会让测试结果自动变成真实外部系统结果。** 2026-09-14 当前集成版本是 Python 66/66、React 26 个文件共 505 项测试和 TypeScript + Vite 构建通过；构建保留 1.39 MB JavaScript chunk 警告。
+`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——⛔ **它不会让测试结果自动变成真实外部系统结果。** 按 [AGENTS 第四节](../AGENTS.md) 按影响选择范围，不把全量当成每次改动的固定流程；构建保留已有的大 chunk 提示。
 
 完整前端验证入口为：
 
@@ -977,7 +996,7 @@ D:\FacebookScraperService\
 
 网络参数保存在 `control\host.json`：`web_host`、`web_port`、`public_base_url`、`allowed_client_cidrs`。受管通知的审校台地址以这里为准；独立开发仍读取 `[feishu].base_url`。首次局域网安装见第 17 节。
 
-两个运营可编辑偏好保存在 `shared\state\operator_preferences.json`：默认柏林排期时刻与挂起工作日数。其余配置、提示词和业务规则由已验证版本交付；不要在服务机直接改 `releases\<sha>\config.toml`。
+两个运营可编辑偏好保存在 `shared\state\operator_preferences.json`：默认排期时刻（业务时区，当前是北京）与挂起工作日数。其余配置、提示词和业务规则由已验证版本交付；不要在服务机直接改 `releases\<sha>\config.toml`。
 
 ### 15.4 注册控制器与首次启动
 

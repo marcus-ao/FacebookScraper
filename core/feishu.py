@@ -72,6 +72,7 @@ class FeishuSettings:
         enabled = c.get('feishu', 'enabled', False)
         if not isinstance(enabled, bool):
             raise ValueError('[feishu].enabled 必须是布尔值')
+        # 受管卡片链接走 host.json；[feishu].base_url 只给非受管进程，不绑定监听地址。
         base_url = load_web_access().public_base_url if os.environ.get('FBSCRAPER_CONTROL_DIR') else c.get('feishu', 'base_url', '')
         result = cls(enabled, base_url,
                      keep_delivered_days=c.get('feishu', 'keep_delivered_days', 30))
