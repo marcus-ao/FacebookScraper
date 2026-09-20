@@ -12,12 +12,13 @@ import time
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
-from playwright.async_api import expect
+from playwright.async_api import expect, TimeoutError as BrowserTimeout, Error as BrowserError
 
 from core.config import ROOT, cfg
 from core.paid_model import atomic_write_json
 from core.store import assert_physical_direct_path
 from publish import business_suite as bs, selectors
+from publish import planner_content as content, published_details
 from publish.channel_evidence import accounts, context_ids
 
 DAY_SELECTOR = '[role="link"][draggable="false"]'
@@ -41,12 +42,16 @@ ITEM_DATA_JS = r'''n => {
 
 class PlannerItemError(bs.PublishStepError):
     """Only structural context crosses the cache/API boundary, never exception text or URLs."""
-    def __init__(self, row, item, stage):
+    def __init__(self, row, item, stage, cause=None):
         self.diagnostic = {'date': row['date'].isoformat(), 'time': item['time'],
                            'item_index': item['index'], 'stage': stage,
                            'has_href': bool(item.get('href')),
                            'text_length': len(item.get('text', '')),
-                           'label_count': len(item.get('labels', []))}
+                           'label_count': len(item.get('labels', [])),
+                           'code': cause.code if isinstance(cause, content.DetailReadError) else
+                                   'load_timeout' if isinstance(cause, (BrowserTimeout, TimeoutError)) else 'read_failed',
+                           'placement': cause.placement if isinstance(cause, content.DetailReadError) else 'unknown',
+                           'missing_fields': list(cause.missing_fields) if isinstance(cause, content.DetailReadError) else []}
         super().__init__(f"月历条目读取失败：{self.diagnostic['date']} {item['time']}（{stage}）")
 
 
@@ -154,7 +159,7 @@ async def read_item(page, row, item, *, timeout=30):
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
         return await read_item_detail(page, row, item, node, raw, timeout=timeout)
     except Exception as exc:
-        raise PlannerItemError(row, item, stage) from exc
+        raise PlannerItemError(row, item, stage, exc) from exc
     finally:
         # Hover cards must not contaminate the final month sweep or the next slot.
         await page.mouse.move(0, 0)
@@ -244,14 +249,20 @@ async def read_item_detail(page, row, item, node, raw, *, timeout):
         remote = parse_qs(parsed.query).get('content_id', [''])[0]
         if (parsed.hostname != 'business.facebook.com' or parsed.path.rstrip('/') != '/latest/insights/object_insights'
                 or not re.fullmatch(r'\d{6,}', remote)):
-            raise bs.PublishStepError('月历条目链接尚未录证，不能跳过未知内容')
+            raise content.DetailReadError('unsupported_type', missing_fields=('detail_adapter',))
         detail = await page.context.new_page()
         try:
-            await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            try:
+                await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
+            except BrowserError as exc:
+                raise content.DetailReadError('navigation_failed') from exc
+            if urlsplit(detail.url).path.rstrip('/') != parsed.path.rstrip('/'):
+                raise content.DetailReadError('navigation_failed')
             await detail.bring_to_front()
-            channels, caption = await published_detail(detail, row, item, timeout=timeout)
-            return {'channels': channels, 'remote_ids': {channels[0]: remote} if len(channels) == 1 else {},
-                    'text': caption, 'delivery': 'published', 'detail_url': url}
+            variants = await published_details.read(detail, row, item, accounts(), timeout=timeout)
+            for variant in variants:
+                variant['source_content_id'] = remote
+            return {'variants': variants}
         finally:
             await detail.close()
     spec = bs.require_readback_evidence()
@@ -260,60 +271,14 @@ async def read_item_detail(page, row, item, node, raw, *, timeout):
     if parsed is None or parsed != expected:
         raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
     remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout)
-    if not remote_ids:
-        raise bs.PublishStepError('排期详情未就绪或缺少目标账号、渠道与远端 ID')
+    if len(remote_ids) != 1:
+        raise content.DetailReadError('identity_unverified', placement='feed',
+                                      missing_fields=('channel_identity',))
     match = re.search(spec.attributes['datetime_regex'], raw)
     caption = raw[:match.start()].strip() if match else raw
     return {'channels': tuple(sorted(remote_ids)), 'remote_ids': remote_ids,
-            'text': caption, 'delivery': 'scheduled'}
-
-
-async def published_detail(page, row, item, *, timeout):
-    """Wait on post metadata and caption stability, without waiting for metric loaders."""
-    deadline = time.monotonic() + timeout
-    previous, stable_since = None, time.monotonic()
-    label = page.get_by_text(re.compile(r'Published on:'))
-    heading = page.get_by_role('heading', level=3).first
-    while True:
-        value = None
-        if await label.count() == 1 and await heading.count():
-            header = await label.evaluate('''el => ({text:el.innerText,
-              platforms:[...el.parentElement.querySelectorAll('img[alt]')].map(n=>n.alt),
-              authors:[...el.querySelectorAll('strong')].map(n=>n.textContent)})''')
-            caption = await heading.inner_text()
-            if caption.strip() and any(author.strip() for author in header['authors']) and header['platforms']:
-                value = (header, caption)
-        if value != previous:
-            previous, stable_since = value, time.monotonic()
-        if value and time.monotonic() - stable_since >= .4:
-            channels = published_channels(value[0], row['date'], item['time'])
-            if not channels:
-                raise bs.PublishStepError('已发布详情账号或渠道不符')
-            return channels, value[1]
-        if time.monotonic() >= deadline:
-            raise bs.PublishStepError('已发布详情的正文、日期、账号或渠道尚未完整就绪')
-        await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
-
-
-def published_channels(header, day, clock):
-    """Read channel evidence from metadata icons, time and collaborators, never from caption text."""
-    match = re.search(r'Published on: \w{3} (\w{3} \d{1,2}), (\d{1,2}:\d{2}[ap]m)', header['text'])
-    if not match:
-        raise bs.PublishStepError('已发布详情缺少可核对的日期与时刻')
-    observed = datetime.strptime(f'{day.year} {match[1]} {match[2]}', '%Y %b %d %I:%M%p')
-    expected = datetime.combine(day, datetime.strptime(clock, '%I:%M %p').time())
-    if observed != expected:
-        raise bs.PublishStepError('月历日期格与已发布详情时刻不一致')
-    markers = set(header['platforms'])
-    if not markers or markers - {'Facebook', 'Instagram'}:
-        return ()
-    channels = tuple(channel for channel, label in (('facebook', 'Facebook'), ('instagram', 'Instagram'))
-                     if label in markers)
-    identity = ' '.join(header['authors'])
-    if not identity.strip() or not all(re.search(r'(?<![\w.])' + re.escape(accounts()[channel]) + r'(?![\w.])', identity)
-                            for channel in channels):
-        return ()
-    return channels
+            'text': caption, 'delivery': 'scheduled', 'placement': 'feed',
+            'caption_status': 'present', 'accounts': {key:accounts()[key] for key in remote_ids}}
 
 
 async def prepare(page, *, timeout=30):
@@ -344,22 +309,38 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30):
     await prepare(page, timeout=timeout)
     rows = await read_grid(page, timeout=timeout)
     ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_ui_timezone(business_timezone)
-    cards, occupied = [], {}
+    cards, occupied, diagnostics = [], {}, []
     for row in rows:
         for item in row['items']:
-            material = await read_item(page, row, item, timeout=timeout)
+            try:
+                material = await read_item(page, row, item, timeout=timeout)
+            except PlannerItemError as exc:
+                diagnostics.append(exc.diagnostic)
+                material = {'channels': (), 'remote_ids': {}, 'text': '', 'delivery': 'unknown',
+                            'placement': exc.diagnostic['placement'],
+                            'read_status': 'unsupported' if exc.diagnostic['code']=='unsupported_type' else
+                                           'unavailable' if exc.diagnostic['code']=='permission_denied' else 'incomplete'}
             if material is None:
                 continue
-            for moment in moments(row['date'], item['time'], ui_zone, business_zone):
-                occupied[moment.timestamp()] = moment
-                cards.append(bs.RemotePlannerCard(moment, material['channels'],
-                    tuple(sorted(material['remote_ids'].items())), material['text'],
-                    hashlib.sha256(material['text'].encode('utf-8')).hexdigest(), material['delivery']))
+            for variant in material.get('variants', [material]):
+                at = variant.get('ui_at')
+                for moment in moments(at.date() if at else row['date'],
+                                      at.strftime('%I:%M %p') if at else item['time'], ui_zone, business_zone):
+                    occupied[moment.timestamp()] = moment
+                    cards.append(bs.RemotePlannerCard(moment, variant['channels'],
+                        tuple(sorted(variant['remote_ids'].items())), variant['text'],
+                        hashlib.sha256(variant['text'].encode('utf-8')).hexdigest(), variant['delivery'],
+                        placement=variant.get('placement','unknown'), media_kind=variant.get('media_kind','unknown'),
+                        caption_status=variant.get('caption_status','unknown'),
+                        accounts=tuple(sorted(variant.get('accounts',{}).items())),
+                        relationships=tuple(variant.get('relationships',())),
+                        read_status=variant.get('read_status','complete'),
+                        source_content_id=variant.get('source_content_id','')))
     # Verify a final sweep so edits/late rendering during detail reads invalidate the inventory.
     if rows != await read_grid(page, timeout=timeout):
         raise bs.PublishStepError('核对详情期间远端月历已更新，请重新读取')
     return bs.RemoteSlotInventory(tuple(occupied[key] for key in sorted(occupied)), ui_timezone,
-        rows[0]['date'], rows[-1]['date'], tuple(cards), True)
+        rows[0]['date'], rows[-1]['date'], tuple(cards), True, tuple(diagnostics))
 
 
 def require():

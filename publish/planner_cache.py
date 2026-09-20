@@ -17,6 +17,7 @@ from publish.journal import PublishOperationLock
 from publish.planning import aware_utc
 from publish import business_suite as bs
 from publish import month_inventory
+from publish.planner_content import PLACEMENTS, MEDIA_KINDS, DELIVERIES, READ_STATUSES, CAPTION_STATUSES
 
 
 @maintenance.guarded('planner_read')
@@ -60,7 +61,7 @@ def _guard(path: Path, _role: str = "target") -> Path:
 def _empty() -> dict:
     return {"version": 1, "observed_at": None, "last_attempt_at": None,
             "refresh_status": "idle", "refresh_error": None, "refresh_diagnostic": None,
-            "inventory": None}
+            "inventory": None, "partial_inventory": None, "partial_observed_at": None}
 
 
 def _serialize(inventory: RemoteSlotInventory) -> dict:
@@ -69,9 +70,14 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
             "visible_start": inventory.visible_start.isoformat() if inventory.visible_start else None,
             "visible_end": inventory.visible_end.isoformat() if inventory.visible_end else None,
             "cards_loaded": inventory.cards_loaded,
+            "diagnostics": list(inventory.diagnostics),
             "cards": [{"at": _moment(card.at).isoformat(), "channels": list(card.channels),
                        "remote_ids": dict(card.remote_ids), "rendered": card.rendered,
-                       "card_sha256": card.card_sha256, 'delivery': card.delivery} for card in inventory.cards]}
+                       "card_sha256": card.card_sha256, 'delivery': card.delivery,
+                       'placement': card.placement, 'media_kind': card.media_kind,
+                       'caption_status': card.caption_status, 'accounts': dict(card.accounts),
+                       'relationships': list(card.relationships), 'read_status': card.read_status,
+                       'source_content_id': card.source_content_id} for card in inventory.cards]}
 
 
 def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
@@ -92,16 +98,29 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
                        for channel, remote in row["remote_ids"].items())
                 or not isinstance(row["rendered"], str) or not isinstance(row["card_sha256"], str)):
             raise ValueError("月历卡片格式无效")
-        if row.get('delivery', 'unknown') not in {'unknown', 'scheduled', 'published'}:
+        if row.get('delivery', 'unknown') not in DELIVERIES:
             raise ValueError('月历公开发布状态无效')
+        metadata = {key: row.get(key, default) for key, default in (
+            ('placement','unknown'), ('media_kind','unknown'), ('caption_status','unknown'),
+            ('read_status','legacy'), ('source_content_id',''))}
+        if (metadata['placement'] not in PLACEMENTS or metadata['media_kind'] not in MEDIA_KINDS
+                or metadata['caption_status'] not in CAPTION_STATUSES or metadata['read_status'] not in READ_STATUSES
+                or not isinstance(metadata['source_content_id'], str)
+                or not isinstance(row.get('accounts',{}),dict)
+                or any(key not in channels or not isinstance(value,str) for key,value in row.get('accounts',{}).items())
+                or not isinstance(row.get('relationships',[]), list)
+                or any(value not in {'collaboration','shared','cross_platform'} for value in row.get('relationships',[]))):
+            raise ValueError('月历内容分类或身份格式无效')
         cards.append(RemotePlannerCard(_moment(row["at"]), tuple(channels),
                                       tuple(sorted(row["remote_ids"].items())),
-                                      row["rendered"], row["card_sha256"], row.get('delivery', 'unknown')))
+                                      row["rendered"], row["card_sha256"], row.get('delivery', 'unknown'),
+                                      **metadata, accounts=tuple(sorted(row.get('accounts',{}).items())),
+                                      relationships=tuple(row.get('relationships',[]))))
     return RemoteSlotInventory(
         tuple(_moment(at) for at in data["occupied"]), data["ui_timezone"],
         date.fromisoformat(data["visible_start"]) if data.get("visible_start") else None,
         date.fromisoformat(data["visible_end"]) if data.get("visible_end") else None,
-        tuple(cards), data["cards_loaded"])
+        tuple(cards), data["cards_loaded"], tuple(data.get('diagnostics',[])))
 
 
 def _load(path: Path) -> dict:
@@ -115,6 +134,9 @@ def _load(path: Path) -> dict:
         if value.get(key) is not None:
             _moment(value[key])
     inventory = inventory_from_cache(value)
+    if value.get('partial_inventory') is not None:
+        inventory_from_cache({'inventory':value['partial_inventory']})
+        _moment(value['partial_observed_at'])
     if (inventory is None) != (value.get("observed_at") is None):
         raise ValueError("月历数据与成功观测时间必须同时存在")
     return value
@@ -131,13 +153,15 @@ def read_cache(path: Path, *, now: datetime | None = None,
                 "age_seconds": None, "refresh_error": "cache_unavailable"}
     age = ((now - _moment(record["observed_at"])).total_seconds()
            if record.get("observed_at") else None)
-    if age is None:
+    if record.get('partial_inventory') is not None:
+        status = 'partial'
+    elif age is None:
         status = "unavailable" if record.get("refresh_error") else "missing"
     elif age < 0:
         status = "clock_skew"
     elif age >= stale_after_seconds:
         status = "stale"
-    elif not inventory_from_cache(record).channels_complete:
+    elif not inventory_from_cache(record).decision_complete:
         status = "partial"
     else:
         status = "ready"
@@ -179,8 +203,19 @@ async def refresh_cache(path: Path, reader, *, state_dir: Path,
             data = _serialize(inventory)
             inventory_from_cache({"inventory": data})
             observed = _moment(now or clock())
+            if not inventory.decision_complete:
+                diagnostic = next(iter(inventory.diagnostics), None)
+                record.update(partial_inventory=data, partial_observed_at=observed.isoformat(),
+                              refresh_status='failed', refresh_error='items_incomplete',
+                              refresh_diagnostic=diagnostic)
+                if not corrupt:
+                    atomic_write_json(path, record, guard=_guard)
+                return {**read_cache(path, now=now or clock()), **{
+                    key:record[key] for key in ('partial_inventory','partial_observed_at',
+                        'refresh_status','refresh_error','refresh_diagnostic')}, 'status':'partial'}
             record.update(inventory=data, observed_at=observed.isoformat(),
-                          refresh_status="refreshed", refresh_error=None, refresh_diagnostic=None)
+                          refresh_status="refreshed", refresh_error=None, refresh_diagnostic=None,
+                          partial_inventory=None, partial_observed_at=None)
         except Exception as exc:
             code = ("timeout" if isinstance(exc, TimeoutError) else
                     "coverage_unavailable" if isinstance(exc, ProbeRequired) else "read_failed")

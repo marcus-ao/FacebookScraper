@@ -204,7 +204,7 @@ class UnscheduleTests(unittest.TestCase):
 
     def inventory(self, *cards, loaded=True):
         from datetime import date
-        return bs.RemoteSlotInventory((), 'America/Los_Angeles', date(2026, 9, 1),
+        return bs.RemoteSlotInventory(tuple(card.at for card in cards), 'America/Los_Angeles', date(2026, 9, 1),
                                       date(2026, 10, 31), cards=cards, cards_loaded=loaded)
 
     def unschedule(self, inventory, reason='业务改主意了，已在后台删除'):
@@ -237,7 +237,7 @@ class UnscheduleTests(unittest.TestCase):
     def test_a_card_still_visible_in_the_backend_refuses_the_registration(self):
         row = self.schedule()
         card = bs.RemotePlannerCard(fixtures.TARGET, ('facebook',), (('facebook', '987654'),),
-                                    'still there', 'sha', 'scheduled')
+                                    'still there', 'sha', 'scheduled', placement='feed')
         with self.assertRaisesRegex(review.ReviewConflict, '仍能读到'):
             self.unschedule(self.inventory(card))
         self.assertIsNotNone(journal.scheduled_record_for_refs(
@@ -312,7 +312,7 @@ class OverduePublicationTests(unittest.TestCase):
     def test_an_observed_publication_clears_it(self):
         from datetime import date
         card = bs.RemotePlannerCard(fixtures.TARGET, ('facebook',), (('facebook', '987654'),),
-                                    'live', 'sha', 'published')
+                                    'live', 'sha', 'published', placement='feed')
         inventory = bs.RemoteSlotInventory((), 'America/Los_Angeles', date(2026, 9, 1),
                                            date(2026, 10, 31), cards=(card,), cards_loaded=True)
         observations.record(self.state, inventory, fixtures.TARGET + timedelta(minutes=5))

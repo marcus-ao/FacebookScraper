@@ -23,7 +23,7 @@ def inventory():
     return RemoteSlotInventory(
         (SLOT,), "America/Los_Angeles", date(2026, 9, 1), date(2026, 9, 30),
         (RemotePlannerCard(SLOT, ("instagram",), (("instagram", "123456"),),
-                           "Manual phone post September 12, 2026, 7:00 AM", "fixture-sha"),), True)
+                           "Manual phone post September 12, 2026, 7:00 AM", "fixture-sha", placement='feed'),), True)
 
 
 class PlannerCacheTests(unittest.TestCase):
@@ -87,6 +87,30 @@ class PlannerCacheTests(unittest.TestCase):
         self.assertIsNone(result["observed_at"])
         self.assertIsNone(inventory_from_cache(result))
 
+    def test_partial_attempt_does_not_replace_last_complete_inventory_or_its_time(self):
+        self.refresh(AsyncMock(return_value=inventory()))
+        partial = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026,9,1), date(2026,9,30),
+            (RemotePlannerCard(SLOT, placement='story', read_status='incomplete'),), True,
+            ({'code':'identity_unverified','date':'2026-09-12','time':'7:00 AM','stage':'published_detail'},))
+        result = self.refresh(AsyncMock(return_value=partial), NOW + timedelta(minutes=1))
+        self.assertEqual(result['refresh_status'], 'failed')
+        self.assertEqual(result['refresh_error'], 'items_incomplete')
+        self.assertEqual(result['observed_at'], NOW.isoformat())
+        self.assertEqual(inventory_from_cache(result).cards, inventory().cards)
+        self.assertEqual(result['partial_inventory']['cards'][0]['placement'], 'story')
+        self.assertEqual(result['partial_observed_at'], (NOW + timedelta(minutes=1)).isoformat())
+        refreshed = self.refresh(AsyncMock(return_value=inventory()), NOW + timedelta(minutes=2))
+        self.assertIsNone(refreshed['partial_inventory'])
+
+    def test_first_partial_attempt_is_displayable_but_cannot_supply_slot_inventory(self):
+        rows = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026,9,1),date(2026,9,30),
+            (RemotePlannerCard(SLOT, placement='unknown', read_status='unsupported'),),True)
+        result = self.refresh(AsyncMock(return_value=rows))
+        self.assertEqual(result['status'], 'partial')
+        self.assertIsNone(result['observed_at'])
+        self.assertIsNone(inventory_from_cache(result))
+        self.assertTrue(result['partial_inventory']['cards_loaded'])
+
     def test_item_failure_retains_safe_location_and_clears_it_after_success(self):
         self.refresh(AsyncMock(return_value=inventory()))
         failure = PlannerItemError({'date': date(2026, 9, 30)},
@@ -127,7 +151,21 @@ class PlannerCacheTests(unittest.TestCase):
                                    date(2026, 9, 30), (RemotePlannerCard(SLOT),), True)
         result = self.refresh(AsyncMock(return_value=rows))
         self.assertEqual(result["status"], "partial")
-        self.assertFalse(inventory_from_cache(result).channels_complete)
+        self.assertIsNone(inventory_from_cache(result))
+        self.assertFalse(inventory_from_cache({'inventory':result['partial_inventory']}).channels_complete)
+
+    def test_legacy_cache_is_displayable_but_does_not_prove_classified_inventory(self):
+        self.refresh(AsyncMock(return_value=inventory()))
+        data = json.loads(self.path.read_text('utf-8'))
+        for card in data['inventory']['cards']:
+            for field in ('placement','media_kind','caption_status','read_status'):
+                card.pop(field)
+        self.path.write_text(json.dumps(data),encoding='utf-8')
+        snapshot = read_cache(self.path,now=NOW)
+        self.assertEqual(snapshot['status'],'partial')
+        loaded = inventory_from_cache(snapshot)
+        self.assertEqual(loaded.cards[0].rendered,inventory().cards[0].rendered)
+        self.assertFalse(loaded.decision_complete)
 
     def test_unproven_month_does_not_replace_last_full_calendar(self):
         self.refresh(AsyncMock(return_value=inventory()))

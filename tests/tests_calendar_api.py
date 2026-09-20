@@ -17,13 +17,14 @@ from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
 from publish.journal import PublishOperationLock  # noqa: E402
 from publish import planner_cache  # noqa: E402
 from publish.month_inventory import PlannerItemError  # noqa: E402
+from publish.planner_content import DetailReadError  # noqa: E402
 from web.api import calendar  # noqa: E402
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
 WINDOW = ScheduleWindow("fixture", timedelta(minutes=20), timedelta(days=30), "America/Los_Angeles")
 SLOT = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)  # Berlin 06:00, LA Sep 30 21:00
 ROWS = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, date(2026, 9, 1), date(2026, 9, 30),
-                          (RemotePlannerCard(SLOT, ("facebook",), (("facebook", "123456"),), "Manual post"),), True)
+                          (RemotePlannerCard(SLOT, ("facebook",), (("facebook", "123456"),), "Manual post", placement="feed"),), True)
 
 
 class CalendarApiTests(unittest.TestCase):
@@ -91,6 +92,35 @@ class CalendarApiTests(unittest.TestCase):
         self.assertTrue(data["bounds"]["facebook"]["available"])
         self.assertEqual(data["bounds"]["facebook"]["end_exclusive"], "2026-10-01T07:00:00+00:00")
         self.assertFalse(self.state.exists())
+
+    def test_partial_attempt_has_separate_cards_coverage_and_safe_failure_reason(self):
+        self.populate()
+        failure = PlannerItemError({'date':date(2026,9,4)},
+            {'index':0,'time':'6:39 PM','text':'private caption','href':'https://example.test/?token=secret'},
+            'published_detail', DetailReadError(
+                'missing_fields', placement='story', missing_fields=('owner',)))
+        partial = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, ROWS.visible_start, ROWS.visible_end,
+            (RemotePlannerCard(SLOT, placement='story', read_status='incomplete'),), True, (failure.diagnostic,))
+        later = NOW + timedelta(minutes=1)
+        with patch('web.api.calendar.current_time', return_value=later), \
+                patch('web.api.calendar.read_live_inventory', AsyncMock(return_value=partial)):
+            result = self.client.post('/api/calendar/refresh')
+            data = result.json()
+        self.assertEqual(result.status_code,502)
+        self.assertEqual(data['status'],'partial')
+        self.assertEqual(data['cached_at'],NOW.isoformat())
+        self.assertEqual(data['cards'][0]['rendered'],'Manual post')
+        self.assertEqual(data['partial_cached_at'],later.isoformat())
+        self.assertEqual(data['partial_cards'][0]['placement'],'story')
+        self.assertTrue(data['coverage']['decision_complete'])
+        self.assertTrue(data['attempt_coverage']['entries_complete'])
+        self.assertFalse(data['attempt_coverage']['decision_complete'])
+        self.assertEqual(data['attempt_coverage']['unresolved_count'],1)
+        self.assertIn('必要业务字段',data['error'])
+        self.assertEqual(data['refresh_diagnostic']['missing_fields'],['owner'])
+        self.assertTrue(data['stale'])
+        for private in ('private caption','token=secret'):
+            self.assertNotIn(private,result.text)
 
     def test_calendar_keeps_next_business_month_card_inside_la_current_month(self):
         """北京比美西快 15–16 小时，所以美西 9 月的尾巴伸进北京 10 月一整个白天。"""

@@ -18,7 +18,7 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
                                       WHEN.date(), WHEN.date(), tuple(cards), True)
 
     def card(self, text=TEXT, channel='facebook', delivery='scheduled'):
-        return bs.RemotePlannerCard(WHEN, (channel,), ((channel, '123456789'),), text, 'hash', delivery)
+        return bs.RemotePlannerCard(WHEN, (channel,), ((channel, '123456789'),), text, 'hash', delivery, placement='feed')
 
     async def readback(self, inventory, **kwargs):
         with patch.object(month_inventory, 'read', AsyncMock(return_value=inventory)), \

@@ -110,7 +110,7 @@ class RecoveryTests(unittest.TestCase):
         attempt = {'status': 'scheduled', 'scheduled_at': '2020-01-01T10:00:00Z',
                    'target_channels': ['instagram'], 'remote_id': 'instagram=12345678'}
         self.assertEqual(observations.status(self.state, attempt)['status'], 'unknown')
-        card = RemotePlannerCard(NOW, ('instagram',), (('instagram', '87654321'),), 'caption', 'hash', 'published')
+        card = RemotePlannerCard(NOW, ('instagram',), (('instagram', '87654321'),), 'caption', 'hash', 'published', placement='feed')
         inventory = RemoteSlotInventory((), 'UTC', NOW.date(), NOW.date(), (card,), True)
         observations.record(self.state, inventory, NOW)
         self.assertEqual(observations.status(self.state, attempt)['status'], 'unknown')

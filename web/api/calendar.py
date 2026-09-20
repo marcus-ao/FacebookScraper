@@ -18,7 +18,16 @@ _ERRORS = {
     "timeout": "刷新超时，保留上次读取的数据。",
     "coverage_unavailable": "未能确认本次日历覆盖的月份，保留上次读取的数据。",
     "read_failed": "未能读取发布日历，请检查发布浏览器后重试。",
+    "items_incomplete": "日期格已读取，但部分内容尚未核实；本次结果不能用于判断可排期时段。",
     "cache_unavailable": "月历缓存无法读取，请联系维护人员检查。",
+}
+
+_DETAIL_ERRORS = {
+    'unsupported_type': '内容类型尚未适配', 'missing_fields': '必要业务字段缺失',
+    'identity_unverified': '无法核实独立渠道身份', 'identity_mismatch': '目标账号或渠道不符',
+    'time_mismatch': '日期或时刻不一致', 'navigation_failed': '详情导航失败',
+    'load_timeout': '详情业务字段加载超时', 'permission_denied': '详情不可访问或权限不足',
+    'structure_unknown': '详情结构尚未识别', 'read_failed': '条目读取失败',
 }
 
 
@@ -70,6 +79,26 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             cards.append({**card, "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
     cards.sort(key=lambda item: item["at"])
+    partial = inventory_from_cache({'inventory':snapshot.get('partial_inventory')})
+    partial_cards = []
+    for card in (snapshot.get('partial_inventory') or {}).get('cards', []):
+        at = datetime.fromisoformat(card['at'])
+        if at.astimezone(ui_zone).strftime('%Y-%m') == local.strftime('%Y-%m'):
+            partial_cards.append({**card, 'at_business':at.astimezone(business_zone).isoformat(),
+                                  'audience':planning.audience_local(at)})
+    partial_cards.sort(key=lambda item:item['at'])
+
+    def coverage(value):
+        return {'grid_complete': bool(value and value.cards_loaded),
+                'entries_complete': bool(value and value.cards_loaded),
+                'classification_complete': bool(value and value.classification_complete),
+                'decision_complete': bool(value and value.decision_complete),
+                'channels_complete': bool(value and value.channels_complete),
+                'unresolved_count': sum(card.read_status!='complete' for card in value.cards) if value else 0,
+                'visible_start': str(value.visible_start) if value and value.visible_start else None,
+                'visible_end': str(value.visible_end) if value and value.visible_end else None,
+                'matches_current_month': bool(value and value.ui_timezone==ui_timezone
+                    and value.covers([month_start, month_end-timedelta(microseconds=1)]))}
     # ⛔ 本地图层只画给人看，不进 planning.evaluate_slot 的占用判定。
     local_layer, local_error = [], None
     try:
@@ -91,16 +120,18 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                   'published_detail': '已发布详情'}
         error += ' 条目 %s %s，读取阶段：%s。' % (
             diagnostic['date'], diagnostic['time'], stages.get(diagnostic['stage'], '条目读取'))
+        error += _DETAIL_ERRORS.get(diagnostic.get('code'), '条目读取失败') + '。'
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
-            "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable"} or
+            "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable", "partial"} or
+                     snapshot.get('refresh_status')=='failed' or
                      bool(snapshot.get("observed_at") and not matches),
             "error": error, "refresh_diagnostic": diagnostic,
             "refresh_status": snapshot.get("refresh_status"),
             "age_seconds": snapshot.get("age_seconds"), "cards": cards,
+            "partial_cards": partial_cards, "partial_cached_at": snapshot.get('partial_observed_at'),
+            "attempt_coverage": coverage(partial) if partial else None,
             "local": local_layer, "local_error": local_error,
-            "coverage": {"visible_start": start, "visible_end": end,
-                         "matches_current_month": matches,
-                         "channels_complete": bool(inventory and inventory.channels_complete)},
+            "coverage": coverage(inventory),
             "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 90),
             "refresh_available": unavailable is None, "refresh_unavailable_reason": unavailable,
             "advisory_only": True, "month_ui": local.strftime("%Y-%m"),

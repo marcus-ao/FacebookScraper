@@ -12,7 +12,9 @@ from playwright.async_api import async_playwright
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
 from publish import month_inventory as month
-from publish.business_suite import PublishStepError
+from publish.business_suite import PublishStepError, ProbeRequired
+from publish.planner_content import DetailReadError
+from publish import published_details
 
 # The real Planner tooltip follows the pointer on and off a slot; is_recommendation's leading
 # mouse.move(0, 0) depends on the off half, so a fixture without it only ever reads one slot.
@@ -121,16 +123,6 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.occupied), 1)
         self.assertFalse(result.channels_complete)
 
-    async def test_published_metadata_binds_channels_collaborator_and_time(self):
-        header = {'text': 'Post · Published on: Sat Sep 5, 11:09am · neakasa.global in collaboration with neakasa.de',
-                  'platforms': ['Instagram'], 'authors': ['neakasa.global', 'neakasa.de']}
-        with patch.object(month, 'accounts', return_value={'instagram': 'neakasa.de', 'facebook': 'Neakasa Deutschland'}):
-            self.assertEqual(month.published_channels(header, date(2026, 9, 5), '11:09 AM'), ('instagram',))
-            self.assertEqual(month.published_channels(dict(header, authors=['neakasa.deals']), date(2026, 9, 5), '11:09 AM'), ())
-            self.assertEqual(month.published_channels(dict(header, authors=['']), date(2026, 9, 5), '11:09 AM'), ())
-            with self.assertRaises(PublishStepError):
-                month.published_channels(header, date(2026, 9, 4), '11:09 AM')
-
     async def test_hovered_schedule_control_is_not_an_expand_button(self):
         await self.page.locator(month.DAY_SELECTOR).nth(20).evaluate("el=>el.insertAdjacentHTML('beforeend','<button>Schedule\\u200b</button>')")
         self.assertEqual(len(await month.read_grid(self.page, timeout=10)), 35)
@@ -228,21 +220,147 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
                 await month.read(self.page, ui_timezone='Asia/Shanghai',
                                  business_timezone='Asia/Shanghai', timeout=5)
 
+    async def test_textless_story_in_a_full_month_is_read_without_caption_or_metadata_author(self):
+        # Semantic fixture: screenshot supplies Story/no-text, recording 200 supplies
+        # heading roles. Independent Story identity is injected; its real DOM is missing.
+        await self.page.locator(month.DAY_SELECTOR).nth(5).evaluate('''el=>el.insertAdjacentHTML(
+          'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=1804155825688886">6:39 PM</a>')''')
+        await self.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html; charset=utf-8', body='''<header><h2>This content has no text</h2>
+              <span>Story · Published on: Fri Sep 4, 6:39pm</span><img alt="Facebook"></header>
+              <aside><h2>Feed preview</h2><h2><a href="https://www.facebook.com/profile.php?id=123456">Neakasa Deutschland</a></h2>
+              <a href="https://www.facebook.com/permalink.php?story_fbid=654321&id=123456">4d</a></aside>
+              <div role="progressbar">Metrics loading</div>'''))
+        with patch.object(month, 'prepare', AsyncMock()), patch.object(month, 'accounts',
+                return_value={'facebook':'Neakasa Deutschland','instagram':'neakasa.de'}), \
+                patch.object(published_details, 'preview_identity', AsyncMock(return_value={
+                    'owner':'Neakasa Deutschland','remote_id':'654321'})):
+            result = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+        self.assertTrue(result.decision_complete)
+        self.assertEqual(len(result.cards), 1)
+        card = result.cards[0]
+        self.assertEqual((card.placement, card.rendered, card.caption_status), ('story','','empty'))
+        self.assertEqual(dict(card.remote_ids), {'facebook':'654321'})
+        self.assertEqual(card.source_content_id, '1804155825688886')
+        self.assertEqual(card.at.isoformat(), '2026-09-04T18:39:00+08:00')
+        self.assertEqual(result.occupied_for_channel('facebook'), (card.at,))
+
+    async def test_aggregate_views_require_independent_channel_identity_time_and_caption(self):
+        # Contract fixture with channel-owned panels, not captured Meta Story DOM.
+        await self.page.set_content('''<header id="summary"><h2>This content has no text</h2>
+          <span>Story · Published on: Fri Sep 4, 6:39pm</span><img alt="Facebook"><img alt="Instagram"></header>
+          <button role="tab" id="fb" aria-controls="fb-view" aria-selected="false" onclick="select(this)">Facebook</button>
+          <button role="tab" id="ig" aria-controls="ig-view" aria-selected="false" onclick="select(this)">Instagram</button>
+          <div role="tabpanel" id="fb-view" aria-labelledby="fb" hidden><header><h2>This content has no text</h2>
+            <span>Story · Published on: Fri Sep 4, 6:39pm</span></header></div>
+          <div role="tabpanel" id="ig-view" aria-labelledby="ig" hidden><header><h2>Instagram version</h2>
+            <span>Story · Published on: Fri Sep 4, 6:40pm</span></header></div>
+          <script>function select(tab){summary.hidden=true;
+            document.querySelectorAll('[role=tab]').forEach(n=>n.setAttribute('aria-selected','false'));
+            document.querySelectorAll('[role=tabpanel]').forEach(n=>n.hidden=true);
+            tab.setAttribute('aria-selected','true');
+            setTimeout(()=>document.getElementById(tab.getAttribute('aria-controls')).hidden=false,350);
+          }</script>''')
+        async def identity(scope, channel, placement):
+            return {'owner': 'Neakasa Deutschland' if channel=='facebook' else 'neakasa.de',
+                    'remote_id':'654321' if channel=='facebook' else '987654'}
+        with patch.object(published_details,'preview_identity',identity):
+            variants = await published_details.read(self.page, {'date':date(2026,9,4)}, {'time':'6:39 PM'},
+                {'facebook':'Neakasa Deutschland','instagram':'neakasa.de'}, timeout=3)
+        self.assertEqual([v['channels'] for v in variants], [('facebook',),('instagram',)])
+        self.assertEqual([v['remote_ids'] for v in variants], [{'facebook':'654321'},{'instagram':'987654'}])
+        self.assertEqual([v['ui_at'].minute for v in variants], [39,40])
+        self.assertEqual([v['text'] for v in variants], ['', 'Instagram version'])
+
+    async def test_selected_tab_and_independent_id_do_not_bind_a_shared_stale_header(self):
+        # Regression for non-atomic tab hydration: a new preview ID is not proof
+        # that a shared caption/date outside its channel view have updated.
+        await self.page.set_content('''<header><h2>Facebook caption</h2>
+          <span>Post · Published on: Fri Sep 4, 6:39pm</span><img alt="Facebook"><img alt="Instagram"></header>
+          <button role="tab" aria-selected="true">Instagram</button>
+          <aside><h2>Feed preview</h2><a href="https://www.instagram.com/stories/neakasa.de/987654/">View story</a></aside>''')
+        with self.assertRaises(DetailReadError) as error:
+            await published_details.read_view(self.page, {'date':date(2026,9,4)}, {'time':'6:39 PM'},
+                {'instagram':'neakasa.de'}, channel='instagram', aggregate=True, timeout=.7)
+        self.assertEqual(error.exception.code,'missing_fields')
+        self.assertEqual(error.exception.missing_fields,('channel_detail_scope',))
+
+    async def test_late_channel_tab_cannot_be_silently_omitted(self):
+        await self.page.set_content('''<div role="tabpanel" id="view" aria-labelledby="fb"><header><h2>Caption</h2>
+          <span>Post · Published on: Fri Sep 4, 6:39pm</span><img alt="Facebook"></header>
+          <aside><h2>Feed preview</h2><h2><a href="https://www.facebook.com/profile.php?id=123456">Neakasa Deutschland</a></h2>
+          <a href="https://www.facebook.com/permalink.php?story_fbid=654321&id=123456">4d</a></aside></div>
+          <button role="tab" id="fb" aria-selected="true" aria-controls="view" onclick="setTimeout(()=>document.body.insertAdjacentHTML('beforeend','<button role=tab>Instagram</button>'),200)">Facebook</button>''')
+        with self.assertRaises(DetailReadError) as error:
+            await published_details.read(self.page, {'date':date(2026,9,4)}, {'time':'6:39 PM'},
+                {'facebook':'Neakasa Deutschland','instagram':'neakasa.de'}, timeout=2)
+        self.assertEqual(error.exception.missing_fields,('channel_tabs',))
+
+    async def test_scheduled_aggregate_cannot_copy_one_id_into_two_channels(self):
+        await self.page.set_content('''<button onclick="document.querySelector('[role=dialog]').hidden=false">Open</button>
+          <div role="dialog" aria-label="Post details" hidden>ID: 123456
+          Facebook's Feed Neakasa Deutschland Instagram feed neakasa.de</div>''')
+        value = await month.bs._open_channel_dialogs(self.page,self.page.get_by_role('button'),SPEC,timeout=1)
+        self.assertEqual(value,{})
+
+    async def test_shared_story_and_feed_source_links_do_not_supply_content_identity(self):
+        await self.page.set_content('''<aside><h2>Feed preview</h2>
+          <h2><a href="https://www.facebook.com/profile.php?id=123456">Neakasa Deutschland</a></h2>
+          <article>Shared post <a href="https://www.facebook.com/permalink.php?story_fbid=444444&id=999999">4d</a></article></aside>''')
+        with self.assertRaises(DetailReadError) as error:
+            await published_details.preview_identity(self.page,'facebook','story')
+        self.assertEqual(error.exception.code,'unsupported_type')
+        self.assertEqual(error.exception.placement,'story')
+        feed = await published_details.preview_identity(self.page,'facebook','feed')
+        self.assertEqual(feed['remote_id'],'')
+
+    async def test_shared_panels_and_outside_ancestors_cannot_supply_channel_metadata(self):
+        await self.page.set_content('''<header><h2>Old caption</h2></header>
+          <button role="tab" id="fb" aria-selected="true" aria-controls="view">Facebook</button>
+          <button role="tab" id="ig" aria-selected="false" aria-controls="view">Instagram</button>
+          <div role="tabpanel" id="view" aria-labelledby="fb"><span>Post · Published on: Fri Sep 4, 6:39pm</span></div>''')
+        with self.assertRaises(DetailReadError) as error:
+            await published_details.read_view(self.page,{'date':date(2026,9,4)},{'time':'6:39 PM'},
+                {'facebook':'Neakasa Deutschland'},channel='facebook',aggregate=True,timeout=.5)
+        self.assertEqual(error.exception.missing_fields,('channel_detail_scope',))
+        scoped = await published_details.header_snapshot(self.page.get_by_role('tabpanel'))
+        self.assertIsNone(scoped['caption'])
+
+    async def test_unknown_and_inaccessible_details_remain_visible_in_a_partial_month(self):
+        for index in (5,6):
+            await self.page.locator(month.DAY_SELECTOR).nth(index).evaluate('''(el,index)=>el.insertAdjacentHTML(
+              'beforeend',`<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=123456${index}">6:39 PM</a>`)''',index)
+        await self.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html; charset=utf-8', body=('''<header><h2>Private caption</h2>
+              <span>New content kind · Published on: Fri Sep 4, 6:39pm</span></header>'''
+              if '1234565' in route.request.url else '<p>This content isn’t available.</p>')))
+        with patch.object(month, 'prepare', AsyncMock()):
+            result = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=3)
+        self.assertTrue(result.cards_loaded)
+        self.assertFalse(result.decision_complete)
+        self.assertEqual(len(result.cards),2)
+        self.assertEqual([d['code'] for d in result.diagnostics], ['unsupported_type','permission_denied'])
+        self.assertNotIn('Private caption', str(result.diagnostics))
+        with self.assertRaises(ProbeRequired):
+            result.occupied_for_channel('facebook')
+
     async def test_published_detail_waits_for_caption_author_and_platform_but_not_metrics(self):
         await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''el=>el.insertAdjacentHTML(
           'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=12345678">5:30 PM</a>')''')
         await self.page.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
-            content_type='text/html', body='''<div><span>Post · Published on: Wed Sep 30, 5:30pm</span></div>
-              <h3></h3><div role="progressbar">Metrics still loading</div><script>
+            content_type='text/html; charset=utf-8', body='''<header><div><span>Post · Published on: Wed Sep 30, 5:30pm</span></div>
+              <h3></h3></header><aside><h2>Feed preview</h2><div id="preview"></div></aside>
+              <div role="progressbar">Metrics still loading</div><script>
               setTimeout(()=>{document.querySelector('h3').textContent='Complete caption';
-                document.querySelector('span').insertAdjacentHTML('beforeend',' · <strong>Neakasa Deutschland</strong>');
-                document.querySelector('span').parentElement.insertAdjacentHTML('beforeend','<img alt="Facebook">');},500);
+                document.querySelector('span').parentElement.insertAdjacentHTML('beforeend','<img alt="Facebook">');
+                preview.innerHTML='<h2><a href="https://www.facebook.com/profile.php?id=123456">Neakasa Deutschland</a></h2><a href="https://www.facebook.com/permalink.php?story_fbid=12345678&id=123456">4d</a>';
+              },500);
               </script>'''))
         rows = await month.read_grid(self.page, timeout=5)
         with patch.object(month, 'accounts', return_value={'facebook': 'Neakasa Deutschland'}):
             result = await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=4)
-        self.assertEqual(result['text'], 'Complete caption')
-        self.assertEqual(result['remote_ids'], {'facebook': '12345678'})
+        self.assertEqual(result['variants'][0]['text'], 'Complete caption')
+        self.assertEqual(result['variants'][0]['remote_ids'], {'facebook': '12345678'})
 
 
 if __name__ == '__main__':

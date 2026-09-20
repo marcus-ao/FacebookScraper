@@ -6,14 +6,14 @@ from publish import business_suite as bs, month_inventory
 
 
 def matching(inventory, when, final_text, target_channels):
-    if not inventory.cards_loaded or not inventory.channels_complete or not inventory.covers((when,)):
+    if not inventory.decision_complete or not inventory.covers((when,)):
         raise bs.PublishStepError('月历范围或渠道未读完整，不能核验本次排期')
     expected = bs._card_text(final_text)
     if not expected:
         raise bs.PublishStepError('待核验文案为空')
     # Bind grid dates to detail captions and IDs before matching time-only links.
     return [card for card in inventory.cards
-            if card.delivery == 'scheduled' and card.at.timestamp() == when.timestamp()
+            if card.delivery == 'scheduled' and card.placement == 'feed' and card.at.timestamp() == when.timestamp()
             and card.channels == target_channels and bs._card_text(card.rendered) == expected]
 
 
@@ -50,7 +50,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
                                               business_timezone=bs.business_timezone(), timeout=timeout)
         diagnostics.update(inventory_cards=len(inventory.cards),
-                           complete_month=inventory.cards_loaded and inventory.channels_complete and inventory.covers((when,)),
+                           complete_month=inventory.decision_complete and inventory.covers((when,)),
                            failure_stage='matching', caption_mismatch=0, time_mismatch=0,
                            channel_mismatch=0, delivery_mismatch=0)
         samples = []

@@ -425,12 +425,29 @@ def stage_f(page, ui):
     page.get_by_role('button',name=re.compile('已观测到公开发布')).click();expect(page.get_by_text('公开发布正文',exact=True)).to_be_visible()
     page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name='刷新月历',exact=True).click()
-    expect(page.get_by_text('本次月历未完整更新，仍展示已取得的记录，请稍后重试',exact=True)).to_be_visible()
+    expect(page.get_by_text('本次月历未完整更新',exact=True)).to_be_visible()
+    expect(page.get_by_text('fixture failure',exact=True)).to_be_visible()
     expect(page.get_by_text('已观测到公开发布',exact=True)).to_be_visible();expect(page.get_by_text('已创建定时任务',exact=True)).to_have_count(0)
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
-    return {'F':'PASS','published_scheduled_distinct':True,'failure_payload_cards_retained':True,'refresh_body':{},'empty_day_min_height':min(heights)}
+    partial={**data,'status':'partial','refresh_status':'failed','stale':True,'error':'Story 缺少独立渠道身份',
+        'partial_cached_at':'2026-09-20T08:00:00Z','attempt_coverage':{**data['coverage'],'decision_complete':False},
+        'partial_cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
+                          'channels':[],'read_status':'incomplete'}]}
+    ui.overrides[('POST','/api/calendar/refresh')]=(502,partial)
+    page.get_by_role('button',name='刷新月历',exact=True).click()
+    expect(page.get_by_text('部分结果 · 不可判断空档',exact=True)).to_be_visible()
+    expect(page.get_by_text('渠道待确认',exact=True)).to_be_visible()
+    expect(page.get_by_text('Story 缺少独立渠道身份',exact=True)).to_be_visible()
+    expect(page.get_by_text(re.compile('上次完整读取：'))).to_be_visible()
+    page.get_by_role('button',name=re.compile('Story')).click()
+    expect(page.get_by_text('此内容无独立正文',exact=True)).to_be_visible()
+    expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
+    page.screenshot(path=str(EVIDENCE/'calendar-partial-story.png'))
+    return {'F':'PASS','published_scheduled_distinct':True,'failure_payload_cards_retained':True,
+            'partial_story_separate':True,'empty_caption_not_placeholder':True,
+            'refresh_body':{},'empty_day_min_height':min(heights)}
 
 
 def stage_g(page, ui):

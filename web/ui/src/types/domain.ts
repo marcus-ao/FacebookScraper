@@ -562,7 +562,13 @@ export interface CalendarCard {
   /** 除 published、scheduled 外均显示待核验。 */
   readonly delivery: string
   readonly rendered: string
-  readonly remote_ids?: readonly string[]
+  readonly remote_ids?: Readonly<Partial<Record<Platform, string>>>
+  readonly placement?: 'feed' | 'story' | 'reel' | 'live' | 'ad' | 'task' | 'unknown'
+  readonly media_kind?: 'text' | 'link' | 'image' | 'carousel' | 'mixed' | 'video' | 'unknown'
+  readonly caption_status?: 'present' | 'empty' | 'unknown'
+  readonly accounts?: Readonly<Partial<Record<Platform, string>>>
+  readonly relationships?: readonly string[]
+  readonly read_status?: 'complete' | 'unsupported' | 'unavailable' | 'incomplete' | 'legacy'
   readonly audience?: AudienceMoment | null
 }
 
@@ -619,15 +625,14 @@ export interface CalendarPayload {
   readonly refresh_status: string | null
   readonly age_seconds: number | null
   readonly cards: readonly CalendarCard[]
+  readonly partial_cards?: readonly CalendarCard[]
+  readonly partial_cached_at?: string | null
+  readonly attempt_coverage?: CalendarCoverage | null
+  readonly refresh_diagnostic?: Readonly<Record<string, unknown>> | null
   /** 本地图层只作展示；占用判定永远只看远端读到的 cards。 */
   readonly local: readonly CalendarLocalEntry[]
   readonly local_error: string | null
-  readonly coverage: {
-    readonly visible_start: string | null
-    readonly visible_end: string | null
-    readonly matches_current_month: boolean
-    readonly channels_complete: boolean
-  }
+  readonly coverage: CalendarCoverage
   readonly bounds: Readonly<Record<Platform, CalendarBound>>
   readonly gap_minutes: number
   readonly refresh_available: boolean
@@ -640,6 +645,18 @@ export interface CalendarPayload {
   readonly audience_timezone: string
   readonly display_start: string
   readonly display_end_exclusive: string
+}
+
+export interface CalendarCoverage {
+  readonly visible_start: string | null
+  readonly visible_end: string | null
+  readonly matches_current_month: boolean
+  readonly channels_complete: boolean
+  readonly grid_complete?: boolean
+  readonly entries_complete?: boolean
+  readonly classification_complete?: boolean
+  readonly decision_complete?: boolean
+  readonly unresolved_count?: number
 }
 
 

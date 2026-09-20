@@ -509,35 +509,94 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 未来真实 UI 改动导致运行时定位失效时再定位具体变化；无需定期重录或重新填写 18 项观察。
 录制工具及 `--fill-notes` 保留作可选诊断用途；本次无须执行。
 
-### 8.1 月历读取修复后的服务机复验
+### 8.1 月历更新、单条取证与后续复验
 
-本节只复验月历读取，不发帖、不排期、不调用模型。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
-服务机正常停止旧 Web，在 `D:\Code\FacebookScraper` 确认 `git status --short` 没有待处理的源码修改，再执行：
+本次交付包含内容分类、部分缓存、保护逻辑和只读取证工具；**Story/Instagram 真实身份适配仍为代码未完成**。
+更新主分支不会自动消除所有未适配项。当前人工目标是取得 9 月 4 日 18:39 Story 的 DOM，
+之后补适配再做整月验收。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
+不发帖、不排期、不调用模型，不删除缓存、归档或业务账本。
 
-```powershell
-git fetch origin
-git switch main
-git pull --ff-only origin main
-scripts\run_web.bat
-```
+1. 确认没有正在进行的发布或排期，在运行 Web 的 PowerShell 窗口按 `Ctrl+C`，正常停止旧 Web。
+   保留发布 Chrome 9223。另开 PowerShell，进入服务机源码目录并检查状态：
 
-`run_web.bat` 会重建前端，保持该启动方式。发布 Chrome 9223 保持人工登录且没有其他发布操作。
-打开月历点一次「刷新」，完成后在另一个 PowerShell 查询结果（GET 只查询，不再触发第二次刷新）：
+   ```powershell
+   Set-Location 'D:\Code\FacebookScraper'
+   git status --short
+   git branch --show-current
+   ```
 
-```powershell
-Invoke-RestMethod 'http://127.0.0.1:8765/api/calendar' |
-    Select-Object status, refresh_status, cached_at, error, coverage, refresh_diagnostic |
-    ConvertTo-Json -Depth 6
-```
+   若有待处理源码修改，保留输出并先处理其归属，不运行 `reset --hard`、`clean` 或覆盖文件。
+   `.env`、本机路径配置、`archive/`、`state/` 保持原样。
 
-正常应为 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
-`coverage.matches_current_month` 与 `channels_complete` 均为 true，`cached_at` 更新到此次读取完成时间。
-仍在 2026 年 9 月时，完整格子范围应为 `2026-08-30` 至 `2026-10-03`；确认 9 月 30 日 17:30 的手工帖子仍在列表中。
-真实条数取决于服务机当时内容，不预设固定条数；`partial` 或保留旧数据均不算本次完整读取通过。
+2. 工作区干净时更新主分支；逐条执行，任一步报错就停止后续步骤：
 
-若失败，只需保留这一份查询结果，优先看 `refresh_diagnostic` 的日期、时刻和阶段
-（`item_ready` / `scheduled_detail` / `published_detail`）。不要连续重跑相同失败命令、重录 G1 或开启后台刷新尝试修复。
-诊断不包含正文、cookie、token、请求头或 URL 参数。开发机隔离测试不能代替本节真实结果。
+   ```powershell
+   git fetch origin
+   git switch main
+   git pull --ff-only origin main
+   git log -1 --oneline
+   Test-Path tools\probe_calendar_detail.py
+   ```
+
+   最后一条应为 `True`。若已在 main，`git switch main` 会提示当前分支；正常即可。
+
+3. 重新启动 Web，必须使用会重建前端的入口：
+
+   ```powershell
+   scripts\run_web.bat
+   ```
+
+   等启动完成后打开 `http://127.0.0.1:8765`，浏览器按 `Ctrl+F5`。
+   保持这个终端运行，后面的诊断在另一个 PowerShell 执行。
+   当前先不重复点「刷新月历」；GET 只查询缓存，可用来核对服务已响应：
+
+   ```powershell
+   Invoke-RestMethod 'http://127.0.0.1:8765/api/calendar' |
+       Select-Object status, refresh_status, cached_at, partial_cached_at, error, coverage, attempt_coverage, refresh_diagnostic |
+       ConvertTo-Json -Depth 6
+   ```
+
+   旧失败缓存仍可能显示原错误，且 `cached_at` 可能为 null；重启本身不会产生成功读取。
+
+4. 在发布专用 Chrome（9223）中人工打开 Planner 的 2026 年 9 月，找到 9 月 4 日 18:39 的 Story 并进入详情。
+   核对 `Story · Published on: Fri Sep 4, 6:39pm` 和 `This content has no text`。
+   若有渠道页签，先选 `Total performance`；同一 Story 的详情只保留一个标签页。
+   已打开正确详情时无需重开。若发布 Chrome 没有运行，使用 `scripts\start_chrome_publish.bat` 并人工登录；
+   不能换成回填 9222 或探测 9224。
+
+5. 在第二个 PowerShell 执行一次只读取证；不需要复制长 Python 或手抄 content_id：
+
+   ```powershell
+   Set-Location 'D:\Code\FacebookScraper'
+   $DetailLog = Join-Path $env:TEMP ('planner-detail-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+   scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story 2>&1 |
+       Tee-Object -FilePath $DetailLog
+   Write-Host "诊断日志：$DetailLog"
+   ```
+
+   正常过程是 `START` → 脱敏 `OPEN_PAGE` → `FOUND: 2026-09-04 18:39 Story` → 各视图 JSON → `DONE`。
+   工具持发布锁，核验 profile，只检查已打开页面；仅切换 Facebook/Instagram 统计页签并恢复原选择。
+   若开始时没有明确的渠道选择，只采集当前视图并保持后来出现的页签不变。
+   不导航到新帖子、不自动登录、不触碰 Publish now/排期/编辑按钮。
+   正文只输出长度；URL 去除除数字内容/账号 ID 以外的查询参数，不读取 cookie、token 或请求头。
+
+   若返回 `STOP: matching detail pages: 0`，把 `OPEN_PAGE` 和 metadata 一并保留；这仅表示未匹配当前打开的详情，
+   不证明浏览器失效。若为 2 或更多，不让工具猜选；保留输出。发布锁忙或 profile 不符时停止，不删除锁文件。
+   不连续重复执行同一失败命令。
+
+6. 将第 3 步的 API 结果及第 5 步日志发回；它们是补齐真实身份适配所需的最小证据。
+   本轮做到此处即可，不以部分结果展示或离线夹具当作真实通过。
+
+**身份适配补齐后的整月复验。** 再按第 1–3 步更新并启动，人工保持发布 Chrome 登录，
+页面点一次「刷新月历」，完成后用第 3 步 GET 查询，不重复触发刷新。
+成功要求 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
+`coverage.matches_current_month/grid_complete/entries_complete/channels_complete/decision_complete` 均为 true，
+`unresolved_count=0`，`cached_at` 更新为此次完成时间且 `partial_cached_at=null`。
+仍在 2026 年 9 月时，日期格范围应为 `2026-08-30` 至 `2026-10-03`；核对 9 月 4 日 Story、
+9 月 30 日 17:30 手工帖子和其它实际类型，逐渠道对照账号、时间与 ID，不预设两渠道相同。
+同渠道 Story/Reel 继续遵循既有 90 分钟规则。`partial_cards/attempt_coverage` 是部分结果，
+`cards/cached_at/coverage` 是最后完整缓存，不能互换；`partial` 或保留旧数据均不算本次完整读取通过。
+全程不得新增、修改、删除或重新提交真实内容；开发机隔离测试不能代替服务机结果。
 
 ## 9. 真实发布前的最终确认
 

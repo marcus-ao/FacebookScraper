@@ -1440,6 +1440,62 @@ pending_review ──编辑──> edited ──确认无误──> content_lock
 失败条目在页面报错中显示日期、UI 时刻和读取阶段；API 的 `refresh_diagnostic` 另提供条目索引与字段存在性/长度，
 不输出正文、链接参数或原始异常。`[calendar].enabled` 只控制后台刷新，页面手动刷新不受它限制。
 
+##### F5-5.1　内容类型与证据覆盖
+
+**资料核对日期：2026-09-20。** 下表区分平台具有某种内容、当前 Planner 确实出现该内容，以及读取器已取得其身份与状态证据。API 字段只用于梳理维度，不能作为 Business Suite DOM、选择器或本账号 UI 能力的证明。没有现场样本的行不表示已经兼容；实际适配与定向验证状态见 [REQUIREMENTS §10.5](REQUIREMENTS.md#105-阶段五单渠道排期与完整月历) 和 [HANDOFF 当前现场](HANDOFF.md#1-当前工作区事实)。
+
+| 官方来源 | 已核对的范围及限制 |
+|---|---|
+| [Meta SDK：Page](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/page.py) | `create_feed` 分别提供 `message`、`link`、`attached_media`、`album_id` 等字段；证明文字、链接与媒体是不同维度，不证明 Planner 对每种组合的展示。 |
+| [Meta SDK：IGUser](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/iguser.py)、[IGMedia](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/igmedia.py) | 分开定义 caption、图片/视频入口、children、媒体形式、产品位置、owner、collaborators、timestamp 和 permalink；媒体归属与合作关系不能混用。不能由字段存在推导混合轮播的全部 UI 组合。 |
+| [Meta 官方 Postman：Instagram API](https://www.postman.com/meta/instagram/documentation/6yqw8pt/instagram-api) | 有独立 Reels 发布示例，且 `share_to_feed` 独立于 Reels 类型；容器完成与正式发布是不同步骤。API 的账号限制与容器状态不能映射成 Planner 的排期状态。 |
+| [Meta：Facebook 视频发布转向 Reels](https://about.fb.com/news/2025/06/making-it-easier-create-videos-facebook/)（2025-06-17） | 公布逐步统一新视频发布流程，并保留此前视频；不能仅因存在视频、长度或日期就把旧内容改判为 Reel。 |
+| [Meta：Facebook Stories](https://about.fb.com/news/2017/03/more-ways-to-share-with-the-facebook-camera/)（2017-03-28，后续更新） | Story 与 Feed/Timeline 是不同位置，Story 可含图片或视频，面向受众的展示期与后台记录不是同一概念。旧说明不证明 2026 年的 Planner 控件。 |
+| [Meta：Instagram Collabs](https://about.fb.com/news/2023/08/music-and-collabs-on-instagram/)（2023-08-11） | 合作内容可属于 Feed、轮播或 Reel，并出现在多个合作者主页；不能因此把合作者当目标 owner 或生成多个远端 ID。 |
+| [Meta：Facebook Live 保留政策](https://about.fb.com/news/2025/02/updating-our-facebook-live-video-storage-policy/)（2025-02-18） | 官方说明直播回放保留期及在 Business Suite 下载的入口；没有证明当前 Planner 包含直播预告/回放，也没有证明历史失效记录应被删除。 |
+| [Meta：Business Suite 跨平台管理](https://about.fb.com/news/2020/09/a-faster-and-easier-way-to-manage-your-business-on-facebook-and-instagram/)（2020-09-17） | 支持集中管理 Facebook/Instagram 发布与表现；不保证一个聚合详情对应两个已发布对象或相同的发布时间/ID。 |
+| [Business Suite 帮助页](https://www.facebook.com/business/help/942827662903020)、[Instagram 发布文档](https://developers.facebook.com/docs/instagram-platform/content-publishing/)、[Pages 发布文档](https://developers.facebook.com/docs/pages-api/posts/) | 本次公开访问分别遇到登录墙、429 或不可访问；未取得正文，不据此声称已核实 Planner 的完整类型列表。 |
+
+**数据分维度。** 内容形式（文字、链接、单图、多图/轮播、视频、混合媒体、未知）、发布位置（Feed、Story、Reel、Live、未知）、发布状态、渠道与账号、合作/分享/跨平台关系分别表达。`Post` 只能证明普通帖子位置，不能证明一定有图片；`Feed preview` 是预览区域标题，不能推翻明确的 `Story` 元数据。正文只有明确的无正文标记才能记为空，缺失字段仍区分加载中、结构未知与不可访问。图内文字及转分享原帖文字不冒充 Story 独立正文。
+
+以下矩阵中的「参与」沿用 **F5-1：同渠道目标时刻前后 90 分钟内的真实卡片**，不新增 Feed/Story/Reel 类型豁免。前提是渠道、目标账号、状态和时间已经核验；身份或占用不明时阻止空档保证。草稿、失败、处理中、任务、广告等不能仅凭类型名豁免，也不能伪装成已排期。
+
+| 类型/位置 | 状态与官方依据 | 当前 Planner / 详情入口证据 | 识别与正文规则 | 账号/渠道证据 | 时间与远端 ID 来源 | 展示及冲突策略 | 测试证据与未验证项 |
+|---|---|---|---|---|---|---|---|
+| Facebook 文字、链接 / Feed | 已发布或已排期；Page API 提供分立字段 | 录制有普通 Post；文字/链接专门样本未取得 | 明确 Post 标签；有正文读全文，无正文须明确标记；链接形式不从正文 URL 猜测 | 目标资产上下文及当前渠道元数据；不靠正文里的账号名 | 已发布详情时间/对象标识；排期详情与日期格核对 | 标注 Feed 和已知形式；参与 | 普通 Post/延迟字段有离线回归；纯文字、链接样本待取 |
+| Facebook 单图、多图、相册 / Feed | 已发布或已排期；Page API 媒体与相册字段 | 普通帖子路径有录制；相册专门结构未取得 | Post 与媒体证据分开；一张封面不能证明总张数；正文可明确为空 | 同上，分享原作者不能替代发布账号 | 各渠道详情；相册子图 ID 不能替代帖子 ID | 不下载媒体以证明读月历；形式不明显示未知，已核验卡片参与 | 普通图文路径已有录制；多图/相册的真实表现待核 |
+| Instagram 单图 / Feed | 已发布或已排期；IGUser 图片入口 | 普通 Post 的 IG 分渠道页有录制 | 明确位置与媒体证据；不强制 caption 非空 | 目标 IG 账号/资产及单渠道详情 | IG 自己的时间/标识；不复用 Facebook ID | 展示独立 IG 记录；参与 | 共通普通 Post 有样本；空 caption 专门样本待核 |
+| Instagram 多图轮播、混合媒体轮播 / Feed | API 有 children、图片/视频入口；混合 UI 组合未核实 | 本轮无对应 Planner DOM | 轮播由明确标签或有序媒体子项证明；缺子项不能猜单图或混合；正文在整帖层 | owner 与 collaborators 分离 | 整帖身份；子项保持关联而不增加排期记录 | 已核验整帖按一张卡片参与；媒体形式未知要显式展示 | 官方字段不能充当 UI 夹具；真实轮播/混合样本待核 |
+| Facebook/Instagram 历史视频、Reels | 已发布/已排期候选；视频迁移公告、Reels API | 没有本轮可复核的 Reel 专门 DOM | 用明确 Video/Reel 标签；不由竖屏、播放按钮或视频长度猜位置；正文可明确为空 | 每渠道实际详情与目标资产 | 本渠道时间与对象 ID；API 容器 ID 不是已发布 ID | 保留 Video 与 Reel 的区别；核验后参与 | 共通字段的离线场景不等于真实 Reel 适配；待样本 |
+| Facebook/Instagram Story（含无独立正文） | **已发布现场样本**；Stories 官方说明 | 用户 9 月 4 日 18:39 截图：Story、无正文标记、对象洞察页；未提供其 DOM | `This content has no text` 为状态提示，不是正文；`Story` 为位置证据；预览不要求普通 Feed 作者结构 | 双图标/统计页签不足以证明双渠道已发；预览显示名不足以绑定资产 ID | 截图时间可定位样本；远端 ID 与各渠道实际时间须由详情证明 | 显示 Story/无正文；已核验卡片参与；不因无正文使正常内容变成未知 | 截图证明业务形态；选择器、目标账号与各渠道身份仍需真实复验 |
+| Story 转分享、已过展示期的后台记录 | 分享关系/可见性另计；Stories 说明和本次较早日期后台样本 | 9 月 4 日记录仍可在 9 月 20 日后台打开；是否转分享仅凭预览不能确定 | Story 仍是 Story；受众展示期过去不等于未发布、未排期或记录不存在 | 不把被分享账号当发布账号 | 保留原发布时刻；分享源 ID 与 Story ID 分开 | 展示历史观测状态；不按“过期”删除记录或制造空档 | 过往日期后台记录有截图；转分享关系与精确过期状态待 DOM |
+| 合作、分享、跨平台关联 | 关系维度；Collabs/Business Suite 官方说明 | 录制 191–204 的聚合 Post 切换后，FB 19:17、IG 19:18 | 聚合标题不能替代分渠道内容；同文同刻不自动合并 | 合作作者不是目标 owner；逐渠道核验 | 分渠道独立时间和 ID；无法证明的渠道不复制聚合 ID | 可关联展示但独立占用；渠道不明阻止空档保证 | 录制支持时间差异；更复杂分享/合作场景仍待真实样本 |
+| 手工创建的普通排期 | 已排期现场样本；已有仓库录制 | 9 月 30 日 17:30 的时间子节点、祖先正文标签、悬浮完整入口 | 限定本卡片补全日期/正文；重新读 DOM；不能借相邻卡片证据 | 排期详情的唯一渠道与目标账号 | 日期格、悬浮时间与详情 ID 一致 | 标注远端/手工；参与 | `tests_month_inventory.py` 有时间子节点、延迟、相邻卡片和变更回归；服务机复验仍需保留该条目 |
+| 直播预告、直播记录/回放 | Live 官方政策证实平台与 Business Suite 入口；Planner 状态未核实 | 无本轮 Planner DOM | 明确 Live/预告/回放标签；不能当普通图文强读；缺失媒体不等于空内容 | 逐资产核验；预告与实际直播可能为不同对象 | 不拿预告时间替代实际开播/发布时间 | 未知入口明确报未适配；不忽略占用 | 当前 Planner 是否展示、身份/时间契约待样本 |
+| Boosted 内容、广告 | IGMedia 有 boost 关联接口；独立广告不是普通媒体类型 | 截图仅有 Boost unavailable，不能证明已投放；独立广告 Planner 样本未取得 | Boost 状态不改变原帖形式；广告需明确对象关系 | 广告账号、发布账号与目标资产不可混用 | 原帖 ID 与广告 ID 分开，不能按广告投放时刻造排期 | 已核验原帖按原规则参与；独立广告未适配时明确失败 | 不把按钮存在当广告证据；独立广告路径待核 |
+| 草稿、失败、处理中、不可访问 | 是状态，不是媒介形式；API 容器状态不证明 UI 状态 | 本轮无各状态完整 DOM | 只读明确状态；权限错误与加载超时、结构未知分开 | 身份不足保留诊断，不自动补目标配置 | 不猜发布时间或远端 ID | 不冒充已发布/已排期；若无法证明不占用，完整性不通过 | 需代表性状态与权限失败样本；未声称真实支持 |
+| Planner 任务、提示、占位、未知入口 | 本轮无足以确认它们等同帖子的官方/UI 证据 | 是否进入本账号日期格未核实 | 必须有正面非内容证据才排除；只有时间不构成证据 | 不适用必须被证明，不能用缺字段推导 | 不伪造内容 ID/渠道/日期 | 未知对象明确报错；若以后证实非内容则独立展示，不计排期 | 未知条目/不完整月份已有拒绝回归；任务专门样本待核 |
+| 推荐活跃时段 | 已有 Planner 推荐提示证据；不是帖子状态 | 现有悬浮 tooltip 路径 | 仅明确推荐提示可排除；未弹 tooltip 仍为未识别 | 不生成账号或渠道帖子 | 日期/时刻只是建议，无帖子 ID | 不计已排期及冲突；不能据此宣称其余条目完整 | `tests_month_inventory.py` 覆盖多个推荐项与无提示项拒绝 |
+
+**当前实现与证据边界。** `RemotePlannerCard` 分开保存 `placement`、`media_kind`、`delivery`、
+`caption_status`、`accounts`、`relationships`、`read_status`；聚合 `source_content_id` 仅作来源定位，
+不复制到渠道 `remote_ids`。明确无正文提示转为 `caption_status=empty`、空正文；不把提示词当用户文案。
+纯解析契约可表达 Post/Story/Reel/Video/Live，但标签解析不等于真实详情身份适配已完成。
+
+已录证的 Facebook Feed 预览按作者 profile 链接与同作者 permalink 关联身份；合作文字与嵌入分享源不作 owner。
+Story 和 Instagram 的生产身份适配仍为**代码未完成**：本地缺少其独立账号/ID 的 DOM 证据，不能拿 Feed permalink
+或猜测的 Story URL 补齐。月历中它们仍保留为未核实项，当前改动不能宣称已恢复服务机整月刷新。
+分渠道内容字段须有独立可核验的所属区域；共用页头或复用面板不能靠等 0.4 秒证明切换完成。
+隔离测试注入的独立身份与分渠道面板只验证契约，不充当 Meta 选择器证据。
+媒体形式没有充分证据时保留 unknown；本轮没有自动推断单图/轮播/混合媒体，也不把未观察的状态写成 published。
+
+覆盖分别输出 `grid_complete`、`entries_complete`、`classification_complete`（位置识别）、
+`channels_complete`、`decision_complete` 和 `unresolved_count`。媒体子类型/分享关系是否已核实仍看各卡片字段，
+不因位置已识别就视为全部类型字段已知。只有决策完整的数据可进入同渠道占用、排期回读和远端删除登记。
+部分读取单独保存 `partial_inventory/partial_observed_at`，API 对应 `partial_cards/partial_cached_at/attempt_coverage`；
+`cards/cached_at/coverage` 始终属于最后一次完整数据。旧版缺少分类字段的缓存可展示，但不授予决策完整性。
+前端明确展示部分结果、未核实卡片及安全错误分类；不改变最后完整缓存的真实时间，不把空数组当完整空月历。
+
 #### F5-6　冲突判定做成两段式
 
 **改哪里**：审校台的时刻选择端点、`publish/workflow.py` 的提交前检查

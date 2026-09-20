@@ -142,6 +142,13 @@ class RemotePlannerCard:
     rendered: str = ""
     card_sha256: str = ""
     delivery: str = 'unknown'
+    placement: str = 'unknown'
+    media_kind: str = 'unknown'
+    caption_status: str = 'unknown'
+    accounts: tuple[tuple[str, str], ...] = ()
+    relationships: tuple[str, ...] = ()
+    read_status: str = 'complete'
+    source_content_id: str = ''
 
 
 @dataclass(frozen=True)
@@ -154,6 +161,18 @@ class RemoteSlotInventory:
     visible_end: date | None = None
     cards: tuple[RemotePlannerCard, ...] = ()
     cards_loaded: bool = False
+    diagnostics: tuple[dict, ...] = ()
+
+    @property
+    def classification_complete(self) -> bool:
+        return self.cards_loaded and all(card.placement != 'unknown' for card in self.cards)
+
+    @property
+    def decision_complete(self) -> bool:
+        # The existing policy counts every same-channel card, regardless of placement.
+        # Unknown/unreadable entries still occupy their observed time and block decisions.
+        return self.channels_complete and self.classification_complete and not self.diagnostics and all(
+            card.read_status == 'complete' for card in self.cards)
 
     @property
     def channels_complete(self) -> bool:
@@ -167,7 +186,7 @@ class RemoteSlotInventory:
     def occupied_for_channel(self, channel: str) -> tuple[datetime, ...]:
         if channel not in {"facebook", "instagram"}:
             raise ValueError("未知目标渠道：%s" % channel)
-        if not self.channels_complete:
+        if not self.decision_complete:
             raise ProbeRequired("Planner 渠道信息不完整，不能把未识别卡片当作空档")
         # UTC 时间戳去重，避免同一 ZoneInfo 的 fold 比较吞掉回拨时刻。
         selected = {card.at.timestamp(): card.at for card in self.cards
@@ -1162,8 +1181,14 @@ async def _open_channel_dialogs(
         previous, stable_since = None, time.monotonic()
         while True:
             rendered = await _node_text(dialog)
-            match = pattern.search(rendered)
-            remote = _regex_remote_id(match) if match else ""
+            remotes = {_regex_remote_id(match) for match in pattern.finditer(rendered)} - {''}
+            remote = next(iter(remotes)) if len(remotes) == 1 else ''
+            markers = [channel for channel in ('facebook', 'instagram')
+                       if attrs.get('%s_marker' % channel) and attrs['%s_marker' % channel] in rendered]
+            # One dialog-wide ID cannot establish two independent channel IDs.
+            # Unknown aggregate layouts must not hide the other channel's occupancy.
+            if len(markers) > 1 or len(remotes) > 1:
+                break
             current = {}
             for channel in ("facebook", "instagram"):
                 marker = str(attrs.get("%s_marker" % channel) or "")
@@ -1526,7 +1551,7 @@ async def read_remote_slot_inventory(
                     remote_cards.append(RemotePlannerCard(
                         at=at, channels=tuple(sorted(remote_ids)),
                         remote_ids=tuple(sorted(remote_ids.items())), rendered=raw,
-                        card_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest()))
+                        card_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(), placement='feed'))
     return RemoteSlotInventory(
         occupied=tuple(occupied[key] for key in sorted(occupied)), ui_timezone=ui_timezone,
         visible_start=(visible[0] if visible else None),
