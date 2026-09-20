@@ -516,6 +516,25 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 之后补适配再做整月验收。保留现有 G1 文件、北京时间配置与已成功的月历 probe。
 不发帖、不排期、不调用模型，不删除缓存、归档或业务账本。
 
+**已回传聚合页日志时的最短补采。** 现场已匹配目标 Story，但旧工具在 Facebook 切换期间漏采 Instagram，
+原来的 DONE 不表示各渠道已采齐。工作区无待处理源码修改、没有发布/排期/刷新在运行时，
+`git pull --ff-only origin main` 更新工具即可；本次补采不需要重启 Web 或刷新月历。
+在 9223 保持同一条 Story 详情打开并选择 Total performance，执行下面一段，将日志发回：
+
+```powershell
+Set-Location 'D:\Code\FacebookScraper'
+$DetailLog = Join-Path $env:TEMP ('planner-detail-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+scripts\run_python.bat -u tools\probe_calendar_detail.py --date 2026-09-04 --time 18:39 --kind Story --responses 2>&1 | Tee-Object -FilePath $DetailLog
+Write-Host "诊断日志：$DetailLog"
+```
+
+新工具逐渠道输出 READ、即时与 settled 样本，等待必要标题/渠道选择就绪，不等待统计数字；
+最后 RESTORED 恢复原标签。缺渠道或恢复失败输出 PARTIAL，不会以 DONE 隐去缺失。
+`--responses` 只被动观察页面切换本来返回的 GraphQL 响应，保留白名单对象 ID、类型、时间、
+账号关系与文字长度，不记录原始响应、正文、凭据或请求头，不主动调用接口。
+响应的 during_view 仅表示到达时正在观察的标签，不能单独证明该响应属于此渠道。
+即使取得 DONE，也只代表本次取证完成，不是整月读取通过；PARTIAL 同样保留日志，不连续重跑。
+
 1. 确认没有正在进行的发布或排期，在运行 Web 的 PowerShell 窗口按 `Ctrl+C`，正常停止旧 Web。
    保留发布 Chrome 9223。另开 PowerShell，进入服务机源码目录并检查状态：
 
@@ -574,9 +593,9 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
    Write-Host "诊断日志：$DetailLog"
    ```
 
-   正常过程是 `START` → 脱敏 `OPEN_PAGE` → `FOUND: 2026-09-04 18:39 Story` → 各视图 JSON → `DONE`。
+   正常过程是 `START` → 脱敏 `OPEN_PAGE` → `FOUND: 2026-09-04 18:39 Story` → 各视图 READ/JSON → RESTORED → `DONE`。
    工具持发布锁，核验 profile，只检查已打开页面；仅切换 Facebook/Instagram 统计页签并恢复原选择。
-   若开始时没有明确的渠道选择，只采集当前视图并保持后来出现的页签不变。
+   若开始时没有明确的渠道选择，只采集当前视图并保持后来出现的页签不变，结果为 PARTIAL。
    不导航到新帖子、不自动登录、不触碰 Publish now/排期/编辑按钮。
    正文只输出长度；URL 去除除数字内容/账号 ID 以外的查询参数，不读取 cookie、token 或请求头。
 

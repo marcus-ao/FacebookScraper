@@ -197,8 +197,20 @@ G1 的真实录制结构验收不等于整套生产系统已激活：专用渠�
 截图没有 DOM，尚不能断言服务机具体缺哪一个节点。上次 §1.22 离线通过不等于整月真实通过。
 [旧实现隔离复现](../state/planner-content-compatibility/baseline-reproduction.json)确认：语义样例中缺日期区作者时详情不就绪，
 即使补齐旧结构也会把 `This content has no text` 原样误作正文。这只证明旧契约缺陷，不证明真实页恰好使用该 DOM。
-首次针对截图 ID 的只读脚本返回匹配页数 0，尚未取得 DOM；该结果不证明浏览器失效。
-后续取证使用 `tools/probe_calendar_detail.py`，按已打开页面实际可见的 Story 日期/时刻识别目标，输出脱敏路径；不再依赖手抄 ID。
+按可见日期/时刻匹配的取证已收到服务机日志；原文及 SHA-256 保全在
+[现场取证汇总](../state/planner-content-compatibility/story-detail-20260920/summary.json)。
+实际聚合 `content_id=18084155825688886`，初始无正文提示是三级 heading；日期区域只显示 Story/时间，
+不能再要求那里具有普通 Feed 作者。三个渠道 tab 的 id、aria-controls 均为空，没有 tabpanel，
+生产读取器要求的关联在该页面上不存在。`instagram_story_preview_frame` 内出现 `neakasa.de`；
+这能定位 IG 预览，不能据此把聚合 ID 认定为独立 IG 或 FB 内容 ID。
+
+旧取证工具点击 Facebook 后，立即与一秒后的样本均没有可见 tab，标题仅记录长度 10；
+随后跳过 Instagram，仍打印 DONE。该缺陷已在隔离浏览器复现；日志没有保留这个标题的文本，
+不能宣称长度 10 一定是 Loading。新工具等待标题不再处于加载状态、目标渠道已选中及必要字段短暂稳定，
+采集即时/就绪两阶段，渠道或恢复失败记 PARTIAL。日志 JSON 用 ASCII 转义，避免 PowerShell 管道把中点解码成“路”。
+`--responses` 可选被动观察本次切换自然返回的 Business Suite GraphQL 响应，只保存白名单对象 ID、类型、
+时间与账号关系；正文仅保留长度，丢弃凭据字段，不访问 cookie、请求头或浏览器存储，不主动调用接口。响应到达时的标签名仅是时间上下文，
+不是渠道归属证明；仍需根据对象关系核验。响应数量、体积及等待均有界。
 
 现有录制 191–204 还显示聚合 Post 切换渠道后，FB 为 19:17、IG 为 19:18；不能把聚合时间、
 正文或 `content_id` 复制成两个渠道记录。合作作者不能替代目标 owner；预览中的分享源同样不能替代。
@@ -215,12 +227,14 @@ G1 的真实录制结构验收不等于整套生产系统已激活：专用渠�
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
 [页面证据](../state/ui-regression/browser-stage-f.json)核对部分结果警示、旧缓存时间与无正文展示。
-随交付加入的 `tests_calendar_detail_probe` 另有 5 条隔离回归：可见元数据定位、脱敏、歧义拒绝、发布锁和延迟页签保持原选择；hygiene 同步通过。
+`tests_calendar_detail_probe` 有 9 条隔离回归：可见元数据/Story 预览、脱敏、歧义拒绝、发布锁、
+延迟页签保持原选择、切换期间重载、缺失渠道不报成功、被动内容对象证据与 PowerShell 管道转义；
+定向结果和 hygiene 见 [取证工具验证](../state/planner-content-compatibility/story-detail-20260920/validation.json)。
 这些结果只证明离线行为，截图中的聚合详情仍缺独立身份适配。
 
-Story 的聚合页、各渠道 owner、独立远端 ID 与 DOM
-仍缺现场证据；本地语义浏览器夹具不是 Meta DOM 录制。只需按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 对这个已打开详情页进行一次只读观察，
-无需重新刷新月份或重录 G1。待收到结果再确认实际适配路径；不得以部分结果可见冒充月历读取真实通过。
+Story 聚合 DOM 已收到，尚缺渠道切换完成后的视图及独立 ID 关系；本地语义浏览器夹具不是 Meta DOM 录制。
+按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 的补采命令使用修正后的工具，
+不再运行会漏采的旧版本。无需重新刷新月份或重录 G1。不得以部分结果可见冒充月历读取真实通过。
 
 ## 2. 红线
 

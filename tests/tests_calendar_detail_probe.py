@@ -1,6 +1,7 @@
 """The diagnostic uses only isolated browser pages and temporary lock storage."""
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -17,8 +18,9 @@ from publish.journal import PublishOperationLock
 from tools import probe_calendar_detail as probe
 
 
-PAGE = '''<h2>This content has no text</h2><span>Story · Published on: Fri Sep 4, 6:39pm</span>
+PAGE = '''<header><h2>This content has no text</h2><span>Story · Published on: Fri Sep 4, 6:39pm</span></header>
 <p>PRIVATE CAPTION SECRET_TOKEN</p><h2>Feed preview</h2>
+<div id="instagram_story_preview_frame"><div><div><span>neakasa.de</span></div></div></div>
 <a href="https://www.facebook.com/permalink.php?story_fbid=654321&id=123456&token=SECRET_TOKEN">Private link text</a>
 <button role="tab" aria-selected="true" onclick="select(this)">Total performance</button>
 <button role="tab" aria-selected="false" onclick="select(this)">Facebook</button>
@@ -53,6 +55,11 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('content_id=999999', text)
         self.assertIn('story_fbid=654321', text)
         self.assertIn('DONE: read-only inspection complete', text)
+        records=[json.loads(line) for line in text.splitlines() if line.startswith('{')]
+        settled=next(row for row in records if row.get('phase')=='settled')
+        self.assertEqual(settled['story_previews'][0]['node']['id'],'instagram_story_preview_frame')
+        self.assertEqual(settled['story_previews'][0]['node']['text'],'neakasa.de')
+        self.assertTrue(settled['readiness']['caption_empty'])
         for private in ('PRIVATE CAPTION', 'SECRET_TOKEN', 'Private link text'):
             self.assertNotIn(private, text)
         self.assertEqual(await self.page.get_by_role('tab', selected=True).inner_text(), 'Total performance')
@@ -94,15 +101,94 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
           setTimeout(()=>document.body.insertAdjacentHTML('beforeend',
             '<button role="tab" aria-selected="true">Total performance</button>'+
             '<button role="tab" onclick="window.changed=true">Facebook</button>'+
-            '<button role="tab" onclick="window.changed=true">Instagram</button>'),350);
+            '<button role="tab" onclick="window.changed=true">Instagram</button>'),3000);
           window.changed=false;</script>''')
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             result = await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story')
-        self.assertTrue(result)
+        self.assertFalse(result)
         self.assertIn('tabs left unchanged',output.getvalue())
+        self.assertNotIn('DONE:', output.getvalue())
         self.assertFalse(await self.page.evaluate('window.changed'))
         self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+    async def test_channel_hydration_does_not_skip_instagram_or_capture_loading_as_ready(self):
+        # The supplied live log has no aria-controls and loses all visible tabs
+        # during the Facebook samples. The delay here is an isolated reproduction.
+        await self.page.evaluate('''() => {
+          window.visits=[];
+          window.select=tab=>{
+            const name=tab.textContent;
+            visits.push(name);
+            document.querySelectorAll('[role=tab]').forEach(n=>n.setAttribute('aria-selected','false'));
+            tab.setAttribute('aria-selected','true');
+            if(name==='Total performance')return;
+            document.querySelector('h2').textContent='Loading...';
+            document.querySelectorAll('[role=tab]').forEach(n=>n.hidden=true);
+            setTimeout(()=>{
+              document.querySelector('h2').textContent='This content has no text';
+              document.querySelectorAll('[role=tab]').forEach(n=>n.hidden=false);
+            },1600);
+          };
+        }''')
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story')
+        self.assertTrue(result)
+        records=[json.loads(s) for s in output.getvalue().splitlines() if s.startswith('{')]
+        settled=[r for r in records if r.get('phase')=='settled' and r.get('frame')==0]
+        self.assertEqual({r['view'] for r in settled},{'initial','Facebook','Instagram'})
+        self.assertTrue(all(r['readiness']['caption_ready'] for r in settled))
+        self.assertEqual(await self.page.evaluate('window.visits'),['Facebook','Instagram','Total performance'])
+
+    async def test_missing_selected_channel_fails_instead_of_claiming_complete(self):
+        await self.page.get_by_role('tab',name='Instagram',exact=True).evaluate(
+            "el=>el.onclick=()=>{document.querySelectorAll('[role=tab]').forEach(n=>n.setAttribute('aria-selected','false'))}")
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story',timeout=1)
+        self.assertFalse(result)
+        self.assertNotIn('DONE:',output.getvalue())
+        self.assertIn('Instagram',output.getvalue())
+        self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+    async def test_passive_content_evidence_redacts_credentials_and_keeps_identity_relationships(self):
+        payload={'data':{'node':{'__typename':'Story','id':'987654321',
+            'owner':{'id':'123456789','username':'neakasa.de','access_token':'SECRET_TOKEN'},
+            'caption':'PRIVATE CAPTION','creation_time':1788518340,'media_type':'IMAGE',
+            'url':'https://instagram.com/stories/neakasa.de/987654321/?token=SECRET_TOKEN',
+            'permalink_url':'https://www.facebook.com/permalink.php?story_fbid=654321&id=123456&token=SECRET_TOKEN'}},
+            'session_token':'SECRET_TOKEN'}
+        await self.context.route('**/api/graphql/**',lambda route: route.fulfill(
+            content_type='application/json',body=json.dumps(payload)))
+        await self.page.evaluate('''() => {const original=window.select;
+          window.select=tab=>{original(tab);fetch('/api/graphql/?secret=SECRET_TOKEN',{method:'POST'})};}''')
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=await probe.inspect(self.browser,day=date(2026,9,4),clock=time(18,39),kind='Story',responses=True)
+        self.assertTrue(result)
+        text=output.getvalue()
+        self.assertIn('987654321',text)
+        self.assertIn('123456789',text)
+        self.assertIn('neakasa.de',text)
+        self.assertIn('creation_time',text)
+        records=[json.loads(line) for line in text.splitlines() if line.startswith('{')]
+        responses=[row['RESPONSE_EVIDENCE'] for row in records if isinstance(row.get('RESPONSE_EVIDENCE'),dict)]
+        self.assertTrue(responses)
+        self.assertEqual(responses[0]['data']['node']['permalink_url'],
+                         'https://www.facebook.com/permalink.php?story_fbid=654321&id=123456')
+        self.assertNotIn('PRIVATE CAPTION',text)
+        self.assertNotIn('SECRET_TOKEN',text)
+        self.assertNotIn('access_token',text)
+        self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+    async def test_probe_json_survives_non_utf8_powershell_pipelines(self):
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            probe.emit({'metadata':'Story · Published on: Fri Sep 4, 6:39pm'})
+        text=output.getvalue()
+        self.assertTrue(text.isascii())
+        self.assertEqual(json.loads(text)['metadata'],'Story · Published on: Fri Sep 4, 6:39pm')
 
 
 if __name__ == '__main__':
