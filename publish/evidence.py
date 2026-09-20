@@ -469,19 +469,15 @@ def verify_publish_chain(button: Locator, account: EvidenceSignal,
                 loaded_rows, planner_rows)):
         return False, "因果链缺账号上下文、可信提交、成功、Planner 就绪或卡片任一环"
     finals = [row for row in data["snapshots"] if row.get("reason") == "final"]
-    screenshot_dir = (Path(dumps_dir) /
-                      (Path(source).stem + "_screenshots")).resolve(strict=False)
-
     def valid_final(row: dict) -> bool:
         raw = row.get("screenshot")
         if row.get("screenshot_error") not in {None, ""} or not isinstance(raw, str):
             return False
-        shot = Path(raw).resolve(strict=False)
         try:
-            shot.relative_to(screenshot_dir)
-        except ValueError:
+            screenshot_path(raw, source, dumps_dir)
+        except (OSError, ValueError):
             return False
-        return shot.is_file() and shot.stat().st_size > 0
+        return True
 
     # 同页按证据顺序贪心选择最早可行节点，后续仍要求有效 final 截图。
     def orders_on(rows: list[dict], page: str) -> list[int]:
