@@ -2,6 +2,8 @@
 import asyncio
 import re
 import time
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from publish.planner_content import DetailReadError, classify_published, LABELS, NO_TEXT
 
@@ -138,7 +140,74 @@ async def read_view(page, row, item, expected_accounts, *, channel='', aggregate
         await asyncio.sleep(min(.2,max(0,deadline-time.monotonic())))
 
 
-async def read_story(page, row, item, expected_accounts, baseline, evidence, *, timeout):
+async def read_facebook_story(page, row, expected_accounts, evidence, *, ui_timezone, timeout):
+    """Read only the FB entity directly related to this detail's verified IG root."""
+    deadline = time.monotonic()+timeout
+    tab = page.get_by_role('tab', name='Facebook', exact=True)
+    while await tab.count() != 1 or not await tab.is_visible():
+        if time.monotonic() >= deadline:
+            raise DetailReadError('identity_unverified', placement='story', missing_fields=('facebook_channel_tab',))
+        await asyncio.sleep(.2)
+    await tab.click(timeout=max(1, (deadline-time.monotonic())*1000))
+    previous, stable_since = None, time.monotonic()
+    last_error = DetailReadError('identity_unverified', placement='story', missing_fields=('facebook_story_identity',))
+    while True:
+        if len(evidence.identities) != 1 or len(evidence.facebook_identities) > 1:
+            raise DetailReadError('identity_unverified', placement='story', missing_fields=('consistent_story_identity',))
+        identity = evidence.facebook_identities[0] if evidence.facebook_identities else None
+        header = await header_snapshot(page)
+        preview = page.get_by_role('heading', name='Feed preview', exact=True)
+        loading = page.get_by_role('heading', name='Loading preview', exact=True)
+        ready = (await preview.count() == 1 and await preview.is_visible() and
+                 not any([await node.is_visible() for node in await loading.all()]))
+        if ready and identity:
+            # The recorded FB Story author row has an avatar IMG beside a DIV
+            # account name. Plain mentions in an embedded post are not authors.
+            ready = await preview.evaluate(r'''(label, owner) => {
+              const visible=n=>!!n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
+              for(let root=label.parentElement,depth=0;root&&depth<6;root=root.parentElement,depth++) {
+                if(root.querySelector('[role="tab"]') || [...root.querySelectorAll('[role="heading"],h1,h2,h3')]
+                    .some(n=>n!==label && /Published on:/.test(n.parentElement.innerText))) break;
+                const authors=[...root.querySelectorAll('div')].filter(visible).flatMap(row=>{
+                  const children=[...row.children].filter(visible);
+                  if(!children.some(n=>n.tagName==='IMG')) return [];
+                  return children.filter(n=>n.tagName==='DIV' && !n.querySelector('div,img,video') && n.innerText.trim())
+                    .map(n=>n.innerText.trim());
+                });
+                if(authors.length) return authors.length===1 && authors[0]===owner;
+              }
+              return false;
+            }''', identity['owner'])
+            if not ready:
+                last_error = DetailReadError('identity_unverified', placement='story', missing_fields=('facebook_story_preview_owner',))
+        selected = await tab.count() == 1 and await tab.get_attribute('aria-selected') == 'true'
+        material = None
+        if identity and header and ready and selected and header['platforms'] == ['Facebook']:
+            if (evidence.identities[0]['facebook_ids'] != (identity['remote_id'],) or
+                    header['metadata'].split('·',1)[0].strip() != 'Story' or
+                    header['caption'] != identity['title']):
+                last_error = DetailReadError('identity_unverified', placement='story', missing_fields=('story_header_binding',))
+            else:
+                try:
+                    observed = datetime.fromtimestamp(identity['created_at'], timezone.utc).astimezone(ZoneInfo(ui_timezone))
+                    material = classify_published({**header, **identity, 'channel':'facebook',
+                        'story_entity_verified':True, 'relationships':('cross_platform',)}, row['date'], expected_accounts)
+                    # Compare this FB object's own time, never the aggregate/IG minute.
+                    if material['ui_at'] != observed.replace(tzinfo=None, second=0, microsecond=0):
+                        raise DetailReadError('time_mismatch', placement='story')
+                except (ValueError, OverflowError, OSError) as exc:
+                    last_error = exc if isinstance(exc, DetailReadError) else DetailReadError('time_mismatch', placement='story')
+                    material = None
+        if material != previous:
+            previous, stable_since = material, time.monotonic()
+        if material and time.monotonic()-stable_since >= .6:
+            return material
+        if time.monotonic() >= deadline:
+            raise last_error
+        await asyncio.sleep(.2)
+
+
+async def read_story(page, row, item, expected_accounts, baseline, evidence, *, timeout, ui_timezone):
     """Bind the recorded IG root media to its selected channel header and Story preview."""
     deadline = time.monotonic()+timeout
     tab = page.get_by_role('tab', name='Instagram', exact=True)
@@ -192,23 +261,28 @@ async def read_story(page, row, item, expected_accounts, baseline, evidence, *, 
         if signature != previous:
             previous, stable_since = signature, time.monotonic()
         if material and time.monotonic()-stable_since >= .6:
-            # Your Story is a UI title, not a verified FB caption or native ID.
-            # BusinessFBStoryContent.id cannot replace a native Story ID: deletion
-            # reconciliation compares native IDs and could otherwise infer absence.
-            if ('TofuFBStoryEntityInfo' in identity['related_kinds'] or
-                    await page.get_by_role('tab', name='Facebook', exact=True).count()):
-                raise DetailReadError('identity_unverified', placement='story',
-                                      missing_fields=('facebook_story_identity', 'facebook_story_caption'), variants=(material,))
-            if set(identity['related_kinds']) - {'TofuIGPostEntityInfo'}:
+            if (set(identity['related_kinds']) - {'TofuIGPostEntityInfo', 'TofuFBStoryEntityInfo'} or
+                    set(identity['instagram_ids']) - {identity['remote_id']}):
                 raise DetailReadError('identity_unverified', placement='story',
                                       missing_fields=('related_story_identity',), variants=(material,))
+            if ('TofuFBStoryEntityInfo' in identity['related_kinds'] or
+                    await page.get_by_role('tab', name='Facebook', exact=True).count()):
+                try:
+                    facebook = await read_facebook_story(page, row, expected_accounts, evidence,
+                                                         timeout=timeout, ui_timezone=ui_timezone)
+                except Exception as exc:
+                    error = exc if isinstance(exc, DetailReadError) else DetailReadError(
+                        'identity_unverified', placement='story', missing_fields=('facebook_story_identity',))
+                    raise DetailReadError(error.code, placement=error.placement,
+                                          missing_fields=error.missing_fields, variants=(material,)) from exc
+                return [material, facebook]
             return [material]
         if time.monotonic() >= deadline:
             raise last_error
         await asyncio.sleep(.2)
 
 
-async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None):
+async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None, ui_timezone=None):
     # Tabs may hydrate after DOMContentLoaded. Wait for the header before deciding
     # whether this is a single-channel view or an aggregate requiring each tab.
     deadline = time.monotonic()+timeout
@@ -221,7 +295,7 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None)
         await asyncio.sleep(.2)
         header = await header_snapshot(page)
     if evidence is not None and header['metadata'].split('·',1)[0].strip()=='Story':
-        return await read_story(page, row, item, expected_accounts, header, evidence, timeout=timeout)
+        return await read_story(page, row, item, expected_accounts, header, evidence, timeout=timeout, ui_timezone=ui_timezone)
     tabs = [(key,page.get_by_role('tab',name=label,exact=True))
             for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
     available = [(key,node) for key,node in tabs if await node.count()==1]

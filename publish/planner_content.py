@@ -48,17 +48,23 @@ def classify_published(observation, day, expected_accounts):
     caption = observation.get('caption')
     if caption is None:
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
-    if channel == 'facebook' and placement == 'story' and ' '.join(caption.split()) == 'Your Story':
-        raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
-    if ' '.join(caption.split()) == NO_TEXT:
+    caption_status = 'present'
+    if channel == 'facebook' and placement == 'story' and ' '.join(caption.split()).casefold() == 'your story':
+        if not observation.get('story_entity_verified'):
+            raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
+        # The verified published Story still occupies its slot; this UI title
+        # proves neither a caption nor the absence of one.
+        caption, caption_status = '', 'unknown'
+    elif ' '.join(caption.split()) == NO_TEXT:
         caption = ''
+        caption_status = 'empty'
     elif not caption.strip():
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
     media_kind = observation.get('media_kind', 'unknown')
     if media_kind not in MEDIA_KINDS:
         media_kind = 'unknown'
     return {'placement': placement, 'media_kind': media_kind, 'text': caption,
-            'caption_status': 'present' if caption else 'empty', 'delivery': 'published',
+            'caption_status': caption_status, 'delivery': 'published',
             'channels': (channel,), 'remote_ids': {channel: remote}, 'accounts': {channel: owner},
             'ui_at': observed, 'read_status': 'complete',
             'relationships': tuple(value for value in observation.get('relationships', ())

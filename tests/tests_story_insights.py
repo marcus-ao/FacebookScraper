@@ -6,7 +6,7 @@ import io
 import json
 import sys
 import unittest
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
 from publish import month_inventory as month
 from publish.business_suite import ProbeRequired
+from publish.month_readback import matching
 from tools import probe_calendar_detail as probe
 
 
@@ -34,6 +35,15 @@ BUSINESS = {'data': {'tofu_business_content': {'contents': [
     {'__typename': 'BusinessFBStoryContent', 'id': '1068553422207259', 'creation_time': 1788518376,
      'content_owner': {'__typename': 'Page', 'id': '739367289254011'}}]}}}
 ACCOUNTS = {'facebook': 'Neakasa Deutschland', 'instagram': 'neakasa.de'}
+
+# Direct relation fields/IDs from story-reader-20260920/probe.txt. The raw title,
+# owner title and epoch were redacted; these fixture values exercise validation.
+FB_ID = '1781315906229402'
+FB_ENTITY = {'entity_id': FB_ID, 'entity_info': {
+    '__typename': 'TofuFBStoryEntityInfo', 'title': 'Your story',
+    'created_at': int(datetime(2026,9,4,10,39,tzinfo=timezone.utc).timestamp()),
+    'owner': {'entity_id': '61578176852811', 'entity_info': {
+        '__typename': 'TofuFBProfileWithBizToolsEntityInfo', 'title': ACCOUNTS['facebook']}}}}
 
 # DOM is a semantic reconstruction of the logged roles/attributes, not raw HTML.
 DETAIL = '''<header><div role="heading" aria-level="3" id="caption">This content has no text</div>
@@ -85,6 +95,67 @@ class StoryInsightsTests(unittest.IsolatedAsyncioTestCase):
     async def inventory(self):
         with patch.object(month, 'prepare', AsyncMock()), patch.object(month, 'accounts', return_value=ACCOUNTS):
             return await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+
+    def linked_facebook(self):
+        self.payload['data']['tofu_entity']['entity_info']['cross_posted_entities'][0] = copy.deepcopy(FB_ENTITY)
+        self.detail_html = DETAIL.replace("tab.setAttribute('aria-selected','true');", """
+            tab.setAttribute('aria-selected','true');
+            caption.textContent=tab.textContent==='Facebook'?'Your story':'This content has no text';
+            if(tab.textContent==='Facebook') document.querySelector('aside').innerHTML=
+                '<h3>Feed preview</h3><div><img><div>Neakasa Deutschland</div><i></i><i></i></div>';
+        """)
+
+    async def test_direct_story_relation_completes_both_channels_without_inventing_facebook_caption(self):
+        self.linked_facebook()
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete)
+        self.assertEqual(len(result.cards), 2)
+        fb = next(c for c in result.cards if c.channels == ('facebook',))
+        ig = next(c for c in result.cards if c.channels == ('instagram',))
+        self.assertEqual(dict(fb.remote_ids), {'facebook': FB_ID})
+        self.assertEqual(dict(ig.remote_ids), {'instagram': SOURCE_ID})
+        self.assertEqual((fb.caption_status, fb.rendered, fb.delivery), ('unknown', '', 'published'))
+        self.assertEqual((ig.caption_status, ig.rendered), ('empty', ''))
+        self.assertEqual(result.occupied_for_channel('facebook'), (fb.at,))
+        self.assertEqual(result.occupied_for_channel('instagram'), (ig.at,))
+        self.assertEqual(matching(result, fb.at, 'Your Story', ('facebook',)), [])
+        self.assertEqual(len(self.context.pages), 1)
+
+    async def test_facebook_has_its_own_publication_minute(self):
+        self.linked_facebook()
+        info = self.payload['data']['tofu_entity']['entity_info']['cross_posted_entities'][0]['entity_info']
+        info['created_at'] += 60
+        self.detail_html = self.detail_html.replace("caption.textContent=", """
+            metadata.textContent='Story · Published on: Fri Sep 4, '+(tab.textContent==='Facebook'?'6:40pm':'6:39pm');
+            caption.textContent=""")
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete)
+        self.assertEqual({c.channels[0]: c.at.minute for c in result.cards}, {'instagram':39, 'facebook':40})
+
+    async def test_inconsistent_facebook_evidence_keeps_instagram_and_blocks_decisions(self):
+        for invalid in ['owner', 'time', 'channel', 'duplicate_relation', 'unlinked', 'preview_owner']:
+            with self.subTest(invalid=invalid):
+                self.payload = copy.deepcopy(ENTITY)
+                self.linked_facebook()
+                related = self.payload['data']['tofu_entity']['entity_info']['cross_posted_entities']
+                if invalid == 'owner':
+                    related[0]['entity_info']['owner']['entity_info']['title'] = 'Other account'
+                elif invalid == 'time':
+                    related[0]['entity_info']['created_at'] += 3600
+                elif invalid == 'channel':
+                    self.detail_html = self.detail_html.replace("'+tab.textContent+'", "'+('Instagram')+'")
+                elif invalid == 'duplicate_relation':
+                    related.append({**copy.deepcopy(FB_ENTITY), 'entity_id': '1781315906229403'})
+                elif invalid == 'preview_owner':
+                    self.detail_html = self.detail_html.replace('<div>Neakasa Deutschland</div>', '<div>Other account</div>')
+                else:
+                    # A standalone FB object cannot be associated by response arrival.
+                    related[0] = {'entity_info': {'__typename': 'TofuFBStoryEntityInfo'}}
+                    self.payload['unrelated'] = copy.deepcopy(FB_ENTITY)
+                result = await self.inventory()
+                self.assertFalse(result.decision_complete)
+                self.assertEqual([dict(c.remote_ids) for c in result.cards if c.read_status == 'complete'],
+                                 [{'instagram': SOURCE_ID}])
 
     async def test_native_instagram_identity_survives_unresolved_facebook_crosspost(self):
         result = await self.inventory()

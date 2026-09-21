@@ -7,10 +7,11 @@ from core.meta_json import response_documents
 
 
 class InsightsEvidence:
-    """Retain only the root IG media relation; business content IDs are another namespace."""
+    """Bind native Story entities through the root IG media, never business content IDs."""
     def __init__(self, page, source_id):
         self.page, self.source_id = page, source_id
         self.tasks, self.identities = [], []
+        self.facebook_identities = []
 
     def start(self):
         self.page.on('response', self.observe)
@@ -42,10 +43,31 @@ class InsightsEvidence:
                 if not isinstance(related, list) or not isinstance(info.get('title'), str):
                     continue
                 kinds = tuple(sorted({entry.get('entity_info', {}).get('__typename', '') for entry in related}))
+                facebook = [entry for entry in related
+                            if entry.get('entity_info', {}).get('__typename') == 'TofuFBStoryEntityInfo']
                 value = {'remote_id': self.source_id, 'owner': match[1], 'title': info['title'],
-                         'related_kinds': kinds}
+                         'related_kinds': kinds,
+                         'facebook_ids': tuple(sorted({str(entry.get('entity_id', '')) for entry in facebook})),
+                         'instagram_ids': tuple(sorted({str((entry.get('entity_info', {}).get('ig_media') or {}).get('id', ''))
+                             for entry in related if entry.get('entity_info', {}).get('__typename') == 'TofuIGPostEntityInfo'}))}
                 if value not in self.identities:
                     self.identities.append(value)
+                for entry in facebook:
+                    fb = entry['entity_info']
+                    owner = fb.get('owner') or {}
+                    owner_info = owner.get('entity_info') or {}
+                    remote = str(entry.get('entity_id', ''))
+                    if (not re.fullmatch(r'\d{6,}', remote) or
+                            str(fb.get('entity_id', remote)) != remote or
+                            not re.fullmatch(r'\d{6,}', str(owner.get('entity_id', ''))) or
+                            owner_info.get('__typename') != 'TofuFBProfileWithBizToolsEntityInfo' or
+                            not isinstance(owner_info.get('title'), str) or
+                            not isinstance(fb.get('title'), str) or type(fb.get('created_at')) is not int):
+                        continue
+                    candidate = {'remote_id': remote, 'owner': owner_info['title'],
+                                 'owner_id': str(owner['entity_id']), 'title': fb['title'], 'created_at': fb['created_at']}
+                    if candidate not in self.facebook_identities:
+                        self.facebook_identities.append(candidate)
         except (ValueError, TypeError, AttributeError, TimeoutError):
             return
         except Exception:

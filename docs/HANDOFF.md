@@ -237,7 +237,28 @@ IG 读取现在在新详情导航前被动监听自然响应，结合媒体 ID�
 选中的 IG 标签、IG 平台标记、已就绪 Story 预览及一致的渠道日期/时间核验。
 不依赖该页面没有提供的 aria-controls，不拿“选中标签并等待一会儿”单独证明共享标题归属。
 允许标签在标题之后加载；用时仍受原读取预算约束。一个渠道未完成时保留已核验变体并追加未知占位与诊断。
-FB 仍缺原生身份关联及正文证据；不会借用 IG 的 ID、空正文或另一个后台记录补齐。
+FB 的身份补充和正文未知规则见下方单条生产验证；不会借用 IG 的 ID、空正文或另一个后台记录补齐。
+
+**单条生产验证与三个筛选截图已收到。** [原文及摘录](../state/planner-content-compatibility/story-reader-20260920/summary.json)
+保全 9094 字节、9 条 JSON，SHA-256 为 `8bf2754178dcaaf9d96693734b482aeada28c994588f585f5efbf59f9d933ef4`。
+读取版本 d9196af 的 IG 变体已返回 complete：原生 ID 18084155825688886、账号 neakasa.de、
+2026-09-04 18:39、story、caption_status=empty；仅这一单条 IG 路径为真实通过，整次读取仍 partial。
+根 IG 对象的 cross_posted_entities 现在明确提供 FB Story entity_id=1781315906229402，
+其 owner.entity_id=61578176852811、类型 TofuFBProfileWithBizToolsEntityInfo；另一次 FB 实体响应的 entity_id 相同。
+这是直接实体关系；不是此前单独 BusinessContent 响应中的 ID，也不解码 opaque story_id 来猜身份。
+同一 FB 对象给出 created_at 整数和 owner.title，但日志只保留类型/长度，不能声称具体秒值或原始标题已从该日志核对。
+运行期逐项检查实际字段，并将 FB 自己的时间按 UI 时区核对所选 FB 页头，不复制 IG 的分钟。
+FB 预览作者限定在 Feed preview 区域内已录证的 IMG 头像与相邻 DIV 账号行；必须唯一且与响应 owner 一致。
+仅预览标题存在或 Loading preview 消失不足以证明 FB 预览已切换，残留 IG/其它账号仍为未完成。
+现有日志只记录标题和作者各自三层祖先，共同祖先的精确距离未保存；有界区域搜索能否命中仍待单条真实复验。
+
+[三个原始截图及 SHA-256](../state/planner-content-compatibility/story-reader-20260920/screenshots.json)确认：
+Total performance 与 Instagram 标题均为 `This content has no text`；Facebook 为 `Your story`（小写 s）。
+三者显示 Sep 4, 6:39pm；Total/FB 预览账号 Neakasa Deutschland，IG 为 neakasa.de，预览均可见。
+截图证实用户此前的描述；FB 0 浏览不能证明未发布，预览内嵌原帖文字不能当作 Story 独立正文。
+已核验直接 FB 实体、owner、渠道、发布状态和时间时，Your story（兼容大小写）记正文 unknown、空字符串，
+允许 complete 占用记录；它不表示正文为空或全文已读。普通 Feed 与 scheduled 全文回读规则保持。
+身份、时间或多实体关系不一致仍保留已核验 IG，加未知占位并阻止决策。
 
 现有录制 191–204 还显示聚合 Post 切换渠道后，FB 为 19:17、IG 为 19:18；不能把聚合时间、
 正文或 `content_id` 复制成两个渠道记录。合作作者不能替代目标 owner；预览中的分享源同样不能替代。
@@ -249,7 +270,7 @@ FB 仍缺原生身份关联及正文证据；不会借用 IG 的 ID、空正文�
 部分结果单独保存 `partial_inventory/partial_observed_at`；此前完整数据与观测时间保留。
 槽位判断、排期回读和远端删除登记必须使用决策完整的数据。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
 
-**当前边界：IG 根媒体 Story 路径离线通过，待服务机单条联调；FB Story 与其它未覆盖类型仍为代码未完成。**
+**当前边界：该条 IG 生产读取真实通过；直接关联 FB Story 及完整月份待真实联调，其它未覆盖类型仍为代码未完成。**
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
@@ -257,12 +278,18 @@ FB 仍缺原生身份关联及正文证据；不会借用 IG 的 ID、空正文�
 `tests_calendar_detail_probe` 的隔离回归覆盖可见元数据/Story 预览、脱敏、歧义拒绝、发布锁、
 延迟页签保持原选择、切换期间加载、缺失渠道不报成功、预览加载超时后继续 IG、首次详情重载响应/嵌入 JSON 与 PowerShell 管道转义；
 11 条定向测试、hygiene 与独立复审见 [取证工具验证](../state/planner-content-compatibility/story-detail-20260920/initial-load-validation.json)。
-这些既有结果只证明离线行为，新 IG 读取路径须另做服务机单条复验。
+这些既有结果只证明离线行为；当前 IG 单条服务机结果另见上方原始日志。
 
-[本次定向验证](../state/planner-content-compatibility/story-first-load-20260920/validation.json)通过 7 个脚本：
+[IG 路径定向验证](../state/planner-content-compatibility/story-first-load-20260920/validation.json)通过 7 个脚本：
 Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条、缓存 15 条及 hygiene；共 70 条测试。
 独立复审发现并修复 IG 标签延迟挂载时提前退出的问题，700ms 延迟夹具已覆盖；复审收尾无阻断项。
 均为隔离夹具和临时数据，不升级真实验收。
+
+[直接关联 FB Story 定向验证](../state/planner-content-compatibility/story-reader-20260920/validation.json)
+通过 7 个脚本：Story 10 条、分类 8 条、取证 12 条、月份 23 条、回读 5 条、缓存 15 条及 hygiene，共 73 条测试。
+成功读取分渠道身份、FB 正文 unknown、IG 正文 empty 与独立分钟；错误 owner/渠道/时间/预览、额外关系及无关联实体保持未完成。
+独立复审发现的 FB 预览作者缺口已补齐，修前错误账号用例失败、修后通过；[复审记录](../state/planner-content-compatibility/story-reader-20260920/review.json)无剩余阻断项。
+日志、截图与测试结果已按 SHA-256 保全到主检出同名 state 目录，均不随 Git 提交；FB 和整月真实结果仍待服务机提供。
 
 按 [MANUAL_STEPS §8.1](MANUAL_STEPS.md#81-月历更新单条取证与后续复验) 使用 `--verify-reader`：
 只对当前详情的新建副本运行生产读取入口，输出已保留变体和缺失字段，并补采根实体/跨帖关系的字段结构。

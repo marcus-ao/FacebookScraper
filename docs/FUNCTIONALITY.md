@@ -1467,7 +1467,7 @@ pending_review ──编辑──> edited ──确认无误──> content_lock
 | Instagram 单图 / Feed | 已发布或已排期；IGUser 图片入口 | 普通 Post 的 IG 分渠道页有录制 | 明确位置与媒体证据；不强制 caption 非空 | 目标 IG 账号/资产及单渠道详情 | IG 自己的时间/标识；不复用 Facebook ID | 展示独立 IG 记录；参与 | 共通普通 Post 有样本；空 caption 专门样本待核 |
 | Instagram 多图轮播、混合媒体轮播 / Feed | API 有 children、图片/视频入口；混合 UI 组合未核实 | 本轮无对应 Planner DOM | 轮播由明确标签或有序媒体子项证明；缺子项不能猜单图或混合；正文在整帖层 | owner 与 collaborators 分离 | 整帖身份；子项保持关联而不增加排期记录 | 已核验整帖按一张卡片参与；媒体形式未知要显式展示 | 官方字段不能充当 UI 夹具；真实轮播/混合样本待核 |
 | Facebook/Instagram 历史视频、Reels | 已发布/已排期候选；视频迁移公告、Reels API | 没有本轮可复核的 Reel 专门 DOM | 用明确 Video/Reel 标签；不由竖屏、播放按钮或视频长度猜位置；正文可明确为空 | 每渠道实际详情与目标资产 | 本渠道时间与对象 ID；API 容器 ID 不是已发布 ID | 保留 Video 与 Reel 的区别；核验后参与 | 共通字段的离线场景不等于真实 Reel 适配；待样本 |
-| Facebook/Instagram Story（含无独立正文） | **已发布现场样本**；Stories 官方说明 | 9 月 4 日 18:39 首次响应直接绑定根 IG media.id 与 Stories permalink；IG 无正文、neakasa.de 预览；FB 预览已就绪，标题 Your Story | `This content has no text` 为无正文提示；`Your Story` 仅为标题，不能证明正文为空；`Story` 为位置证据 | IG 结合响应媒体身份、账号、title 与选中渠道的标题/预览核验；统计错误不证明内容不存在 | 原生 ig_media.id 由同对象关系确认；FB 后台内容记录 ID 不替代原生 ID，仍待直接关联 | 保留已核验 IG 和未知 FB 占位；未完成渠道继续阻止决策完整性 | IG 路径离线通过，待真实联调；FB 身份/正文适配代码未完成 |
+| Facebook/Instagram Story（含无独立正文） | **已发布现场样本**；Stories 官方说明 | 9 月 4 日 18:39 根 IG media.id、Stories permalink 与 cross_posted_entities 中 FB Story entity_id 直接关联；三个筛选截图已保全 | IG 的明确无正文提示记 empty；FB 的 `Your story` 记 unknown，不冒充独立正文或空正文；`Story` 为位置证据 | IG 结合响应身份和选中渠道预览；FB 结合直接关联实体的 owner 类型/账号与选中渠道标题；统计错误或 0 浏览不证明内容不存在 | IG 原生 media.id；FB Story entity_id 及同对象 created_at 与渠道标题时间核对；不使用后台 BusinessContent ID | 身份、账号、状态和时间完整的已发布 Story 参与占用；未知正文独立展示，未知身份仍阻止决策 | 该条 IG 生产读取真实通过；FB 与整月待真实联调，见 HANDOFF §1.23 |
 | Story 转分享、已过展示期的后台记录 | 分享关系/可见性另计；Stories 说明和本次较早日期后台样本 | 9 月 4 日记录仍可在 9 月 20 日后台打开；是否转分享仅凭预览不能确定 | Story 仍是 Story；受众展示期过去不等于未发布、未排期或记录不存在 | 不把被分享账号当发布账号 | 保留原发布时刻；分享源 ID 与 Story ID 分开 | 展示历史观测状态；不按“过期”删除记录或制造空档 | 过往日期后台记录有截图；转分享关系与精确过期状态待 DOM |
 | 合作、分享、跨平台关联 | 关系维度；Collabs/Business Suite 官方说明 | 录制 191–204 的聚合 Post 切换后，FB 19:17、IG 19:18 | 聚合标题不能替代分渠道内容；同文同刻不自动合并 | 合作作者不是目标 owner；逐渠道核验 | 分渠道独立时间和 ID；无法证明的渠道不复制聚合 ID | 可关联展示但独立占用；渠道不明阻止空档保证 | 录制支持时间差异；更复杂分享/合作场景仍待真实样本 |
 | 手工创建的普通排期 | 已排期现场样本；已有仓库录制 | 9 月 30 日 17:30 的时间子节点、祖先正文标签、悬浮完整入口 | 限定本卡片补全日期/正文；重新读 DOM；不能借相邻卡片证据 | 排期详情的唯一渠道与目标账号 | 日期格、悬浮时间与详情 ID 一致 | 标注远端/手工；参与 | `tests_month_inventory.py` 有时间子节点、延迟、相邻卡片和变更回归；服务机复验仍需保留该条目 |
@@ -1485,7 +1485,11 @@ pending_review ──编辑──> edited ──确认无误──> content_lock
 已录证的 Facebook Feed 预览按作者 profile 链接与同作者 permalink 关联身份；合作文字与嵌入分享源不作 owner。
 首次加载的 IG 根媒体 Story 由 `ig_media.id` 与请求 content_id 一致、同对象 Stories 链接和选中渠道 DOM 联合核验。
 响应 title 为空且 IG 标题明确无正文时才记为空；仅有媒体 PHOTOS 不能进一步断言单图或轮播。
-FB Story 仍缺原生 ID 的直接关联和正文证据，不能拿同账号/同分钟的 BusinessContent ID 或 IG 数据补齐。
+FB Story 使用已绑定 IG 根对象的 cross_posted_entities 中唯一 TofuFBStoryEntityInfo.entity_id，
+核对同对象 owner 的实体类型、账号名与已录证预览作者行、原始 title 与选中 FB 标题，以及 created_at 按 UI 时区转换后的渠道分钟。
+不拿同账号/同分钟的 BusinessContent ID 或 IG 数据补齐。截图中的 `Your story`（兼容大小写差异）
+是界面标题：仅在该实体及其占用字段核验完成后记 `caption_status=unknown`、正文为空字符串、`read_status=complete`。
+这里 complete 只表示已发布 Story 的占用已核验，不表示正文已知；普通 Feed 和排期全文回读要求不变。
 一个渠道失败时保留已核验变体，再追加未核实项；当前改动不能宣称已恢复服务机整月刷新。
 分渠道内容字段须有独立可核验的所属区域；共用页头或复用面板不能靠等 0.4 秒证明切换完成。
 隔离测试注入的独立身份与分渠道面板只验证契约，不充当 Meta 选择器证据。

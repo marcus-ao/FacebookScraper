@@ -65,6 +65,9 @@ class ContentTests(unittest.TestCase):
         with self.assertRaises(content.DetailReadError) as error:
             self.parse(obs)
         self.assertIn('caption', error.exception.missing_fields)
+        obs['story_entity_verified'] = True
+        value = self.parse(obs)
+        self.assertEqual((value['text'], value['caption_status'], value['read_status']), ('', 'unknown', 'complete'))
 
     def test_collaborator_and_caption_mentions_cannot_replace_the_publishing_owner(self):
         obs = self.observation()

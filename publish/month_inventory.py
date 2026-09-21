@@ -151,7 +151,7 @@ async def is_recommendation(page, item, *, timeout=1.5):
         return False
 
 
-async def read_item(page, row, item, *, timeout=30):
+async def read_item(page, row, item, *, timeout=30, ui_timezone=None):
     stage = 'item_ready'
     try:
         ready = await ready_item(page, row, item, timeout=timeout)
@@ -159,7 +159,7 @@ async def read_item(page, row, item, *, timeout=30):
             return None
         node, raw = ready
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
-        return await read_item_detail(page, row, item, node, raw, timeout=timeout)
+        return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone)
     except Exception as exc:
         raise PlannerItemError(row, item, stage, exc) from exc
     finally:
@@ -238,7 +238,7 @@ def require_same_item(item, fresh):
         raise bs.PublishStepError('月历条目已读取的正文发生变化，请重新读取')
 
 
-async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None):
+async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -269,7 +269,8 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
                 raise content.DetailReadError('navigation_failed')
             await detail.bring_to_front()
             try:
-                variants = await published_details.read(detail, row, item, accounts(), timeout=timeout, evidence=evidence)
+                variants = await published_details.read(detail, row, item, accounts(), timeout=timeout, evidence=evidence,
+                                                       ui_timezone=ui_timezone or cfg().get('publish', 'ui_timezone', ''))
             except content.DetailReadError as exc:
                 for variant in exc.variants:
                     variant['source_content_id'] = remote
@@ -332,7 +333,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30):
     for row in rows:
         for item in row['items']:
             try:
-                material = await read_item(page, row, item, timeout=timeout)
+                material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone)
             except PlannerItemError as exc:
                 diagnostics.append(exc.diagnostic)
                 material = {'channels': (), 'remote_ids': {}, 'text': '', 'delivery': 'unknown',

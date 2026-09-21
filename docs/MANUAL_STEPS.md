@@ -511,9 +511,9 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 ### 8.1 月历更新、单条取证与后续复验
 
-本次已实现基于首次加载响应的 IG Story 身份核验，以及部分变体保留；FB Story 仍缺原生 ID 关联和正文证据。
-用户已确认 IG/Total performance 显示 `This content has no text`，Facebook 显示 `Your Story`。
-当前只复验这条详情；出现一个已核验 IG 变体和 FB 未完成诊断是预期结果，不算整月通过。
+服务机单条日志已验证 IG Story，并提供直接关联的 FB Story 实体；适配已加入 FB owner、预览作者、标题与自身发布时间核对。
+三个截图确认 IG/Total performance 显示 `This content has no text`，Facebook 显示 `Your story`（小写 s）。
+先用生产读取器复验这条详情；完整返回两个独立渠道后，再进行一次整月刷新。FB 正文保持 unknown，不要求把界面标题证明为空正文。
 保留 G1 文件、北京时间配置、既有月历 probe、缓存及业务数据，不重录 G1。
 
 1. 确认没有发布、排期或月历刷新正在运行；在旧 Web 的 PowerShell 按 `Ctrl+C` 正常停止服务。
@@ -557,13 +557,16 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
    不刷新整月、不写月历缓存、不登录、不发布、不排期、不调用模型。
    只被动观察页面自然返回的响应；输出根实体/跨帖关系的字段结构、白名单 ID/类型/账号及文字长度。
    非数字 ID 若为 JSON 或 base64 JSON，只做有界解码后再次脱敏；不执行内容，不输出任意字符串原值或凭据。
-   该解码结果只供补齐 FB 关联，不自动写入生产 remote_ids。
+   该解码结果只供诊断；生产 remote_ids 使用明确关联的数字实体 ID。
 
-5. 将该日志发回，重点看 `ENTITY_IDENTITY` 和 `READER_RESULT`。本条 IG 的预期结果为：
+5. 重点看 `READER_RESULT` 的 `complete=true` 和两个独立 variants。本条 IG 的预期结果为：
    `remote_ids.instagram=18084155825688886`、`accounts.instagram=neakasa.de`、`placement=story`、
    `caption_status=empty`、`caption_length=0`、`ui_at=2026-09-04T18:39:00`。
-   末尾仍应为 `PARTIAL`，缺失字段包含 `facebook_story_identity` 与 `facebook_story_caption`；退出码 2 表示尚未完整读取。
-   若 IG 也没有保留下来，或报其它缺失字段，保留输出，不连续重跑。
+   FB 应为 `remote_ids.facebook=1781315906229402`、`accounts.facebook=Neakasa Deutschland`、
+   `placement=story`、`caption_status=unknown`、`caption_length=0`、`read_status=complete`，本条截图时间同为 18:39。
+   FB 正文 unknown 是预期展示，表示 `Your story` 未被当成正文；不表示身份或占用未知。
+   若末尾为 `PARTIAL`、complete=false 或退出码 2，保留整份日志发回，先不刷新整月，不连续重跑。
+   尤其 `time_mismatch` 需核对同一个 FB 对象的 created_at，不能拿 IG 或后台 BusinessContent 时间补齐。
    `STOP: matching detail pages: 0` 仅表示没匹配当前打开的详情；2 或更多表示不唯一。
    发布锁忙时等待正在运行的操作结束，不删除锁文件。
 
@@ -583,12 +586,12 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
    ```
 
    旧失败缓存及 `cached_at=null` 可能仍在：单条验证不写缓存，重启也不会产生成功读取。
-   本轮先不要再点刷新月历；等 FB 关联补齐后再做下方整月复验。
+   第 5 步单条完整通过后执行下方整月复验；若单条未完成，只查看缓存并保留诊断。
 
-**身份适配补齐后的整月复验。** 再按上方更新及启动步骤操作，人工保持发布 Chrome 登录，
+**单条完整通过后的整月复验。** 保持发布 Chrome 登录，
 页面点一次「刷新月历」，完成后用第 6 步 GET 查询，不重复触发刷新。
 成功要求 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
-`coverage.matches_current_month/grid_complete/entries_complete/channels_complete/decision_complete` 均为 true，
+`coverage.matches_current_month/grid_complete/entries_complete/classification_complete/channels_complete/decision_complete` 均为 true，
 `unresolved_count=0`，`cached_at` 更新为此次完成时间且 `partial_cached_at=null`。
 仍在 2026 年 9 月时，日期格范围应为 `2026-08-30` 至 `2026-10-03`；核对 9 月 4 日 Story、
 9 月 30 日 17:30 手工帖子和其它实际类型，逐渠道对照账号、时间与 ID，不预设两渠道相同。
