@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -51,7 +54,7 @@ exit /b 0
 ''')
         system32 = Path(os.environ['SystemRoot']) / 'System32'
         self.environment = dict(os.environ, PATH=str(self.bin) + os.pathsep + str(system32),
-                                LAUNCH_EVENTS=str(self.events))
+                                LAUNCH_EVENTS=str(self.events), FBSCRAPER_CONTROL_DIR='', FBSCRAPER_NETWORK_CONFIG='')
 
     @staticmethod
     def write_bat(path, content):
@@ -99,6 +102,59 @@ exit /b 0
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Node.js', result.stdout + result.stderr)
         self.assertEqual(self.recorded(), [])
+
+    def prepare_lan(self):
+        for directory in ('tools', 'core', 'ops'):
+            (self.root / directory).mkdir()
+        for name in ('tools/source_web.py', 'core/web_access.py', 'scripts/run_web_lan.bat'):
+            shutil.copyfile(ROOT / name, self.root / name)
+        self.network = self.root / 'ops/service-machine.network.json'
+        self.network.write_text(json.dumps({'web_host': '0.0.0.0', 'web_port': 9876,
+            'public_base_url': 'http://10.66.6.3:9876', 'allowed_client_cidrs': ['10.66.6.0/24']}), encoding='ascii')
+        self.write_bat(self.scripts / 'run_python.bat', r'''@echo off
+if "%~2"=="tools.source_web" goto lan
+echo serve>>"%LAUNCH_EVENTS%"
+type "%~dp0..\web\ui\dist\bundle.txt"
+echo arguments: %*
+echo policy: %FBSCRAPER_NETWORK_CONFIG%
+exit /b 0
+:lan
+cd /d "%~dp0.."
+"%LAUNCH_PYTHON%" %*
+exit /b %ERRORLEVEL%
+''')
+        self.environment.update(LAUNCH_PYTHON=sys.executable, PYTHONPATH=str(self.root), PYTHONIOENCODING='utf-8')
+        self.launcher = self.scripts / 'run_web_lan.bat'
+
+    def run_lan(self, **environment):
+        return subprocess.run([os.environ['COMSPEC'], '/d', '/c', str(self.launcher)], cwd=self.temp.name,
+                              env={**self.environment, **environment}, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace', timeout=15)
+
+    def test_lan_reads_binding_and_policy_from_json_and_reuses_frontend_build(self):
+        self.prepare_lan()
+        result = self.run_lan()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.recorded(), ['install', 'build', 'serve'])
+        self.assertIn('fresh-css', result.stdout)
+        self.assertIn('--host 0.0.0.0 --port 9876 --no-proxy-headers', result.stdout)
+        self.assertIn(str(self.network), result.stdout)
+
+    def test_lan_invalid_policy_or_managed_terminal_stops_before_build(self):
+        self.prepare_lan()
+        result = self.run_lan(FBSCRAPER_CONTROL_DIR='installed/control')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.recorded(), [])
+        self.network.write_text('{broken', encoding='ascii')
+        result = self.run_lan()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.recorded(), [])
+
+    def test_lan_propagates_frontend_failure(self):
+        self.prepare_lan()
+        result = self.run_lan(FAIL_BUILD='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.recorded(), ['install', 'build'])
 
 
 if __name__ == '__main__':

@@ -8,13 +8,15 @@
 
 **开发机（本仓库）。** 没有 `config.local.toml`，直接按 `config.toml` 的 `[paths]` 读同目录的 `archive/` 与 `state/`。归档 0 篇；`state/` 保留离线证据及本次服务机 G1 录制，没有任何业务账本——`published.jsonl`、`paid_requests.jsonl`、`pipeline_state.json`、`feishu_outbox.json` 都不存在。激活边界未激活，四个计划任务未注册，G1 录制及共通信号已通过；专用渠道/月历能力和 G8 仍按各自证据判断，见 §1.21。⚠️ 副本工作区可能用忽略入库的 `config.local.toml` 指回别的数据，所以「在副本里跑」不等于「跑在空数据上」——接手前先看那个文件指向哪里。
 
-**审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`；构建产物不入版本库。⛔ **源码检出重启 Web 必须走 `scripts/run_web.bat`**——它每次按锁文件装依赖再构建。直接跑 Uvicorn 会继续提供旧产物，这个坑真实发生过：服务机 `git pull` 后重启，页面仍是修复前的 CSS。带 `release.json` 的运行包用包内前端，不需要 Node。
+**审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`；构建产物不入版本库。⛔ **源码检出重启 Web 必须走 `scripts/run_web.bat`（局域网用复用它的 `scripts/run_web_lan.bat`）**——它每次按锁文件装依赖再构建。直接跑 Uvicorn 会继续提供旧产物，这个坑真实发生过：服务机 `git pull` 后重启，页面仍是修复前的 CSS。带 `release.json` 的运行包用包内前端，不需要 Node。
 
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
-**外部依赖。** `[feishu].enabled = true`，非受管 `base_url` 为 `http://10.66.4.9:8765`；服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。
+**外部依赖。** `[feishu].enabled = true`，非受管入口读 `[feishu].base_url`，由改址脚本与网络 JSON 同步；服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
+
+**源码服务机改址。** 仓库网络入口以 `ops/service-machine.network.json` 为准，非受管飞书入口同步至 `[feishu].base_url`。`scripts/update_service_address.bat` 支持 IP/前缀或明确 CIDR，保留未指定端口；只输入 IP 时不猜新子网。局域网入口 `scripts/run_web_lan.bat` 从同一 JSON 读取监听和端口，再调用原前端构建流程。防火墙及客户端操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。受管 `control/host.json` 优先且不由此工具修改，历史文档中的地址不是新的现场确认。
 
 ### 1.1 服务机现状与上线前的未完项
 
@@ -29,7 +31,7 @@
 | 审校台 | 用过。减少动画偏好下三点菜单跑到 `y=-7296`，已修；当时服务机在跑修复前的 CSS，启动脚本已补构建步骤 |
 | 仍未解决 | `/api/refinements/task/...` 返回 500。本机 FB/IG 隔离样例都是 200，未复现；需要服务机 Python 日志里该请求的 Traceback 末尾、异常类型和错误说明，遮去密钥 |
 
-上线前按顺序做：服务机先只读数抓取积压 → 拉含这份配置的 `main` 并正常停旧 Web 后重启（必须走 `scripts/run_web.bat`）→ 复验上表六项 → 人工重新回填 FB 原图 → 四机器人在**服务机**自检（2026-09-15 那次在开发机上做的，不算）→ 写入 `HEARTBEAT_URL` → 72 小时试运行且不带 `--process`。打开 `--process` 的四条硬前置见 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图)。
+上线前按顺序做：服务机先只读数抓取积压 → 拉含这份配置的 `main` 并正常停旧 Web 后重启（源码局域网走 `scripts/run_web_lan.bat`）→ 复验上表六项 → 人工重新回填 FB 原图 → 四机器人在**服务机**自检（2026-09-15 那次在开发机上做的，不算）→ 写入 `HEARTBEAT_URL` → 72 小时试运行且不带 `--process`。打开 `--process` 的四条硬前置见 [MANUAL_STEPS §14.1](MANUAL_STEPS.md#141-打开内容处理抓到就翻译和出图)。
 
 ⚠️ **`[feishu].enabled` 已经是 `true`。** 抓取事件在落档时就以 `acknowledged=false` 写进 `capture_state.json`，飞书关闭时 `enqueue_capture_results()` 第一行就返回、不会确认它们。服务机第一次加载这份配置（拉代码并重启）之后，下一轮维护会把积压事件按扫描一次性入队。只读数一遍的步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 
@@ -346,6 +348,14 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 
 没有渠道页签**不等于**单渠道详情——页签会迟挂载（已有回归覆盖 3 秒延迟）。工具照旧只在开头捕获一次原选择，
 捕获不到就保留初始快照并报不完整，不会声称读全，也不会去点页签。
+
+### 1.24 源码服务地址更新（2026-09-20）
+
+**验证状态：离线通过。** `scripts/update_service_address.bat` 同步网络 JSON 与非受管飞书 URL；`scripts/run_web_lan.bat` 读取同一配置启动。主检出原地址未替换，`10.66.6.3/24` 仅为测试及操作示例，现场 IP/前缀由人确认。工作树 `.worktrees/service-address-updater`，分支 `codex/service-address-updater`。
+
+[定向回归 6/6 脚本](../state/offline-validation-20260921T062357Z/results.json)覆盖 Web 访问 14 项、启动批处理 8 项、受管部署 19 项、发布后台维护保护 25 项、更新器初版 9 项及 hygiene；[更新器最终 10 项](../state/offline-validation-20260921T062550Z/results.json)另补实际 `.bat` 的交互/参数模式、带空格目录、异目录启动和解释器绑定。独立只读复审再次执行更新器及启动脚本共 18 项通过，未发现阻塞问题。
+
+测试均用临时配置和隔离数据；启动测试执行真实 Windows 批处理，但 npm 和最终 Web 服务器为夹具，没有连接真实账号、发送飞书、修改防火墙或读写业务账本。服务机拉取、监听、防火墙及同事电脑访问仍为 **待真实联调**，按 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址) 操作。日志位于本工作树 `state/`，不随 Git 提交，清理前须保全。
 
 ## 2. 红线
 
