@@ -980,10 +980,17 @@ def next_slots(now: datetime, occupied: Iterable[datetime], count: int,
         for slot in rules.slots:
             candidate = datetime.combine(day, slot, tzinfo=zone)
             # 月份在 **UI 时区**里判：北京 10-01 00:00 在美西还是 09-30 上午。
-            in_ui = candidate.astimezone(ui_zone)
-            if (in_ui.year, in_ui.month) != ui_month:
+            shown = candidate.astimezone(ui_zone)
+            in_ui = (shown.year, shown.month)
+            if in_ui > ui_month:
+                # 夹具翻不到下个月，越过本月就没有可排的了。
                 exhausted = True
                 break
+            if in_ui < ui_month:
+                # ⚠️ 这里只能跳过，不能收工。UI 时区落后于业务时区时，当天第一个
+                # 槽可能还落在上个月（北京 10-01 09:00 = 美西 09-30 18:00），
+                # 而当天更晚的槽和本月其余部分都还可排；当成"越界"会让整月归零。
+                continue
             if (candidate <= local_now or candidate in busy
                     or bs.ui_time_is_ambiguous(candidate, rules.ui_timezone)):
                 continue
