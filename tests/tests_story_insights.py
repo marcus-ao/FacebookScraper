@@ -334,9 +334,11 @@ class PublishedMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.cards[0].relationships, ())
 
     async def test_unverified_or_mismatched_identity_keeps_the_slot_unresolved(self):
+        original_detail = self.detail
         for invalid in ['no_media_response', 'other_media_id', 'preview_author', 'viewer_only', 'platform']:
             with self.subTest(invalid=invalid):
                 self.payload = copy.deepcopy(MEDIA_PAYLOAD)
+                self.detail = original_detail
                 if invalid == 'no_media_response':
                     self.payload = {'data': {}}
                 elif invalid == 'other_media_id':
@@ -352,6 +354,11 @@ class PublishedMediaTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.inventory()
                 self.assertFalse(result.decision_complete)
                 self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+                # A loader/navigation failure must not accidentally satisfy an identity rejection.
+                missing = {'preview_author': 'instagram_preview_author', 'platform': 'owner'}.get(
+                    invalid, 'media_identity')
+                self.assertEqual([d['stage'] for d in result.diagnostics], ['published_detail'])
+                self.assertEqual([d['missing_fields'] for d in result.diagnostics], [[missing]])
 
     async def test_late_channel_tabs_are_reported_instead_of_a_single_channel_reading(self):
         self.detail = self.detail.replace("fetch('/api/graphql/',{method:'POST'});", '''

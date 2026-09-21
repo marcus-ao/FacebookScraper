@@ -357,6 +357,40 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 
 测试均用临时配置和隔离数据；启动测试执行真实 Windows 批处理，但 npm 和最终 Web 服务器为夹具，没有连接真实账号、发送飞书、修改防火墙或读写业务账本。服务机拉取、监听、防火墙及同事电脑访问仍为 **待真实联调**，按 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址) 操作。日志位于本工作树 `state/`，不随 Git 提交，清理前须保全。
 
+### 1.25 Story/已发布媒体离线回归耗时（2026-09-21）
+
+基点 `bfd846c`，工作树 `.worktrees/story-insights-timeout`，分支 `codex/story-insights-timeout`。
+[原版默认入口](../state/offline-validation-20260921T071100Z/results.json)复现 `tests_story_insights` 300.05 秒、退出码 124。
+`month.read(timeout=5)` 的五秒是各读取步骤的预算，不是整次月份读取的总时限；负向子测试各自等待身份核验超时，
+并在详情前后分别扫描两遍完整月历。逐格 `Locator.evaluate()` 会反复获取、执行、释放元素句柄；
+[分段计时](../state/story-insights-timeout/before-profile.log)中七次 inventory 的十四次月历扫描占 65.97 秒，
+详情占 36.98 秒，两个测试的 setup 合计 2.32 秒。该诊断与默认入口并行，计时包装也有开销，不能当独立运行基准。
+
+扫描改用浏览器内直接快照，合并加载标记的零数量检查和同格条目/按钮读取；按钮仍由 Playwright 按角色及可见性定位。
+仍逐日滚动、等待加载、验证日期/条目/展开控件，
+要求两遍一致，并在详情后完整复扫。浏览器逐测试隔离、五秒负向等待和默认 300 秒脚本上限均保持。
+媒体身份负向子测试逐项重置 HTML，避免 `preview_author` 污染后续 `viewer_only`/`platform`。
+负向断言另核对 `published_detail` 阶段及各自的缺失字段，避免把加载/导航失败误当身份拒绝。
+新增隔离 Chromium 场景覆盖滚到日期格才出现的加载器、`progressbar` 转 `aria-busy`、未加载完不能继续滚动、
+迟到条目、完整复扫及扫描途中日期格消失；[定向结果](../state/story-insights-timeout/grid-boundaries-final.log)为离线通过。
+
+两条慢测试用保留的基线源码及最终源码串行比较，无并行浏览器测试、无分段计时包装：
+[修前](../state/story-insights-timeout/before-single.json)与[修后](../state/story-insights-timeout/after-single.json)记录
+媒体身份五个子场景 69.13 → 47.13 秒，Story 身份两个子场景 27.87 → 18.77 秒，均通过。
+[原版整文件诊断](../state/story-insights-timeout/before-full.log)15 条通过、375.96 秒；该次部分时间有其它诊断并行，
+不能将其与后续串行回归的差额全部归因于代码。运行环境及可复跑的基线源码在同一证据目录。
+
+**最终验证：离线通过。** [全量结果](../state/offline-validation-20260921T073026Z/results.json)104/104 脚本退出码均为 0，
+默认 300 秒上限不变；Story 15 条全部通过、整文件 237.80 秒，月份读取 25 条通过、91.25 秒。
+同轮覆盖发布/回读、缓存、取证、调度、Web 浏览器及 hygiene；前端生产构建通过，保留既有大 chunk 提示。
+[只读复审](../state/story-insights-timeout/review.json)无阻塞项，原有 Story 15 个方法与基线副本的 Git 一致性另经核对。
+
+用户报告的原始 `invalid='platform'` ERROR 尚缺完整堆栈，本轮修前整文件、修前/后单条及最终全量均未复现；
+不能将它归因于已确认的 HTML 污染，也不能声称已证明其独立或已彻底修复。收到原日志后在本节续查；
+`platform` 实际走 Facebook Feed 适配器，当前明确拒绝原因是 `owner`，不是 IG `media_channel`。
+证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
+不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
