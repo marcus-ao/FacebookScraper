@@ -277,6 +277,54 @@ async def read_facebook_story(page, row, expected_accounts, evidence, *, ui_time
         await asyncio.sleep(.2)
 
 
+async def read_facebook_only_story(page, row, item, expected_accounts, evidence, *, timeout):
+    """Read a Story published to Facebook alone: no Instagram root, no channel tab.
+
+    The page states this detail's own content_id on the Story entity, so the
+    publishing page is response-bound and needs no preview predicate. The only
+    DOM facts used are the header badge and metadata every detail already has.
+    """
+    deadline = time.monotonic()+timeout
+    previous, stable_since = None, time.monotonic()
+    last_error = DetailReadError('identity_unverified', placement='story',
+                                 missing_fields=('facebook_story_identity',))
+    while True:
+        # An Instagram root observed here would mean this is a cross-posted Story
+        # reached through the wrong reader, never a Facebook-only one.
+        if len(evidence.story_identities) > 1 or evidence.identities:
+            raise DetailReadError('identity_unverified', placement='story',
+                                  missing_fields=('consistent_story_identity',))
+        identity = evidence.story_identities[0] if evidence.story_identities else None
+        header = await header_snapshot(page)
+        material = None
+        if identity and header:
+            metadata = ' '.join(header['metadata'].split())
+            if metadata.split('·',1)[0].strip() != 'Story' or header['platforms'] != ['Facebook']:
+                last_error = DetailReadError('identity_unverified', placement='story',
+                                             missing_fields=('facebook_story_channel',))
+            elif header['caption'] != identity['title']:
+                last_error = DetailReadError('identity_unverified', placement='story',
+                                             missing_fields=('story_header_binding',))
+            else:
+                # Response-bound authorship, the same standard as a published post:
+                # a page that is not the configured one still holds its own slot.
+                observation = {**header, **identity, 'story_entity_verified':True,
+                               'owner_verified':True, 'media_kind':'unknown', 'relationships':()}
+                try:
+                    material = classify_published(observation, row['date'], expected_accounts)
+                    if material['ui_at'].strftime('%I:%M %p').lstrip('0') != item['time'].lstrip('0'):
+                        raise DetailReadError('time_mismatch', placement='story')
+                except DetailReadError as exc:
+                    last_error, material = exc, None
+        if material != previous:
+            previous, stable_since = material, time.monotonic()
+        if material and time.monotonic()-stable_since >= .4:
+            return [material]
+        if time.monotonic() >= deadline:
+            raise last_error
+        await asyncio.sleep(.2)
+
+
 async def read_story(page, row, item, expected_accounts, baseline, evidence, *, timeout, ui_timezone):
     """Bind the recorded IG root media to its selected channel header and Story preview."""
     deadline = time.monotonic()+timeout
@@ -352,6 +400,26 @@ async def read_story(page, row, item, expected_accounts, baseline, evidence, *, 
         await asyncio.sleep(.2)
 
 
+async def channel_tabs(page, header, *, deadline):
+    """Resolve the channel tabs against the header badge instead of one sample.
+
+    Tabs mount after the header, so counting them once cannot prove their absence:
+    that is how an aggregate detail gets read as a single channel and then fails
+    for a missing channel. A header naming two platforms spans channels and must
+    carry their tabs; a single badge cannot have them, and the post-read tab check
+    still catches one that mounts afterwards.
+    """
+    tabs = [(key,page.get_by_role('tab',name=label,exact=True))
+            for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
+    while True:
+        available = [(key,node) for key,node in tabs if await node.count()==1]
+        if len(header['platforms']) < 2 or len(available) == len(header['platforms']):
+            return tabs, available
+        if time.monotonic() >= deadline:
+            raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
+        await asyncio.sleep(.2)
+
+
 async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None, ui_timezone=None):
     # Tabs may hydrate after DOMContentLoaded. Wait for the header before deciding
     # whether this is a single-channel view or an aggregate requiring each tab.
@@ -364,11 +432,17 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
             raise DetailReadError('structure_unknown', missing_fields=('published_header',))
         await asyncio.sleep(.2)
         header = await header_snapshot(page)
+    tabs, available = await channel_tabs(page, header, deadline=deadline)
     if evidence is not None and header['metadata'].split('·',1)[0].strip()=='Story':
+        # A Story published to Facebook alone has no Instagram root to bind and no
+        # channel tab to select. Every other Story keeps the recorded path, so an
+        # Instagram badge still waits for its tab inside read_story.
+        if header['platforms'] == ['Facebook'] and not available:
+            variants = await read_facebook_only_story(page,row,item,expected_accounts,evidence,timeout=timeout)
+            if any([await node.count() for _,node in tabs]):
+                raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
+            return variants
         return await read_story(page, row, item, expected_accounts, header, evidence, timeout=timeout, ui_timezone=ui_timezone)
-    tabs = [(key,page.get_by_role('tab',name=label,exact=True))
-            for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
-    available = [(key,node) for key,node in tabs if await node.count()==1]
     if not available:
         try:
             material = await read_view(page,row,item,expected_accounts,timeout=timeout)

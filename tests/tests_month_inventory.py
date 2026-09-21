@@ -16,7 +16,7 @@ from publish.business_suite import PublishStepError, ProbeRequired
 from publish.planner_content import DetailReadError
 from publish import published_details
 
-# The real Planner tooltip follows the pointer on and off a slot; is_recommendation's leading
+# The real Planner tooltip follows the pointer on and off a slot; recommendation_state's leading
 # mouse.move(0, 0) depends on the off half, so a fixture without it only ever reads one slot.
 TOOLTIP_SLOT = ('<div role="link" onmouseenter="tip.hidden=false" onmouseleave="tip.hidden=true">'
                 '{clock} AM<img alt="Instagram"></div>')
@@ -53,7 +53,7 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         slots = self.page.get_by_role('link')
         # The first hover on a page carries an actionability setup measured here at a median 641ms,
         # against 47ms for every later one. Spend it now: left inside a timed assertion it overruns
-        # short budgets, is_recommendation reports False, and the positive case flakes.
+        # short budgets, recommendation_state refuses, and the positive case flakes.
         await slots.first.hover()
         return slots
 
@@ -82,11 +82,58 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PublishStepError):
             await month.read_grid(self.page, timeout=.2)
 
+    async def test_each_day_waits_for_scroll_triggered_loaders_before_taking_its_snapshot(self):
+        await self.page.evaluate('''() => {
+          window.visited=[];window.scrolledWhileLoading=false;
+          const scroll=Element.prototype.scrollIntoView;
+          Element.prototype.scrollIntoView=function(...args) {
+            scroll.apply(this,args);
+            if(!this.matches('[draggable="false"]')) return;
+            const index=[...document.querySelectorAll('[draggable="false"]')].indexOf(this);
+            visited.push(index);
+            if(document.getElementById('loader')) scrolledWhileLoading=true;
+            if(index!==10 || this.dataset.loaded) return;
+            this.dataset.loaded='true';
+            document.body.insertAdjacentHTML('beforeend','<div id="loader" role="progressbar"></div>');
+            setTimeout(()=>{
+              loader.removeAttribute('role');loader.setAttribute('aria-busy','true');
+              setTimeout(()=>{
+                this.insertAdjacentHTML('beforeend','<a href="/detail">8:36 AM</a>');
+                loader.remove();
+              },120);
+            },120);
+          };
+        }''')
+        rows = await month.read_grid(self.page, timeout=5)
+        self.assertEqual(rows[10]['items'][0]['time'], '8:36 AM')
+        visited = await self.page.evaluate('visited')
+        self.assertEqual(visited, list(range(35)) * (len(visited) // 35))
+        self.assertGreaterEqual(len(visited), 70)
+        self.assertFalse(await self.page.evaluate('scrolledWhileLoading'))
+
+    async def test_day_removed_during_scroll_cannot_be_reported_as_empty(self):
+        html = await self.page.content()
+        for remove_current in (False, True):
+            with self.subTest(remove_current=remove_current):
+                await self.page.set_content(html)
+                await self.page.evaluate('''removeCurrent => {
+                  const scroll=Element.prototype.scrollIntoView;
+                  Element.prototype.scrollIntoView=function(...args) {
+                    scroll.apply(this,args);
+                    const last=document.querySelector('[draggable="false"]:last-child');
+                    if(removeCurrent && this!==last) return;
+                    Element.prototype.scrollIntoView=scroll;
+                    (removeCurrent ? this : last).remove();
+                  };
+                }''', remove_current)
+                with self.assertRaises(PublishStepError):
+                    await month.read_grid(self.page, timeout=5)
+
     async def test_only_positive_recommendation_tooltip_can_skip_a_slot(self):
         item = await self.mount_slots(1)
-        self.assertTrue(await month.is_recommendation(self.page, item))
+        self.assertEqual(await month.recommendation_state(self.page, item), 'shown')
         await self.page.get_by_role('tooltip').evaluate("el=>el.textContent='A future post'")
-        self.assertFalse(await month.is_recommendation(self.page, item))
+        self.assertEqual(await month.recommendation_state(self.page, item), 'absent')
         # Refused for the text, not for a stalled hover: the tooltip did open, and even the full
         # production budget never lets a non-matching one confirm. Shortening the budget here would
         # buy a second back and give away the difference between those two reasons.
@@ -95,24 +142,31 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def test_every_recommendation_slot_in_a_month_is_confirmed_not_just_the_first(self):
         slots = await self.mount_slots(2)
         for index in range(2):
-            self.assertTrue(await month.is_recommendation(self.page, slots.nth(index)))
+            self.assertEqual(await month.recommendation_state(self.page, slots.nth(index)), 'shown')
 
     async def test_a_slot_whose_tooltip_never_resolves_stays_a_post_rather_than_a_recommendation(self):
         slots = await self.mount_slots(1)
         await self.page.get_by_role('tooltip').evaluate("el=>el.removeAttribute('role')")
-        # A short budget cannot flip this one: every way the hover can go wrong also reports False.
-        self.assertFalse(await month.is_recommendation(self.page, slots, timeout=.3))
+        # A short budget cannot flip this one: every way the hover can go wrong also refuses.
+        self.assertNotEqual(await month.recommendation_state(self.page, slots, timeout=.3), 'shown')
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
         await self.page.set_content('<div role="link" draggable="false">15'
                                     '<div role="link">10:00 AM</div></div>')
         # Refusing to confirm must cost the run an error, never a silently skipped scheduled post.
-        with patch.object(month, 'is_recommendation', AsyncMock(return_value=False)), \
+        with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
                 patch.object(month.bs, 'require_readback_evidence', return_value=SimpleNamespace(
                     attributes={'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
                                 'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})):
-            with self.assertRaises(PublishStepError):
+            with self.assertRaises(PublishStepError) as caught:
                 await month.read_item(self.page, row, {'index': 0, 'href': '', 'text': '10:00 AM',
                                                        'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=.5)
+        # The budget running out is how this ends, but not why: an item left for a
+        # real task because its tooltip never opened has to say so, or every such
+        # slot reads as a browser timeout and the placeholder stays invisible.
+        self.assertEqual(caught.exception.diagnostic['stage'], 'item_ready')
+        self.assertEqual(caught.exception.diagnostic['code'], 'structure_unknown')
+        self.assertEqual(caught.exception.diagnostic['missing_fields'],
+                         ['item_caption', 'recommendation_absent'])
 
     async def test_conflict_inventory_contains_unknown_channel_cards(self):
         rows = [{'date': date(2026, 9, 15), 'items': [{'index': 0, 'time': '10:00 AM'}]}]
@@ -126,6 +180,10 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def test_hovered_schedule_control_is_not_an_expand_button(self):
         await self.page.locator(month.DAY_SELECTOR).nth(20).evaluate("el=>el.insertAdjacentHTML('beforeend','<button>Schedule\\u200b</button>')")
         self.assertEqual(len(await month.read_grid(self.page, timeout=10)), 35)
+        await self.page.locator(month.DAY_SELECTOR).first.evaluate(
+            "el=>el.insertAdjacentHTML('beforeend','<div role=button>See more</div>')")
+        with self.assertRaisesRegex(PublishStepError, '展开控件'):
+            await month.read_grid(self.page, timeout=5)
 
     async def test_schedule_aria_and_grid_must_agree_on_time_before_reading_remote_id(self):
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
@@ -136,7 +194,7 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         spec = SimpleNamespace(attributes={
             'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
             'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})
-        with patch.object(month, 'is_recommendation', AsyncMock(return_value=False)), \
+        with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
                 patch.object(month.bs, 'require_readback_evidence', return_value=spec), \
                 patch.object(month.bs, '_open_channel_dialogs', AsyncMock()) as open_detail:
             with self.assertRaises(PublishStepError):
@@ -234,15 +292,21 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(month, 'prepare', AsyncMock()), patch.object(month, 'accounts',
                 return_value={'facebook':'Neakasa Deutschland','instagram':'neakasa.de'}), \
                 patch.object(published_details, 'preview_identity', AsyncMock(return_value={
-                    'owner':'Neakasa Deutschland','remote_id':'654321'})):
+                    'owner':'Neakasa Deutschland','remote_id':'654321'})) as feed_identity:
             result = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+        # The point of this fixture, whichever reader ends up refusing it: a Story
+        # never reaches the Feed adapter, so the stub above stays unused.
+        feed_identity.assert_not_called()
         self.assertFalse(result.decision_complete)
         self.assertEqual(len(result.cards), 1)
         card = result.cards[0]
         self.assertEqual((card.placement, card.rendered, card.caption_status), ('story','','unknown'))
         self.assertEqual(dict(card.remote_ids), {})
         self.assertEqual(card.at.isoformat(), '2026-09-04T18:39:00+08:00')
-        self.assertEqual(result.diagnostics[0]['missing_fields'], ['instagram_channel_tab'])
+        # A Facebook-badged Story with no channel tab is read as Facebook-only, so
+        # what it lacks is that page's own Story entity, not an Instagram tab it
+        # was never going to have.
+        self.assertEqual(result.diagnostics[0]['missing_fields'], ['facebook_story_identity'])
 
     async def test_aggregate_views_require_independent_channel_identity_time_and_caption(self):
         # Contract fixture with channel-owned panels, not captured Meta Story DOM.

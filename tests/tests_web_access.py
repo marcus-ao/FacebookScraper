@@ -21,6 +21,58 @@ LAN = {'web_host': '0.0.0.0', 'web_port': 8765, 'public_base_url': 'http://192.1
 
 
 class PolicyTests(unittest.TestCase):
+    def test_explicit_source_policy_also_controls_feishu_links(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'network.json'
+            source.write_text(json.dumps(LAN), encoding='utf-8')
+            fallback = {'enabled': True, 'base_url': 'http://old-review.internal:8765'}
+            fake = SimpleNamespace(get=lambda section, key, default=None: fallback.get(key, default))
+            with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR='', FBSCRAPER_NETWORK_CONFIG=str(source)), \
+                    patch('core.feishu.cfg', return_value=fake):
+                self.assertEqual(FeishuSettings.load().base_url, LAN['public_base_url'])
+                source.write_text('{broken', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'invalid_source_web_settings'):
+                    FeishuSettings.load()
+
+    def test_source_policy_is_opt_in_and_managed_policy_takes_priority(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'network.json'
+            source.write_text(json.dumps(LAN), encoding='utf-8')
+            with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR='', FBSCRAPER_NETWORK_CONFIG=''):
+                self.assertEqual(load_web_access(), WebAccess())
+            with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR='', FBSCRAPER_NETWORK_CONFIG=str(source)):
+                self.assertEqual(load_web_access().as_dict(), LAN)
+                (Path(root) / 'host.json').write_text('{}', encoding='utf-8')
+                self.assertEqual(load_web_access(Path(root)), WebAccess())
+                with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR=root):
+                    self.assertEqual(load_web_access(), WebAccess())
+                for contents in ('{broken', '[]', '{"web_host":"0.0.0.0"}'):
+                    source.write_text(contents, encoding='utf-8')
+                    with self.assertRaisesRegex(ValueError, 'invalid_source_web_settings'):
+                        load_web_access()
+                source.unlink()
+                with self.assertRaisesRegex(ValueError, 'invalid_source_web_settings'):
+                    load_web_access()
+
+    def test_source_lan_preserves_client_host_origin_checks_and_reports_bad_config(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / 'network.json'
+            source.write_text(json.dumps(LAN), encoding='utf-8')
+            with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR='', FBSCRAPER_NETWORK_CONFIG=str(source)):
+                for address, url, origin, status in (
+                    ('192.168.10.21', LAN['public_base_url'], LAN['public_base_url'], 409),
+                    ('192.168.11.21', LAN['public_base_url'], LAN['public_base_url'], 403),
+                    ('192.168.10.21', 'http://wrong.invalid:8765', LAN['public_base_url'], 403),
+                    ('192.168.10.21', LAN['public_base_url'], 'http://wrong.invalid:8765', 403),
+                ):
+                    with self.subTest(address=address, url=url, origin=origin), TestClient(
+                            app, base_url=url, client=(address, 41000)) as client:
+                        response = client.post('/api/deployment/defer', json={}, headers={'Origin': origin})
+                        self.assertEqual(response.status_code, status)
+                source.unlink()
+                with TestClient(app, base_url=LAN['public_base_url'], client=('192.168.10.21', 41000)) as client:
+                    self.assertEqual(client.get('/api/deployment/status').status_code, 503)
+
     def test_default_binding_and_legacy_port_are_local(self):
         self.assertEqual(WebAccess.from_mapping({}), WebAccess())
         policy = WebAccess.from_mapping({'web_port': 4321})
@@ -170,7 +222,7 @@ class OfficeApiTests(unittest.TestCase):
 
     def test_managed_feishu_links_share_persistent_public_url(self):
         fake = SimpleNamespace(get=lambda section, key, default=None: default)
-        with patch('core.feishu.cfg', return_value=fake):
+        with patch('core.feishu.cfg', return_value=fake), patch.dict(os.environ, FBSCRAPER_NETWORK_CONFIG='missing.json'):
             settings = FeishuSettings.load()
         self.assertEqual(settings.base_url, LAN['public_base_url'])
         card = notification_card('system', [{'run_id': 'fixture'}], settings)

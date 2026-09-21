@@ -81,8 +81,8 @@ async def visible_month(page):
 
 async def settled(page, timeout):
     try:
-        await expect(page.get_by_role('progressbar')).to_have_count(0, timeout=max(1, timeout * 1000))
-        await expect(page.locator('[aria-busy="true"]')).to_have_count(0, timeout=max(1, timeout * 1000))
+        loaders = page.get_by_role('progressbar').or_(page.locator('[aria-busy="true"]'))
+        await expect(loaders).to_have_count(0, timeout=max(1, timeout * 1000))
     except AssertionError as exc:
         raise bs.PublishStepError('月历仍在加载，未确认空档') from exc
 
@@ -105,13 +105,28 @@ async def read_grid(page, *, timeout=30):
         for index, day in enumerate(dates):
             cell = cells.nth(index)
             # DOM scrolling avoids background RAF throttling; loaders and two sweeps determine readiness.
-            await cell.evaluate("el => el.scrollIntoView({block:'center', behavior:'instant'})")
+            # evaluate_all snapshots avoid acquiring/disposing an ElementHandle for every cell.
+            # Still visit every day: scrolling can mount cards and loaders in an otherwise empty cell.
+            present = await cell.evaluate_all('''els => {
+              if(els.length!==1) return false;
+              els[0].scrollIntoView({block:'center', behavior:'instant'}); return true;
+            }''')
+            if not present:
+                raise bs.PublishStepError('月历日期格在读取过程中消失，请重新读取')
             await settled(page, deadline - time.monotonic())
             # Top-level descendant links represent one card; nested wrappers repeat its time.
-            items = await cell.evaluate('''el => [...el.querySelectorAll('[role="link"],a')]
-              .filter(n=>n.parentElement.closest('[role="link"],a')===el)
-              .map((n,index)=>({index,...(''' + ITEM_DATA_JS + ''')(n)}))''')
-            extra = await cell.get_by_role('button').all_inner_texts()
+            snapshot = await cell.or_(cell.get_by_role('button')).evaluate_all('''(nodes, selector) => {
+              const cells=nodes.filter(n=>n.matches(selector));
+              if(cells.length!==1) return null;
+              const el=cells[0];
+              const items=[...el.querySelectorAll('[role="link"],a')]
+                .filter(n=>n.parentElement.closest('[role="link"],a')===el)
+                .map((n,index)=>({index,...(''' + ITEM_DATA_JS + ''')(n)}));
+              return {items,extra:nodes.filter(n=>n!==el).map(n=>n.innerText)};
+            }''', DAY_SELECTOR)
+            if snapshot is None:
+                raise bs.PublishStepError('月历日期格在读取过程中消失，请重新读取')
+            items, extra = snapshot['items'], snapshot['extra']
             if any(' '.join(label.replace('\u200b', '').split()) not in {'Schedule', 'Create'} for label in extra):
                 raise bs.PublishStepError('日期格存在未处理的展开控件，月历读取不完整')
             for item in items:
@@ -133,22 +148,45 @@ async def read_grid(page, *, timeout=30):
         await asyncio.sleep(min(.4, max(0, deadline - time.monotonic())))
 
 
+def unreadable_item(tooltip):
+    """An item with neither a detail link nor complete text stays a real task.
+
+    It cannot be skipped, so the refusal carries why the recommendation tooltip
+    did not settle it; without that the run only reports that time ran out.
+    """
+    return content.DetailReadError('structure_unknown', missing_fields=(
+        'item_caption', *(('recommendation_' + tooltip,) if tooltip else ())))
+
+
 def item_locator(page, row, item):
     cell = page.locator(DAY_SELECTOR).nth(row['cell_index'])
     # Same structural relationship as read_grid; no clickable navigation is included.
     return cell.locator('xpath=.//*[@role="link" or self::a][not(ancestor::*[@role="link" or self::a][ancestor::*[@draggable="false"]])]') .nth(item['index'])
 
 
-async def is_recommendation(page, item, *, timeout=1.5):
+async def recommendation_state(page, item, *, timeout=1.5):
+    """Hover the card and report which step decided it, not just whether it passed.
+
+    Only `shown` skips a slot. A placeholder that is not recognised is read as a
+    real task and fails far away in item_ready, so the step that refused has to
+    reach the diagnostic: `stale` a tooltip that never cleared, `unreachable` a
+    card that could not be hovered, `absent` a hover that opened no tooltip.
+    """
     await page.mouse.move(0, 0)
     tip = page.get_by_role('tooltip', name=RECOMMENDATION, exact=True)
     try:
         await tip.wait_for(state='hidden', timeout=timeout * 1000)
-        await item.hover(timeout=timeout * 1000)
-        await tip.wait_for(state='visible', timeout=timeout * 1000)
-        return True
     except Exception:
-        return False
+        return 'stale'
+    try:
+        await item.hover(timeout=timeout * 1000)
+    except Exception:
+        return 'unreachable'
+    try:
+        await tip.wait_for(state='visible', timeout=timeout * 1000)
+    except Exception:
+        return 'absent'
+    return 'shown'
 
 
 async def read_item(page, row, item, *, timeout=30, ui_timezone=None):
@@ -175,15 +213,26 @@ async def ready_item(page, row, item, *, timeout):
     require_same_item(item, fresh)
     spec = None
     before_hover = set()
+    tooltip = ''
     if not fresh['href']:
         spec = bs.require_readback_evidence()
         before_hover = set(await page.get_by_role('link').all_inner_texts())
-        if await is_recommendation(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic()))):
+        tooltip = await recommendation_state(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic())))
+        if tooltip == 'shown':
             return None
     previous, stable_since = None, time.monotonic()
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     while True:
-        fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, (deadline - time.monotonic()) * 1000))
+        if time.monotonic() >= deadline:
+            raise unreadable_item(tooltip)
+        try:
+            fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, (deadline - time.monotonic()) * 1000))
+        except BrowserTimeout:
+            # A deadline-shortened evaluate reports a browser fault for what is
+            # really this item staying unreadable; it must not hide the reason.
+            if time.monotonic() < deadline:
+                raise
+            raise unreadable_item(tooltip) from None
         require_same_item(item, fresh)
         raw = ''
         if not fresh['href']:
@@ -219,8 +268,6 @@ async def ready_item(page, row, item, *, timeout):
             # read() compares this refreshed DOM snapshot with the final sweep.
             item.update(fresh)
             return node, raw
-        if time.monotonic() >= deadline:
-            raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
         await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
 
 

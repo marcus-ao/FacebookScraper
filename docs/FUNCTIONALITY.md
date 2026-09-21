@@ -1490,6 +1490,11 @@ FB Story 使用已绑定 IG 根对象的 cross_posted_entities 中唯一 TofuFBS
 核对同对象 owner 的实体类型、账号名与已录证预览作者行、原始 title 与选中 FB 标题，以及 created_at 按 UI 时区转换后的渠道分钟。
 不拿同账号/同分钟的 BusinessContent ID 或 IG 数据补齐。截图中的 `Your story`（兼容大小写差异）
 是界面标题：仅在该实体及其占用字段核验完成后记 `caption_status=unknown`、正文为空字符串、`read_status=complete`。
+只发到 Facebook 的 Story 没有 IG 根，也没有任何渠道页签，另走一条路径：`tofu_object_insights.entity.entity_id`
+与 `entity_info.entity_id` 都等于请求 content_id，发布页只以 `entity_info.lwi_info.page_id` 挂在实体上，
+页名取同一份响应里 `id` 等于该 page_id 的页节点。`supported_actions` 里的 `owner.entity_id` 是 profile 标识，
+`tofu_business_content` 的 `id` 是业务内容 ID 且整份响应不出现 content_id，两者都不能用来补身份或时刻；
+时刻按表头与日期格核对，`relationships` 记空，不得写 `cross_platform`。
 这里 complete 只表示已发布 Story 的占用已核验，不表示正文已知；普通 Feed 和排期全文回读要求不变。
 一个渠道失败时保留已核验变体，再追加未核实项；当前改动不能宣称已恢复服务机整月刷新。
 分渠道内容字段须有独立可核验的所属区域；共用页头或复用面板不能靠等 0.4 秒证明切换完成。
@@ -1808,7 +1813,13 @@ IG 19 篇纯图文里 **6 篇（32%）与 FB 某篇是同一条内容**（4 篇�
 
 ### 7.4 办公局域网入口
 
-受管 Web 可显式监听 `0.0.0.0:8765`，业务从固定办公 IPv4 或明确配置的内网主机名访问。监听地址、端口、标准入口和允许来源网段保存在服务机控制目录，不随代码更新或回退覆盖。默认安装仍为回环模式，候选预检始终用回环临时端口。两个模式共享同一套数据绑定。服务机安装配置 `ops/service-machine.network.json` 采用 2026-09-17 用户确认的 WLAN `10.66.4.9:8765`，只允许 `10.66.4.0/24`；已安装实例按 [MANUAL_STEPS §17.4.1](MANUAL_STEPS.md#1741-已有实例改为当前办公网) 维护改址，新网络的现场可达性单独验收。
+源码服务机使用 `scripts/update_service_address.bat` 输入新 IPv4，或带现场确认前缀的 `IP/前缀`，同步 `ops/service-machine.network.json` 和 `config.toml` 的 `[feishu].base_url`。同网段只换 IP 时保留允许来源；跨网段须明确输入 CIDR，不默认 `/24`；端口默认保留，可用 `--port` 修改。其他模型入口、凭据和业务数据不参与更新。
+
+源码局域网通过 `scripts/run_web_lan.bat` 启动，从同一 JSON 读取监听地址和端口，并以 `FBSCRAPER_NETWORK_CONFIG` 接通来源、Host、Origin 检查；飞书也读取该显式网络策略，独立调度器未设置此变量时读取已同步的 `[feishu].base_url`。启动前继续复用 `run_web.bat` 的前端构建流程。普通 `run_web.bat` 未设置该环境变量时保持本机模式。合并 main 后，服务机拉取、空闲时重启 Web 和调度器，新生成卡片使用新入口。页面、API、图片和下载使用相对路径，随浏览器入口切换。防火墙使用配置中的地址、端口和来源，人工操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。
+
+已发送到飞书的历史卡片是远端消息，URL 不会随本地改址更新；当前群 webhook 不返回可用于编辑远端消息的 `message_id`，本地 `bot-accepted:` 回执不能替代它。已冻结的发件箱卡片与回执保持投递事实，不批量重写或自动重发。完整地址依赖清单及验证边界见 [HANDOFF §1.26](HANDOFF.md#126-服务地址引用与飞书历史链接核查2026-09-21)。
+
+受管 Web 的监听地址、端口、标准入口和允许来源保存在 `control/host.json`，优先于源码环境变量，不随代码更新或回退覆盖。默认安装仍为回环模式，候选预检始终用回环临时端口。新安装可读取仓库的网络 JSON；已安装实例按 [MANUAL_STEPS §17.4.1](MANUAL_STEPS.md#1741-已有实例改为当前办公网) 维护改址。网络 JSON 中的值是待部署配置，真实服务机及客户端可达性单独验收。
 
 页面、图片、下载和 API 先核对连接来源与 Host；远程写入另核对同源 Origin 和 JSON。标准入口以外或未允许网段被拒绝。部署健康保留本机访问，业务可查看投影后的部署状态、登记本标签页的编辑状态和暂缓更新。维护管理继续用本地 CLI。HTTP 下使用随机标签页标识及复制回退，无须调整浏览器安全设置。
 
@@ -1824,7 +1835,7 @@ IG 19 篇纯图文里 **6 篇（32%）与 FB 某篇是同一条内容**（4 篇�
 | 2 | 德国站显示名已于 2026-09-12 控件录证：FB `Neakasa Deutschland`、IG `neakasa.de`；仍需逐渠道提交回读 | F5 真实验收 | 发布账号持有人确认具体两篇内容后联调 |
 | 3 | 德国站 IG 的 bio 现在放的是什么？有没有聚合页 | F3-2 的只读展示 | 业务 |
 | 4 | 德语同类账号名单（标签热度的主信号采样对象） | 无——标签热度整条链路本轮**明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)） | 业务，恢复该功能时再问 |
-| 5 | 飞书卡片中的审校台地址已定为 `http://10.66.4.9:8765`（受管实例读 `control/host.json` 的 `public_base_url`）；`[feishu].enabled` 已是 `true` | F4 真实群投递 | 你：服务机第一次加载这份配置之前先数积压，并在服务机跑四机器人自检，见 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) |
+| 5 | 非受管飞书入口由改址脚本同步 `[feishu].base_url`，受管实例读 `control/host.json` 的 `public_base_url`；`[feishu].enabled` 已是 `true` | F4 真实群投递 | 你：服务机第一次加载这份配置之前先数积压，并在服务机跑四机器人自检，见 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) |
 
 **从上一轮继承、仍然挂着的**：
 

@@ -334,9 +334,11 @@ class PublishedMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.cards[0].relationships, ())
 
     async def test_unverified_or_mismatched_identity_keeps_the_slot_unresolved(self):
+        original_detail = self.detail
         for invalid in ['no_media_response', 'other_media_id', 'preview_author', 'viewer_only', 'platform']:
             with self.subTest(invalid=invalid):
                 self.payload = copy.deepcopy(MEDIA_PAYLOAD)
+                self.detail = original_detail
                 if invalid == 'no_media_response':
                     self.payload = {'data': {}}
                 elif invalid == 'other_media_id':
@@ -352,8 +354,143 @@ class PublishedMediaTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.inventory()
                 self.assertFalse(result.decision_complete)
                 self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+                # A loader/navigation failure must not accidentally satisfy an identity rejection.
+                missing = {'preview_author': 'instagram_preview_author', 'platform': 'owner'}.get(
+                    invalid, 'media_identity')
+                self.assertEqual([d['stage'] for d in result.diagnostics], ['published_detail'])
+                self.assertEqual([d['missing_fields'] for d in result.diagnostics], [[missing]])
 
     async def test_late_channel_tabs_are_reported_instead_of_a_single_channel_reading(self):
+        self.detail = self.detail.replace("fetch('/api/graphql/',{method:'POST'});", '''
+          setTimeout(()=>document.body.insertAdjacentHTML('beforeend',
+            '<button role="tab" aria-selected="false">Facebook</button>'+
+            '<button role="tab" aria-selected="false">Instagram</button>'),400);
+          fetch('/api/graphql/',{method:'POST'});''')
+        result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        self.assertEqual([d['missing_fields'] for d in result.diagnostics], [['channel_tabs']])
+
+    async def test_a_two_platform_header_waits_for_its_own_channel_tabs(self):
+        # The 9/15 19:17 aggregate names both platforms in its header while its
+        # channel tabs mount afterwards. Counting them once reads the detail as a
+        # single channel, which then fails for a channel it was never given.
+        self.detail = self.detail.replace('<img alt="Instagram">',
+                                          '<img alt="Facebook"><img alt="Instagram">') \
+            .replace("fetch('/api/graphql/',{method:'POST'});", '''
+          const mount=name=>{const b=document.createElement('button');b.setAttribute('role','tab');
+            b.setAttribute('aria-selected','false');b.textContent=name;
+            b.onclick=()=>b.setAttribute('aria-selected','true');document.body.append(b)};
+          setTimeout(()=>{mount('Facebook');mount('Instagram')},400);
+          fetch('/api/graphql/',{method:'POST'});''')
+        result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        # Selected a channel and asked this page for its view, instead of reporting
+        # the aggregate as a reading with no channel at all.
+        self.assertEqual([d['missing_fields'] for d in result.diagnostics], [['channel_detail_scope']])
+
+
+STORY_ID = '1065266012808732'
+PAGE_ID = '739367289254011'
+# Structure from the 2026-09-21 reload log of the 9/15 19:17 Facebook Story: one
+# platform badge, metric tabs only, and no Instagram root anywhere on the page.
+FB_ONLY = '''<header><div role="heading" aria-level="3" id="caption">{caption}</div>
+  <div id="metadata"><img alt="{platform}"><span>Story &middot; Published on: Tue Sep 15, 7:17pm</span></div></header>
+  <button role="tab" aria-selected="true">Total</button>
+  <button role="tab" aria-selected="false">Audience</button>
+  <aside><h3>Feed preview</h3><div><div><img><div>''' + ACCOUNTS['facebook'] + '''</div></div></div></aside>
+  <script>fetch('/api/graphql/',{method:'POST'});</script>'''
+# The page is named beside the entity only through lwi_info.page_id; the
+# supported_actions owner (61578176852811) is a profile id, not this page.
+FB_ONLY_PAYLOAD = {'data': {
+    'page': {'name': ACCOUNTS['facebook'], 'id': PAGE_ID},
+    'tofu_object_insights': {'__typename': 'BizWebFBStoryObjectInsights', 'entity': {
+        'entity_id': STORY_ID, 'entity_info': {
+            '__typename': 'TofuFBStoryEntityInfo', 'title': 'Your story',
+            'media_type': 'PHOTOS', 'entity_id': STORY_ID,
+            'lwi_info': {'__typename': 'XFBTofuFBStoryBoostInfo', 'page_id': PAGE_ID}}}}}}
+
+
+class FacebookOnlyStoryTests(unittest.IsolatedAsyncioTestCase):
+    """A Story published to Facebook alone: no Instagram root, no channel tab."""
+
+    async def asyncSetUp(self):
+        self.pw = await async_playwright().start()
+        self.browser = await self.pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
+        self.context = await self.browser.new_context()
+        self.payload = copy.deepcopy(FB_ONLY_PAYLOAD)
+        self.detail = FB_ONLY.replace('{caption}', 'Your story').replace('{platform}', 'Facebook')
+        async def route(request):
+            url = request.request.url
+            if '/api/graphql/' in url:
+                await request.fulfill(content_type='application/json', body=json.dumps(self.payload))
+            elif '/object_insights/' in url:
+                await request.fulfill(content_type='text/html; charset=utf-8', body=self.detail)
+            else:
+                await request.fulfill(content_type='text/html', body='<html></html>')
+        await self.context.route('**/*', route)
+        self.page = await self.context.new_page()
+        await self.page.goto('https://business.facebook.com/latest/content_calendar')
+        days = calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)
+        cells = ''.join(f'<div role="link" draggable="false"><span>{d.day}</span>' + (
+            f'<a href="/latest/insights/object_insights/?content_id={STORY_ID}">7:17 PM</a>'
+            if d == date(2026,9,15) else '') + '</div>' for d in days)
+        await self.page.set_content('<h1>September</h1><h1>2026</h1>' + cells)
+
+    async def asyncTearDown(self):
+        await self.browser.close()
+        await self.pw.stop()
+
+    async def inventory(self):
+        with patch.object(month, 'prepare', AsyncMock()), patch.object(month, 'accounts', return_value=ACCOUNTS):
+            return await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+
+    async def test_facebook_only_story_completes_from_its_own_entity(self):
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete)
+        self.assertEqual(len(result.cards), 1)
+        card = result.cards[0]
+        self.assertEqual(dict(card.remote_ids), {'facebook': STORY_ID})
+        self.assertEqual(dict(card.accounts), {'facebook': ACCOUNTS['facebook']})
+        self.assertEqual((card.placement, card.caption_status, card.rendered), ('story', 'unknown', ''))
+        self.assertEqual(card.at.isoformat(), '2026-09-15T19:17:00+08:00')
+        # Nothing on this page relates it to Instagram, so nothing may claim it does.
+        self.assertEqual(card.relationships, ())
+        self.assertEqual(result.occupied_for_channel('facebook'), (card.at,))
+        self.assertEqual(result.occupied_for_channel('instagram'), ())
+        self.assertEqual(len(self.context.pages), 1)
+
+    async def test_a_page_not_bound_to_this_entity_cannot_name_the_story(self):
+        for invalid in ['other_entity', 'inner_entity', 'other_page', 'no_page_id', 'caption', 'no_title']:
+            with self.subTest(invalid=invalid):
+                self.payload = copy.deepcopy(FB_ONLY_PAYLOAD)
+                self.detail = FB_ONLY.replace('{caption}', 'Your story').replace('{platform}', 'Facebook')
+                entity = self.payload['data']['tofu_object_insights']['entity']
+                if invalid == 'other_entity':
+                    entity['entity_id'] = '1099999999999999'
+                elif invalid == 'inner_entity':
+                    entity['entity_info']['entity_id'] = '1099999999999999'
+                elif invalid == 'other_page':
+                    # A named page that is not the one this Story was boosted from.
+                    self.payload['data']['page']['id'] = '739367289254012'
+                elif invalid == 'no_page_id':
+                    entity['entity_info'].pop('lwi_info')
+                elif invalid == 'caption':
+                    self.detail = self.detail.replace('>Your story<', '>Another story<')
+                else:
+                    entity['entity_info'].pop('title')
+                result = await self.inventory()
+                self.assertFalse(result.decision_complete)
+                self.assertFalse(any(c.read_status == 'complete' for c in result.cards))
+
+    async def test_an_instagram_badge_still_waits_for_its_own_channel_tab(self):
+        # Only a Facebook-only header may take this path; every other Story keeps
+        # the recorded Instagram-rooted reader and its tab.
+        self.detail = self.detail.replace('alt="Facebook"', 'alt="Instagram"')
+        result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        self.assertEqual([d['missing_fields'] for d in result.diagnostics], [['instagram_channel_tab']])
+
+    async def test_late_channel_tabs_are_reported_instead_of_a_facebook_only_story(self):
         self.detail = self.detail.replace("fetch('/api/graphql/',{method:'POST'});", '''
           setTimeout(()=>document.body.insertAdjacentHTML('beforeend',
             '<button role="tab" aria-selected="false">Facebook</button>'+

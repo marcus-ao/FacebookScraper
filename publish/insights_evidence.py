@@ -13,6 +13,7 @@ class InsightsEvidence:
         self.tasks, self.identities = [], []
         self.facebook_identities = []
         self.media_identities = []
+        self.story_identities = []
 
     def start(self):
         self.page.on('response', self.observe)
@@ -41,6 +42,39 @@ class InsightsEvidence:
         if value not in self.media_identities:
             self.media_identities.append(value)
 
+    def observe_story_page(self, document):
+        """A Story published to Facebook alone repeats this detail's own content_id.
+
+        Its entity carries the publishing page only as `lwi_info.page_id`, so the
+        name is taken from a page node in the same document whose id equals it.
+        ⚠️ `supported_actions[*].entity.entity_info.owner.entity_id` is a profile
+        identifier, not that page; `owning_page_for_graphql` arrives in a document
+        that never names the entity and cannot bind on its own.
+        """
+        data = document.get('data') or {}
+        insights = data.get('tofu_object_insights')
+        if not isinstance(insights, dict) or insights.get('__typename') != 'BizWebFBStoryObjectInsights':
+            return
+        entity = insights.get('entity') or {}
+        info = entity.get('entity_info') or {}
+        if (info.get('__typename') != 'TofuFBStoryEntityInfo'
+                or str(entity.get('entity_id', '')) != self.source_id
+                or str(info.get('entity_id', '')) != self.source_id
+                or not isinstance(info.get('title'), str)):
+            return
+        page_id = str((info.get('lwi_info') or {}).get('page_id', ''))
+        if not re.fullmatch(r'\d{6,}', page_id):
+            return
+        named = {node['name'] for node in (data.get('page'), insights.get('owning_page_for_graphql'))
+                 if isinstance(node, dict) and str(node.get('id', '')) == page_id
+                 and isinstance(node.get('name'), str) and node['name'].strip()}
+        if len(named) != 1:
+            return
+        value = {'channel': 'facebook', 'remote_id': self.source_id, 'owner': next(iter(named)),
+                 'owner_id': page_id, 'title': info['title']}
+        if value not in self.story_identities:
+            self.story_identities.append(value)
+
     async def collect(self, response):
         try:
             raw = await asyncio.wait_for(response.body(), 5)
@@ -48,6 +82,7 @@ class InsightsEvidence:
                 return
             for document in response_documents(raw):
                 self.observe_media(document)
+                self.observe_story_page(document)
                 info = document.get('data', {}).get('tofu_entity', {}).get('entity_info', {})
                 if info.get('__typename') != 'TofuIGPostEntityInfo':
                     continue
