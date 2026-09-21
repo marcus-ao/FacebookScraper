@@ -109,7 +109,9 @@ def main(argv=None):
         if not args.dry_run:
             print('配置已同步。检查 git diff，提交并合并到 main 后，在服务机拉取并重启 Web 和调度器。')
             print('局域网启动：scripts\\run_web_lan.bat；防火墙改址与客户端验收见 docs/MANUAL_STEPS.md §13.1。')
-            print('已发出或已冻结在发件箱中的飞书链接保持原样。')
+            print('新生成的飞书审校、待审列表、历史归档和运行详情链接会使用新入口。')
+            print('飞书中已发送的历史卡片不会被改写：当前 webhook 通道没有可用于更新消息的 message_id。')
+            print('已有投递记录、冻结卡片与回执保留原样；不要清空发件箱来重发历史通知。')
         return 0
     except (OSError, ValueError, EOFError, KeyboardInterrupt) as exc:
         print('更新未完成：' + (str(exc) or '输入已取消。'), file=sys.stderr)

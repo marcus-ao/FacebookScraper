@@ -1810,7 +1810,9 @@ IG 19 篇纯图文里 **6 篇（32%）与 FB 某篇是同一条内容**（4 篇�
 
 源码服务机使用 `scripts/update_service_address.bat` 输入新 IPv4，或带现场确认前缀的 `IP/前缀`，同步 `ops/service-machine.network.json` 和 `config.toml` 的 `[feishu].base_url`。同网段只换 IP 时保留允许来源；跨网段须明确输入 CIDR，不默认 `/24`；端口默认保留，可用 `--port` 修改。其他模型入口、凭据和业务数据不参与更新。
 
-源码局域网通过 `scripts/run_web_lan.bat` 启动，从同一 JSON 读取监听地址和端口，并以 `FBSCRAPER_NETWORK_CONFIG` 接通来源、Host、Origin 检查；启动前继续复用 `run_web.bat` 的前端构建流程。普通 `run_web.bat` 未设置该环境变量时保持本机模式。合并 main 后，服务机拉取、空闲时重启 Web 和调度器，新生成卡片使用新入口；已发出或已冻结的发件箱链接不改写。防火墙使用配置中的地址、端口和来源，人工操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。
+源码局域网通过 `scripts/run_web_lan.bat` 启动，从同一 JSON 读取监听地址和端口，并以 `FBSCRAPER_NETWORK_CONFIG` 接通来源、Host、Origin 检查；飞书也读取该显式网络策略，独立调度器未设置此变量时读取已同步的 `[feishu].base_url`。启动前继续复用 `run_web.bat` 的前端构建流程。普通 `run_web.bat` 未设置该环境变量时保持本机模式。合并 main 后，服务机拉取、空闲时重启 Web 和调度器，新生成卡片使用新入口。页面、API、图片和下载使用相对路径，随浏览器入口切换。防火墙使用配置中的地址、端口和来源，人工操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。
+
+已发送到飞书的历史卡片是远端消息，URL 不会随本地改址更新；当前群 webhook 不返回可用于编辑远端消息的 `message_id`，本地 `bot-accepted:` 回执不能替代它。已冻结的发件箱卡片与回执保持投递事实，不批量重写或自动重发。完整地址依赖清单及验证边界见 [HANDOFF §1.26](HANDOFF.md#126-服务地址引用与飞书历史链接核查2026-09-21)。
 
 受管 Web 的监听地址、端口、标准入口和允许来源保存在 `control/host.json`，优先于源码环境变量，不随代码更新或回退覆盖。默认安装仍为回环模式，候选预检始终用回环临时端口。新安装可读取仓库的网络 JSON；已安装实例按 [MANUAL_STEPS §17.4.1](MANUAL_STEPS.md#1741-已有实例改为当前办公网) 维护改址。网络 JSON 中的值是待部署配置，真实服务机及客户端可达性单独验收。
 

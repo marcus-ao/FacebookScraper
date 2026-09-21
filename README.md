@@ -13,7 +13,7 @@ npm.cmd --prefix web/ui run build
 scripts\run_web.bat
 ```
 
-审校台本地地址为 <http://127.0.0.1:8765>。受管服务机办公入口是 `http://10.66.4.9:8765`，写在实例的 `control/host.json`，不由 `[feishu].base_url` 部署。日常启动只需最后一条命令；前端开发与故障定位见 [web/README.md](web/README.md)。
+审校台本地地址为 <http://127.0.0.1:8765>。源码服务机用 `scripts\run_web_lan.bat`，入口与端口读取 [ops/service-machine.network.json](ops/service-machine.network.json)；改址运行 `scripts\update_service_address.bat`，同时同步新飞书卡片入口。已发送的历史卡片链接不会随配置改写，操作说明见 [MANUAL_STEPS §13.1](docs/MANUAL_STEPS.md#131-源码服务机一键改址)。受管实例的入口读取自己的 `control/host.json`。前端开发与故障定位见 [web/README.md](web/README.md)。
 
 业务配置在 [config.toml](config.toml)，密钥按 [.env.example](.env.example) 填入 `.env`。接续已有数据时使用 [config.local.example.toml](config.local.example.toml) 绑定本机路径，恢复步骤见操作指南。
 
