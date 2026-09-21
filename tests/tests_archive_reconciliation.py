@@ -146,6 +146,44 @@ class ReconciliationTests(unittest.TestCase):
             self.assertEqual(self.truths[key].read_bytes(), raw)
             self.assertIn(key, output)
 
+    def test_unresolved_names_the_real_image_problem_instead_of_one_sentence(self):
+        undecodable, never, video = (self.nodes[i]['pk'] for i in (0, 2, 1))
+        image = next(path for path in self.kept if path.parent == self.truths[undecodable].parent)
+        image.write_bytes(b'broken image')
+        truth = self.truths[never]
+        source = json.loads(truth.read_text('utf-8'))
+        # 0x6AA7C003 = 2026-09-14T09:36:03Z：归档里那个签名地址早过期了，直接重下只会拿到 403。
+        source['media'][0].update(local_path=None, sha256=None, byte_size=None,
+                                  url='https://cdn.invalid/2.jpg?oe=6AA7C003')
+        truth.write_text(json.dumps(source), encoding='utf-8', newline='')
+        self.capture.unlink()
+        report = archive_integrity.reconcile_instagram(store.Archive(self.c.archive_dir, self.arc.base.name))
+        found = {row['post_id']: row for row in report['unresolved']}
+        self.assertEqual(report['repaired'], [])
+        self.assertEqual([p['detail'] for p in found[undecodable]['image_problems']], ['undecodable'])
+        self.assertEqual(found[undecodable]['actions'], ['refetch'])
+        self.assertIn('截断或格式异常', found[undecodable]['reason'])
+        problem = found[never]['image_problems'][0]
+        self.assertEqual((problem['detail'], problem['source_url_expired']), ('never_downloaded', True))
+        self.assertIn('已于 2026-09-14T09:36:03Z 过期', found[never]['reason'])
+        # 视频只留元数据是设计行为，不能被算成原图不可用。
+        self.assertNotIn('image_problems', found[video])
+        self.assertIn('没有匹配的本地 capture 来源证据', found[video]['reason'])
+
+    def test_every_observable_detail_has_a_declared_action(self):
+        # 少一条就是 KeyError 崩在核验里；这里比对而不是在运行时兜底。
+        self.assertEqual(set(archive_integrity.IMAGE_PROBLEM_ACTIONS),
+                         set(store.MEDIA_STORAGE_DETAILS) - {'ok', 'video_metadata_only'})
+
+    def test_status_counts_image_problems_by_cause(self):
+        image = next(path for path in self.kept if path.parent == self.truths[self.nodes[0]['pk']].parent)
+        image.write_bytes(b'broken image')
+        report = archive_integrity.archive_report(store.Archive(self.c.archive_dir, self.arc.base.name))
+        self.assertEqual(report['image_problem_counts'], {'image_undecodable': 1})
+        self.assertEqual(report['images_unavailable'], 1)
+        item = next(row for row in report['incomplete_items'] if row['post_id'] == self.nodes[0]['pk'])
+        self.assertEqual(item['media_files'], [{'kind': 'image', 'status': 'corrupt', 'detail': 'undecodable'}])
+
     def test_incomplete_warning_distinguishes_first_observation_and_saved_comparison(self):
         rows = self.arc.rows()
         entry = {}

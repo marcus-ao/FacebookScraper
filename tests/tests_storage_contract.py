@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -103,6 +104,98 @@ class StorageContractTests(unittest.TestCase):
         self.assertEqual(store.media_storage_info(self.arc.base, row)[0]['storage_status'], 'missing')
         video = dict(row, media=[{'kind': 'video', 'url': 'https://cdn.invalid/v.mp4'}])
         self.assertEqual(store.media_storage_info(self.arc.base, video)[0]['storage_status'], 'metadata_only')
+
+    def verified_image(self, color='red'):
+        """落盘并记下实际哈希与字节数，和真实采集一致——没有这层记录就验不出改写。"""
+        post = self.post(url='https://cdn.invalid/a.png')
+        path = self.arc.save_media(post, 0, png(color), image_facts(png(color)))
+        self.arc.append(post)
+        return path
+
+    def test_storage_detail_names_each_unusable_case_apart(self):
+        path = self.verified_image()
+        row = self.arc.rows()[0]
+
+        def observed(source=None):
+            item = store.media_storage_info(self.arc.base, source or row)[0]
+            return item['storage_status'], item['storage_detail']
+
+        self.assertEqual(observed(), ('saved', 'ok'))
+        # 能解码但与归档记录不符：这是档案与文件冲突，不是坏文件，处置完全不同。
+        path.write_bytes(png('blue'))
+        self.assertEqual(observed(), ('corrupt', 'digest_mismatch'))
+        loose = dict(row, media=[dict(row['media'][0], sha256=None, byte_size=999999)])
+        self.assertEqual(observed(loose), ('corrupt', 'size_mismatch'))
+        path.write_bytes(png()[:20])
+        self.assertEqual(observed(), ('corrupt', 'undecodable'))
+        path.unlink()
+        self.assertEqual(observed(), ('missing', 'file_absent'))
+        never = dict(row, media=[dict(row['media'][0], local_path=None)])
+        self.assertEqual(observed(never), ('missing', 'never_downloaded'))
+        outside = dict(row, media=[dict(row['media'][0], local_path='../outside.png')])
+        self.assertEqual(observed(outside), ('corrupt', 'path_rejected'))
+        video = dict(row, media=[{'kind': 'video', 'url': 'https://cdn.invalid/v.mp4'}])
+        self.assertEqual(observed(video), ('metadata_only', 'video_metadata_only'))
+
+    def test_briefly_locked_original_is_retried_instead_of_reported_corrupt(self):
+        path = self.verified_image()
+        row = self.arc.rows()[0]
+        real, attempts = Path.read_bytes, []
+
+        def flaky(target):
+            if Path(target) == path:
+                attempts.append(target)
+                if len(attempts) <= 2:
+                    # 审校台预览占住原图时，Windows 给的就是这个，而不是坏字节。
+                    raise OSError(13, 'sharing violation', str(target), 32)
+            return real(target)
+
+        with patch.object(Path, 'read_bytes', flaky):
+            item = store.media_storage_info(self.arc.base, row)[0]
+        self.assertEqual((item['storage_status'], item['storage_detail']), ('saved', 'ok'))
+        self.assertEqual(len(attempts), 3)
+
+    def test_persistent_lock_and_unstable_file_are_not_called_corrupt_bytes(self):
+        path = self.verified_image()
+        row = self.arc.rows()[0]
+        real_read, real_stat = Path.read_bytes, Path.stat
+
+        def locked(target):
+            if Path(target) == path:
+                raise OSError(13, 'sharing violation', str(target), 33)
+            return real_read(target)
+
+        class Moving:
+            """只把 mtime 推着走，其余字段照旧——链接检查仍要读到真实 st_mode。"""
+
+            def __init__(self, source, tick):
+                self._source, self.st_mtime_ns = source, source.st_mtime_ns + tick
+
+            def __getattr__(self, name):
+                return getattr(self._source, name)
+
+        ticks = iter(range(1000))
+
+        def moving(target, **kwargs):
+            result = real_stat(target, **kwargs)
+            return Moving(result, next(ticks)) if Path(target) == path else result
+
+        with patch.object(store, 'MEDIA_READ_RETRY_SECONDS', 0.05):
+            with patch.object(Path, 'read_bytes', locked):
+                item = store.media_storage_info(self.arc.base, row)[0]
+            self.assertEqual((item['storage_status'], item['storage_detail']), ('corrupt', 'locked'))
+            self.assertIsNone(item['sha256'])
+            with patch.object(Path, 'stat', moving):
+                item = store.media_storage_info(self.arc.base, row)[0]
+        self.assertEqual((item['storage_status'], item['storage_detail']), ('corrupt', 'changed_while_reading'))
+
+    def test_signed_cdn_expiry_is_parsed_as_hexadecimal(self):
+        # 按十进制解会得到四千年后的日期，过期地址就被判成"仍然有效"。
+        self.assertEqual(store.signed_url_expiry('https://cdn.invalid/a.jpg?oe=6AA7C003'),
+                         datetime(2026, 9, 14, 9, 36, 3, tzinfo=timezone.utc))
+        self.assertIsNone(store.signed_url_expiry('https://cdn.invalid/a.jpg'))
+        self.assertIsNone(store.signed_url_expiry('https://cdn.invalid/a.jpg?oe=zzz'))
+        self.assertIsNone(store.signed_url_expiry(None))
 
     def test_interrupted_tag_move_recovers_originals_and_image_ownership(self):
         post = self.post(url='https://cdn.invalid/a.png')

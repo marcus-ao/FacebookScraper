@@ -242,6 +242,91 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(CaptureStateError):
             self.state.recover(key, self.state.status()['revision'], 'repeat')
 
+    async def test_expired_signed_url_is_refreshed_only_on_explicit_recovery(self):
+        # oe=60000000 是 2020 年；归档里这种地址再请求只会拿到 403，重下多少次都一样。
+        expired = 'https://scontent-a1.cdninstagram.com/v/t51/99_n.jpg?stp=dst-jpg&oe=60000000&_nc_ht=a1'
+        fresh = 'https://scontent-b2.cdninstagram.com/v/t99/99_n.jpg?stp=dst-jpg&oe=7FFFFFFF&_nc_ht=b2'
+        stale = self.post(media=[Media(expired, 'image')])
+        self.ctx.request.get.side_effect = OSError('fixture expired url')
+        await self.scan([stale])
+        key = post_key('instagram', 'target', '1')
+        self.assertEqual(self.state.status()['items'][key]['status'], 'manual')
+
+        # 自动轮次不变：同一篇再扫一次仍然不开详情，靠的是 begin() 跳过人工项。
+        detail = AsyncMock(return_value=(self.col, 'https://www.instagram.com/p/1/'))
+        item = self.state.recover(key, self.state.status()['revision'], 'fixture refresh')
+        self.dcfg.scan_id, self.dcfg.run_kind = item['scan_id'], 'recovery'
+        self.ctx.request.get.side_effect = self.response
+        with patch.object(delta, 'scan_page', detail):
+            with patch.object(delta, 'extract', side_effect=[[self.post(media=[Media(fresh, 'image')])]]):
+                await delta.capture_post(self.ctx, 'instagram', 'target', self.arc, self.dcfg,
+                                         self.post(media=[Media(expired, 'image')]), lifecycle=self.state)
+        self.assertEqual(detail.await_count, 1)
+        self.assertEqual(self.ctx.request.get.await_args.args[0], fresh)
+        result = self.state.status()['items'][key]
+        self.assertEqual((result['status'], result['saved_images']), ('complete', 1))
+        self.assertTrue(self.arc.rows()[0]['media_complete'])
+
+    async def test_recovery_keeps_replaying_a_url_whose_expiry_is_unknown(self):
+        """没有 `oe` 就不知道失效时刻，不能凭猜测去开详情——那是额外的平台访问。"""
+        self.ctx.request.get.side_effect = OSError('fixture failure')
+        await self.scan([self.post()])
+        key = post_key('instagram', 'target', '1')
+        item = self.state.recover(key, self.state.status()['revision'], 'fixture retry')
+        self.dcfg.scan_id, self.dcfg.run_kind = item['scan_id'], 'recovery'
+        self.ctx.request.get.side_effect = self.response
+        with patch.object(delta, 'scan_page', AsyncMock(side_effect=AssertionError('no detail visit'))):
+            await delta.capture_post(self.ctx, 'instagram', 'target', self.arc, self.dcfg,
+                                     self.post(), lifecycle=self.state)
+        self.assertEqual(self.state.status()['items'][key]['status'], 'complete')
+
+    async def test_retiring_stale_manual_keeps_real_failures_and_needs_cas(self):
+        """复现服务机现场：旧 interrupt() 把未开始的候选也打成 manual，之后永远不再排程。"""
+        self.ctx.request.get.side_effect = OSError('fixture failure')
+        await self.scan([self.post('started')])
+        never = post_key('instagram', 'target', 'never')
+        data = self.state.status()
+        # 按 23c719d 之前的写法伪造一条：只有 manual，没有 attempt_started_at。
+        data['items'][never] = dict(data['items'][post_key('instagram', 'target', 'started')],
+                                    key=never, status='manual', attempt_started_at=None, recovery=False,
+                                    reason='本轮会话中断或预算耗尽，未处理候选已转人工',
+                                    source=dict(self.post('never').to_row()))
+        self.state._save(data)
+        revision = self.state.status()['revision']
+
+        with self.assertRaises(CaptureStateError):
+            self.state.retire_stale_manual(revision - 1, 'stale revision')
+        with self.assertRaises(CaptureStateError):
+            self.state.retire_stale_manual(revision, '   ')
+
+        result = self.state.retire_stale_manual(revision, '23c719d 之前的漏判')
+        self.assertEqual([row['key'] for row in result['retired']], [never])
+        self.assertEqual([row['key'] for row in result['kept_manual']],
+                         [post_key('instagram', 'target', 'started')])
+        items = self.state.status()['items']
+        self.assertEqual(items[never]['status'], 'deferred')
+        self.assertIn('23c719d 之前的漏判', items[never]['reason'])
+        # 真实失败过的那条原样保留：退役不能把它藏起来。
+        self.assertEqual(items[post_key('instagram', 'target', 'started')]['status'], 'manual')
+        # 投递账本不因重新分类而改写。
+        self.assertEqual(len(self.state.status()['events']), len(data['events']))
+
+    async def test_retired_item_becomes_a_candidate_again_without_new_requests(self):
+        self.ctx.request.get.side_effect = OSError('fixture failure')
+        await self.scan([self.post('1')])
+        key = post_key('instagram', 'target', '1')
+        data = self.state.status()
+        data['items'][key].update(attempt_started_at=None)
+        self.state._save(data)
+        self.state.retire_stale_manual(self.state.status()['revision'], 'fixture retire')
+        self.assertEqual(self.state.status()['items'][key]['status'], 'deferred')
+        # deferred 不再被 begin() 跳过，所以这一篇能重新进候选并被正常处理。
+        self.ctx.request.get.side_effect = self.response
+        self.now += timedelta(hours=2)  # 主页配额到点；退役本身不改配额。
+        self.dcfg.scan_id = 'scan-two'
+        await self.scan([self.post('1')])
+        self.assertEqual(self.state.status()['items'][key]['status'], 'complete')
+
     async def test_429_during_page_load_prevents_any_scrolling(self):
         handlers = {}
         page = SimpleNamespace(url='about:blank', mouse=SimpleNamespace(wheel=AsyncMock(), move=AsyncMock()),

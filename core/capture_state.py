@@ -232,6 +232,36 @@ class CaptureState:
                                   {m['kind'] for m in row.get('media', [])} == {'image'}), acknowledged=False))
             self._save(data)
 
+    def retire_stale_manual(self, expected_revision, reason, *, now=None):
+        """把「当轮从未开始尝试」的旧人工项退回 `deferred`，补上早期 `interrupt()` 的漏判。
+
+        判据与现在的 `interrupt()` 完全一致：没有 `attempt_started_at`、也不是人工恢复授权的项，
+        当初就该记 `deferred`。⛔ **已开始过的尝试一律不动**——那是真实失败，退役等于把它藏起来。
+        事件账本同样不改写：已经形成的投递记录是既成事实，不因重新分类而消失。
+        退成 `deferred` 之后 `begin()` 不再跳过它们，但基线外的帖在候选阶段就被拦下、
+        已归档且无变化的帖 `should_append()` 为假，所以这一步不会引发任何新的平台请求。
+        """
+        if not reason.strip():
+            raise CaptureStateError('退役旧人工项需要处理说明')
+        with FileLock(self.lock, busy_message='采集事实正在写入，请稍后重试'):
+            data = self.status()
+            if data['revision'] != expected_revision:
+                raise CaptureStateError('采集状态已变化，请刷新后核对')
+            stamp = (now or datetime.now(timezone.utc)).isoformat()
+            retired, kept = [], []
+            for key, item in data['items'].items():
+                if item['status'] != 'manual':
+                    continue
+                if item.get('attempt_started_at') or item.get('recovery'):
+                    kept.append({'key': key, 'reason': item.get('reason') or ''})
+                    continue
+                retired.append({'key': key, 'classification': item.get('classification'),
+                                'previous_reason': item.get('reason') or ''})
+                item.update(status='deferred', finished_at=stamp,
+                            reason='当轮从未开始尝试，已退回等待后续自然扫描：' + reason.strip())
+            self._save(data)
+            return {'revision': data['revision'], 'retired': retired, 'kept_manual': kept}
+
     def recover(self, key, expected_revision, reason):
         """消费一次人工尝试授权；调用方必须持有 delta.lock，随后立即执行该项。"""
         if not reason.strip():
