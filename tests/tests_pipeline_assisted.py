@@ -5,7 +5,7 @@ import json
 import sys
 import tempfile
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 from PIL import Image
@@ -293,7 +293,10 @@ with tempfile.TemporaryDirectory() as folder:
 
 
 print("\n[6] 北京槽位跨美西 DST 窗口仍正确")
-rules = A.publish_rules()
+# ⚠️ UI 时区在这里固定成美西，不跟部署配置走。部署的 `ui_timezone` 已是
+# `Asia/Shanghai`（无夏令时、且与业务时区重合），照配置跑则回拨分支永远不触发、
+# UI 月界永远等于北京月界，这一组会全绿却什么都没验到。槽位小时仍来自配置。
+rules = replace(A.publish_rules(), ui_timezone="America/Los_Angeles")
 slot_hours = {slot.hour for slot in rules.slots}
 # 北京不切夏令时，槽位小时固定；会动的是它在美西 UI 里显示成几点。
 for when, want_hour in [
@@ -328,6 +331,17 @@ check(0 < len(crossing) < 20 and all(
           item.astimezone(A.ZoneInfo("America/Los_Angeles")).month == 9
           for item in crossing),
       "月底槽位不够时返回**少于** count 个，由调用方决定怎么办（整批不提交）")
+# UI 时区落后于业务时区时，当天第一个槽可能还落在**上一个** UI 月份：北京
+# 10-01 09:00 在美西是 09-30 18:00。它确实排不了，但当天更晚的槽和本月其余
+# 部分都还在，不能跟"越过本月"一样收工——否则整月一个槽都给不出来。
+early = replace(rules, slots=(time(9, 0), *rules.slots))
+survives = A.next_slots(
+    datetime.fromisoformat("2026-10-01T16:30:00+08:00"), (), 3, early)
+check(len(survives) == 3
+      and survives[0].isoformat() == "2026-10-01T23:00:00+08:00"
+      and all(item.astimezone(A.ZoneInfo("America/Los_Angeles")).month == 10
+              for item in survives),
+      "首日清晨槽落在上个 UI 月份时只跳过它，不把整月搜索一起掐断")
 
 
 print("\n[7] 批量首个不明确失败立即停止，后续零调用")

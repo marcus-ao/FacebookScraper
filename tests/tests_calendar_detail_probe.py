@@ -32,6 +32,17 @@ PAGE = '''<header><h2>This content has no text</h2><span>Story · Published on: 
  document.querySelectorAll('[role=tab]').forEach(n=>n.setAttribute('aria-selected','false'));
  tab.setAttribute('aria-selected','true');}</script>'''
 
+# A published single-channel detail: the metric tabs are role=tab too, but there
+# is no channel tab to select or restore. Both live samples on 2026-09-21 (the
+# Instagram Feed post and the Facebook-only Story) have exactly this shape.
+SINGLE = '''<header><h2>Day 1 at IFA</h2><span>Post · Published on: Sat Sep 5, 11:48am</span>
+ <img alt="Instagram"></header><h2>Feed preview</h2>
+<div><div><img><div>neakasa.global</div></div></div>
+<button role="tab" aria-selected="true">Total</button>
+<button role="tab" aria-selected="false">Audience</button>
+<button onclick="window.submitted=true">Publish now</button>
+<script>window.submitted=false;</script>'''
+
 
 class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -175,6 +186,55 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(r.get('view')=='Instagram' and r.get('phase')=='settled' for r in records))
         self.assertNotIn('DONE:',output.getvalue())
         self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
+
+    async def single_channel_detail(self, body=SINGLE):
+        await self.context.route('**/latest/insights/object_insights/**', lambda route: route.fulfill(
+            content_type='text/html; charset=utf-8', body=body))
+        await self.page.goto('https://business.facebook.com/latest/insights/object_insights/?content_id=18015951041945821')
+
+    async def test_metric_tabs_do_not_make_a_single_channel_detail_unreadable(self):
+        # Total/Audience are role=tab; counting them refused the very details
+        # whose structure is still unknown.
+        await self.single_channel_detail()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = await probe.inspect(self.browser, day=date(2026,9,5), clock=time(11,48), kind='Post')
+        text = output.getvalue()
+        # Still not a complete reading - late channel tabs stay possible - but the
+        # initial view must be captured instead of refused before it is looked at.
+        self.assertFalse(result)
+        self.assertNotIn('STOP:', text)
+        self.assertIn('tabs left unchanged', text)
+        records = [json.loads(s) for s in text.splitlines() if s.startswith('{')]
+        settled = next(r for r in records if r.get('phase') == 'settled')
+        self.assertEqual(settled['view'], 'initial')
+        self.assertEqual(settled['readiness']['platforms'], ['Instagram'])
+        self.assertFalse(any(r.get('view') in {'Facebook','Instagram'} for r in records))
+        self.assertEqual(await self.page.get_by_role('tab', selected=True).inner_text(), 'Total')
+        self.assertFalse(await self.page.evaluate('window.submitted'))
+
+    async def test_single_channel_detail_can_still_be_reloaded_for_initial_evidence(self):
+        payload = {'data':{'tofu_entity':{'entity_id':'18015951041945821','entity_info':{
+            '__typename':'TofuIGPostEntityInfo','caption':'PRIVATE INITIAL CAPTION',
+            'owner':{'id':'17841475604335349','username':'neakasa.global','access_token':'SECRET_TOKEN'}}}}}
+        await self.single_channel_detail(
+            SINGLE + '<script type="application/json">' + json.dumps(payload) + '</script>')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = await probe.inspect(self.browser, day=date(2026,9,5), clock=time(11,48), kind='Post', reload=True)
+        text = output.getvalue()
+        self.assertFalse(result)
+        self.assertNotIn('STOP: reload requires', text)
+        self.assertIn('RELOAD:', text)
+        records = [json.loads(s) for s in text.splitlines() if s.startswith('{')]
+        embedded = next(r['EMBEDDED_EVIDENCE'] for r in records if isinstance(r.get('EMBEDDED_EVIDENCE'), dict))
+        entity = embedded['data']['tofu_entity']
+        self.assertEqual(entity['entity_info']['owner']['id'], '17841475604335349')
+        self.assertEqual(entity['entity_info']['owner']['username'], 'neakasa.global')
+        for private in ('SECRET_TOKEN', 'PRIVATE INITIAL CAPTION', 'access_token'):
+            self.assertNotIn(private, text)
+        self.assertEqual(await self.page.get_by_role('tab', selected=True).inner_text(), 'Total')
+        self.assertFalse(await self.page.evaluate('window.submitted'))
 
     async def test_single_detail_reload_observes_initial_responses_and_embedded_identity(self):
         payload={'data':{'story':{'__typename':'Story','id':'765432109',

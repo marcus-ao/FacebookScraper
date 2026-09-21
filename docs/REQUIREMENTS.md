@@ -351,7 +351,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 |---|---|---|---|---|
 | F5-1/F5-2 同渠道 90 分钟 | 离线通过 | 同帖去重与占用分开，人工冲突拒绝 + 3 条建议，不擅自顺延 | 远端完整月历另验 | 90 分钟边界、不同渠道不冲突、别人正文也占槽 |
 | F5-1 跨日占用比较 | 离线通过 | 按真实墙钟距离跨 ±1 天比较，不按日历日——否则 23:30 与次日 00:30 在界面上显示"附近没有"，而后端 90 分钟闸会拒 | 无 | `features/approval/occupancy` 单测 |
-| F5-3 北京时刻/实际 UI 范围 | 离线通过 | 运营及发布设备均按用户确认采用北京时间；平台最早/最晚限制交当次 UI，保留月历覆盖、未来时刻、DST 与间隔校验 | 无人工边界测量前置 | 发布/批准/规划回归，含无手工上限、北京时间月界与未来时刻 |
+| F5-3 北京时刻/实际 UI 范围 | 离线通过 | 运营及发布设备均按用户确认采用北京时间；平台最早/最晚限制交当次 UI，保留月历覆盖、未来时刻、DST 与间隔校验；月界是单向的——只有越过本月才停手，落在上个 UI 月份的候选仅跳过 | 无人工边界测量前置 | 发布/批准/规划回归，含无手工上限、北京时间月界与未来时刻；DST 回拨与 UI 月界固定按美西 UI 时区验——部署的 `ui_timezone` 无夏令时且与业务时区重合，跟着配置走这两条会全绿却什么都没验到 |
 | F5-4 八态/冻结/挂起/接管 | 离线通过 | `actor: null`、3 上海工作日、源变唤醒、理由与终态分计；`content_locked` 关掉四个编辑入口，解冻作废快照但留字节 | 通知联动另验 | `tests_review`/`tests_web_review`：`handed_off` 不计 `skipped`，模糊回执不重开提交，冻结期间编辑一律 409 |
 | F5-4 内容冻结与解冻 | 离线通过 | 冻结写正文/图片字节快照并关掉四个编辑入口；解冻显式确认、快照标 `discarded` 保留字节；冻结不要求发布录证（`lockable` 与 `available` 分开） | 运营实际使用另验 | `tests_review`、`tests_approval`、`tests_web_review`；浏览器场景 09 验冻结前后时刻选择框的出现与消失 |
 | F5-10 撤销登记 | 离线通过 | 系统不自动删远端卡片；人删完登记，持锁实时读整月核实 remote ID 不在了才解除防重；`published.jsonl` 原行保留，作废按 attempt 不按来源 | 真实删除与回读另验 | `tests_publish_operations::UnscheduleTests`：卡片仍在/月历未读完整/未覆盖该时刻/无 remote ID 四种拒绝，同来源另一次 scheduled 仍拦住 |
@@ -361,7 +361,8 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F5-5 完整月份读取 | 待真实联调 | 服务机 probe 已报告 35 格；9 月 30 日时间子节点修复离线通过，随后真实刷新仍在 9 月 4 日 18:39 Story 详情失败 | 服务机已登录的 9223；Story 身份适配见下一行 | 两条现场条目和完整月份须一并复验，部分结果不算通过；不重录 G1 |
 | F5-5 全内容类型兼容 | 代码未完成 | IG 根媒体 Story 与直接关联 FB Story 已有适配；其它尚无对应结构的类型仍未完成，不因标签解析存在就声称覆盖 | 先复验当前 Story，再完整刷新月份；未知身份/类型继续阻止 decision_complete | 逐类边界见 FUNCTIONALITY F5-5.1，不升级整月或全类型验收 |
 | F5-5 当前 IG Story 单条读取 | 真实通过 | 2026-09-20 服务机 --verify-reader 保留 IG 18084155825688886、neakasa.de、18:39、story、empty；整体仍 partial | 仅该详情的 IG 变体；不代表 FB 或整月 | [原始日志与 SHA-256](../state/planner-content-compatibility/story-reader-20260920/summary.json)，读取版本 d9196af |
-| F5-5 直接关联 FB Story 占用 | 待真实联调 | 新日志给出 FB entity_id 1781315906229402 与 owner entity_id 61578176852811 的直接关系；运行期核对 owner/title/created_at，Your story 保留正文未知。预览判据改为「无可见 IG 框 + owner 自有头像行」，唯一作者判据已作废（跨发预览内嵌原卡片，不可能唯一） | 同一详情 --verify-reader 完整返回两个渠道后再刷新整月；原始时间秒值尚未在现场输出核对；预览判据只在与截图一致的五种结构上离线验过 | 截图、证据限制和定向验证见 [HANDOFF §1.23](HANDOFF.md#123-月历内容类型兼容与无正文-story2026-09-20) |
+| F5-5 直接关联 FB Story 占用 | 真实通过 | 新日志给出 FB entity_id 1781315906229402 与 owner entity_id 61578176852811 的直接关系；运行期核对 owner/title/created_at，Your story 保留正文未知。预览判据改为「无可见 IG 框 + owner 自有头像行」，唯一作者判据已作废（跨发预览内嵌原卡片，不可能唯一） | 仅 2026-09-04 18:39 这一条；整月仍 partial，7 条未核实分属五类，见 HANDOFF §1.23。原始时间秒值仍未在现场输出核对 | 2026-09-21 服务机 `--verify-reader` 返回 `complete=true` 及两个独立变体，[原文与 SHA-256](../state/calendar-data-sync-fix/story-both-channels-20260921/summary.json) |
+| F5-5 IG Feed/Reel 已发布读取 | 离线通过 | 单渠道详情无渠道页签；`instagram_post.id`=content_id 绑 `bizlink_instagram_actor.username`，预览作者用 `#caption-author`，正文取三级标题全文（可见省略号是 CSS 裁剪）；合作按同节点 `in collaboration with` 记 `collaboration` | 响应已核验的 owner 与配置账号不同时如实记录并占槽（用户 2026-09-21 决定）；多图/轮播细分仍 unknown；Facebook 侧视频/Reel 未覆盖 | `tests_story_insights::PublishedMediaTests` 5 项：合作帖占槽、Reel 形式、独作不记关系、五种身份不符拒绝、迟挂载页签报 `channel_tabs` |
 | F5-5 月历展示/公开观察代码 | 离线通过 | 截至时间/范围/完整性/stale/busy，公开以 remote ID 和明确观察为准，不按时钟推算 | 真实新 scheduled 形态另验 | runtime recovery/浏览器 UI：未知不报公开，建议不计帖子 |
 | F5-6 提交前实时复核 | 离线通过 | 缓存仅提示，持发布锁重读；未读完不能判空档 | 完整月历真实输入另验 | 缓存后新增人工项造成冲突，busy/不完整即拒绝 |
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |

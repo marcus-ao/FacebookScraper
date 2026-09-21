@@ -12,6 +12,7 @@ class InsightsEvidence:
         self.page, self.source_id = page, source_id
         self.tasks, self.identities = [], []
         self.facebook_identities = []
+        self.media_identities = []
 
     def start(self):
         self.page.on('response', self.observe)
@@ -22,12 +23,31 @@ class InsightsEvidence:
                 {'/api/graphql', '/graphql'} and len(self.tasks) < 40):
             self.tasks.append(asyncio.create_task(self.collect(response)))
 
+    def observe_media(self, document):
+        """A published post or reel names its own account on the media ID itself.
+
+        ⚠️ `viewer.username` in the same document is the signed-in account, not
+        the author; bind only through `instagram_post.id`.
+        """
+        post = (document.get('data') or {}).get('instagram_post')
+        if not isinstance(post, dict) or str(post.get('id', '')) != self.source_id:
+            return
+        actor = post.get('bizlink_instagram_actor') or {}
+        if (not isinstance(actor.get('username'), str) or not actor['username'].strip()
+                or not re.fullmatch(r'\d{6,}', str(actor.get('id', '')))):
+            return
+        value = {'channel': 'instagram', 'remote_id': self.source_id,
+                 'owner': actor['username'], 'owner_id': str(actor['id'])}
+        if value not in self.media_identities:
+            self.media_identities.append(value)
+
     async def collect(self, response):
         try:
             raw = await asyncio.wait_for(response.body(), 5)
             if response.status != 200 or len(raw) > 4_000_000:
                 return
             for document in response_documents(raw):
+                self.observe_media(document)
                 info = document.get('data', {}).get('tofu_entity', {}).get('entity_info', {})
                 if info.get('__typename') != 'TofuIGPostEntityInfo':
                     continue

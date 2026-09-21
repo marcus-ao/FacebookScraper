@@ -94,6 +94,62 @@ async def preview_identity(page, channel, placement):
     }''', channel)
 
 
+# The Instagram feed preview names its author in a stable `caption-author` node,
+# recorded on both the 2026-09-21 post and reel samples. Its sibling caption text
+# is the embedded copy, not evidence of authorship.
+PREVIEW_AUTHOR = r'''() => {
+  const visible=n=>!!n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
+  const nodes=[...document.querySelectorAll('#caption-author')].filter(visible);
+  return nodes.length===1 ? (nodes[0].innerText||'').trim() : '';
+}'''
+COLLABORATION = ' in collaboration with '
+
+
+async def read_media(page, row, item, expected_accounts, evidence, *, timeout):
+    """Read a published post or reel that carries its own account and media ID.
+
+    Single-channel details have no channel tab at all; the caption heading holds
+    the whole text, so the visual ellipsis is CSS clamping, not truncation.
+    """
+    deadline = time.monotonic()+timeout
+    previous, stable_since = None, time.monotonic()
+    last_error = DetailReadError('identity_unverified', missing_fields=('media_identity',))
+    while True:
+        if len(evidence.media_identities) > 1:
+            raise DetailReadError('identity_unverified', missing_fields=('consistent_media_identity',))
+        identity = evidence.media_identities[0] if evidence.media_identities else None
+        header = await header_snapshot(page)
+        material = None
+        if identity and header:
+            metadata = ' '.join(header['metadata'].split())
+            placement = LABELS.get(metadata.split('·', 1)[0].strip(), 'unknown')
+            if header['platforms'] != [identity['channel'].title()]:
+                last_error = DetailReadError('identity_unverified', placement=placement,
+                                             missing_fields=('media_channel',))
+            elif await page.evaluate(PREVIEW_AUTHOR) != identity['owner']:
+                last_error = DetailReadError('identity_unverified', placement=placement,
+                                             missing_fields=('instagram_preview_author',))
+            else:
+                # A collaborator is never the owner, but the collaboration is
+                # stated in this same metadata node, so it is recorded as a relation.
+                observation = {**header, **identity, 'owner_verified': True,
+                               'media_kind': 'video' if metadata.split('·')[0].strip() in {'Reel','Video','Live'} else 'unknown',
+                               'relationships': ('collaboration',) if COLLABORATION in metadata else ()}
+                try:
+                    material = classify_published(observation, row['date'], expected_accounts)
+                    if material['ui_at'].strftime('%I:%M %p').lstrip('0') != item['time'].lstrip('0'):
+                        raise DetailReadError('time_mismatch', placement=material['placement'])
+                except DetailReadError as exc:
+                    last_error, material = exc, None
+        if material != previous:
+            previous, stable_since = material, time.monotonic()
+        if material and time.monotonic()-stable_since >= .4:
+            return [material]
+        if time.monotonic() >= deadline:
+            raise last_error
+        await asyncio.sleep(.2)
+
+
 async def read_view(page, row, item, expected_accounts, *, channel='', aggregate=False, timeout=30):
     deadline = time.monotonic()+timeout
     previous, stable_since = None, time.monotonic()
@@ -314,7 +370,19 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
             for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
     available = [(key,node) for key,node in tabs if await node.count()==1]
     if not available:
-        material = await read_view(page,row,item,expected_accounts,timeout=timeout)
+        try:
+            material = await read_view(page,row,item,expected_accounts,timeout=timeout)
+        except DetailReadError as exc:
+            # ⚠️ Only a channel that has no preview-identity adapter falls through
+            # here. The recorded Facebook feed keeps its profile-link identity;
+            # this must not swallow it.
+            if (evidence is None or exc.code != 'unsupported_type'
+                    or exc.missing_fields != ('channel_identity_adapter',)):
+                raise
+            variants = await read_media(page,row,item,expected_accounts,evidence,timeout=timeout)
+            if any([await node.count() for _,node in tabs]):
+                raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
+            return variants
         if any([await node.count() for _,node in tabs]) or await page.get_by_role('tab',name='Total performance',exact=True).count():
             raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
         if material['ui_at'].strftime('%I:%M %p').lstrip('0') != item['time'].lstrip('0'):
