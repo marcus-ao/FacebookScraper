@@ -1,6 +1,6 @@
 # 项目交接
 
-**现场同步至 2026-09-20。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
+**现场同步至 2026-09-21。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
 
@@ -12,7 +12,7 @@
 
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
-**外部依赖。** `[feishu].enabled = true`，非受管入口读 `[feishu].base_url`，由改址脚本与网络 JSON 同步；服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。
+**外部依赖。** `[feishu].enabled = true`，未设置显式网络策略的非受管进程读取 `[feishu].base_url`，由改址脚本与网络 JSON 同步；设置 `FBSCRAPER_NETWORK_CONFIG` 时读取该 JSON。服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
@@ -35,7 +35,7 @@
 
 ⚠️ **`[feishu].enabled` 已经是 `true`。** 抓取事件在落档时就以 `acknowledged=false` 写进 `capture_state.json`，飞书关闭时 `enqueue_capture_results()` 第一行就返回、不会确认它们。服务机第一次加载这份配置（拉代码并重启）之后，下一轮维护会把积压事件按扫描一次性入队。只读数一遍的步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 
-⚠️ **没有「只在服务机开飞书」这个选项。** `config.local.toml` 被白名单锁定，只能绑 `[paths]` 与 `[runtime]`，两台机器共用同一份 `config.toml`。非受管入口读 `[feishu].base_url`；服务机设了 `FBSCRAPER_CONTROL_DIR`，卡片链接走 `control/host.json` 的 `public_base_url`。⛔ **`[feishu].base_url` 不是监听地址**，`git pull` 也不会改 `host.json`。⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`**——四个 webhook 是真的，会往业务群发卡片。
+⚠️ **没有「只在服务机开飞书」这个选项。** `config.local.toml` 被白名单锁定，只能绑 `[paths]` 与 `[runtime]`，两台机器共用同一份 `config.toml`。未设置显式网络策略的非受管进程读取 `[feishu].base_url`；设置 `FBSCRAPER_NETWORK_CONFIG` 时读取源码网络 JSON；设置 `FBSCRAPER_CONTROL_DIR` 时优先读取 `control/host.json` 的 `public_base_url`。⛔ **`[feishu].base_url` 不是监听地址**，`git pull` 也不会改 `host.json`。⚠️ **开发机不要带着生产 `.env` 跑调度或 `--process`**——四个 webhook 是真的，会往业务群发卡片。
 
 ### 1.2 已交付修复留下的硬约束
 
@@ -373,11 +373,65 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 
 ### 1.24 源码服务地址更新（2026-09-20）
 
-**验证状态：离线通过。** `scripts/update_service_address.bat` 同步网络 JSON 与非受管飞书 URL；`scripts/run_web_lan.bat` 读取同一配置启动。主检出原地址未替换，`10.66.6.3/24` 仅为测试及操作示例，现场 IP/前缀由人确认。工作树 `.worktrees/service-address-updater`，分支 `codex/service-address-updater`。
+**验证状态：离线通过。** `scripts/update_service_address.bat` 同步网络 JSON 与非受管飞书 URL；`scripts/run_web_lan.bat` 读取同一配置启动。初次交付时未替换主检出原地址，`10.66.6.3/24` 当时仅为测试及操作示例；后续实际配置以网络 JSON 为准。工作树 `.worktrees/service-address-updater`，分支 `codex/service-address-updater`。
 
 [定向回归 6/6 脚本](../state/offline-validation-20260921T062357Z/results.json)覆盖 Web 访问 14 项、启动批处理 8 项、受管部署 19 项、发布后台维护保护 25 项、更新器初版 9 项及 hygiene；[更新器最终 10 项](../state/offline-validation-20260921T062550Z/results.json)另补实际 `.bat` 的交互/参数模式、带空格目录、异目录启动和解释器绑定。独立只读复审再次执行更新器及启动脚本共 18 项通过，未发现阻塞问题。
 
 测试均用临时配置和隔离数据；启动测试执行真实 Windows 批处理，但 npm 和最终 Web 服务器为夹具，没有连接真实账号、发送飞书、修改防火墙或读写业务账本。服务机拉取、监听、防火墙及同事电脑访问仍为 **待真实联调**，按 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址) 操作。日志位于本工作树 `state/`，不随 Git 提交，清理前须保全。
+
+### 1.25 Story/已发布媒体离线回归耗时（2026-09-21）
+
+基点 `bfd846c`，工作树 `.worktrees/story-insights-timeout`，分支 `codex/story-insights-timeout`。
+[原版默认入口](../state/offline-validation-20260921T071100Z/results.json)复现 `tests_story_insights` 300.05 秒、退出码 124。
+`month.read(timeout=5)` 的五秒是各读取步骤的预算，不是整次月份读取的总时限；负向子测试各自等待身份核验超时，
+并在详情前后分别扫描两遍完整月历。逐格 `Locator.evaluate()` 会反复获取、执行、释放元素句柄；
+[分段计时](../state/story-insights-timeout/before-profile.log)中七次 inventory 的十四次月历扫描占 65.97 秒，
+详情占 36.98 秒，两个测试的 setup 合计 2.32 秒。该诊断与默认入口并行，计时包装也有开销，不能当独立运行基准。
+
+扫描改用浏览器内直接快照，合并加载标记的零数量检查和同格条目/按钮读取；按钮仍由 Playwright 按角色及可见性定位。
+仍逐日滚动、等待加载、验证日期/条目/展开控件，
+要求两遍一致，并在详情后完整复扫。浏览器逐测试隔离、五秒负向等待和默认 300 秒脚本上限均保持。
+媒体身份负向子测试逐项重置 HTML，避免 `preview_author` 污染后续 `viewer_only`/`platform`。
+负向断言另核对 `published_detail` 阶段及各自的缺失字段，避免把加载/导航失败误当身份拒绝。
+新增隔离 Chromium 场景覆盖滚到日期格才出现的加载器、`progressbar` 转 `aria-busy`、未加载完不能继续滚动、
+迟到条目、完整复扫及扫描途中日期格消失；[定向结果](../state/story-insights-timeout/grid-boundaries-final.log)为离线通过。
+
+两条慢测试用保留的基线源码及最终源码串行比较，无并行浏览器测试、无分段计时包装：
+[修前](../state/story-insights-timeout/before-single.json)与[修后](../state/story-insights-timeout/after-single.json)记录
+媒体身份五个子场景 69.13 → 47.13 秒，Story 身份两个子场景 27.87 → 18.77 秒，均通过。
+[原版整文件诊断](../state/story-insights-timeout/before-full.log)15 条通过、375.96 秒；该次部分时间有其它诊断并行，
+不能将其与后续串行回归的差额全部归因于代码。运行环境及可复跑的基线源码在同一证据目录。
+
+**最终验证：离线通过。** [全量结果](../state/offline-validation-20260921T073026Z/results.json)104/104 脚本退出码均为 0，
+默认 300 秒上限不变；Story 15 条全部通过、整文件 237.80 秒，月份读取 25 条通过、91.25 秒。
+同轮覆盖发布/回读、缓存、取证、调度、Web 浏览器及 hygiene；前端生产构建通过，保留既有大 chunk 提示。
+[只读复审](../state/story-insights-timeout/review.json)无阻塞项，原有 Story 15 个方法与基线副本的 Git 一致性另经核对。
+
+用户报告的原始 `invalid='platform'` ERROR 尚缺完整堆栈，本轮修前整文件、修前/后单条及最终全量均未复现；
+不能将它归因于已确认的 HTML 污染，也不能声称已证明其独立或已彻底修复。收到原日志后在本节续查；
+`platform` 实际走 Facebook Feed 适配器，当前明确拒绝原因是 `owner`，不是 IG `media_channel`。
+证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
+不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
+
+### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
+
+用户确认旧地址出现在**改址前已发送的历史卡片**。此时两份当前配置均为 `http://10.66.6.3:8765`；新卡片生成链没有遗漏第三份源码入口配置。发现并修复了显式源码网络环境变量的读取差异：Web 原本读取该 JSON，飞书却回退 TOML；现在二者共用显式策略，受管 `host.json` 仍优先。README 的过期办公入口与 heartbeat 注释中的旧 IP 已移除，使用配置引用，避免下次改址再次过期。
+
+[工作区只读扫描清单](../state/service-address-audit/scan.json)记录命中文件、分类和各工作树配置副本，不记录凭据值。472 个命中文件中有 430 个位于历史测试证据/旧运行副本；当前主检出没有真实 `state/feishu_outbox.json` 或 `control/host.json`。扫描及修复未改业务数据、已部署控制目录或其他功能工作树。以下清单按实际消费者决定改址范围，不全仓替换所有 IP：
+
+| 地址消费者 | 来源与同步方式 |
+|---|---|
+| 源码局域网监听、来源检查、运行页“审校台入口” | `ops/service-machine.network.json` → `tools/source_web.py` / `core/web_access.py` / `web/api/deployment.py` |
+| 飞书新卡片：审校、两平台待审列表、采集异常、已存原帖、运行详情 | `core/feishu.py` 统一生成按钮；优先受管策略，其次显式源码策略，否则读取 `[feishu].base_url`；独立调度器启动时保存设置，改址需正常重启 |
+| 飞书部署通知、命令行自检、运行状态 | 同用 `FeishuSettings.load()`；部署通知由独立发件箱记录，不存在另一个写死 IP 的通知模板 |
+| 页面导航、API、图片、下载 | 前端使用相对 URL，共用当前浏览器入口；不需要替换静态产物中的 IP |
+| 普通开发启动、Vite 代理、CDP、健康检查 | 本机回环地址和对应端口有独立含义，保留；不替换为办公网 IP |
+| 飞书已发送历史卡片、已冻结发件箱与回执 | 属于远端消息或历史投递事实，不是配置项；当前 webhook 没有远端 message_id，不改写或自动重发 |
+| Windows 防火墙、已安装受管实例 | 服务机本地状态；源码防火墙命令读取网络 JSON，受管实例按 §17 独立维护，不随源码 Git 拉取更新 |
+| 模型 API、飞书 webhook、心跳、社媒原帖、德国落地页 | 外部服务或业务链接，独立于本项目访问地址，不纳入改址 |
+| 其他工作树、测试夹具、旧制品和历史文档示例 | 版本/验证副本，不参与当前源码进程；保留历史数值与证据 |
+
+**验证状态：离线通过。** [修前](../state/offline-validation-20260921T080707Z/results.json)复现显式源码 JSON 未控制飞书入口；[修后](../state/offline-validation-20260921T080811Z/results.json)更新器 12 项与 Web 策略 15 项通过；[相关回归](../state/offline-validation-20260921T081120Z/results.json)飞书、通知路由、webhook、更新器、Web 策略及仓库卫生检查共 6/6 脚本通过。新增集成覆盖实际改址后 11 组按钮生成场景及端口同步，原帖链接保持；隔离发件箱中新事件使用新入口，已发送及结果未知的投递不改写、不重发。没有给真实群发消息，服务机与客户端可达性仍为 **待真实联调**。证据在本功能工作树与主检出各保留一份，校验见 [保全清单](../state/service-address-audit/preservation.json)。
 
 ## 2. 红线
 

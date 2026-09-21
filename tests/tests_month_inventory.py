@@ -82,6 +82,53 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PublishStepError):
             await month.read_grid(self.page, timeout=.2)
 
+    async def test_each_day_waits_for_scroll_triggered_loaders_before_taking_its_snapshot(self):
+        await self.page.evaluate('''() => {
+          window.visited=[];window.scrolledWhileLoading=false;
+          const scroll=Element.prototype.scrollIntoView;
+          Element.prototype.scrollIntoView=function(...args) {
+            scroll.apply(this,args);
+            if(!this.matches('[draggable="false"]')) return;
+            const index=[...document.querySelectorAll('[draggable="false"]')].indexOf(this);
+            visited.push(index);
+            if(document.getElementById('loader')) scrolledWhileLoading=true;
+            if(index!==10 || this.dataset.loaded) return;
+            this.dataset.loaded='true';
+            document.body.insertAdjacentHTML('beforeend','<div id="loader" role="progressbar"></div>');
+            setTimeout(()=>{
+              loader.removeAttribute('role');loader.setAttribute('aria-busy','true');
+              setTimeout(()=>{
+                this.insertAdjacentHTML('beforeend','<a href="/detail">8:36 AM</a>');
+                loader.remove();
+              },120);
+            },120);
+          };
+        }''')
+        rows = await month.read_grid(self.page, timeout=5)
+        self.assertEqual(rows[10]['items'][0]['time'], '8:36 AM')
+        visited = await self.page.evaluate('visited')
+        self.assertEqual(visited, list(range(35)) * (len(visited) // 35))
+        self.assertGreaterEqual(len(visited), 70)
+        self.assertFalse(await self.page.evaluate('scrolledWhileLoading'))
+
+    async def test_day_removed_during_scroll_cannot_be_reported_as_empty(self):
+        html = await self.page.content()
+        for remove_current in (False, True):
+            with self.subTest(remove_current=remove_current):
+                await self.page.set_content(html)
+                await self.page.evaluate('''removeCurrent => {
+                  const scroll=Element.prototype.scrollIntoView;
+                  Element.prototype.scrollIntoView=function(...args) {
+                    scroll.apply(this,args);
+                    const last=document.querySelector('[draggable="false"]:last-child');
+                    if(removeCurrent && this!==last) return;
+                    Element.prototype.scrollIntoView=scroll;
+                    (removeCurrent ? this : last).remove();
+                  };
+                }''', remove_current)
+                with self.assertRaises(PublishStepError):
+                    await month.read_grid(self.page, timeout=5)
+
     async def test_only_positive_recommendation_tooltip_can_skip_a_slot(self):
         item = await self.mount_slots(1)
         self.assertEqual(await month.recommendation_state(self.page, item), 'shown')
@@ -133,6 +180,10 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def test_hovered_schedule_control_is_not_an_expand_button(self):
         await self.page.locator(month.DAY_SELECTOR).nth(20).evaluate("el=>el.insertAdjacentHTML('beforeend','<button>Schedule\\u200b</button>')")
         self.assertEqual(len(await month.read_grid(self.page, timeout=10)), 35)
+        await self.page.locator(month.DAY_SELECTOR).first.evaluate(
+            "el=>el.insertAdjacentHTML('beforeend','<div role=button>See more</div>')")
+        with self.assertRaisesRegex(PublishStepError, '展开控件'):
+            await month.read_grid(self.page, timeout=5)
 
     async def test_schedule_aria_and_grid_must_agree_on_time_before_reading_remote_id(self):
         row = {'date': date(2026, 9, 15), 'cell_index': 0}

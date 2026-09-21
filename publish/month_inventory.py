@@ -81,8 +81,8 @@ async def visible_month(page):
 
 async def settled(page, timeout):
     try:
-        await expect(page.get_by_role('progressbar')).to_have_count(0, timeout=max(1, timeout * 1000))
-        await expect(page.locator('[aria-busy="true"]')).to_have_count(0, timeout=max(1, timeout * 1000))
+        loaders = page.get_by_role('progressbar').or_(page.locator('[aria-busy="true"]'))
+        await expect(loaders).to_have_count(0, timeout=max(1, timeout * 1000))
     except AssertionError as exc:
         raise bs.PublishStepError('月历仍在加载，未确认空档') from exc
 
@@ -105,13 +105,28 @@ async def read_grid(page, *, timeout=30):
         for index, day in enumerate(dates):
             cell = cells.nth(index)
             # DOM scrolling avoids background RAF throttling; loaders and two sweeps determine readiness.
-            await cell.evaluate("el => el.scrollIntoView({block:'center', behavior:'instant'})")
+            # evaluate_all snapshots avoid acquiring/disposing an ElementHandle for every cell.
+            # Still visit every day: scrolling can mount cards and loaders in an otherwise empty cell.
+            present = await cell.evaluate_all('''els => {
+              if(els.length!==1) return false;
+              els[0].scrollIntoView({block:'center', behavior:'instant'}); return true;
+            }''')
+            if not present:
+                raise bs.PublishStepError('月历日期格在读取过程中消失，请重新读取')
             await settled(page, deadline - time.monotonic())
             # Top-level descendant links represent one card; nested wrappers repeat its time.
-            items = await cell.evaluate('''el => [...el.querySelectorAll('[role="link"],a')]
-              .filter(n=>n.parentElement.closest('[role="link"],a')===el)
-              .map((n,index)=>({index,...(''' + ITEM_DATA_JS + ''')(n)}))''')
-            extra = await cell.get_by_role('button').all_inner_texts()
+            snapshot = await cell.or_(cell.get_by_role('button')).evaluate_all('''(nodes, selector) => {
+              const cells=nodes.filter(n=>n.matches(selector));
+              if(cells.length!==1) return null;
+              const el=cells[0];
+              const items=[...el.querySelectorAll('[role="link"],a')]
+                .filter(n=>n.parentElement.closest('[role="link"],a')===el)
+                .map((n,index)=>({index,...(''' + ITEM_DATA_JS + ''')(n)}));
+              return {items,extra:nodes.filter(n=>n!==el).map(n=>n.innerText)};
+            }''', DAY_SELECTOR)
+            if snapshot is None:
+                raise bs.PublishStepError('月历日期格在读取过程中消失，请重新读取')
+            items, extra = snapshot['items'], snapshot['extra']
             if any(' '.join(label.replace('\u200b', '').split()) not in {'Schedule', 'Create'} for label in extra):
                 raise bs.PublishStepError('日期格存在未处理的展开控件，月历读取不完整')
             for item in items:
