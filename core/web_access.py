@@ -1,4 +1,4 @@
-"""Persistent installation network policy shared by workers, HTTP and notifications."""
+"""Validated managed and opt-in source network policy for HTTP access."""
 from __future__ import annotations
 
 import ipaddress
@@ -100,9 +100,16 @@ class WebAccess:
 
 def load_web_access(control: Path | None = None) -> WebAccess:
     raw = str(control) if control is not None else os.environ.get('FBSCRAPER_CONTROL_DIR', '')
-    if not raw:
-        return WebAccess()
+    if raw:
+        path = Path(raw) / 'host.json'
+        error = 'invalid_managed_web_settings'
+    else:
+        source = os.environ.get('FBSCRAPER_NETWORK_CONFIG', '').strip()
+        if not source:
+            return WebAccess()
+        path = Path(source)
+        error = 'invalid_source_web_settings'
     try:
-        return WebAccess.from_mapping(json.loads((Path(raw) / 'host.json').read_text(encoding='utf-8')))
+        return WebAccess.from_mapping(json.loads(path.read_text(encoding='utf-8')))
     except (OSError, ValueError, TypeError) as exc:
-        raise ValueError('invalid_managed_web_settings') from exc
+        raise ValueError(error) from exc

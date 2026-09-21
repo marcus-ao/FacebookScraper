@@ -1,6 +1,6 @@
 # 人工操作指南
 
-**2026-09-20 试运营上线。服务机已装好，这一轮的动作是：先只读数抓取积压（[§2.1](#21-配置同群四个机器人)）→ 拉取含 `[feishu].enabled = true` 的 `main` 并重启 → 复验 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) 那张表 → 人工重新回填 FB 原图（[第 4 节](#4-为当前目标建立归档)）→ 四机器人在服务机自检（[§2.1](#21-配置同群四个机器人)）→ 写入外部看门狗 `HEARTBEAT_URL`（[§2.2](#22-外部心跳)，不是审校台网址）→ 72 小时试运行（[第 14 节](#14-阶段一真实验收监测与原帖抓取)，不带 `--process`）。** ⛔ **拉代码不会改 `control/host.json`，也不会把 Web 部署到 `10.66.4.9`；办公入口以实例 host.json 为准。** 打开内容处理另有四条硬前置（[§14.1](#141-打开内容处理抓到就翻译和出图)），真实排期还要先录发布证据（[第 8 节](#8-录制单渠道-business-suite-证据)、[第 16 节](#16-阶段三真实验收冻结排期与自动发布)）。日历、云盘镜像、标签热度本轮仍关着。
+**2026-09-20 试运营上线。服务机已装好，这一轮的动作是：先只读数抓取积压（[§2.1](#21-配置同群四个机器人)）→ 拉取含 `[feishu].enabled = true` 的 `main` 并重启 → 复验 [HANDOFF §1.1](HANDOFF.md#11-服务机现状与上线前的未完项) 那张表 → 人工重新回填 FB 原图（[第 4 节](#4-为当前目标建立归档)）→ 四机器人在服务机自检（[§2.1](#21-配置同群四个机器人)）→ 写入外部看门狗 `HEARTBEAT_URL`（[§2.2](#22-外部心跳)，不是审校台网址）→ 72 小时试运行（[第 14 节](#14-阶段一真实验收监测与原帖抓取)，不带 `--process`）。** ⛔ **源码局域网按 [§13.1](#131-源码服务机一键改址) 改址与启动；受管实例的 `control/host.json` 不随拉取更新。** 打开内容处理另有四条硬前置（[§14.1](#141-打开内容处理抓到就翻译和出图)），真实排期还要先录发布证据（[第 8 节](#8-录制单渠道-business-suite-证据)、[第 16 节](#16-阶段三真实验收冻结排期与自动发布)）。日历、云盘镜像、标签热度本轮仍关着。
 
 1–13 节是分主题的长期参考，第 14–17 节是排成顺序的现场流程。业务规则看 [FUNCTIONALITY.md](FUNCTIONALITY.md)，每个验收单元的状态看 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)，证据边界看 [HANDOFF.md](HANDOFF.md)。
 
@@ -62,7 +62,7 @@
 scripts\run_python.bat -c "import json; from pathlib import Path; from core.config import cfg; p = cfg().state_dir / 'capture_state.json'; data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}; events = [e for e in (data.get('events') or {}).values() if isinstance(e, dict) and e.get('acknowledged') is False]; scans = {e.get('scan_id') for e in events}; print('unacknowledged_events', len(events)); print('scans', len(scans))"
 ```
 
-记下事件数和扫描数。文件不存在则积压为 0。这是只读，不要改 `capture_state.json`。数完再拉代码、停旧 Web、用 `scripts\run_web.bat` 重启。
+记下事件数和扫描数。文件不存在则积压为 0。这是只读，不要改 `capture_state.json`。数完再拉代码、停旧 Web；源码局域网用 `scripts\run_web_lan.bat` 重启（§13.1）。
 
 1. 进入同一业务群 → 群设置 → 群机器人，分别打开四个自定义机器人；
 2. 核对名称为「新帖检测推送机器人」「新帖爬取推送机器人」「新帖发布推送机器人」「状态告警推送机器人」，与上表对应；
@@ -716,6 +716,7 @@ Facebook、Instagram 待审核入口的四个子分类均按原帖发布时间�
 ```powershell
 git pull --ff-only
 scripts\run_web.bat
+# 服务机局域网使用：scripts\run_web_lan.bat（见 §13.1）
 ```
 
 先正常停止旧 Web 进程，再运行启动脚本。脚本每次执行锁定依赖安装（包含构建工具）与前端构建，
@@ -740,8 +741,8 @@ scripts\run_web.bat
 ### 合并与启动
 
 - [ ] 把开发分支合并到原 `main`
-- [ ] 在原主工作区运行 `scripts\run_web.bat`
-- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 17 节）
+- [ ] 在原主工作区运行 `scripts\run_web.bat`；源码局域网使用 `scripts\run_web_lan.bat`
+- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；源码局域网读取网络 JSON（§13.1）；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 17 节）
 
 `DIST` 的目录在 `web/api/app.py` import 时确定，但每次请求仍读取其中的文件。
 旧版启动脚本只启动 Python，不会将更新后的源码变成新构建；当前脚本已补上构建步骤。
@@ -812,6 +813,75 @@ Traceback 末尾、异常类型和错误说明，遮去密钥；`Internal Server
 - [ ] 保存失败页面、console、Network 和对应测试报告
 - [ ] 核对 `/api` 404 仍是 JSON、缺失静态资源仍是 404、深链接刷新仍返回应用
 - [ ] 保留 archive/state 原样；前端整理没有改变数据格式或写入契约
+
+### 13.1 源码服务机一键改址
+
+在开发机的功能工作树中双击 [scripts/update_service_address.bat](../scripts/update_service_address.bat)，或从仓库运行：
+
+```powershell
+scripts\update_service_address.bat
+```
+
+按提示输入服务机新 IPv4。同一允许网段内保留原来源范围与端口；跨网段时必须补充允许来源 CIDR，或直接输入现场确认过前缀的 `IP/前缀`。例如 **仅当服务机实际前缀为 24 且准备允许该网段时**，可输入 `10.66.6.3/24`。IP 不能用于推断掩码；在服务机用 `Get-NetIPAddress -InterfaceAlias WLAN -AddressFamily IPv4` 核对，网卡名按实际修改。
+
+也可以传参数，先预览再写入：
+
+```powershell
+scripts\update_service_address.bat 10.66.6.3/24 --dry-run
+scripts\update_service_address.bat 10.66.6.3/24
+# 多个获准客户端网段用重复参数；不要与 IP/前缀混用。
+scripts\update_service_address.bat 10.66.6.3 --allow-client-subnet 10.66.6.0/24 --allow-client-subnet 10.66.4.0/24
+# 需要改端口时追加 --port 9876；默认保留原端口。
+```
+
+脚本校验完两份配置后更新 `ops/service-machine.network.json` 的监听、入口、端口、来源，以及 `config.toml` 中 `[feishu].base_url`；保留其他模型服务入口、注释、凭据和业务数据。相同值重复执行不写文件，配置损坏或输入错误时返回非零。普通写入失败会恢复本次已写的文件；这是开发机的配置修改，不是跨文件断电事务，仍需检查 diff 后再提交。脚本不自动提交、推送、修改 Windows IP、防火墙或受管 `host.json`。
+
+检查 `git diff -- config.toml ops/service-machine.network.json`，提交并合并到 `main`，再让服务机更新。仅推送功能分支不会进入服务机拉取的 `main`。服务机先保存所有草稿，等待抓取、模型、上传和发布工作完成，在调度器空闲后正常退出 Web 与调度器，再执行：
+
+```powershell
+git status --short --branch
+git pull --ff-only origin main
+scripts\run_web_lan.bat
+```
+
+`run_web_lan.bat` 在当前源码目录读取网络 JSON，自动采用其中的端口；它继续调用 `run_web.bat` 安装并构建前端。无效 JSON、受管终端或运行包会停止启动。需要本机开发时使用普通 `run_web.bat`；局域网环境变量仅在子进程内生效。调度器按改址前相同命令恢复，以载入新的非受管飞书入口；新生成卡片使用新地址，已发送或已冻结入队的卡片链接不会被改写。
+
+**防火墙是服务机本地状态，Git 拉取不能更新它。** 原规则若绑定旧 IP/端口/来源，首次启用或改址后，在服务机管理员 PowerShell 中核对公司认可的 Domain/Private 网络，更新专用规则。以下代码从同一 JSON 读取地址，不再手写三处 IP：
+
+```powershell
+# 在服务机仓库根目录执行；网卡名称按实际修改。
+$sourceInterface = 'WLAN'
+Get-NetIPAddress -InterfaceAlias $sourceInterface -AddressFamily IPv4
+Get-NetConnectionProfile -InterfaceAlias $sourceInterface
+# 核对 JSON 入口 IP 属于此网卡、前缀正确，网络为 DomainAuthenticated 或 Private 后继续。
+$sourcePolicy = Get-Content -LiteralPath 'ops\service-machine.network.json' -Raw | ConvertFrom-Json
+$sourceAddress = ([uri]$sourcePolicy.public_base_url).Host
+$sourceRuleName = 'FBScraper-Source-LAN-Web'
+$sourceRuleSettings = @{
+    PolicyStore = 'PersistentStore'
+    Direction = 'Inbound'
+    Action = 'Allow'
+    Enabled = 'True'
+    Protocol = 'TCP'
+    LocalPort = $sourcePolicy.web_port
+    LocalAddress = $sourceAddress
+    RemoteAddress = @($sourcePolicy.allowed_client_cidrs)
+    InterfaceAlias = $sourceInterface
+    Profile = @('Domain', 'Private')
+}
+$sourceRules = @(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop |
+    Where-Object { $_.Name -eq $sourceRuleName })
+if ($sourceRules.Count -gt 0) {
+    Set-NetFirewallRule -Name $sourceRuleName @sourceRuleSettings
+} else {
+    New-NetFirewallRule -Name $sourceRuleName -DisplayName 'FBScraper Source LAN Web' @sourceRuleSettings
+}
+Get-NetTCPConnection -LocalPort $sourcePolicy.web_port -State Listen
+```
+
+监听应为 `0.0.0.0` 与配置端口。若网卡是 Public，按公司网络政策处理，不扩大规则到所有配置文件。已有更宽规则可能影响最终有效范围，按 §17.2 人工核对；这里只更新源码专用规则。受管安装继续使用 §17 的流程。
+
+从获准客户端对配置入口 IP/端口执行 `Test-NetConnection`，然后打开 JSON 的 `public_base_url`，验证首页、历史、详情刷新、图片显示与下载、已授权样本保存后持久化，以及新生成飞书链接。TCP 不通检查实际地址、监听、防火墙和客户端网络；403 检查来源网段、Host 和 Origin；503 `access_config_invalid` 检查网络 JSON，不关闭来源校验。跨网段放行仍需公司路由支持。这些服务机及同事电脑验收均为 **待真实联调**。
 
 ## 14. 阶段一真实验收：监测与原帖抓取
 
@@ -1248,17 +1318,19 @@ scripts\run_pipeline.bat preflight
 
 ## 17. 办公局域网接入
 
+本节为受管安装流程；源码部署用 [§13.1](#131-源码服务机一键改址)。以下具体 IP、网段和网卡属于 2026-09-17 的受管操作示例，改址后不得照抄旧数值；待部署值读取 `ops/service-machine.network.json`，已安装实例以其 `control/host.json` 为准。
+
 首版面向 2–5 人同权、受控办公局域网 HTTP。用户确认暂不登录和记录个人身份，`actor: null`；获准进入入口的电脑具有相同业务能力，HTTP 不加密。业务写入仍经过已有预算、来源许可、冻结确认和版本冲突检查。本节只解决访问，不授予抓取、模型或发布权限。
 
 ### 17.1 固定入口和首次安装
 
-2026-09-17 用户确认服务机最新 IPv4 为 **10.66.4.9**；沿用此前办公网络信息：有效网卡 **WLAN**，掩码 **255.255.255.0**，网关 **10.66.4.254**。此前 `10.66.4.35` 是旧 DHCP 采样地址，不再作为当前入口；地址仍未确认保留。当前标准入口为 **http://10.66.4.9:8765**，只允许 **10.66.4.0/24**；开发机 `10.66.4.12` 在该范围内。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
+2026-09-17 用户确认的历史样例为 IPv4 **10.66.4.9**、网卡 **WLAN**、掩码 **255.255.255.0**、网关 **10.66.4.254**，当时入口为 **http://10.66.4.9:8765**，仅允许 **10.66.4.0/24**，开发机 `10.66.4.12` 在该范围内。DHCP 地址保留未确认。网关不是业务入口，已断开的以太网和虚拟网卡不用于放行。
 
 安装配置已写入 [ops/service-machine.network.json](../ops/service-machine.network.json)，仅含四个网络字段，通过 `--network-config` 读取并校验后写入 `control/host.json`。该文件只在版本库里，不随运行制品发布，不改变开发默认、不保存凭据、不覆盖业务运行模式。配置文件与逐项网络参数不可混用。
 
-上述地址仅代表用户最近确认的网络状态；DHCP 地址保留、WLAN 的 Domain/Private 网络类型、客户端同网段及 Wi-Fi 客户端隔离仍需现场核对。先由网络管理员为 `10.66.4.9` 保留 DHCP 地址，再用于持续业务；应用配置不会切换 Wi-Fi，也不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
+每次改址均重新现场核对 IP/前缀、DHCP 地址保留、Domain/Private 网络类型、客户端网段及 Wi-Fi 客户端隔离。应用配置不会切换 Wi-Fi，也不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
 
-正式安装按第 15 节选择 main 的成功制品；当前功能分支的隔离调试按第 17.6 节。网络配置取服务机上已拉取的仓库副本（同第 17.6 节），网络值已填写为本机真实信息，下面仅下载、仓库和安装目录是示例：
+正式安装按第 15 节选择 main 的成功制品；隔离调试按第 17.6 节。网络配置取服务机上已拉取并核对过的仓库副本，下面下载、仓库和安装目录按现场修改：
 
 ```powershell
 Set-Location D:\Downloads\fbscraper-windows

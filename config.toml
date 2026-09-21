@@ -217,8 +217,9 @@ snooze_default_days = 3  # 上海工作日，按周一至周五计。
 enabled = true
 # 非受管卡片里的审校台链接。⚠️ 它不绑定监听地址，git pull / 更新运行包也不会改
 # 服务机 control/host.json。受管实例读 host.json 的 public_base_url
-#（安装模板 ops/service-machine.network.json）。URL 不含凭据、查询参数或锚点。
-base_url = "http://10.66.4.9:8765"
+#（网络配置 ops/service-machine.network.json）。用 scripts/update_service_address.bat 同步两处入口。
+# URL 不含凭据、查询参数或锚点。
+base_url = "http://10.66.6.3:8765"
 scan_reports = true  # 每轮的发现与落档卡分别由检测、爬取机器人发送；无新帖不推。
 keep_delivered_days = 30  # 终态保留期；未确认投递继续保留。
 

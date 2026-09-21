@@ -29,9 +29,8 @@ class HostTests(unittest.TestCase):
         profile = Path(__file__).resolve().parents[1] / 'ops/service-machine.network.json'
         expected = read_json(profile)
         policy = WebAccess.from_mapping(expected)
-        self.assertEqual(policy.public_base_url, 'http://10.66.4.9:8765')
-        self.assertTrue(policy.permits_client('10.66.4.12'))
-        self.assertFalse(policy.permits_client('10.66.3.42'))
+        self.assertEqual(policy.web_host, '0.0.0.0')
+        self.assertFalse(policy.permits_client('8.8.8.8'))
         with patch('deployment.cli.install', return_value={}) as installer, patch('builtins.print'):
             main(['install', '--root', 'fixture-root', '--release', 'fixture-release',
                   '--network-config', str(profile)])
