@@ -1490,6 +1490,11 @@ FB Story 使用已绑定 IG 根对象的 cross_posted_entities 中唯一 TofuFBS
 核对同对象 owner 的实体类型、账号名与已录证预览作者行、原始 title 与选中 FB 标题，以及 created_at 按 UI 时区转换后的渠道分钟。
 不拿同账号/同分钟的 BusinessContent ID 或 IG 数据补齐。截图中的 `Your story`（兼容大小写差异）
 是界面标题：仅在该实体及其占用字段核验完成后记 `caption_status=unknown`、正文为空字符串、`read_status=complete`。
+只发到 Facebook 的 Story 没有 IG 根，也没有任何渠道页签，另走一条路径：`tofu_object_insights.entity.entity_id`
+与 `entity_info.entity_id` 都等于请求 content_id，发布页只以 `entity_info.lwi_info.page_id` 挂在实体上，
+页名取同一份响应里 `id` 等于该 page_id 的页节点。`supported_actions` 里的 `owner.entity_id` 是 profile 标识，
+`tofu_business_content` 的 `id` 是业务内容 ID 且整份响应不出现 content_id，两者都不能用来补身份或时刻；
+时刻按表头与日期格核对，`relationships` 记空，不得写 `cross_platform`。
 这里 complete 只表示已发布 Story 的占用已核验，不表示正文已知；普通 Feed 和排期全文回读要求不变。
 一个渠道失败时保留已核验变体，再追加未核实项；当前改动不能宣称已恢复服务机整月刷新。
 分渠道内容字段须有独立可核验的所属区域；共用页头或复用面板不能靠等 0.4 秒证明切换完成。

@@ -133,22 +133,45 @@ async def read_grid(page, *, timeout=30):
         await asyncio.sleep(min(.4, max(0, deadline - time.monotonic())))
 
 
+def unreadable_item(tooltip):
+    """An item with neither a detail link nor complete text stays a real task.
+
+    It cannot be skipped, so the refusal carries why the recommendation tooltip
+    did not settle it; without that the run only reports that time ran out.
+    """
+    return content.DetailReadError('structure_unknown', missing_fields=(
+        'item_caption', *(('recommendation_' + tooltip,) if tooltip else ())))
+
+
 def item_locator(page, row, item):
     cell = page.locator(DAY_SELECTOR).nth(row['cell_index'])
     # Same structural relationship as read_grid; no clickable navigation is included.
     return cell.locator('xpath=.//*[@role="link" or self::a][not(ancestor::*[@role="link" or self::a][ancestor::*[@draggable="false"]])]') .nth(item['index'])
 
 
-async def is_recommendation(page, item, *, timeout=1.5):
+async def recommendation_state(page, item, *, timeout=1.5):
+    """Hover the card and report which step decided it, not just whether it passed.
+
+    Only `shown` skips a slot. A placeholder that is not recognised is read as a
+    real task and fails far away in item_ready, so the step that refused has to
+    reach the diagnostic: `stale` a tooltip that never cleared, `unreachable` a
+    card that could not be hovered, `absent` a hover that opened no tooltip.
+    """
     await page.mouse.move(0, 0)
     tip = page.get_by_role('tooltip', name=RECOMMENDATION, exact=True)
     try:
         await tip.wait_for(state='hidden', timeout=timeout * 1000)
-        await item.hover(timeout=timeout * 1000)
-        await tip.wait_for(state='visible', timeout=timeout * 1000)
-        return True
     except Exception:
-        return False
+        return 'stale'
+    try:
+        await item.hover(timeout=timeout * 1000)
+    except Exception:
+        return 'unreachable'
+    try:
+        await tip.wait_for(state='visible', timeout=timeout * 1000)
+    except Exception:
+        return 'absent'
+    return 'shown'
 
 
 async def read_item(page, row, item, *, timeout=30, ui_timezone=None):
@@ -175,15 +198,26 @@ async def ready_item(page, row, item, *, timeout):
     require_same_item(item, fresh)
     spec = None
     before_hover = set()
+    tooltip = ''
     if not fresh['href']:
         spec = bs.require_readback_evidence()
         before_hover = set(await page.get_by_role('link').all_inner_texts())
-        if await is_recommendation(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic()))):
+        tooltip = await recommendation_state(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic())))
+        if tooltip == 'shown':
             return None
     previous, stable_since = None, time.monotonic()
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     while True:
-        fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, (deadline - time.monotonic()) * 1000))
+        if time.monotonic() >= deadline:
+            raise unreadable_item(tooltip)
+        try:
+            fresh = await node.evaluate(ITEM_DATA_JS, timeout=max(1, (deadline - time.monotonic()) * 1000))
+        except BrowserTimeout:
+            # A deadline-shortened evaluate reports a browser fault for what is
+            # really this item staying unreadable; it must not hide the reason.
+            if time.monotonic() < deadline:
+                raise
+            raise unreadable_item(tooltip) from None
         require_same_item(item, fresh)
         raw = ''
         if not fresh['href']:
@@ -219,8 +253,6 @@ async def ready_item(page, row, item, *, timeout):
             # read() compares this refreshed DOM snapshot with the final sweep.
             item.update(fresh)
             return node, raw
-        if time.monotonic() >= deadline:
-            raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
         await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
 
 
