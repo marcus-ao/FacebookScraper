@@ -40,7 +40,11 @@ def classify_published(observation, day, expected_accounts):
     owner = observation.get('owner', '').strip()
     if not owner:
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('owner',))
-    if owner != expected_accounts[channel]:
+    # A collaborator's post appears in this asset's planner under its own author.
+    # Occupancy is per channel slot, so a response-verified account that differs
+    # from the configured one still takes the slot and is recorded as itself.
+    # ⛔ Owners read off the DOM have no such proof and must match the config.
+    if owner != expected_accounts[channel] and not observation.get('owner_verified'):
         raise DetailReadError('identity_mismatch', placement=placement)
     remote = observation.get('remote_id', '')
     if not re.fullmatch(r'\d{6,}', remote):

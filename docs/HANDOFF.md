@@ -282,16 +282,26 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 
 | 条目 | code / 缺失 | 现状 |
 |---|---|---|
-| 09-05 11:48、09-06 02:09 Feed | `unsupported_type` / `channel_identity_adapter` | IG Feed 没有身份适配器；`preview_identity` 只实现了 Facebook Feed |
-| 09-08 23:36 Reel | 同上，`placement=reel` | IG Reel 同因 |
-| 09-15 19:17 #0 | `identity_unverified` / `channel` | 表头平台图标不是恰好一个，类型尚未确认 |
-| 09-15 19:17 #1 | `identity_unverified` / `instagram_channel_tab` | FB 单渠道 Story 被路由进跨发读取器，死等不存在的 IG 页签 |
-| 09-27 17:00、09-30 17:30 | `read_failed` / `load_timeout`，阶段 `item_ready` | 排期项连详情都没进；09-30 那条正是 §1.22 处理过的同一条 |
+| 09-05 11:48、09-06 02:09 Feed、09-08 23:36 Reel | `unsupported_type` / `channel_identity_adapter` | **已按现场结构实现 `read_media`**，离线通过，服务机待复验 |
+| 09-15 19:17 #1 | `identity_unverified` / `instagram_channel_tab` | FB 单渠道 Story 被路由进跨发读取器，死等不存在的 IG 页签。⛔ 适配器未写：该页只发 `tofu_object_insights`，且现有脱敏把 `entity_id` 丢了，没有回指 content_id 的字段可用 |
+| 09-15 19:17 #0 | `identity_unverified` / `channel` | 同格另一条，FB+IG 双图标的聚合 Post；是本来就没有渠道页签，还是页签迟挂载被提前采样，尚未区分 |
+| 09-27 17:00 | `read_failed`，阶段 `item_ready` | ⭐ 图标项是**平台按历史数据推荐的活跃时段占位**，不是真实任务（用户明确）。`is_recommendation()` 的 tooltip 原文已对不上，且推荐时刻每次读取会变 |
+| 09-30 17:30 | `load_timeout`，阶段 `item_ready` | 真实 IG 排期项；§1.22 处理过同一条，服务机上仍未通过 |
 
-⛔ **这些类型的适配器尚未编写，且不要照截图猜。** IG Feed 表头正文在现场是截断的（`…`），
-全文是否在根实体 `title` 里、合作行是否与 `Published on:` 同节点，都还没有现场证据。
+**IG Feed/Reel 的现场结构（2026-09-21，`--reload`）。** 这几条推翻了先前从截图得到的猜测：
 
-**当前边界：9 月 4 日跨发 Story 的两个渠道真实通过；完整月份待真实联调，上表五类仍为代码未完成。**
+- ⛔ **表头正文没有被截断。** 响应 `title_length` 与 DOM 三级标题长度只差 2（532/530、718/720，空白折叠），
+  可见的 `…` 是 CSS 裁剪。**不要因为截图里有省略号就去别处找全文。**
+- 身份绑定用 `data.instagram_post.id`（严格等于 content_id）同对象的 `bizlink_instagram_actor.username`。
+  ⚠️ 同一份响应里的 `viewer.username` 是登录账号，不是作者，不能拿来补。
+- 预览作者有稳定 ID `#caption-author`，两个样本都在；旁边的 `#caption` 是内嵌正文副本，不是归属证据。
+- 合作关系就写在 `Published on:` 那个节点里：`Post · Published on: … · neakasa.global in collaboration with neakasa.tech and neakasa.de`
+  （长度 39+3+14+23+27=106 闭合，Reel 同样闭合）。据此记 `collaboration`，不从别处推。
+- 这两条帖的 owner 是 `neakasa.global`，与配置的 `neakasa.de` 不同。用户决定：**如实记 `neakasa.global` 并占槽**
+  （合作内容会出现在合作者主页，确实挤占发布节奏）。`classify_published` 因此只对响应已核验的 owner 放行差异，
+  DOM 推出来的 owner 仍须等于配置账号。`occupied_for_channel` 按渠道选卡片、与账号无关，冲突逻辑不用改。
+
+**当前边界：9 月 4 日跨发 Story 两个渠道真实通过；IG Feed/Reel 适配器离线通过、服务机待复验；上表其余三类仍为代码未完成。**
 预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，基点 `c0e734c`；
 **离线通过**，逐脚本结果与限制见该工作树 [state/calendar-data-sync-fix/validation.json](../state/calendar-data-sync-fix/validation.json)，清理前须保全。
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
@@ -330,6 +340,9 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 - **读取器放弃得比响应到达还快。** 不适配的类型在表头出现后约 0.4 秒就抛 `unsupported_type`，副本随即关闭：
   当次只观察到 1 条响应且没有 `entity_info`，`PREVIEW_STRUCTURE` 六层里只剩标题本身。
   这是测量假象，不是「根实体不存在」。诊断观察者现在先被动静默等待（静默 1.5 秒、上限 10 秒）再取结构。
+- **`entity_id` 被脱敏丢掉。** `content_fields` 的 `IDS` 原先没有 `entity_id`，标量落不进任何分支就被丢弃，
+  于是 FB 单渠道 Story 看起来「没有任何字段回指 content_id」。已补进 `IDS`；`entity_identity_fields`
+  本来就按 `_id$` 保留，所以 `--verify-reader` 和 `--reload` 之前给出的结论不一致。
 
 没有渠道页签**不等于**单渠道详情——页签会迟挂载（已有回归覆盖 3 秒延迟）。工具照旧只在开头捕获一次原选择，
 捕获不到就保留初始快照并报不完整，不会声称读全，也不会去点页签。

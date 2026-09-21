@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit, urlencode
 from core.meta_json import response_documents
 
 
-IDS = {'id', 'content_id', 'post_id', 'story_id', 'media_id', 'owner_id', 'actor_id',
+IDS = {'id', 'entity_id', 'content_id', 'post_id', 'story_id', 'media_id', 'owner_id', 'actor_id',
        'page_id', 'instagram_id', 'instagram_account_id', 'facebook_id', 'fbid', 'pk',
        'story_fbid', 'legacy_fbid', 'ig_media_id', 'instagram_media_id'}
 TIMES = {'creation_time', 'created_time', 'publish_time', 'published_time', 'scheduled_time',
