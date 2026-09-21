@@ -304,7 +304,7 @@ SQLite 模式版本为 **2**（`PRAGMA user_version=2`），旧模式由本地�
 |---|---|
 | `posts` | `task_id TEXT PRIMARY KEY`；`account_dir/platform/post_id/account/owner/coauthors_json`；`created_at/archived_at/permalink/text/source_route`；`month/primary_tag/archive_relpath/folder_name/media_complete/status/row_json`。`(account_dir, post_id)` 唯一。合作方与界面扩展数据使用 JSON 文本。 |
 | `post_tags` | `task_id/tag/ordinal`；帖与 tag 组合唯一，帖与顺序组合唯一，外键指向帖子。保存业务分类，首项决定目录。原始 hashtag 保留在原文与展示投影中。 |
-| `post_media` | `(task_id, ordinal)` 主键，外键指向帖子；`kind/source_url/local_path/content_type/width/height/byte_size/sha256/storage_status`。顺序从 0 开始，保留视频元数据项。 |
+| `post_media` | `(task_id, ordinal)` 主键，外键指向帖子；`kind/source_url/local_path/content_type/width/height/byte_size/sha256/storage_status`。顺序从 0 开始，保留视频元数据项。`storage_status` 只有 `saved/missing/corrupt/metadata_only` 四个值；"为什么不是 saved" 由并列的 `storage_detail` 回答，它只随只读观察和归档核验报告走，不入库。 |
 
 时间、标识和路径使用文本；顺序、尺寸、字节数和完整性布尔值使用整数。未知首次归档时间、媒体哈希等保持 NULL，不推算历史事实。`archive_relpath` 相对归档根；媒体 `local_path` 相对账号目录。平台、账号、月份、状态、分类及稳定分页排序均有索引。
 

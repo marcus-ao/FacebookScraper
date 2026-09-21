@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass, field, asdict
@@ -84,6 +85,52 @@ def same_media_locator(old: dict, new: Media) -> bool:
                        if k not in ('oh', 'oe') and not k.startswith('_nc_'))
         return parts.scheme, parts.netloc, parts.path, query
     return locator(old.get('url')) == locator(new.url)
+
+
+def signed_url_expiry(url: str | None) -> datetime | None:
+    """Meta CDN 图片地址的失效时刻；没有 `oe` 参数时返回 None（失效时间未知）。
+
+    ⚠️ `oe` 是**十六进制**的 Unix 秒。按十进制解会得到四千年后的日期，于是任何过期地址
+    都被判成"还没过期"，归档里那张下不回来的图就永远说不清为什么下不回来。
+    参数名区分大小写，签名改一个字符就失效，所以不能靠改 `oe` 续命，只能重新取地址。
+    """
+    if not url:
+        return None
+    raw = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True)).get('oe')
+    try:
+        return datetime.fromtimestamp(int(raw, 16), timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def refresh_signed_media_urls(post: "Post", fresh: "Post") -> int:
+    """用详情里的新地址替换同一张媒体已过期的签名地址；返回换掉的张数。
+
+    只认逐位对齐的同一张：数量、顺序、kind、source_media_id 和**文件名段**都要一致。
+    ⚠️ 不能整条 URL 比——Meta 的边缘主机和 oh/oe/_nc_* 每次都变，稳定的只有文件名；
+    也不能放宽到文件名之外，`stp=` 这类尺寸/裁剪参数变了就是另一张派生图，换过去等于
+    悄悄把归档内容换成别的尺寸。对不齐就整篇返回 0，宁可这次恢复失败。
+    """
+    if len(fresh.media) != len(post.media):
+        return 0
+
+    def identity(url):
+        parts = urlsplit(url or '')
+        return (PurePosixPath(parts.path).name,
+                sorted((key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+                       if key not in ('oh', 'oe') and not key.startswith('_nc_')))
+
+    for old, new in zip(post.media, fresh.media):
+        if old.kind != new.kind or not new.url or identity(old.url) != identity(new.url):
+            return 0
+        if old.source_media_id and new.source_media_id and old.source_media_id != new.source_media_id:
+            return 0
+    changed = 0
+    for old, new in zip(post.media, fresh.media):
+        if old.url != new.url:
+            old.url = new.url
+            changed += 1
+    return changed
 
 
 _SAFE_POST_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,199}\Z")
@@ -614,34 +661,97 @@ def resolve_media_path(account_dir: Path, source: dict, media: dict) -> Path | N
     return assert_physical_direct_path(directory, directory / relative.name, kind='file', label='原图')
 
 
+# ⚠️ 与 localize/images.py 的写入侧同源：Windows 上审校台的图片预览会短暂占住原图，
+# 读到的是 WinError 32/33 而不是坏文件。这里不重试的后果不是报错，是把一张好图判成
+# "原图损坏" 并把整篇推进人工队列，而下一次读它又是好的。
+_SHARING_VIOLATION = {32, 33}
+MEDIA_READ_RETRY_SECONDS = 2.0
+
+# storage_status 只有 saved/missing/corrupt/metadata_only 四个值：SQLite 的 post_media 列、
+# 展示索引签名和审校台详情都按它取，不要加值。细分原因走并列的 storage_detail，
+# 它决定这一张能不能本地修好、还是必须重新取源、还是要人裁决。
+MEDIA_STORAGE_DETAILS = {  # 逐条都是能直接接在"第 N 张"后面的短句。
+    'ok': '已按字节核验',
+    'video_metadata_only': '视频按设计只留元数据，不算下载失败',
+    'never_downloaded': '从未下载成功，归档里没有本地路径',
+    'file_absent': '归档记了本地路径，但文件已不在',
+    'undecodable': '文件在，但不是能完整解码的图片（截断或格式异常）',
+    'digest_mismatch': '能解码，但 SHA-256 与归档记录不符',
+    'size_mismatch': '能解码，但字节数与归档记录不符',
+    'changed_while_reading': '读取期间文件一直在变',
+    'locked': '被其它进程占用，限时重试后仍读不到',
+    'read_error': '读取时发生 I/O 错误',
+    'path_rejected': '本地路径不在该帖的归档目录内',
+}
+
+
+def _read_stable_bytes(path: Path) -> bytes | None:
+    """读到一份自洽的字节。返回 None 表示重试窗口内文件一直在变——那是正在被写，不是损坏。"""
+    deadline = time.monotonic() + MEDIA_READ_RETRY_SECONDS
+    while True:
+        try:
+            before = path.stat()
+            raw = path.read_bytes()
+            after = path.stat()
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) not in _SHARING_VIOLATION or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.025)
+            continue
+        if ((before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                == (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                and len(raw) == after.st_size):
+            return raw
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.025)
+
+
 def media_storage_info(account_dir: Path, source: dict) -> list[dict]:
-    """只读观察每张原图实际字节，不以路径或 manifest 存在代替完整性。"""
+    """只读观察每张原图实际字节，不以路径或 manifest 存在代替完整性。
+
+    每项额外带 ``storage_detail``（取值见 ``MEDIA_STORAGE_DETAILS``）。缺这一层的后果
+    真实发生过：缺图、截断、哈希不符、路径越界和一次瞬时占用会报出同一句话，
+    运营看不出该重新取源、该核对档案还是什么都不用做。
+    """
     result = []
     for ordinal, media in enumerate(source.get('media') or []):
         item = dict(media, ordinal=ordinal, source_url=media.get('url'))
-        item.update(content_type=None, byte_size=None, sha256=None, storage_status='missing')
+        item.update(content_type=None, byte_size=None, sha256=None,
+                    storage_status='missing', storage_detail='never_downloaded')
         if media.get('kind') == 'video':
-            item['storage_status'] = 'metadata_only'
-        else:
-            try:
-                path = resolve_media_path(account_dir, source, media)
-                if path is not None:
-                    item['local_path'] = path.relative_to(account_dir).as_posix()
-                if path is not None and path.exists():
-                    before = path.stat()
-                    raw = path.read_bytes()
-                    after = path.stat()
+            item.update(storage_status='metadata_only', storage_detail='video_metadata_only')
+            result.append(item)
+            continue
+        try:
+            path = resolve_media_path(account_dir, source, media)
+            if path is not None:
+                item['local_path'] = path.relative_to(account_dir).as_posix()
+                item['storage_detail'] = 'file_absent'
+            if path is not None and path.exists():
+                raw = _read_stable_bytes(path)
+                if raw is None:
+                    item['storage_status'] = 'corrupt'
+                    item['storage_detail'] = 'changed_while_reading'
+                else:
                     digest = hashlib.sha256(raw).hexdigest()
                     item.update(byte_size=len(raw), sha256=digest, storage_status='corrupt')
                     facts = image_facts(raw)
-                    stable = (before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (
-                        after.st_size, after.st_mtime_ns, after.st_ctime_ns)
-                    if (facts and stable and len(raw) == after.st_size
-                            and (not media.get('sha256') or media['sha256'] == digest)
-                            and (media.get('byte_size') is None or media['byte_size'] == len(raw))):
-                        item.update(facts, storage_status='saved')
-            except (ArchivePathError, OSError):
-                item.update(content_type=None, byte_size=None, sha256=None, storage_status='corrupt')
+                    if not facts:
+                        item['storage_detail'] = 'undecodable'
+                    elif media.get('sha256') and media['sha256'] != digest:
+                        item['storage_detail'] = 'digest_mismatch'
+                    elif media.get('byte_size') is not None and media['byte_size'] != len(raw):
+                        item['storage_detail'] = 'size_mismatch'
+                    else:
+                        item.update(facts, storage_status='saved', storage_detail='ok')
+        except ArchivePathError:
+            item.update(content_type=None, byte_size=None, sha256=None,
+                        storage_status='corrupt', storage_detail='path_rejected')
+        except OSError as exc:
+            item.update(content_type=None, byte_size=None, sha256=None, storage_status='corrupt',
+                        storage_detail='locked' if getattr(exc, 'winerror', None) in _SHARING_VIOLATION
+                        else 'read_error')
         result.append(item)
     return result
 

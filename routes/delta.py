@@ -28,7 +28,7 @@ from core.monitor_access import AccessController, AccessDenied
 from core.monitoring import MonitoringJournal
 from core.notify import notify
 from core.parse import extract, merge_post, partition_by_owner, walk
-from core.store import Archive, Media, Post
+from core.store import Archive, Media, Post, refresh_signed_media_urls, signed_url_expiry
 from core.paid_model import FileLock
 
 PLATFORMS = ("facebook", "instagram")
@@ -593,10 +593,32 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
     return res
 
 
+def _images_need_fresh_urls(arc: Archive, post: Post) -> bool:
+    """还缺图，且它的地址已经**确定**过期——只有这时候再取一次才有意义。
+
+    失效时刻未知（地址里没有 `oe`）时按仍可用处理：宁可白下一次，也不为一个猜测去开详情。
+    """
+    now = utcnow()
+    for media in post.media:
+        if media.kind != 'image' or arc.reusable_media(post, media.url) is not None:
+            continue
+        expiry = signed_url_expiry(media.url)
+        if expiry is not None and expiry <= now:
+            return True
+    return False
+
+
 async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=None):
-    """一篇一次尝试：只有来源列表不足才打开详情，已失败的下载由人工决定恢复。"""
+    """一篇一次尝试：只有来源列表不足才打开详情，已失败的下载由人工决定恢复。
+
+    ⚠️ 人工恢复是仅有的例外。归档里存的是 Meta 的签名地址，`oe` 到点之后再请求只会
+    拿到 403 URL signature expired，而签名改一个字符就失效，续不了期——所以人明确
+    要求恢复某篇时，允许开一次详情换回新地址，否则那篇永远修不好。自动轮次不变，
+    仍然「下载失败不触发详情」。
+    """
     reason, archived = '', False
     source_visit = False
+    stale_urls = dcfg.run_kind == 'recovery' and _images_need_fresh_urls(arc, post)
     if lifecycle:
         lifecycle.started(post, utcnow())
     def guard():
@@ -604,9 +626,10 @@ async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=Non
             dcfg.access.check(platform)
     try:
         guard()
-        if post.source_media_complete is not True and dcfg.access:
+        if (post.source_media_complete is not True or stale_urls) and dcfg.access:
             if not post.permalink:
-                reason = '来源媒体列表不完整且没有可用的源帖链接'
+                reason = ('缺图且没有可用的源帖链接，无法换取新的图片地址' if stale_urls
+                          else '来源媒体列表不完整且没有可用的源帖链接')
             else:
                 parsed = urlsplit(post.permalink)
                 allowed = {'instagram': {'www.instagram.com', 'instagram.com'},
@@ -633,6 +656,9 @@ async def capture_post(ctx, platform, account, arc, dcfg, post, *, lifecycle=Non
                     accepted, rejected = partition_by_owner([merged], account)
                     if accepted:
                         post = merged
+                        # merge 按完整性择优，两份都完整时留的是旧的那份——过期地址正在这里。
+                        if stale_urls and refresh_signed_media_urls(post, match):
+                            print('    ~ %s 已用详情里的新图片地址替换过期签名' % post.post_id)
                     else:
                         arc.record_rejected(rejected)
                         dcfg.source_failures.append('详情作者证据与主页不匹配')
@@ -869,6 +895,8 @@ def _parse_args(argv):
     p.add_argument("--initialize-baseline", action="store_true")
     p.add_argument("--recover-access", action="store_true")
     p.add_argument("--recover-post", metavar="PLATFORM:ACCOUNT:POST_ID", help="人工明确执行该异常项一次采集")
+    p.add_argument("--retire-stale-manual", action="store_true",
+                   help="把当轮从未开始尝试的旧人工项退回 deferred；不触发任何平台请求")
     p.add_argument("--expected-revision", type=int)
     p.add_argument("--reason", default="")
     return p.parse_args(argv)
@@ -1019,6 +1047,14 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
                 return 0
             if args.initialize_access:
                 print(json.dumps(access.initialize(args.reason), ensure_ascii=False, indent=2))
+                return 0
+            if args.retire_stale_manual:
+                if args.expected_revision is None:
+                    raise AccessDenied("退役旧人工项需 --expected-revision 与 --reason；先 --status 复核")
+                result = CaptureState(path.parent).retire_stale_manual(args.expected_revision, args.reason)
+                print('[i] 退役从未开始的旧人工项 %d 条 · 保留真实失败 %d 条'
+                      % (len(result['retired']), len(result['kept_manual'])))
+                print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0
             if args.recover_access or args.reset_failures:
                 if args.expected_revision is None:

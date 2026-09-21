@@ -4,13 +4,69 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from core import paid_model
 from core.parse import from_iphone_struct, is_iphone_struct, on_timeline_of, walk
-from core.store import (Archive, _atomic_write_text, archive_write_lock,
-                        assert_physical_direct_path, media_storage_info, read_post_truth)
+from core.store import (MEDIA_STORAGE_DETAILS, Archive, _atomic_write_text, archive_write_lock,
+                        assert_physical_direct_path, media_storage_info, read_post_truth,
+                        signed_url_expiry)
+
+# 三类处置完全不同：重新取源要平台访问额度，裁决要人看两份证据，瞬时的什么都不用做。
+# 合成一句话的后果真实发生过——每一轮都报同一句，运营分不出哪篇该动、哪篇本来就没事。
+IMAGE_PROBLEM_ACTIONS = {
+    'never_downloaded': ('refetch', '须重新取源'),
+    'file_absent': ('refetch', '须重新取源'),
+    'undecodable': ('refetch', '须重新取源'),
+    'digest_mismatch': ('adjudicate', '归档记录与文件冲突，须人工裁决'),
+    'size_mismatch': ('adjudicate', '归档记录与文件冲突，须人工裁决'),
+    'changed_while_reading': ('transient', '不用处理，下一轮自然重新观察'),
+    'locked': ('transient', '先关掉占着它的程序，审校台的图片预览就会占用'),
+    'read_error': ('local', '本地磁盘或权限问题，先修好再核验'),
+    'path_rejected': ('local', '归档路径越界，须人工核对目录'),
+}
+
+
+class ImagesUnusable(ValueError):
+    """原图不能当完整性依据；`problems` 是逐张结论，调用方据此决定下一步而不是重读文件。"""
+
+    def __init__(self, message: str, problems: list[dict]):
+        super().__init__(message)
+        self.problems = problems
+
+
+def unusable_images(observed: list[dict]) -> list[dict]:
+    """逐张列出不能当原图用的图片及其处置方向；视频的 metadata_only 不在其中。"""
+    problems = []
+    for item in observed:
+        if item['kind'] != 'image' or item['storage_status'] == 'saved':
+            continue
+        detail = item['storage_detail']
+        action, _advice = IMAGE_PROBLEM_ACTIONS[detail]
+        problem = {'ordinal': item['ordinal'], 'status': item['storage_status'], 'detail': detail,
+                   'action': action, 'explain': MEDIA_STORAGE_DETAILS[detail]}
+        if action == 'refetch':
+            expiry = signed_url_expiry(item.get('source_url'))
+            # 归档里那个签名地址过期之后再请求只会拿到 403，直接重下永远失败。
+            problem['source_url_expired'] = None if expiry is None else expiry <= datetime.now(timezone.utc)
+            problem['source_url_expires_at'] = None if expiry is None else expiry.strftime('%Y-%m-%dT%H:%M:%SZ')
+        problems.append(problem)
+    return problems
+
+
+def image_problem_reason(problems: list[dict]) -> str:
+    """把逐张结论写成运营看得懂、且能据此决定下一步的一句话。"""
+    parts = []
+    for problem in problems:
+        _action, advice = IMAGE_PROBLEM_ACTIONS[problem['detail']]
+        if problem.get('source_url_expired'):
+            advice += '，且归档里的图片地址已于 %s 过期，须先刷新详情再取' % problem['source_url_expires_at']
+        elif problem.get('source_url_expired') is False:
+            advice += '，归档里的图片地址仍在有效期内'
+        parts.append('第 %d 张%s —— %s' % (problem['ordinal'] + 1, problem['explain'], advice))
+    return '原图不可用：' + '；'.join(parts) + '；未修改完整性'
 
 
 def archive_report(arc: Archive, capture_items=None) -> dict:
@@ -29,9 +85,10 @@ def archive_report(arc: Archive, capture_items=None) -> dict:
         try:
             source, _ = read_post_truth(arc.base, indexed)
             observed = media_storage_info(arc.base, source)
+            unusable = unusable_images(observed)
             if source.get('source_media_complete') is False:
                 problems.append('source_unconfirmed')
-            if any(m['kind'] == 'image' and m['storage_status'] != 'saved' for m in observed):
+            if unusable:
                 problems.append('images_unavailable')
             if indexed.get('media_complete') != source.get('media_complete'):
                 problems.append('index_mismatch')
@@ -40,7 +97,11 @@ def archive_report(arc: Archive, capture_items=None) -> dict:
             result.update(post_media_complete=source.get('media_complete'),
                           source_media_complete=source.get('source_media_complete'),
                           source_media_count=source.get('source_media_count'),
-                          media_files=[{'kind': m['kind'], 'status': m['storage_status']} for m in observed])
+                          media_files=[{'kind': m['kind'], 'status': m['storage_status'],
+                                        'detail': m['storage_detail']} for m in observed])
+            if unusable:
+                result['image_problems'] = unusable
+                counts.update('image_' + problem['detail'] for problem in unusable)
             if problems:
                 counts['metadata_only_videos'] += sum(m['kind'] == 'video' for m in observed)
         except (OSError, ValueError) as exc:
@@ -54,6 +115,9 @@ def archive_report(arc: Archive, capture_items=None) -> dict:
             'archive_incomplete': len(incomplete),
             **{key: counts[key] for key in ('source_unconfirmed', 'images_unavailable',
                 'metadata_only_videos', 'index_mismatch', 'archive_unreadable')},
+            # 汇总按细分原因分开数：要重新取源的、要人裁决的和瞬时的不能算成同一堆。
+            'image_problem_counts': {key: value for key, value in sorted(counts.items())
+                                     if key.startswith('image_')},
             'incomplete_items': incomplete}
 
 
@@ -83,8 +147,9 @@ def _repair(account_dir, post_id, evidence, *, apply):
             raise ValueError('归档索引中没有指定帖子；不创建新帖')
         source, directory = read_post_truth(account_dir, indexed)
         observed = media_storage_info(account_dir, source)
-        if any(m['kind'] == 'image' and m['storage_status'] != 'saved' for m in observed):
-            raise ValueError('原图缺失、损坏或与归档校验值不一致；未修改完整性')
+        problems = unusable_images(observed)
+        if problems:
+            raise ImagesUnusable(image_problem_reason(problems), problems)
         already_complete = (source.get('source_media_complete') is True
                             and source.get('media_complete') is True
                             and source.get('source_media_count') == len(observed))
@@ -182,5 +247,10 @@ def reconcile_instagram(arc: Archive) -> dict:
             report = _repair(arc.base, post_id, evidence[post_id], apply=True)
             result['repaired'].append(report)
         except (OSError, ValueError, paid_model.FileLockBusy) as exc:
-            result['unresolved'].append({'post_id': post_id, 'reason': str(exc)})
+            entry = {'post_id': post_id, 'reason': str(exc)}
+            if isinstance(exc, ImagesUnusable):
+                # 逐张结论随报告走，运营与后续工具都不必再去反推那句话是什么意思。
+                entry['image_problems'] = exc.problems
+                entry['actions'] = sorted({problem['action'] for problem in exc.problems})
+            result['unresolved'].append(entry)
     return result

@@ -176,6 +176,25 @@ scripts\run_python.bat -m routes.delta --status --platform instagram
 
 检查 `archive_incomplete`、`source_unconfirmed`、`images_unavailable`、`metadata_only_videos`、`index_mismatch` 和 `incomplete_items`。计数可以重叠，视频数是待核验帖内的视频项数。`not_in_capture_state` 表示历史归档尚未登记为监测采集项，不能使用 `--recover-post`。没有 capture、文件损坏、同帖证据矛盾或实际图片缺失时，程序保留原记录并输出原因；重复运行不会绕过证据要求，也不会触发额外详情访问。`--status` 和 `--dry-run` 不执行修复。
 
+#### 保留待核验的帖子该怎么处理
+
+“原图不可用”按原因分开报，因为三类的处置完全不同。`image_problem_counts` 是全账号汇总，`incomplete_items[].media_files[].detail` 和保留项的 `image_problems` 是逐张结论，`actions` 是这一篇需要哪几类动作。
+
+| `detail` | `action` | 你要做的事 |
+|---|---|---|
+| `never_downloaded` / `file_absent` / `undecodable` | `refetch` | 原图得重新取。报告里 `source_url_expired` 为 `true` 时**不要直接重下**，归档里那个地址已经过期，只会拿到 403；按下面的人工恢复走，它会开一次详情换新地址 |
+| `digest_mismatch` / `size_mismatch` | `adjudicate` | 文件是好图，但和归档记的哈希/字节数对不上。**先别动**：比对 `post.json.before-*.bak` 与当前文件，确认是谁改的再决定 |
+| `changed_while_reading` / `locked` | `transient` | 什么都不用做。`locked` 通常是审校台正在预览这张图占住了文件，关掉那一页下一轮自己就好 |
+| `read_error` / `path_rejected` | `local` | 本地磁盘、权限或归档目录的问题，先修好再核验 |
+
+只有 `refetch` 这一类需要占用平台访问配额，且必须由人显式发起：
+
+```powershell
+scripts\run_python.bat -m routes.delta --recover-post instagram:<账号>:<post_id> --expected-revision <N> --reason "补回过期地址的原图"
+```
+
+⚠️ 它只对已登记为采集项（`--status` 里 `capture_status` 不是 `not_in_capture_state`）且状态为 `manual` 的帖有效。地址确已过期时这一次会开详情换新地址；没有 `oe` 参数、失效时刻未知的按仍可用处理，不开详情。
+
 修复后的列表/详情从真相读取，SQLite 在展示入口按现有刷新机制更新（历史页可能保留短时缓存）。即使真相已写入而 manifest 中断，下一次普通监测也能继续同步；原图与备份无需移动或删除。单帖工具 §4.1 仍可用于明确指定证据的定点操作，并支持 `media_type=2` 的明确单视频。
 
 本机只用隔离归档及构造 capture 验证自动处理；服务机的 7 篇是否都有可用证据、实际修复数量以服务机输出为准。
@@ -982,6 +1001,16 @@ scripts\run_python.bat -m routes.delta --recover-post PLATFORM:ACCOUNT:POST_ID -
 ```
 
 访问恢复不清配额/历史；单帖恢复只尝试一次并服从同一护栏。Web `POST /api/runtime/capture/recover` 含 key/version/reason。`monitor/recover` 含 version/reason 与可选 platform，且不访问平台。版本冲突先重读。
+
+**人工队列里混着 `23c719d` 之前留下的陈旧项。** 那一版的 `interrupt()` 把当轮**尚未开始**的候选也打成 `manual`，而 `begin()` 永远跳过 `manual`，于是它们既不会被自动重试、也不会自己消失——服务机 2026-09-21 的 37 条里有 33 条是这一类。现在的代码已经把未开始的记成 `deferred`（会自愈），只差把旧账清掉：
+
+```powershell
+scripts\run_python.bat -m routes.delta --retire-stale-manual --expected-revision <N> --reason "23c719d 之前的漏判"
+```
+
+只退役「没有 `attempt_started_at` 且不是人工恢复授权」的项，判据与现在的 `interrupt()` 完全一致；⛔ **真正尝试过并失败的项一条都不动**，投递事件账本也不改写。退役后状态变 `deferred`，命令会同时列出退役清单和保留的真实失败项。
+
+⚠️ 这一步**不产生任何平台请求**：基线外的旧帖在候选阶段就被 `outside_baseline` 拦下，已归档且无变化的帖 `should_append()` 为假。真要重新采集，仍然只能逐帖走上面的 `--recover-post`。
 
 本地落点也要核（云盘本轮不做，没有可比对的远端）：
 
