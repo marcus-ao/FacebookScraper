@@ -277,7 +277,21 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 部分结果单独保存 `partial_inventory/partial_observed_at`；此前完整数据与观测时间保留。
 槽位判断、排期回读和远端删除登记必须使用决策完整的数据。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
 
-**当前边界：该条 IG 生产读取真实通过；直接关联 FB Story 及完整月份待真实联调，其它未覆盖类型仍为代码未完成。**
+**2026-09-21 服务机现场：9 月 4 日两个渠道已真实通过（`complete=true`），整月仍 partial，7 条未核实。**
+日期格与条目本身读全了（`2026-08-30`–`2026-10-03`、`grid_complete`、`entries_complete` 均 true），缺口按类型分五类：
+
+| 条目 | code / 缺失 | 现状 |
+|---|---|---|
+| 09-05 11:48、09-06 02:09 Feed | `unsupported_type` / `channel_identity_adapter` | IG Feed 没有身份适配器；`preview_identity` 只实现了 Facebook Feed |
+| 09-08 23:36 Reel | 同上，`placement=reel` | IG Reel 同因 |
+| 09-15 19:17 #0 | `identity_unverified` / `channel` | 表头平台图标不是恰好一个，类型尚未确认 |
+| 09-15 19:17 #1 | `identity_unverified` / `instagram_channel_tab` | FB 单渠道 Story 被路由进跨发读取器，死等不存在的 IG 页签 |
+| 09-27 17:00、09-30 17:30 | `read_failed` / `load_timeout`，阶段 `item_ready` | 排期项连详情都没进；09-30 那条正是 §1.22 处理过的同一条 |
+
+⛔ **这些类型的适配器尚未编写，且不要照截图猜。** IG Feed 表头正文在现场是截断的（`…`），
+全文是否在根实体 `title` 里、合作行是否与 `Published on:` 同节点，都还没有现场证据。
+
+**当前边界：9 月 4 日跨发 Story 的两个渠道真实通过；完整月份待真实联调，上表五类仍为代码未完成。**
 预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，基点 `c0e734c`；
 **离线通过**，逐脚本结果与限制见该工作树 [state/calendar-data-sync-fix/validation.json](../state/calendar-data-sync-fix/validation.json)，清理前须保全。
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
@@ -308,6 +322,17 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 以及读取器那段区域搜索每一层看到的紧致文本节点（标签、三层祖先内有无图像、文字长度，账号名按既有白名单才给原文）。
 上限 6 层 × 20 个节点。⚠️ **这条是为了让一次真实运行就能定位预览判据，而不是再照截图猜第六个选择器**；
 失败时它和 `READER_RESULT` 在同一份日志里，别只回传结论。
+
+⛔ **取证前先确认工具本身没在饿死证据。** 2026-09-21 踩到两处，都会让现场读起来像「页面没有这些东西」：
+
+- **指标页签也是 `role=tab`。** `Total / Audience / Followers` 会被计入，单渠道详情因此被判成「渠道选择不明」而直接 STOP，
+  普通模式和 `--reload` 都进不去。现在只统计 `Total performance / Facebook / Instagram` 三个名字。
+- **读取器放弃得比响应到达还快。** 不适配的类型在表头出现后约 0.4 秒就抛 `unsupported_type`，副本随即关闭：
+  当次只观察到 1 条响应且没有 `entity_info`，`PREVIEW_STRUCTURE` 六层里只剩标题本身。
+  这是测量假象，不是「根实体不存在」。诊断观察者现在先被动静默等待（静默 1.5 秒、上限 10 秒）再取结构。
+
+没有渠道页签**不等于**单渠道详情——页签会迟挂载（已有回归覆盖 3 秒延迟）。工具照旧只在开头捕获一次原选择，
+捕获不到就保留初始快照并报不完整，不会声称读全，也不会去点页签。
 
 ## 2. 红线
 

@@ -106,8 +106,24 @@ async def wait_view(page, channel, *, timeout):
 
 class ReaderObserver(ResponseEvidence):
     """Response identity plus one bounded view of the region the reader searched."""
+    async def settle(self, *, quiet=1.5, limit=10):
+        """Keep listening passively; issue no request and touch nothing."""
+        deadline = monotonic_time.monotonic()+limit
+        seen, since = len(self.tasks), monotonic_time.monotonic()
+        while monotonic_time.monotonic() < deadline:
+            await asyncio.sleep(.25)
+            if len(self.tasks) != seen:
+                seen, since = len(self.tasks), monotonic_time.monotonic()
+            elif monotonic_time.monotonic()-since >= quiet:
+                return
+
     async def finish(self):
+        # ⚠️ An unsupported type makes the reader give up ~0.4s after the header,
+        # while the first responses and the preview are still in flight. Without
+        # this wait the evidence reads as "no root entity, empty preview", which
+        # is an artifact of the measurement, not a fact about the page.
         try:
+            await self.settle()
             structure = await asyncio.wait_for(self.page.evaluate(PREVIEW_STRUCTURE, sorted(NAMES)), 8)
             self.emit({'PREVIEW_STRUCTURE': structure})
         except Exception as exc:
@@ -169,15 +185,21 @@ async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, rel
     if verify_reader:
         return await verify_detail_reader(page, day, clock, timeout=timeout)
     names = ('Total performance', 'Facebook', 'Instagram')
+    # ⚠️ The metric tabs (Total/Audience/Followers) are role=tab as well. Counting
+    # every tab made a single-channel detail look like an unreadable channel
+    # selection and refused to inspect exactly the types that still need evidence.
+    channel_tabs = sum([await page.get_by_role('tab', name=name, exact=True).count() for name in names])
     selected = [name.strip() for name in await page.get_by_role('tab', selected=True).all_inner_texts()
                 if name.strip() in names]
     original = selected[0] if len(selected) == 1 else None
-    if original is None and await page.get_by_role('tab').count():
+    if original is None and channel_tabs:
         print('STOP: selected channel tab is unknown; no tabs were changed', flush=True)
         return False
     original_url = urlsplit(page.url)
     original_id = parse_qs(original_url.query).get('content_id', [])
-    if reload and (original is None or original_url.path.rstrip('/') != '/latest/insights/object_insights'
+    # Without channel tabs there is no selection to restore, so reload stays safe.
+    if reload and ((original is None and channel_tabs)
+                   or original_url.path.rstrip('/') != '/latest/insights/object_insights'
                    or len(original_id) != 1 or not re.fullmatch(r'\d{6,30}', original_id[0])):
         print('STOP: reload requires one identified detail and a restorable channel selection', flush=True)
         return False
@@ -200,6 +222,9 @@ async def inspect(browser, *, day, clock, kind, timeout=30, responses=False, rel
                 evidence.view = view
             if channel:
                 if original is None:
+                    # Channel tabs also mount late, so their absence at sampling
+                    # time cannot prove a single-channel detail. The initial view
+                    # is still captured above; it just is not a complete reading.
                     print('SKIP: no initial channel selection; tabs left unchanged', flush=True)
                     complete = False
                     break
