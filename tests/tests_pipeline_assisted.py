@@ -293,7 +293,10 @@ with tempfile.TemporaryDirectory() as folder:
 
 
 print("\n[6] 北京槽位跨美西 DST 窗口仍正确")
-rules = A.publish_rules()
+# ⚠️ UI 时区在这里固定成美西，不跟部署配置走。部署的 `ui_timezone` 已是
+# `Asia/Shanghai`（无夏令时、且与业务时区重合），照配置跑则回拨分支永远不触发、
+# UI 月界永远等于北京月界，这一组会全绿却什么都没验到。槽位小时仍来自配置。
+rules = replace(A.publish_rules(), ui_timezone="America/Los_Angeles")
 slot_hours = {slot.hour for slot in rules.slots}
 # 北京不切夏令时，槽位小时固定；会动的是它在美西 UI 里显示成几点。
 for when, want_hour in [
