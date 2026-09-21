@@ -566,6 +566,8 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
    `placement=story`、`caption_status=unknown`、`caption_length=0`、`read_status=complete`，本条截图时间同为 18:39。
    FB 正文 unknown 是预期展示，表示 `Your story` 未被当成正文；不表示身份或占用未知。
    若末尾为 `PARTIAL`、complete=false 或退出码 2，保留整份日志发回，先不刷新整月，不连续重跑。
+   日志里还有一条 `PREVIEW_STRUCTURE`，记录读取器在 Feed preview 区域每一层看到的节点结构；
+   预览类字段（如 `facebook_story_preview_owner`）失败时，定位就靠它，务必一并回传。
    尤其 `time_mismatch` 需核对同一个 FB 对象的 created_at，不能拿 IG 或后台 BusinessContent 时间补齐。
    `STOP: matching detail pages: 0` 仅表示没匹配当前打开的详情；2 或更多表示不唯一。
    发布锁忙时等待正在运行的操作结束，不删除锁文件。

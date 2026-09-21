@@ -16,7 +16,7 @@ from core.console import force_utf8
 from publish.journal import PublishOperationLock
 from publish.month_inventory import read_item_detail
 from publish.planner_content import DetailReadError
-from tools.calendar_detail_response import ResponseEvidence
+from tools.calendar_detail_response import NAMES, PREVIEW_STRUCTURE, ResponseEvidence
 
 
 SNAPSHOT = r'''() => {
@@ -104,10 +104,21 @@ async def wait_view(page, channel, *, timeout):
         await asyncio.sleep(.2)
 
 
+class ReaderObserver(ResponseEvidence):
+    """Response identity plus one bounded view of the region the reader searched."""
+    async def finish(self):
+        try:
+            structure = await asyncio.wait_for(self.page.evaluate(PREVIEW_STRUCTURE, sorted(NAMES)), 8)
+            self.emit({'PREVIEW_STRUCTURE': structure})
+        except Exception as exc:
+            self.emit({'PREVIEW_STRUCTURE': 'unreadable', 'read_error_type': type(exc).__name__})
+        await super().finish()
+
+
 async def verify_detail_reader(page, day, clock, *, timeout):
     """Run the production detail entry point on one temporary copy; leave the source intact."""
     def observe(detail):
-        observer = ResponseEvidence(detail, emit, identity_only=True)
+        observer = ReaderObserver(detail, emit, identity_only=True)
         observer.start()
         return observer
 

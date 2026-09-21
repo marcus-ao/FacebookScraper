@@ -7,6 +7,26 @@ from zoneinfo import ZoneInfo
 
 from publish.planner_content import DetailReadError, classify_published, LABELS, NO_TEXT
 
+# The tightest node carrying exactly the owner name, beside an avatar. Account
+# names arrive as a bare text node or wrapped in one span, so an element-leaf
+# test alone misses them; compare against the children instead.
+PREVIEW_OWNER = r'''(label, owner) => {
+  const visible=n=>!!n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
+  const own=n=>(n.innerText||'').trim();
+  const beside=n=>{
+    for(let row=n.parentElement,up=0;row&&up<3;row=row.parentElement,up++)
+      if([...row.querySelectorAll('img,svg,image,[role="img"]')].some(visible)) return true;
+    return false;
+  };
+  for(let root=label.parentElement,depth=0;root&&depth<6;root=root.parentElement,depth++) {
+    if(root.querySelector('[role="tab"]') || [...root.querySelectorAll('[role="heading"],h1,h2,h3')]
+        .some(n=>n!==label && /Published on:/.test(n.parentElement?.innerText||''))) break;
+    if([...root.querySelectorAll('div,span')].some(n=>visible(n) && own(n)===owner
+        && ![...n.children].some(c=>own(c)===owner) && beside(n))) return true;
+  }
+  return false;
+}'''
+
 
 async def header_snapshot(page):
     labels = [node for node in await page.get_by_text(re.compile(r'Published on:')).all()
@@ -161,23 +181,17 @@ async def read_facebook_story(page, row, expected_accounts, evidence, *, ui_time
         ready = (await preview.count() == 1 and await preview.is_visible() and
                  not any([await node.is_visible() for node in await loading.all()]))
         if ready and identity:
-            # The recorded FB Story author row has an avatar IMG beside a DIV
-            # account name. Plain mentions in an embedded post are not authors.
-            ready = await preview.evaluate(r'''(label, owner) => {
-              const visible=n=>!!n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
-              for(let root=label.parentElement,depth=0;root&&depth<6;root=root.parentElement,depth++) {
-                if(root.querySelector('[role="tab"]') || [...root.querySelectorAll('[role="heading"],h1,h2,h3')]
-                    .some(n=>n!==label && /Published on:/.test(n.parentElement.innerText))) break;
-                const authors=[...root.querySelectorAll('div')].filter(visible).flatMap(row=>{
-                  const children=[...row.children].filter(visible);
-                  if(!children.some(n=>n.tagName==='IMG')) return [];
-                  return children.filter(n=>n.tagName==='DIV' && !n.querySelector('div,img,video') && n.innerText.trim())
-                    .map(n=>n.innerText.trim());
-                });
-                if(authors.length) return authors.length===1 && authors[0]===owner;
-              }
-              return false;
-            }''', identity['owner'])
+            # ⚠️ A cross-posted Story preview nests the shared card with its own
+            # account row, so this owner is never the only name in the region:
+            # requiring a unique author can never pass on the live page.
+            # What separates the channels is that the Instagram view keeps its
+            # own `#instagram_story_preview_frame`, while this owner has an
+            # avatar row of its own. Mentions inside the embedded caption are
+            # not tightest-node matches beside an avatar.
+            ready = not any([await node.is_visible()
+                             for node in await page.locator('#instagram_story_preview_frame').all()])
+            if ready:
+                ready = await preview.evaluate(PREVIEW_OWNER, identity['owner'])
             if not ready:
                 last_error = DetailReadError('identity_unverified', placement='story', missing_fields=('facebook_story_preview_owner',))
         selected = await tab.count() == 1 and await tab.get_attribute('aria-selected') == 'true'

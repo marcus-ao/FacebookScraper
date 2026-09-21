@@ -17,6 +17,36 @@ KINDS = {'__typename', 'media_type', 'content_type', 'platform', 'status', 'is_p
          'is_story', 'is_video', 'is_reel', 'is_crosspost', 'is_crossposted'}
 NAMES = {'Neakasa Deutschland', 'neakasa.de', 'neakasa.global', 'neakasa.tech'}
 
+# Five preview selectors in a row were written from screenshots and each failed on
+# the server. Report what the reader's own region search sees, so one run decides
+# instead of the next guess. Bounded to 6 levels x 20 nodes; text only when the
+# account is already allowlisted, otherwise its length.
+PREVIEW_STRUCTURE = r'''(names) => {
+  const visible=n=>!!n.getClientRects().length&&getComputedStyle(n).visibility!=='hidden';
+  const own=n=>(n.innerText||'').trim();
+  const headings=()=>[...document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')].filter(visible);
+  const frames=[...document.querySelectorAll('#instagram_story_preview_frame')];
+  const label=headings().filter(n=>own(n)==='Feed preview');
+  const result={preview_headings:label.length, instagram_frames:frames.length,
+    instagram_frames_visible:frames.filter(visible).length,
+    loading_preview:headings().some(n=>/^Loading preview/i.test(own(n))), levels:[]};
+  if(label.length!==1) return result;
+  for(let root=label[0].parentElement,depth=0;root&&depth<6;root=root.parentElement,depth++) {
+    const stop=!!root.querySelector('[role="tab"]');
+    const nodes=[...root.querySelectorAll('div,span')].filter(n=>visible(n)&&own(n)
+        &&![...n.children].some(c=>own(c)===own(n))).slice(0,20).map(n=>{
+      let image=false;
+      for(let row=n.parentElement,up=0;row&&up<3&&!image;row=row.parentElement,up++)
+        image=[...row.querySelectorAll('img,svg,image,[role="img"]')].some(visible);
+      return {tag:n.tagName, text:names.includes(own(n))?own(n):null,
+              text_length:own(n).length, image_within_3:image};
+    });
+    result.levels.push({depth, stops_at_tabs:stop, tightest_nodes:nodes});
+    if(stop) break;
+  }
+  return result;
+}'''
+
 
 def safe_field(key):
     return bool(re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]{0,79}', key)) and not re.search(

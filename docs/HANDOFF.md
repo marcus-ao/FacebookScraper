@@ -248,9 +248,16 @@ FB 的身份补充和正文未知规则见下方单条生产验证；不会借�
 这是直接实体关系；不是此前单独 BusinessContent 响应中的 ID，也不解码 opaque story_id 来猜身份。
 同一 FB 对象给出 created_at 整数和 owner.title，但日志只保留类型/长度，不能声称具体秒值或原始标题已从该日志核对。
 运行期逐项检查实际字段，并将 FB 自己的时间按 UI 时区核对所选 FB 页头，不复制 IG 的分钟。
-FB 预览作者限定在 Feed preview 区域内已录证的 IMG 头像与相邻 DIV 账号行；必须唯一且与响应 owner 一致。
-仅预览标题存在或 Loading preview 消失不足以证明 FB 预览已切换，残留 IG/其它账号仍为未完成。
-现有日志只记录标题和作者各自三层祖先，共同祖先的精确距离未保存；有界区域搜索能否命中仍待单条真实复验。
+⛔ **跨发的 Story 预览里嵌着被分享的原卡片，它自带账号行，所以 owner 永远不是该区域里唯一的账号名**——
+"唯一作者"这个判据在真实页面上不可能成立。2026-09-20 服务机 `--verify-reader` 卡在
+`facebook_story_preview_owner`，根因就是这条：读取器认的是 `IMG` 作直接子节点、账号在相邻且无嵌套的 `DIV`，
+而三张截图里的预览是「头像 + 账号行」外面再套一层被分享卡片。[隔离复现](../state/calendar-data-sync-fix/preview-owner-repro.json)
+用五种与截图一致的结构验证：旧判据只在单元夹具那一种形状下通过，其余四种全假。
+夹具当初是照着判据写的，所以测试一直绿——**不要再把它改回一行作者**。
+现在的判据是：可见的 `#instagram_story_preview_frame` 不存在（IG 视图保留自己的框，这是两个渠道的结构分界），
+且区域内存在恰好等于 owner、其子节点都不等于该文本、三层祖先内有图像的节点。
+仅预览标题存在或 Loading preview 消失仍不足以证明 FB 预览已切换。
+Total performance 与 Facebook 两个页签的预览完全相同，预览本身不能区分这两者，靠的是页签选中与表头平台图标。
 
 [三个原始截图及 SHA-256](../state/planner-content-compatibility/story-reader-20260920/screenshots.json)确认：
 Total performance 与 Instagram 标题均为 `This content has no text`；Facebook 为 `Your story`（小写 s）。
@@ -271,6 +278,8 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 槽位判断、排期回读和远端删除登记必须使用决策完整的数据。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
 
 **当前边界：该条 IG 生产读取真实通过；直接关联 FB Story 及完整月份待真实联调，其它未覆盖类型仍为代码未完成。**
+预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，基点 `c0e734c`；
+**离线通过**，逐脚本结果与限制见该工作树 [state/calendar-data-sync-fix/validation.json](../state/calendar-data-sync-fix/validation.json)，清理前须保全。
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
@@ -295,6 +304,10 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 只对当前详情的新建副本运行生产读取入口，输出已保留变体和缺失字段，并补采根实体/跨帖关系的字段结构。
 非数字 ID 若为 JSON 或 base64 JSON，只做有界解码再脱敏；此结果仅作诊断，绝不自动当作原生 ID。
 不再输出整页重复 DOM，不刷新月份、不重录 G1、不写月历缓存。部分结果不是整月真实通过。
+读取结束、副本关闭之前另输出一条 `PREVIEW_STRUCTURE`：预览标题与 IG 框的可见数量、是否仍在 Loading，
+以及读取器那段区域搜索每一层看到的紧致文本节点（标签、三层祖先内有无图像、文字长度，账号名按既有白名单才给原文）。
+上限 6 层 × 20 个节点。⚠️ **这条是为了让一次真实运行就能定位预览判据，而不是再照截图猜第六个选择器**；
+失败时它和 `READER_RESULT` 在同一份日志里，别只回传结论。
 
 ## 2. 红线
 

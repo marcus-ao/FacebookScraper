@@ -45,6 +45,16 @@ FB_ENTITY = {'entity_id': FB_ID, 'entity_info': {
     'owner': {'entity_id': '61578176852811', 'entity_info': {
         '__typename': 'TofuFBProfileWithBizToolsEntityInfo', 'title': ACCOUNTS['facebook']}}}}
 
+# Reconstructed from story-reader-20260920/facebook.png: the Story owner row, then
+# the nested cross-posted card with its own account row and a caption mention.
+# ⚠️ Do not flatten this back to one bare `<img>` beside one `<div>` author. That
+# shape existed only in this fixture, and matching it is what shipped a reader the
+# live page could never satisfy.
+FB_PREVIEW = ('<h3>Feed preview</h3><div>'
+    '<div><div><img></div><div><span>' + ACCOUNTS['facebook'] + '</span></div><i>...</i><i>x</i></div>'
+    '<div><div><div><img></div><div>neakasa.global, neakasa.de and neakasa.tech</div></div>'
+    '<img><div><span>neakasa.global</span> Back at IFA this year</div></div></div>')
+
 # DOM is a semantic reconstruction of the logged roles/attributes, not raw HTML.
 DETAIL = '''<header><div role="heading" aria-level="3" id="caption">This content has no text</div>
   <div id="metadata">Story · Published on: Fri Sep 4, 6:39pm</div><span id="platforms"></span></header>
@@ -101,8 +111,7 @@ class StoryInsightsTests(unittest.IsolatedAsyncioTestCase):
         self.detail_html = DETAIL.replace("tab.setAttribute('aria-selected','true');", """
             tab.setAttribute('aria-selected','true');
             caption.textContent=tab.textContent==='Facebook'?'Your story':'This content has no text';
-            if(tab.textContent==='Facebook') document.querySelector('aside').innerHTML=
-                '<h3>Feed preview</h3><div><img><div>Neakasa Deutschland</div><i></i><i></i></div>';
+            if(tab.textContent==='Facebook') document.querySelector('aside').innerHTML='""" + FB_PREVIEW + """';
         """)
 
     async def test_direct_story_relation_completes_both_channels_without_inventing_facebook_caption(self):
@@ -133,7 +142,8 @@ class StoryInsightsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({c.channels[0]: c.at.minute for c in result.cards}, {'instagram':39, 'facebook':40})
 
     async def test_inconsistent_facebook_evidence_keeps_instagram_and_blocks_decisions(self):
-        for invalid in ['owner', 'time', 'channel', 'duplicate_relation', 'unlinked', 'preview_owner']:
+        for invalid in ['owner', 'time', 'channel', 'duplicate_relation', 'unlinked',
+                        'preview_owner', 'preview_frame']:
             with self.subTest(invalid=invalid):
                 self.payload = copy.deepcopy(ENTITY)
                 self.linked_facebook()
@@ -147,7 +157,13 @@ class StoryInsightsTests(unittest.IsolatedAsyncioTestCase):
                 elif invalid == 'duplicate_relation':
                     related.append({**copy.deepcopy(FB_ENTITY), 'entity_id': '1781315906229403'})
                 elif invalid == 'preview_owner':
-                    self.detail_html = self.detail_html.replace('<div>Neakasa Deutschland</div>', '<div>Other account</div>')
+                    self.detail_html = self.detail_html.replace(
+                        '<span>' + ACCOUNTS['facebook'] + '</span>', '<span>Other account</span>')
+                elif invalid == 'preview_frame':
+                    # The Instagram preview left in place is not the Facebook view,
+                    # however long the Facebook tab has been selected.
+                    self.detail_html = self.detail_html.replace(
+                        '<h3>Feed preview</h3><div>', '<h3>Feed preview</h3><div id=instagram_story_preview_frame>')
                 else:
                     # A standalone FB object cannot be associated by response arrival.
                     related[0] = {'entity_info': {'__typename': 'TofuFBStoryEntityInfo'}}
