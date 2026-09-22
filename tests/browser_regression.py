@@ -123,7 +123,10 @@ def stage_e(page, ui):
 
 def stage_d1(page, ui):
     page.goto(ui.fx.base_url + '/review', wait_until='networkidle')
-    row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
+    # ⚠️ /review 是 Facebook 队列，而 /api/tasks 不分平台。少了 platform 这一条，
+    # 列表改成按原帖时间降序后挑中的就是 IG 行，页面上永远等不到它。
+    row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review'
+             and row['platform']=='facebook' and not row['hard_alerts'])
     task_id=row['id']; detail=ui.fx.detail(task_id)
     page.locator(f'tr[data-task-id="{task_id}"] a').first.click()
     expect(page.get_by_role('button',name='编辑德语',exact=True)).to_be_visible()
