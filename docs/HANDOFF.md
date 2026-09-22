@@ -483,13 +483,22 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 正常执行退役 2 条、保留 1 条并打印逐条依据。
 证据已按 SHA-256 保全到主检出 `state/image-verification-classification/`，清单在同目录 `preservation.json`。
 
-归档与状态使用工作树默认独立路径，只复用主检出 Python，没有复制凭据。
-⛔ **没有连接真实社媒、CDN、模型或发布**，因此以下均为 **待真实联调**：过期地址的详情回读能否
-换回可下载的新地址、换址后原图能否实际取回，以及服务机执行退役后的实际条数。
-服务机 `--status` 已确认那篇 `3970856510175738446` 的图片状态是 `missing`、
-`source_media_complete` 为真、`capture_reason` 是"平台阻断或本轮会话预算耗尽"——
-即九种中的 `never_downloaded`，且其地址早于 2026-08-24 签发，正是要走详情换址的那一类。
-顺序：先 `--status` 读 revision 与逐帖 `image_problems`，再 `--retire-stale-manual` 清死账，
+离线部分使用工作树默认独立路径，只复用主检出 Python，没有复制凭据。
+
+**服务机实测（2026-09-22，代码 `d7b7cd9`）：分类与退役真实通过，换址仍未被走到。**
+逐条输出记于[服务机记录](../state/image-verification-classification/service-machine-20260922.json)。
+退役按判据精确命中：37 条人工项退役 33 条（`historical` 30、`source_updated` 3）、保留 4 条真实失败，
+无一误伤。那篇 `3970856510175738446` 经 `--recover-post` 回到 `complete`。
+
+⚠️ **但换址那条路没有被走到，而且原因推翻了本节原先的判断。** 那个地址的 `oe` 是
+**2026-09-24T06:51:32Z**，执行时尚未过期，`source_url_expired` 为 `false`——
+`_images_need_fresh_urls()` 因此返回假，一次详情都没开，直接用归档里的旧地址重下就成功了。
+所以卡住它的从来不是地址过期，而是**没人知道该对它执行 `--recover-post`**：它一直是 `manual`、
+入口一直可用，只是那句"原图缺失、损坏或与归档校验值不一致"没说该做什么。真正解开它的是分类，不是换址。
+⛔ 因此 `signed_url_expiry` 判定过期后开详情、`refresh_signed_media_urls` 采纳真实详情里的新地址、
+以及过期地址是否真的返回 403，三项仍是 **待真实联调**；要等一篇 `oe` 确已过期的缺图帖出现才能验。
+
+操作顺序：先 `--status` 读 revision 与逐帖 `image_problems`，再 `--retire-stale-manual` 清死账，
 最后对剩下的真实失败逐帖 `--recover-post`。步骤见
 [MANUAL_STEPS §4.2](MANUAL_STEPS.md#42-历史-ig-完整性自动核验)与 [§14 E](MANUAL_STEPS.md#e-cas-恢复与证据)。
 
