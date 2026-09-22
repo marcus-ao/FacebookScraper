@@ -111,6 +111,7 @@ class ManualScheduleChainTests(unittest.TestCase):
             patch.object(workflow.media, "verify_upload", AsyncMock(return_value={"image_count": 1})),
             patch.object(workflow.bs, "fill_caption", AsyncMock()),
             patch.object(workflow.bs, "set_schedule", AsyncMock(return_value="read-back")),
+            patch.object(workflow.bs, 'verify_form', AsyncMock()),
             patch.object(workflow, "_screenshot", AsyncMock(return_value="")),
             patch.object(workflow.month_inventory, "read", AsyncMock(return_value=inventory)),
             patch.object(workflow.bs, "submit", submit),

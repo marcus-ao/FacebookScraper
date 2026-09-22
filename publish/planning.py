@@ -119,17 +119,21 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
         return SlotDecision(False, "ambiguous_ui_time")
     if inventory.ui_timezone != window.ui_timezone:
         return SlotDecision(False, "calendar_incomplete")
-    try:
-        occupied = tuple(aware_utc(at) for at in inventory.occupied_for_channel(channel))
-    except ProbeRequired:
-        return SlotDecision(False, "channels_unavailable")
-
     def covered(at):
         # 目标本身可见不足以判断前后90分钟；跨可见边界时不能猜另一月为空。
         return inventory.covers([at - gap, at + gap])
 
     if not covered(utc_target):
         return SlotDecision(False, "calendar_incomplete")
+
+    def occupancy(at):
+        return tuple(aware_utc(card.at) for card in inventory.cards_in_range(
+            channel, at-gap, at+gap, include_bounds=False))
+
+    try:
+        occupied = occupancy(utc_target)
+    except ProbeRequired:
+        return SlotDecision(False, "channels_unavailable")
     conflicts = tuple(at.astimezone(target.tzinfo) for at in occupied if abs(at - utc_target) < gap)
     if not conflicts:
         return SlotDecision(True, "available")
@@ -143,8 +147,13 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
             candidate = anchor + timedelta(minutes=sign * distance)
             if (candidate <= aware_utc(now)
                     or not bounds.earliest <= candidate <= bounds.latest or not covered(candidate)
-                    or any(abs(candidate - at) < gap for at in (*occupied, *suggestions))
+                    or any(abs(candidate - at) < gap for at in suggestions)
                     or ui_time_is_ambiguous(candidate, window.ui_timezone)):
+                continue
+            try:
+                if any(abs(candidate - at) < gap for at in occupancy(candidate)):
+                    continue
+            except ProbeRequired:
                 continue
             suggestions.append(candidate)
             if len(suggestions) == 3:

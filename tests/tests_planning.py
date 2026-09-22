@@ -18,7 +18,7 @@ WINDOW = ScheduleWindow("offline-fixture", timedelta(minutes=20), timedelta(days
 
 
 def inventory(*entries, start=date(2026, 9, 1), end=date(2026, 9, 30)):
-    cards = tuple(RemotePlannerCard(at=at, channels=channels, rendered="fixture", placement="feed")
+    cards = tuple(RemotePlannerCard(at=at, channels=channels, rendered="fixture", placement="feed", time_verified=True)
                   for at, channels in entries)
     return RemoteSlotInventory(tuple(card.at for card in cards), UI, start, end,
                                cards=cards, cards_loaded=True)
@@ -38,7 +38,7 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(evaluate_slot(now, 'facebook', rows, now=now, window=window).allowed)
 
         target = now + timedelta(minutes=90)
-        occupied = RemotePlannerCard(at=target, channels=('facebook',), rendered='fixture', placement='feed')
+        occupied = RemotePlannerCard(at=target, channels=('facebook',), rendered='fixture', placement='feed', time_verified=True)
         rows = RemoteSlotInventory((target,), 'Asia/Shanghai', date(2026, 9, 1), date(2026, 9, 30),
                                    cards=(occupied,), cards_loaded=True)
         result = evaluate_slot(target, 'facebook', rows, now=now, window=window)

@@ -25,7 +25,7 @@ def classify_published(observation, day, expected_accounts):
     metadata = ' '.join(observation.get('metadata', '').split())
     label = metadata.split('·', 1)[0].strip()
     placement = LABELS.get(label, 'unknown')
-    if placement == 'unknown':
+    if placement == 'unknown' and not observation.get('owner'):
         raise DetailReadError('unsupported_type')
     match = re.search(r'Published on: \w{3} (\w{3} \d{1,2}), (\d{1,2}:\d{2}\s*[ap]m)', metadata, re.I)
     if not match:
@@ -50,8 +50,10 @@ def classify_published(observation, day, expected_accounts):
     if not re.fullmatch(r'\d{6,}', remote):
         raise DetailReadError('missing_fields', placement=placement, missing_fields=('remote_id',))
     caption = observation.get('caption')
-    if caption is None:
-        raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
+    missing = ['placement'] if placement == 'unknown' else []
+    if caption is None or not caption.strip():
+        caption = ''
+        missing.append('caption')
     caption_status = 'present'
     if channel == 'facebook' and placement == 'story' and ' '.join(caption.split()).casefold() == 'your story':
         if not observation.get('story_entity_verified'):
@@ -63,13 +65,14 @@ def classify_published(observation, day, expected_accounts):
         caption = ''
         caption_status = 'empty'
     elif not caption.strip():
-        raise DetailReadError('missing_fields', placement=placement, missing_fields=('caption',))
+        caption_status = 'unknown'
     media_kind = observation.get('media_kind', 'unknown')
     if media_kind not in MEDIA_KINDS:
         media_kind = 'unknown'
     return {'placement': placement, 'media_kind': media_kind, 'text': caption,
             'caption_status': caption_status, 'delivery': 'published',
             'channels': (channel,), 'remote_ids': {channel: remote}, 'accounts': {channel: owner},
-            'ui_at': observed, 'read_status': 'complete',
+            'ui_at': observed, 'read_status': 'incomplete' if missing else 'complete',
+            'missing_fields': tuple(missing),
             'relationships': tuple(value for value in observation.get('relationships', ())
                                    if value in {'collaboration', 'shared', 'cross_platform'})}

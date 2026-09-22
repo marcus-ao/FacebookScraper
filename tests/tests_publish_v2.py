@@ -294,7 +294,8 @@ from publish import month_inventory, month_readback
 long_caption = "Dies ist eine lange deutsche Produktbeschreibung. " * 24
 truncated = long_caption[:250] + "…"
 cards = tuple(bs.RemotePlannerCard(when, ("facebook",), (("facebook", str(12345678+i)),),
-    truncated, "hash", "scheduled", placement="feed") for i in range(2))
+    truncated, "hash", "scheduled", placement="feed", caption_status='present', time_verified=True,
+    accounts=(('facebook', TARGET_FB),)) for i in range(2))
 inventory = bs.RemoteSlotInventory((when,), "Europe/Berlin", when.date(), when.date(), cards, True)
 with patch.object(month_inventory, "read", AsyncMock(return_value=inventory)), \
         patch.object(bs, "_readback_screenshot", AsyncMock(return_value="")):
@@ -350,6 +351,7 @@ with tempfile.TemporaryDirectory() as folder:
             patch.object(bs, "upload_images", AsyncMock(return_value=())), \
             patch.object(bs, "fill_caption", AsyncMock()), \
             patch.object(bs, "set_schedule", AsyncMock(return_value="fixture-time")), \
+            patch.object(bs, 'verify_form', AsyncMock()), \
             patch.object(bs, "submit", AsyncMock(side_effect=submit_with_durable_intent)), \
             patch.object(workflow.month_readback, "verify", AsyncMock(return_value=truncated_readback)), \
             patch.object(workflow.media, 'verify_upload', AsyncMock(return_value={'image_count': 1})), \

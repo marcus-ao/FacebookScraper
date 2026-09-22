@@ -86,7 +86,7 @@ class ApprovalTests(unittest.TestCase):
     def test_selected_conflicting_time_is_rejected_with_three_alternatives(self):
         self.allow_fixture_evidence()
         self.inventory = bs.RemoteSlotInventory((TARGET,), 'America/Los_Angeles', date(2026, 9, 1), date(2026, 9, 30),
-            cards=(bs.RemotePlannerCard(TARGET, ('facebook',), rendered='another operator caption', placement='feed'),), cards_loaded=True)
+            cards=(bs.RemotePlannerCard(TARGET, ('facebook',), rendered='another operator caption', placement='feed', time_verified=True),), cards_loaded=True)
         execute = AsyncMock()
         with self.assertRaises(approval.ApprovalConflict) as error:
             self.approve(inventory_reader=AsyncMock(return_value=self.inventory), executor=execute)

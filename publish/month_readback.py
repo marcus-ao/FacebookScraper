@@ -3,18 +3,31 @@ import hashlib
 from datetime import datetime
 
 from publish import business_suite as bs, month_inventory
+from publish.channel_evidence import accounts
 
 
 def matching(inventory, when, final_text, target_channels):
-    if not inventory.decision_complete or not inventory.covers((when,)):
-        raise bs.PublishStepError('月历范围或渠道未读完整，不能核验本次排期')
+    if len(target_channels) != 1:
+        raise bs.PublishStepError('排期回读必须且只能有一个目标渠道')
+    try:
+        relevant = inventory.cards_in_range(target_channels[0], when, when)
+    except bs.ProbeRequired as exc:
+        raise bs.PublishStepError('月历范围或相关条目未读完整，不能核验本次排期') from exc
+    if any(card.read_status != 'complete' or card.placement == 'unknown'
+           or card.delivery == 'unknown' or card.caption_status == 'unknown' for card in relevant):
+        raise bs.PublishStepError('目标时刻的详情未完整，不能当作没有旧卡')
     expected = bs._card_text(final_text)
     if not expected:
         raise bs.PublishStepError('待核验文案为空')
     # Bind grid dates to detail captions and IDs before matching time-only links.
-    return [card for card in inventory.cards
+    matched = [card for card in relevant
             if card.delivery == 'scheduled' and card.placement == 'feed' and card.at.timestamp() == when.timestamp()
             and card.channels == target_channels and bs._card_text(card.rendered) == expected]
+    expected_accounts = accounts()
+    if any(dict(card.accounts) != {channel: expected_accounts[channel] for channel in target_channels}
+           for card in matched):
+        raise bs.PublishStepError('排期详情账号与本次目标不一致或缺失')
+    return matched
 
 
 def remote_id(card):

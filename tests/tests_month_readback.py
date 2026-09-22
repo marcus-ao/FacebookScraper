@@ -19,7 +19,9 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
                                       WHEN.date(), WHEN.date(), tuple(cards), True)
 
     def card(self, text=TEXT, channel='facebook', delivery='scheduled'):
-        return bs.RemotePlannerCard(WHEN, (channel,), ((channel, '123456789'),), text, 'hash', delivery, placement='feed')
+        return bs.RemotePlannerCard(WHEN, (channel,), ((channel, '123456789'),), text, 'hash', delivery,
+            placement='feed', caption_status='present', time_verified=True,
+            accounts=((channel, month_readback.accounts()[channel]),))
 
     async def readback(self, inventory, **kwargs):
         with patch.object(month_inventory, 'read', AsyncMock(return_value=inventory)), \
@@ -49,6 +51,8 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.readback(self.inventory([self.card()]), pre_submit_baseline=baseline)).found)
         self.assertFalse((await self.readback(self.inventory([self.card()]), expected_remote_id='facebook=other')).found)
         self.assertFalse((await self.readback(self.inventory([self.card(), self.card()]))).found)
+        for accounts in ((), (('facebook', 'Other account'),)):
+            self.assertFalse((await self.readback(self.inventory([replace(self.card(), accounts=accounts)]))).found)
 
     async def test_truncated_caption_failure_keeps_relevant_diagnostics(self):
         result = await self.readback(self.inventory([self.card(TEXT[:100])]))

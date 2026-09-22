@@ -150,6 +150,8 @@ class RemotePlannerCard:
     relationships: tuple[str, ...] = ()
     read_status: str = 'complete'
     source_content_id: str = ''
+    time_verified: bool = False
+    diagnostic_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,30 @@ class RemoteSlotInventory:
         selected = {card.at.timestamp(): card.at for card in self.cards
                     if channel in card.channels}
         return tuple(selected[key] for key in sorted(selected))
+
+    def cards_in_range(self, channel: str, start: datetime, end: datetime, *,
+                       include_bounds: bool = True) -> tuple[RemotePlannerCard, ...]:
+        """Unverified variant times cannot borrow an aggregate card's clock."""
+        if channel not in {'facebook', 'instagram'} or start.timestamp() > end.timestamp():
+            raise ValueError('无效的月历渠道或时间范围')
+        if (not self.cards_loaded or not self.covers((start, end))
+                or {card.at.timestamp() for card in self.cards} != {at.timestamp() for at in self.occupied}
+                or not set(range(len(self.diagnostics))).issubset(
+                    {card.diagnostic_index for card in self.cards})):
+            raise ProbeRequired('月历覆盖或条目证据不完整，不能确认这个时段空闲')
+        selected = []
+        for card in self.cards:
+            if not card.time_verified:
+                raise ProbeRequired('月历条目的独立时刻未核验，不能用外层卡片时间排除占用')
+            if not start.timestamp() <= card.at.timestamp() <= end.timestamp():
+                continue
+            if not include_bounds and card.at.timestamp() in {start.timestamp(), end.timestamp()}:
+                continue
+            if not card.channels or not set(card.channels) <= {'facebook', 'instagram'}:
+                raise ProbeRequired('相关时段的条目渠道未知，不能当作空档')
+            if channel in card.channels:
+                selected.append(card)
+        return tuple(selected)
 
     def covers(self, slots: tuple[datetime, ...] | list[datetime]) -> bool:
         if any(slot.tzinfo is None or slot.utcoffset() is None for slot in slots):
@@ -706,9 +732,7 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
         " ／ ".join(readbacks), zone.key, when.isoformat())
 
 
-async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
-                        *, timeout: float, where: str) -> str:
-    """写入并回读时分与 AM/PM；小时尝试一位和两位格式。"""
+async def _time_controls(group, where):
     # ---- 三个 spinbutton：minutes / meridiem 有名字，小时靠排除法 ----
     spins = await group.get_by_role("spinbutton").all()
     labels = [(await item.get_attribute("aria-label") or "").strip()
@@ -729,6 +753,39 @@ async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
     hours = unnamed[0]
     minutes_input = spins[labels.index(COMPOSER["schedule_minutes"].name)]
     meridiem_input = spins[labels.index(COMPOSER["schedule_meridiem"].name)]
+    return hours, minutes_input, meridiem_input
+
+
+async def verify_form(page, text, when, *, ui_timezone, timeout=DEFAULT_UI_TIMEOUT):
+    """最终只读复核；不修复内容、不拨开关、不重新填写时刻。"""
+    await assert_page_usable(page)
+    box = locator_for(page, 'caption_box')
+    if await box.count() != 1 or normalize_caption(await box.inner_text(timeout=_ms(timeout))) != normalize_caption(text):
+        raise PublishStepError('提交前正文已变化或无法唯一核验；未提交')
+    switch = locator_for(page, 'schedule_switch')
+    if await switch.count() != 1 or not await switch.is_checked():
+        raise PublishStepError('提交前排期开关已变化；未提交')
+    dates, groups = locator_for(page, 'schedule_date_input'), locator_for(page, 'schedule_time_group')
+    if await dates.count() != 1 or await groups.count() != 1:
+        raise PublishStepError('提交前必须且只能有一套排期控件；未提交')
+    local = when.astimezone(resolve_ui_timezone(ui_timezone))
+    assert_ui_time_unambiguous(when, ui_timezone)
+    if not _same_date(await dates.input_value(), local):
+        raise PublishStepError('提交前日期已变化；未提交')
+    controls = await _time_controls(groups, '提交前排期控件')
+    values = [(await _field_value(control)) for control in controls]
+    rendered = (await groups.inner_text()).replace(_ZWSP, '').strip()
+    expected = (local.hour % 12 or 12, local.minute, 'AM' if local.hour < 12 else 'PM')
+    # contenteditable spinbuttons expose inner text; real input controls expose values.
+    observed = ' : '.join(values[:2]) + ' ' + values[2] if all(value is not None for value in values) else rendered
+    if not _same_time(observed, *expected) or not _same_time(rendered, *expected):
+        raise PublishStepError('提交前时刻已变化；未提交')
+
+
+async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
+                        *, timeout: float, where: str) -> str:
+    """写入并回读时分与 AM/PM；小时尝试一位和两位格式。"""
+    hours, minutes_input, meridiem_input = await _time_controls(group, where)
     rendered = ""
     for hour_text in (str(hour12), "%02d" % hour12):
         await _type_into(page, hours, hour_text, timeout=timeout)

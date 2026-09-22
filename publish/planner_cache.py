@@ -85,6 +85,7 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
                        'placement': card.placement, 'media_kind': card.media_kind,
                        'caption_status': card.caption_status, 'accounts': dict(card.accounts),
                        'relationships': list(card.relationships), 'read_status': card.read_status,
+                       'time_verified': card.time_verified, 'diagnostic_index': card.diagnostic_index,
                        'source_content_id': card.source_content_id} for card in inventory.cards]}
 
 
@@ -111,6 +112,12 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
         metadata = {key: row.get(key, default) for key, default in (
             ('placement','unknown'), ('media_kind','unknown'), ('caption_status','unknown'),
             ('read_status','legacy'), ('source_content_id',''))}
+        metadata.update(time_verified=row.get('time_verified', False), diagnostic_index=row.get('diagnostic_index'))
+        diagnostic_index = metadata['diagnostic_index']
+        if (type(metadata['time_verified']) is not bool or
+                (diagnostic_index is not None and (type(diagnostic_index) is not int or
+                 not 0 <= diagnostic_index < len(data.get('diagnostics', []))))):
+            raise ValueError('月历时刻证据或诊断关联无效')
         if (metadata['placement'] not in PLACEMENTS or metadata['media_kind'] not in MEDIA_KINDS
                 or metadata['caption_status'] not in CAPTION_STATUSES or metadata['read_status'] not in READ_STATUSES
                 or not isinstance(metadata['source_content_id'], str)

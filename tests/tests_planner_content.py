@@ -39,18 +39,19 @@ class ContentTests(unittest.TestCase):
             self.assertEqual((value['placement'], value['media_kind']), (placement, form))
         obs = self.observation()
         obs['metadata'] = 'New format · Published on: Fri Sep 4, 6:39pm'
-        with self.assertRaises(content.DetailReadError) as error:
-            self.parse(obs)
-        self.assertEqual(error.exception.code, 'unsupported_type')
+        value = self.parse(obs)
+        self.assertEqual(value['placement'], 'unknown')
+        self.assertEqual(value['read_status'], 'incomplete')
 
     def test_empty_feed_is_explicit_and_missing_caption_remains_missing(self):
         obs = self.observation()
         obs['metadata'] = 'Post · Published on: Fri Sep 4, 6:39pm'
         self.assertEqual(self.parse(obs)['text'], '')
         obs['caption'] = None
-        with self.assertRaises(content.DetailReadError) as error:
-            self.parse(obs)
-        self.assertIn('caption', error.exception.missing_fields)
+        value = self.parse(obs)
+        self.assertEqual(value['caption_status'], 'unknown')
+        self.assertEqual(value['read_status'], 'incomplete')
+        self.assertEqual(value['channels'], ('instagram',))
 
     def test_aggregate_icons_cannot_supply_channels_or_copy_an_id(self):
         obs = self.observation()

@@ -510,10 +510,14 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
         # A detail that owns per-channel tabpanels keeps the recorded scoped read.
         # The observed aggregate has none and rewrites the shared header instead,
         # so its channels are separated by the selection and the response entity.
-        if evidence is not None and not await page.get_by_role('tabpanel').count():
-            variants.append(await read_aggregate(page,row,item,expected_accounts,evidence,channel,timeout=timeout))
-        else:
-            variants.append(await read_view(page,row,item,expected_accounts,channel=channel,aggregate=True,timeout=timeout))
+        try:
+            if evidence is not None and not await page.get_by_role('tabpanel').count():
+                variants.append(await read_aggregate(page,row,item,expected_accounts,evidence,channel,timeout=timeout))
+            else:
+                variants.append(await read_view(page,row,item,expected_accounts,channel=channel,aggregate=True,timeout=timeout))
+        except DetailReadError as exc:
+            raise DetailReadError(exc.code, placement=exc.placement, missing_fields=exc.missing_fields,
+                                  variants=(*variants, *exc.variants)) from exc
     if [(key,await node.count()) for key,node in tabs] != [(key,int(any(key==found for found,_ in available))) for key,_ in tabs]:
         raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
     if not set(header['platforms']).issubset({channel.title() for channel,_ in available}):

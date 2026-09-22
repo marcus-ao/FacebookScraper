@@ -207,12 +207,16 @@ async def _execute_unlocked(
             planner_page = await context.new_page()
         await check_live_slot(planner_page, post, when,
                               ui_timezone=ui_timezone, timeout=timeout, run=run)
+        step = '提交前最终表单复核'
+        media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
+        await bs.verify_form(page, post.text_de, when, ui_timezone=ui_timezone, timeout=timeout)
         await channels.verify_before_submit(page, target_channels, run=run)
         step = "G6 单次提交"
         # 点击前先耐久记录未决意图，避免点击后崩溃又被当作可安全重试。
         armed = journal.transition(
             prepared, journal.STATUS_SUBMIT_AMBIGUOUS,
             recorded_at=datetime.now().astimezone().isoformat(),
+            readback_diagnostics={'composer_media': media_check},
             step=step, note=("自动提交意图已耐久；从此刻起即使进程中断也必须"
                              "人工确认远端状态，禁止自动重试"))
         journal.append(c.state_dir, armed)

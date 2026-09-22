@@ -407,6 +407,24 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ProbeRequired):
             result.occupied_for_channel('facebook')
 
+    async def test_missing_caption_keeps_verified_time_for_local_occupancy(self):
+        await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''el=>el.insertAdjacentHTML(
+          'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=12345678">5:30 PM</a>')''')
+        await self.context.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html; charset=utf-8', body='''<header><h3></h3><div>
+              <span>Post · Published on: Wed Sep 30, 5:30pm</span><img alt="Facebook"></div></header>
+              <aside><h2>Feed preview</h2><div><h2><a href="https://www.facebook.com/profile.php?id=123456">Neakasa Deutschland</a></h2>
+              <a href="https://www.facebook.com/permalink.php?story_fbid=12345678&id=123456">4d</a></div></aside>'''))
+        with patch.object(month, 'prepare', AsyncMock()):
+            result = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=3)
+        self.assertFalse(result.decision_complete)
+        partial = result.cards[0]
+        self.assertEqual(partial.caption_status, 'unknown')
+        self.assertTrue(partial.time_verified)
+        self.assertEqual(result.cards_in_range('facebook', partial.at, partial.at), (partial,))
+        outside = partial.at.replace(day=15)
+        self.assertEqual(result.cards_in_range('facebook', outside, outside), ())
+
     async def test_published_detail_waits_for_caption_author_and_platform_but_not_metrics(self):
         await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''el=>el.insertAdjacentHTML(
           'beforeend','<a href="https://business.facebook.com/latest/insights/object_insights/?content_id=12345678">5:30 PM</a>')''')
