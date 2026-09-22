@@ -61,6 +61,8 @@
 
 **减少动画偏好下的弹层定位。** 全局把 `transition-duration` 设成非零的 `0.01ms !important`，会让弹层的同步测量读到 `-1000vh` 的过渡起点，菜单跑到屏幕外（隔离 Chromium 实测 `y=-7300`）。⛔ **过渡时间必须是 `0s`**，动画时长可以留 `0.01ms`；机制见[上游 #618](https://github.com/react-component/trigger/issues/618)。
 
+**采集表的每页条数。** 运行状态「新帖采集状态」在浏览器里对当前记录分页。`pagination.pageSize` 是受控值；写成固定的 `10` 时，条数菜单的选择会在配置合并里被盖回 10。初始条数用 `defaultPageSize`，并显式打开条数选择。离开本页或整页刷新不要求记住条数。离线证据：`tests_browser_workflow.test_13_capture_table_page_size_follows_the_size_changer`，78 条夹具，在工作树 `state/monitor-page-size/`。
+
 **上传绕过刷新等待的测试写法。** 按钮禁用时直接设置隐藏文件输入会绕过页面的刷新等待，得到 409。测试要点击可用按钮后经文件选择器上传，不放宽业务版本检查，也不自动重试。
 
 **开发代理的 Host。** Vite 代理改写 Host 之后与浏览器 Origin 不符，会被来源检查拒绝；开发代理保留原 Host。
