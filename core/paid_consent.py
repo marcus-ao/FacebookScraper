@@ -7,10 +7,37 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from uuid import UUID, uuid4
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 from core import paid_model, review, translated
 from core.store import (archive_write_lock, assert_physical_direct_path,
                         post_directory, read_post_truth)
+
+FINGERPRINT_VERSION = 2
+
+
+def fingerprint_version(record: dict) -> int:
+    version = record.get('source_fingerprint_version', 1)
+    if type(version) is not int or version not in {1, FINGERPRINT_VERSION}:
+        raise review.ReviewValidationError('来源指纹版本不受支持，请保留记录并核对')
+    return version
+
+
+def _normalized_identity(identity: dict) -> dict:
+    """Only remove known image URL signatures; retain derivation and unknown query bytes."""
+    media = []
+    for item in identity['media']:
+        url = item.get('url')
+        if item.get('kind') == 'image' and isinstance(url, str):
+            parts = urlsplit(url)
+            kept = []
+            for parameter in parts.query.split('&'):
+                key = unquote_plus(parameter.partition('=')[0])
+                if key not in {'oh', 'oe'} and not key.startswith('_nc_'):
+                    kept.append(parameter)
+            url = urlunsplit(parts._replace(query='&'.join(kept)))
+        media.append(dict(item, url=url))
+    return dict(identity, media=media)
 
 
 def _ledger(account_dir: Path) -> Path:
@@ -20,9 +47,10 @@ def _ledger(account_dir: Path) -> Path:
                                        kind='file', label='单帖付费授权')
 
 
-def _identity(source: dict, account_dir: Path) -> dict:
+def _identity(source: dict, account_dir: Path, *, version: int = FINGERPRINT_VERSION) -> dict:
     """tags、派生稿和文件夹布局不属于许可；全文、作者关系和原图字节属于许可。"""
     account_dir = Path(account_dir)
+    fingerprint_version({'source_fingerprint_version': version})
     directory = post_directory(account_dir, source)
     media = source.get('media')
     if not isinstance(source.get('text'), str) or not isinstance(media, list):
@@ -45,11 +73,12 @@ def _identity(source: dict, account_dir: Path) -> dict:
             raise review.ReviewConflict('读取期间原图发生变化，请刷新后重试')
         originals.append({'kind': item.get('kind'), 'url': item.get('url'),
                           'sha256': hashlib.sha256(data).hexdigest()})
-    return {'platform': source.get('platform'), 'account': source.get('account'),
+    identity = {'platform': source.get('platform'), 'account': source.get('account'),
             'account_dir': account_dir.name, 'post_id': source.get('post_id'),
             'source_full_text_sha256': hashlib.sha256(source['text'].encode('utf-8')).hexdigest(),
             'owner': source.get('owner'), 'coauthors': source.get('coauthors'),
             'media_complete': source.get('media_complete'), 'media': originals}
+    return _normalized_identity(identity) if version == FINGERPRINT_VERSION else identity
 
 
 def _digest(identity: dict) -> str:
@@ -57,9 +86,9 @@ def _digest(identity: dict) -> str:
                                     separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def fingerprint(source: dict, account_dir: Path) -> str:
+def fingerprint(source: dict, account_dir: Path, *, version: int = FINGERPRINT_VERSION) -> str:
     """供页面 CAS 使用；损坏或缺失原图抛错，由能力端点展示不可用原因。"""
-    return _digest(_identity(source, account_dir))
+    return _digest(_identity(source, account_dir, version=version))
 
 
 def history(account_dir: Path) -> list[dict]:
@@ -76,8 +105,16 @@ def history(account_dir: Path) -> list[dict]:
             if (not isinstance(event, dict) or event.get('action') != 'granted'
                     or event.get('actor') is not None or event.get('account') != Path(account_dir).name
                     or not isinstance(event.get('post_id'), str)
+                    or not isinstance(event.get('source_identity'), dict)
                     or not re.fullmatch(r'[0-9a-f]{64}', event.get('source_fingerprint', ''))
                     or _digest(event['source_identity']) != event['source_fingerprint']):
+                raise ValueError
+            fingerprint_version(event)
+            identity = event['source_identity']
+            if (identity.get('post_id') != event['post_id'] or identity.get('account_dir') != event['account']
+                    or not isinstance(identity.get('media'), list)
+                    or any(not isinstance(item, dict) or not re.fullmatch(r'[0-9a-f]{64}', item.get('sha256', ''))
+                           for item in identity['media'])):
                 raise ValueError
             UUID(event['revision'])
             events.append(event)
@@ -91,7 +128,8 @@ def is_current(account_dir: Path, source: dict) -> bool:
     try:
         current, _ = read_post_truth(account_dir, source)
         latest = {row['post_id']: row for row in history(account_dir)}.get(current['post_id'])
-        return bool(latest and latest['source_fingerprint'] == fingerprint(current, account_dir))
+        # history() verifies the saved digest before normalizing a legacy identity in memory.
+        return bool(latest and _digest(_normalized_identity(latest['source_identity'])) == fingerprint(current, account_dir))
     except (OSError, ValueError):
         return False
 
@@ -118,6 +156,7 @@ def grant(account_dir: Path, indexed: dict, *, source_fingerprint: str,
                  'previous_revision': (previous or {}).get('revision'),
                  'post_id': source['post_id'], 'platform': source['platform'], 'account': account_dir.name,
                  'source_fingerprint': source_fingerprint, 'source_identity': identity,
+                 'source_fingerprint_version': FINGERPRINT_VERSION,
                  'source_text_sha256': source_text_sha256, 'review_revision': review_revision,
                  'human_revision': human_revision, 'recorded_at': datetime.now(timezone.utc).isoformat(),
                  'actor': None}

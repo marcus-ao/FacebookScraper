@@ -112,8 +112,11 @@ def unlock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
 def _bind(post, snapshot_id, source, account_dir, target=None):
     """把已冻结内容接到本次提交上：先核内容，再绑时刻。"""
     account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
+    metadata, _, _, _ = snapshots.load(snapshot_id)
+    version = paid_consent.fingerprint_version(metadata)
     candidate = replace(post, snapshot_id=snapshot_id,
-                        source_fingerprint=paid_consent.fingerprint(source, account))
+                        source_fingerprint=paid_consent.fingerprint(source, account, version=version),
+                        source_fingerprint_version=version)
     try:
         return snapshots.ensure(candidate, bind=True, target=target)
     except review.ReviewConflict as exc:

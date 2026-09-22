@@ -192,6 +192,27 @@ class NotificationTests(unittest.TestCase):
         self.assertIn('图片', changes[0]['payload']['text'])
         self.assertEqual((cfg().state_dir / 'published.jsonl').read_bytes(), before)
 
+    def test_scheduled_source_checks_use_each_records_fingerprint_version(self):
+        self.f.source['media'][0]['url'] = 'https://fixture.fbcdn.net/image.jpg?oh=old&oe=123&stp=keep'
+        self.f.write_source()
+        attempts = {}
+        for version in (1, 2):
+            attempt = journal.PublishAttempt(post_id=self.f.post_id, platform='facebook',
+                status=journal.STATUS_SCHEDULED, scheduled_at=self.now.isoformat(),
+                recorded_at=self.now.isoformat(), text_de_sha256='fixture',
+                source_fingerprint=paid_consent.fingerprint(self.f.source,self.f.account,version=version),
+                source_fingerprint_version=version)
+            journal.append(cfg().state_dir,attempt)
+            attempts[version] = attempt
+        before = (cfg().state_dir/'published.jsonl').read_bytes()
+        self.runtime.collect([self.f.account],self.now)
+        self.assertFalse(any(key.startswith('source-changed:') for key in self.events()))
+        self.f.source['media'][0]['url'] = 'https://fixture.fbcdn.net/image.jpg?oh=new&oe=456&stp=keep'
+        self.f.write_source()
+        self.runtime.collect([self.f.account],self.now)
+        self.assertFalse(any(key.startswith('source-changed:'+attempts[2].attempt_id) for key in self.events()))
+        self.assertEqual((cfg().state_dir/'published.jsonl').read_bytes(), before)
+
     def scanned(self, rows):
         record_capture_rows(self.runtime, rows, self.now, 'facebook')
         self.runtime.scan('delta', 'facebook')

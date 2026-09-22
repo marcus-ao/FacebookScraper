@@ -51,13 +51,15 @@ def freeze(post, source: dict, *, expected_fingerprint: str, scheduled_at=None):
     atomic_write_json(directory / 'snapshot.json', {
         'schema_version': 1, 'snapshot_id': directory.name, 'fingerprint': fingerprint,
         'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256(source['text']),
+        'source_fingerprint_version': paid_consent.FINGERPRINT_VERSION,
         'account': account.name, 'post_id': post.post_id, 'platform': post.platform,
         'status': 'frozen',
         'scheduled_at': scheduled_at.isoformat() if scheduled_at is not None else None,
         'worker': current_worker(), 'files': {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
         'images': image_names})
     return replace(post, image_paths=tuple(directory / name for name in image_names),
-                   snapshot_id=directory.name, source_fingerprint=source_fingerprint), files, directory
+                   snapshot_id=directory.name, source_fingerprint=source_fingerprint,
+                   source_fingerprint_version=paid_consent.FINGERPRINT_VERSION), files, directory
 
 
 def bind_schedule(snapshot_id: str, when: datetime, *, target=None) -> dict:
@@ -103,6 +105,7 @@ def load(snapshot_id: str):
     directory = folder(snapshot_id)
     path = store.assert_physical_direct_path(directory, directory / 'snapshot.json', kind='file', label='快照清单')
     metadata = json.loads(path.read_text(encoding='utf-8'))
+    paid_consent.fingerprint_version(metadata)
     if metadata.get('snapshot_id') != snapshot_id or not isinstance(metadata.get('files'), dict):
         raise review.ReviewConflict('快照清单无效，不能用当前稿件代替')
     files = {}
@@ -139,7 +142,8 @@ def ensure(post, *, bind: bool = False, target=None):
         if (files['text_de.txt'].decode('utf-8') != post.text_de
                 or metadata.get('post_id') != post.post_id or metadata.get('platform') != post.platform
                 or metadata.get('account') != post.platform[:2] + '_' + post.account
-                or metadata.get('source_fingerprint') != post.source_fingerprint):
+                or metadata.get('source_fingerprint') != post.source_fingerprint
+                or paid_consent.fingerprint_version(metadata) != getattr(post, 'source_fingerprint_version', 1)):
             raise review.ReviewConflict('提交身份或内容与冻结快照不一致，请重新审核')
         if bind:
             metadata = bind_schedule(post.snapshot_id, post.scheduled_at, target=target)

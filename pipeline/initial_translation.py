@@ -82,6 +82,7 @@ def submit(account_dir: Path, indexed: dict, *, source_fingerprint: str, source_
         _check(account_dir, source)
         row = {'job_id': uuid4().hex, 'kind': 'initial', 'account': account_dir.name, 'post_id': source['post_id'],
                'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256,
+               'source_fingerprint_version': paid_consent.FINGERPRINT_VERSION,
                'consent_revision': consent['revision'], 'status': 'pending', 'actor': None,
                'recorded_at': datetime.now(timezone.utc).isoformat()}
         row.update(worker=refinement.current_worker(), operation_tracked=True)
@@ -111,7 +112,7 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None,
     try:
         def preflight():
             source, _ = _check(account_dir, indexed)
-            if paid_consent.fingerprint(source, account_dir) != row['source_fingerprint']:
+            if paid_consent.fingerprint(source, account_dir, version=paid_consent.fingerprint_version(row)) != row['source_fingerprint']:
                 raise review.ReviewConflict('原文、作者或原图已经改变，请重新确认')
             engine.budget_preflight()
         preflight()

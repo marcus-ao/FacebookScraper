@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from core.maintenance import Gate
 from core.process_identity import worker_alive
+from core.runtime_identity import TRUTH_CONTRACT_VERSION
 
 
 class WorkerTests(unittest.TestCase):
@@ -34,7 +35,7 @@ class WorkerTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, target)
         shutil.copyfile(ROOT / 'config.toml', self.release / 'config.toml')
-        self.manifest = {'version': 1, 'protocol': 1, 'truth_contract': 1,
+        self.manifest = {'version': 1, 'protocol': 1, 'truth_contract': TRUTH_CONTRACT_VERSION,
                          'sha': 'a' * 40, 'runtime_id': 'b' * 64}
         (self.release / 'release.json').write_text(json.dumps(self.manifest), encoding='utf-8')
         dist = self.release / 'web/ui/dist'

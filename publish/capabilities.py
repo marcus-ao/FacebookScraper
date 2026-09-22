@@ -2,6 +2,7 @@
 from datetime import datetime
 
 from core.config import ROOT, cfg
+from core import paid_consent
 from publish import business_suite as bs, channels, evidence, journal, planning, snapshots, month_inventory
 
 
@@ -76,6 +77,7 @@ def acceptance(state_dir):
                 fingerprint = row['final_text_sha256'] + ':' + ','.join(row['image_sha256'])
                 if (metadata['fingerprint'] != fingerprint
                         or metadata['source_fingerprint'] != row['source_fingerprint']
+                        or paid_consent.fingerprint_version(metadata) != paid_consent.fingerprint_version(row)
                         or source['platform'] != channel or source['post_id'] != row['post_id']
                         or snapshots.require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
                     continue

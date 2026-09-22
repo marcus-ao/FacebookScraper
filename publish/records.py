@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from core import notify, review, store, translated
+from core import notify, review, store, translated, paid_consent
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings, MirrorService
@@ -68,6 +68,7 @@ def project(attempt, *, now=None) -> dict:
                 or metadata['post_id'] != row['post_id'] or metadata['platform'] != row['platform']
                 or metadata['account'] != source['platform'][:2] + '_' + source['account']
                 or metadata['source_fingerprint'] != row.get('source_fingerprint')
+                or paid_consent.fingerprint_version(metadata) != paid_consent.fingerprint_version(row)
                 or snapshots.require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
             raise review.ReviewConflict('发布回执与批准快照不一致')
         account = cfg().archive_dir / metadata['account']

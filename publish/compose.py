@@ -130,6 +130,7 @@ class DePost:
     post_dir: Path
     snapshot_id: str = ''
     source_fingerprint: str = ''
+    source_fingerprint_version: int = 1
 
     @property
     def is_collaboration(self) -> bool:

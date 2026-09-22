@@ -63,6 +63,7 @@ def new_attempt(post, when: datetime, *, ui_timezone: str,
         ui_scheduled_at=when.astimezone(ZoneInfo(ui_timezone)).isoformat(),
         snapshot_id=getattr(post, 'snapshot_id', ''),
         source_fingerprint=getattr(post, 'source_fingerprint', ''),
+        source_fingerprint_version=getattr(post, 'source_fingerprint_version', 1),
         origin=origin,
     )
 

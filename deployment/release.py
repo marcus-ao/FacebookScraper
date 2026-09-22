@@ -12,6 +12,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from core.runtime_identity import TRUTH_CONTRACT_VERSION
 
 SOURCE_DIRS = ('core', 'routes', 'localize', 'publish', 'pipeline', 'web/api', 'tools', 'deployment')
 ROOT_FILES = ('config.toml', 'requirements.txt', 'requirements.lock', '.env.example')
@@ -19,7 +20,7 @@ EXCLUDED_PARTS = {'.git', '.venv', 'venv', 'node_modules', '__pycache__', 'state
                   '.pytest_cache', '.env', 'config.local.toml'}
 ARTIFACT_NAME = 'fbscraper-windows'
 REPOSITORY = 'marcus-ao/FacebookScraper'
-COMPATIBILITY = {'version': 1, 'protocol': 1, 'truth_contract': 1,
+COMPATIBILITY = {'version': 1, 'protocol': 1, 'truth_contract': TRUTH_CONTRACT_VERSION,
                  'python': '3.12.9', 'platform': 'win_amd64', 'workflow': 'release.yml'}
 
 

@@ -107,13 +107,18 @@ class ReleaseTests(unittest.TestCase):
         manifest = self.build()
         with self.assertRaises(ValueError):
             verify_release(self.output, expected_sha='b' * 40)
-        for key, value in (('protocol', 2), ('truth_contract', 2), ('python', '3.13.0'),
+        from core.runtime_identity import read_release
+        self.assertEqual(read_release(self.output)['truth_contract'], 2)
+        for key, value in (('protocol', 2), ('truth_contract', 1), ('python', '3.13.0'),
                            ('platform', 'linux'), ('run_id', True), ('repository', 'other/repo'),
                            ('sha', int('1' * 40)), ('runtime_id', int('1' * 64))):
             changed = dict(manifest, **{key: value})
             (self.output / 'release.json').write_text(json.dumps(changed))
             with self.assertRaises(ValueError, msg=key):
                 verify_release(self.output)
+            if key == 'truth_contract':
+                with self.assertRaises(ValueError):
+                    read_release(self.output)
         changed = dict(manifest, files=[dict(manifest['files'][0], path='../outside')])
         (self.output / 'release.json').write_text(json.dumps(changed))
         with self.assertRaises(ValueError):

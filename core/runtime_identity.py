@@ -7,6 +7,9 @@ import re
 import stat
 from pathlib import Path
 
+# Original-image choices and source fingerprint v2 must not be read by older writers.
+TRUTH_CONTRACT_VERSION = 2
+
 
 def read_release(root: Path) -> dict | None:
     path = root / 'release.json'
@@ -15,7 +18,7 @@ def read_release(root: Path) -> dict | None:
     try:
         value = json.loads(path.read_text(encoding='utf-8'))
         if (not isinstance(value, dict) or value.get('version') != 1
-                or value.get('protocol') != 1 or value.get('truth_contract') != 1
+                or value.get('protocol') != 1 or value.get('truth_contract') != TRUTH_CONTRACT_VERSION
                 or not re.fullmatch(r'[a-f0-9]{40}', str(value.get('sha', '')))
                 or not re.fullmatch(r'[a-f0-9]{64}', str(value.get('runtime_id', '')))):
             raise ValueError('invalid release identity')

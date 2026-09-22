@@ -86,6 +86,24 @@ class InitialTranslationTests(ConsentFixture):
         editor.edit.assert_not_called()
         self.assertFalse((self.account / 'images_de.jsonl').exists())
 
+    def test_legacy_pending_job_uses_its_original_fingerprint_version(self):
+        self.source['media'][0]['url'] += '?oh=old&oe=123&stp=keep'
+        self.write_source()
+        selection = image_de.image_selection_record(self.account, self.source, 0, 'original')
+        event = review.transition(self.account,self.source,'image_selected', expected_revision=None,
+            expected_source_sha256=translated.source_text_sha256(self.source['text']), image_selection=selection)
+        job = self.submit(review_revision=event['revision'])
+        job.pop('source_fingerprint_version')
+        job['source_fingerprint'] = paid_consent.fingerprint(self.source,self.account,version=1)
+        refinement._append(job)
+        translator = SimpleNamespace(translate=Mock(return_value='Ein sauberes Zuhause. #Neakasa'))
+        editor = Mock()
+        result = initial_translation.execute(job,self.source,translator=translator,editor=editor,
+            risk_scanner=lambda **kwargs: {'status':'completed','risks':[]})
+        self.assertEqual(result['status'], 'succeeded', result)
+        translator.translate.assert_called_once()
+        editor.edit.assert_not_called()
+
     def test_processing_uses_existing_ledgers_and_returns_to_review(self):
         job = self.submit()
         calls = []

@@ -590,7 +590,8 @@ class Runtime:
                 self.outbox.enqueue(f'{kind}:{attempt["attempt_id"]}', kind, payload, now)
             if status == journal.STATUS_SCHEDULED:
                 if attempt.get('source_fingerprint'):
-                    digest = paid_consent.fingerprint(source, directory)
+                    digest = paid_consent.fingerprint(source, directory,
+                        version=paid_consent.fingerprint_version(attempt))
                     changed = digest != attempt['source_fingerprint']
                 else:
                     digest = source_text_sha256(source['text'])

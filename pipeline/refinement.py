@@ -308,6 +308,7 @@ def submit(account_dir: Path, indexed: dict, *, kind: str, instruction: str,
         if kind == 'text':
             row['prompt_version'] = translated.PROMPT_VERSION
         row.update(worker=current_worker(), operation_tracked=True,
+                   source_fingerprint_version=paid_consent.FINGERPRINT_VERSION,
                    source_fingerprint=paid_consent.fingerprint(source, account_dir))
         if kind == 'suggest':
             # 固定点击时的编辑区正文；任务排队期间不能改用磁盘上的另一个版本。
@@ -341,7 +342,8 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
                 if ('review_revision' in row
                         and review.state_for(account_dir, source).get('revision') != row['review_revision']):
                     raise review.ReviewConflict('图片选择或审校已更新，请重新核对后发起优化')
-            if row.get('source_fingerprint') and paid_consent.fingerprint(source, account_dir) != row['source_fingerprint']:
+            if row.get('source_fingerprint') and paid_consent.fingerprint(
+                    source, account_dir, version=paid_consent.fingerprint_version(row)) != row['source_fingerprint']:
                 raise review.ReviewConflict('源文、作者或原图已经改变，请重新核对')
             engine.budget_preflight()
         preflight()

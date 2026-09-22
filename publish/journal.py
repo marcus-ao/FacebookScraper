@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 from core.paid_model import FileLock
-from core import paid_model
+from core import paid_model, paid_consent
 
 JOURNAL_NAME = "published.jsonl"
 
@@ -151,10 +151,12 @@ class PublishAttempt:
     manual_evidence: bool = False
     snapshot_id: str = ''
     source_fingerprint: str = ''
+    source_fingerprint_version: int = 1
     # 空字符串是旧记录和 CLI。审校台新尝试写成 review_desk，用来判断点击前失败能否重试。
     origin: str = ''
 
     def __post_init__(self) -> None:
+        paid_consent.fingerprint_version({'source_fingerprint_version': self.source_fingerprint_version})
         if not (self.post_id or "").strip():
             raise ValueError("留痕必须记 post_id")
         if self.status not in _STATUSES:
@@ -222,12 +224,14 @@ def _compat_row(row: dict) -> dict:
     out.setdefault("manual_evidence", False)
     out.setdefault('snapshot_id', '')
     out.setdefault('source_fingerprint', '')
+    out.setdefault('source_fingerprint_version', 1)
     out.setdefault('origin', '')
     return out
 
 
 def _validate_loaded_row(row: dict, *, path: Path, number: int) -> dict:
     """最小 journal 契约；任一坏行都不能被幂等检查当作“不存在”。"""
+    paid_consent.fingerprint_version(row)
     status = row.get("status")
     if status not in _STATUSES:
         raise ValueError(
