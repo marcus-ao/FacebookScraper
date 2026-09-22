@@ -479,6 +479,26 @@ Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没�
 清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
 同一条发布闸上的 `tests_service_address` 间歇失败另见
 [§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
+
+**2026-09-22 续二：离线全量放行之后，浏览器步骤露出两条陈旧判据。** 上面两处修好后，
+[run 35693145553](../state/ci-evidence-35693145553/) 的第 13 步在 CI 上 107/107 通过——
+`tests_story_insights` 168.59 秒（预算的 56%，也是整个 suite 最慢的一个）、`tests_service_address` 2.56 秒——
+但第 14 步 `browser_regression --stage D1` 失败，打包与上传照旧跳过。
+⚠️ 这一步至少 25 轮没被执行过：之前每轮都死在第 13 步，两条陈旧判据因此一直没人看见。
+两条都与本轮改动无关，`b7e235c` 上同样复现（本分支没碰 `web/`、`browser_regression.py`、`browser_lan.py`、`core/maintenance.py`）。
+
+- **D1 挑错了队列。** 它在 `/review` 点一条来自 `/api/tasks`（不分平台）的首个待审行；列表改按原帖时间降序后
+  首行是 IG 行，而 `/review` 是 Facebook 队列，那一行永远不会出现。D2 早就带着 `platform=='facebook'`，D1 补上同一条件。
+- **`browser_lan` 六轮红三轮，堵在同一处。** 测试用 `clear_session` 模拟操作员清理失联的脏草稿，而
+  `clear_session` 把会话连同 `sequence` 水位一起丢弃；关闭途中已经发出的那个状态包随后把会话重新注册成 dirty，
+  维护再也静不下来（每次失败的唯一阻塞项都是刚被清掉的那条，原因 `unsaved`）。操作员真遇到会再清一次，
+  测试的等待里同样重试，其余客户端的干净与确认判据仍由 `try_quiesce` 把关。
+  ⚠️ 维护闸本身没有改：「落后的状态包能把已解决的阻塞项拉回来」要不要在 `core/maintenance.py` 里挡住，
+  留给维护闸的负责人判断。
+
+修后本机按 CI 的顺序跑完整个第 14 步：`browser_regression --stage ALL` 13 组通过（444.03 秒）、
+`cutover_rehearsal` 8.26 秒、`browser_deployment` 6 项、`browser_lan` 22.47 秒；
+`browser_lan` 另单独连跑六轮全过（修前六轮红三轮）。日志见 `state/story-insights-ci-timeout/step14-*.log`。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的判据与状态不变。
 
 ### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
