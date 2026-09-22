@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -180,34 +181,137 @@ class CardTests(unittest.TestCase):
     def setUp(self):
         self.settings = FeishuSettings(True, 'http://review.internal:8765')
 
-    def test_monitor_cards_offer_the_source_link_without_a_review_task(self):
+    def test_detection_has_paired_fields_and_distinct_source_and_observation_times(self):
         card = notification_card('monitor_found', [{
-            'platform': 'Instagram', 'text': '发现 1 篇新帖',
+            'platform': 'facebook', 'account': '@neakasaofficial', 'counts': {'new': 2},
+            'published_at': '2026-09-22T02:03:04Z', 'discovered_at': '2026-09-22T03:04:05Z',
+            'text': 'A clean home', 'run_id': 'scan/1'}], self.settings)
+        self.assertEqual(card['header']['title']['content'], '[Neakasa 德国] 监测到新发帖')
+        fields = card['elements'][0]['fields']
+        self.assertEqual([f['text']['content'] for f in fields], [
+            '**平台账号：**\nFacebook · @neakasaofficial',
+            "**检测状态：**\n<font color='green'>新发布 2 篇</font>",
+            '**最新发帖时间：**\n2026-09-22 10:03:04', '**监测时间：**\n2026-09-22 11:04:05'])
+        self.assertTrue(all(f['is_short'] is True for f in fields))
+        self.assertEqual(card['elements'][-1]['actions'][0]['url'],
+                         'http://review.internal:8765/runtime?scan=scan%2F1')
+
+    def test_empty_invalid_and_naive_times_are_safe_and_never_expose_zone_labels(self):
+        for value in (None, '', 'not-a-date', 42, {}, '9999-12-31T23:59:59-12:00'):
+            with self.subTest(value=value):
+                card = notification_card('monitor_found', [{'published_at': value,
+                    'discovered_at': value}], self.settings)
+                fields = card['elements'][0]['fields']
+                self.assertTrue(all(f['text']['content'].endswith('\n-') for f in fields[2:]))
+                self.assertNotIn('北京时间', json.dumps(card, ensure_ascii=False))
+        card = notification_card('monitor_found', [{'published_at': datetime(2026, 9, 22, 1)}], self.settings)
+        self.assertTrue(card['elements'][0]['fields'][2]['text']['content'].endswith('2026-09-22 09:00:00'))
+
+    def test_summary_normalizes_lines_truncates_before_escaping_and_never_mentions_everyone(self):
+        for length in (149, 150, 151):
+            card = notification_card('ready', [{'text': '文' * length}], self.settings)
+            content = next(e['text']['content'] for e in card['elements'] if 'text' in e)
+            self.assertEqual(content, '> ' + '文' * min(length, 150) + ('...' if length > 150 else ''))
+        card = notification_card('ready', [{'text': 'first\r\n \n\n<at id=all></at> **bold**'}], self.settings)
+        content = next(e['text']['content'] for e in card['elements'] if 'text' in e)
+        self.assertNotIn('<at', content)
+        self.assertNotIn('**bold**', content)
+        self.assertEqual(len(content.splitlines()), 2)
+        self.assertTrue(all(line.startswith('> ') for line in content.splitlines()))
+
+    def test_risk_green_requires_completed_scan_clean_checks_and_current_preview(self):
+        clean = {'risk_status': 'completed', 'risk_count': 0,
+                 'checks': {'issues': [], 'warnings': [], 'ready': True}, 'text': 'Deutsch'}
+        variants = [({}, True), ({'risk_status': 'not_scanned'}, False),
+                    ({'risk_status': 'failed'}, False), ({'risk_status': 'stale'}, False),
+                    ({'risk_count': 2}, False), ({'processing_notes': ['价格待核对']}, False),
+                    ({'image_variant': 'original'}, False),
+                    ({'checks': {'issues': [{'message': '未确认'}], 'warnings': [], 'ready': False}}, False),
+                    ({'preview_error': 'content_refresh_failed'}, False)]
+        for changes, green in variants:
+            card = notification_card('ready', [{**clean, **changes}], self.settings)
+            status = card['elements'][0]['fields'][1]['text']['content']
+            self.assertEqual("color='green'" in status, green, changes)
+            self.assertNotIn('敏感词', status)
+            self.assertEqual(card['header']['template'], 'orange')
+
+    def test_merged_review_buttons_are_numbered_and_all_follow_content(self):
+        card = notification_card('ready', [{'task_id': 'a/' + str(i), 'text': 'item ' + str(i)}
+                                          for i in range(10)], self.settings)
+        tags = [e['tag'] for e in card['elements']]
+        start = tags.index('action')
+        self.assertTrue(all(tag == 'action' for tag in tags[start:]))
+        buttons = [b for e in card['elements'][start:] for b in e['actions']]
+        self.assertEqual(len(buttons), 10)
+        self.assertTrue(all(len(e['actions']) <= 5 for e in card['elements'][start:]))
+        self.assertEqual(buttons[-1]['text']['content'], '10. 前往审核入库')
+
+    def test_settings_control_site_and_clock_and_reject_invalid_configuration(self):
+        settings = replace(self.settings, site_name='示例站点', timezone='Europe/Berlin')
+        card = notification_card('system', [{'occurred_at': '2026-07-01T00:00:00Z',
+                                  'module_name': '采集', 'error_reason': '会话失效',
+                                  'action_recommendation': '请手动登录'}], settings)
+        self.assertEqual(card['header']['title']['content'], '[示例站点] 任务异常告警')
+        self.assertIn('2026-07-01 02:00:00', json.dumps(card))
+        self.assertEqual(card['elements'][-1]['actions'][0]['type'], 'danger')
+        for changes in ({'site_name': ''}, {'timezone': 'invalid/zone'}):
+            with self.assertRaises(ValueError):
+                replace(self.settings, **changes)
+
+    def test_legacy_capture_fields_keep_only_business_facts_and_correct_wall_time(self):
+        card = notification_card('monitor_saved', [{'capture_status': '完整', 'fields': [
+            {'label': '来源', 'value': 'Facebook · neakasaofficial'},
+            {'label': '原帖发布时间（北京时间）', 'value': '2026-09-22 10:00:00'},
+            {'label': '英文摘要', 'value': 'Legacy source'},
+            {'label': '正文状态', 'value': '已保存'}, {'label': '产品分类', 'value': '未分类'}]}], self.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn('2026-09-22 10:00:00', rendered)
+        self.assertIn('Legacy source', rendered)
+        self.assertTrue(all(word not in rendered for word in ('北京时间', '正文状态', '产品分类')))
+
+    def test_capture_and_detection_titles_never_upgrade_partial_or_historical_results(self):
+        for payload, expected in [({'counts': {'historical': 1}}, '监测到历史补获'),
+                                  ({'counts': {'new': 1, 'source_updated': 1}}, '监测到帖子变化')]:
+            card = notification_card('monitor_found', [payload], self.settings)
+            self.assertEqual(card['header']['title']['content'], '[Neakasa 德国] ' + expected)
+        for archived, expected in [(True, '原帖抓取部分完成'), (False, '原帖抓取失败')]:
+            card = notification_card('monitor_saved', [{'capture_status': '待人工', 'archived': archived}], self.settings)
+            self.assertEqual(card['header']['title']['content'], '[Neakasa 德国] ' + expected)
+
+    def test_legacy_detection_without_counts_does_not_claim_new_publication(self):
+        card = notification_card('monitor_found', [{'text': '历史补获 1 篇',
+                                  'created_at': '2026-09-22 10:00:00 北京时间'}], self.settings)
+        self.assertEqual(card['header']['title']['content'], '[Neakasa 德国] 监测到帖子变化')
+        self.assertTrue(card['elements'][0]['fields'][2]['text']['content'].endswith('\n-'))
+
+    def test_monitor_cards_offer_the_dashboard_without_a_review_task(self):
+        card = notification_card('monitor_found', [{
+            'platform': 'Instagram', 'text': '发现 1 篇新帖', 'counts': {'new': 1},
             'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
         actions = [element for element in card['elements'] if element['tag'] == 'action']
         labels = [button['text']['content'] for element in actions for button in element['actions']]
-        # 「查看原帖」原来埋在 task_id 分支里；监测卡发生在有审校任务之前。
-        self.assertEqual(labels, ['查看原帖'])
+        self.assertEqual(labels, ['查看运行看板'])
         self.assertEqual(card['header']['template'], 'turquoise')
-        self.assertIn('监测到新帖', card['header']['title']['content'])
+        self.assertIn('监测到新发帖', card['header']['title']['content'])
 
-    def test_an_untrustworthy_permalink_produces_no_button(self):
+    def test_an_untrustworthy_permalink_keeps_only_the_internal_button(self):
         for bad in ('http://www.instagram.com/p/abc/', 'javascript:alert(1)',
                     'https://user:pw@www.instagram.com/p/abc/', ''):
             with self.subTest(permalink=bad):
                 card = notification_card('monitor_saved', [{'text': 'x', 'permalink': bad}],
                                          self.settings)
-                self.assertFalse([e for e in card['elements'] if e['tag'] == 'action'])
+                buttons = [b for e in card['elements'] if e['tag'] == 'action' for b in e['actions']]
+                self.assertEqual([b['url'] for b in buttons], ['http://review.internal:8765/runtime'])
 
-    def test_review_cards_keep_both_buttons_in_the_review_first_order(self):
+    def test_review_cards_link_directly_to_the_review_task(self):
         card = notification_card('ready', [{
             'task_id': 'in_acme/p1', 'text': 'Deutscher Text',
             'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
         element = next(e for e in card['elements'] if e['tag'] == 'action')
         self.assertEqual([button['text']['content'] for button in element['actions']],
-                         ['去审校', '查看原帖'])
+                         ['前往审核入库'])
         self.assertIn('task=in_acme%2Fp1', json.dumps(card, ensure_ascii=False))
-        self.assertEqual(card['header']['template'], 'blue')
+        self.assertEqual(card['header']['template'], 'orange')
 
     def test_the_selftest_card_renders_but_can_never_be_enqueued(self):
         from core.feishu import KINDS, TITLES

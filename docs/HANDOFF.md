@@ -649,6 +649,18 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 ⚠️ `tests_story_insights` 在空闲机器上要 358.19 秒，超过 `tools/test_offline.py` 的 300 秒默认，
 该次本地验证带 `--timeout 600`，当时 CI 使用默认超时；相关历史修复见上文。当前 Actions 停用决定见 §1。
 
+### 1.30 飞书四机器人统一卡片（2026-09-22）
+
+功能工作树 `.worktrees/feishu-card-redesign`，分支 `codex/feishu-card-redesign`。卡片入口仍为 `core/feishu.py`；纯渲染集中在 `core/feishu_cards.py`，采集/审校/排期/部署调用链提供原始业务时间和结构化状态。配置 `[feishu].site_name/timezone` 默认 `Neakasa 德国` / `Asia/Shanghai`；卡片不带时区字样。双列属性、150 字引用摘要、底部导航、批次计数与逐帖状态遵循 [FUNCTIONALITY 的 F4-4](FUNCTIONALITY.md)。
+
+已冻结卡片和未知投递保持原样；旧未分配检测事件缺少分类时使用“监测到帖子变化”，不从旧自由文本猜“新发布”。风险未扫、失效、失败或素材检查有问题时不显示绿色通过。晨报计数与核账恢复建议独立呈现，避免正文摘要限长吃掉关键提示；部署通知保留具体原因。Windows 本地告警和真实群投递边界不变。
+
+**验证状态：离线通过。** [验证清单](../state/feishu-card-redesign/validation-summary.json)记录最终命令及各脚本日志；[用户指定测试](../state/feishu-card-redesign/pytest-feishu.log)为 44 项、30 个子场景通过。相关通知路由、审校、流水线、采集恢复、发布操作、部署宿主、服务地址、Web 入口、本地通知和 hygiene 共 10 个脚本通过。只读代码评审发现的旧分类误报、部署原因丢失及晨报截断三项已用[回归用例](../state/feishu-card-redesign/review-fixes.log)复现并修复。
+
+[四类卡片 JSON](../state/feishu-card-redesign/cards-preview.json)由 `notifications --self-test --dry-run` 生成；只验证 payload，不证明飞书客户端实际排版。测试使用临时数据、模拟 HTTP 及固定示例，没有真实群消息、业务 Chrome、付费模型或发布操作。新版服务机测试群/手机/桌面排版为 **待真实联调**，步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
+
+证据已按 SHA-256 校验复制到主检出同名 `state/` 路径，[保全清单](../state/feishu-card-redesign/preservation.json)记录来源与摘要；本功能工作树保留独立测试环境和原证据。未接入真实业务数据或复制凭据。证据不随 Git 提交；清理工作树前仍按 §1.3 核对。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

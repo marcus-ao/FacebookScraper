@@ -75,7 +75,15 @@ scripts\run_python.bat -c "import json; from pathlib import Path; from core.conf
 scripts\run_python.bat -m pipeline notifications --self-test
 ```
 
-同一个群应收到四张「通道自检」卡片，标题和正文各自写明预期机器人。逐张核对消息的真实发送者与卡片名称一致。同群正常；四个角色复用相同 webhook 地址会在发送前拒绝。运行页 `bots` 显示各自是否配置和格式是否有效，`duplicate_bot_targets` 显示重复地址；这些字段不含地址或密钥，也不证明实际可投递。
+同一个群应收到四张使用正式检测、抓取、待审、告警模板的示例卡，标题均带「通道自检」及角色名称。示例时间和帖子为固定夹具，没有业务含义；逐张核对消息的真实发送者与角色一致。同群正常；四个角色复用相同 webhook 地址会在发送前拒绝。运行页 `bots` 显示各自是否配置和格式是否有效，`duplicate_bot_targets` 显示重复地址；这些字段不含地址或密钥，也不证明实际可投递。
+
+开发机只检查结构时使用离线预览，不需要 webhook 或签名密钥：
+
+```powershell
+scripts\run_python.bat -m pipeline notifications --self-test --dry-run
+```
+
+输出为四个 `{role, card}` 对象组成的 JSON 数组；不创建发件箱、不发送请求。卡片站点与显示时区取 `[feishu].site_name/timezone`，当前为 `Neakasa 德国` / `Asia/Shanghai`；只显示时间数字，不附时区文字。服务机测试群另核对双列属性、引用摘要、底部按钮、合并卡序号，以及手机/桌面的实际显示和链接可达性。dry-run 与模拟 HTTP 不能替代这项真实验收。
 
 日常只读投递状态、以及核对不确定投递：
 
@@ -998,7 +1006,7 @@ scripts\run_scheduler.bat --run
 
 核对类别 new/historical/source_updated/recovered/time_unknown；原文、元数据、owner/coauthors、`items[key].source.media` 和媒体线索齐全。`source_media_complete` 与 `media_complete` 分开；后者要求每张静态图全图解码、SHA 和原子落盘。IG 重复封面/视频缩略图不计图片；每媒体一个尺寸、顺序不变；未知总数明确 unknown。revision 只由正文与有序实际媒体 SHA 改变。
 
-detect 每平台/扫描至多一张摘要，零新增不发。capture 对每个合格候选恰好一张卡，包含完整/部分完成/失败/待人工、类别、平台、账号、owner/coauthors、三个北京时间、标签、英文前 300 字符与截断、正文状态、验证图片数/已知总数、安全原因和下一步。主按钮按归档状态去 `/history/{account_dir}/{post_id}` 或 `/runtime?capture={key}`，次按钮到源帖。卡片无缩略图，不声称进入本地化队列。
+detect 每平台/扫描至多一张摘要，零新增不发；分类计数区分新发布、历史补获、更新和恢复，多篇展示最新发帖及对应监测时间。capture 对每个合格候选恰好一张卡，包含完成/部分完成/失败、平台账号、合作归属、发帖与抓取时间、英文前 150 字符及超长省略号、实际验证图片数/已知总数、异常原因和下一步。卡片时间按配置格式化且不附时区字样。主按钮按归档状态去 `/history/{account_dir}/{post_id}` 或 `/runtime?capture={key}`，次按钮到源帖。卡片无缩略图，不声称进入本地化队列。
 
 消息异步入 durable outbox，不阻塞下载；重启补入已持久候选漏掉的意图。未知结果人工核对，不自动重发。FB 多图顺序、IG carousel 顺序、四机器人真实发送者/链接、自然新帖分别留真实证据；无自然新帖时平台捕获仍待真实联调。
 

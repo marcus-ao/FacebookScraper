@@ -159,7 +159,7 @@ class AddressTests(unittest.TestCase):
             ('monitor_saved', {'capture_key': 'fb/a', 'archived': True, 'account_dir': 'fa_example',
                               'post_id': 'a'}, '/history/fa_example/a'),
             ('system', {'run_id': 'run/a'}, '/runtime?scan=run%2Fa'),
-            ('morning', {'task_id': 'in_example/d'}, '/?task=in_example%2Fd'),
+            ('morning', {'task_id': 'in_example/d'}, '/runtime'),
             ('selftest', {'run_id': 'self/a'}, '/runtime?scan=self%2Fa'),
         ]
         with patch.object(config, '_cfg', cached), patch.dict(os.environ, FBSCRAPER_NETWORK_CONFIG=''):
@@ -171,7 +171,10 @@ class AddressTests(unittest.TestCase):
                     card = notification_card(kind, [payload], FeishuSettings.load())
                     urls = [action['url'] for item in card['elements'] if item['tag'] == 'action'
                             for action in item['actions']]
-                    self.assertEqual(urls, [new_base + suffix, payload['permalink']])
+                    expected = [new_base + suffix]
+                    if kind == 'monitor_saved':
+                        expected.append(payload['permalink'])
+                    self.assertEqual(urls, expected)
             with patch.dict(os.environ, FBSCRAPER_NETWORK_CONFIG=str(self.network)):
                 policy = load_web_access()
                 self.assertEqual(policy.public_base_url, new_base)
@@ -198,7 +201,7 @@ class AddressTests(unittest.TestCase):
             delivered = []
             current.dispatch(now + timedelta(minutes=20), lambda role, card, ident: delivered.append(card) or 'new')
             self.assertEqual(len(delivered), 1)
-            url = delivered[0]['elements'][0]['actions'][0]['url']
+            url = delivered[0]['elements'][-1]['actions'][0]['url']
             self.assertEqual(url, 'http://10.66.6.3:8765/runtime?scan=new')
             previous = json.loads(before)['deliveries']
             after = json.loads(path.read_bytes())['deliveries']

@@ -20,9 +20,22 @@ def deliver(control: Path, event: dict, *, settings=None, bot=None):
     now = datetime.now(timezone.utc)
     summary = {'success': '服务更新完成', 'failure': '服务更新未完成，请检查运行状态',
                'rollback': '服务已回退到已验证版本', 'blocked': '服务更新已等待超过 30 分钟'}[event['kind']]
+    occurred = event.get('occurred_at') or event.get('created_at')
+    if occurred is None and type(event.get('at')) in {int, float}:
+        try:
+            occurred = datetime.fromtimestamp(event['at'], timezone.utc).isoformat()
+        except (ValueError, OverflowError, OSError):
+            occurred = None
+    error = event.get('error_code')
+    reason = {'worker_exit_unconfirmed': '上一运行实例的退出状态尚未确认',
+              'rollback_start_failed': '回退版本未能启动', 'rollback_health_failed': '回退版本健康检查未通过',
+              'running_worker_exited': '运行进程意外退出', 'running_worker_unknown': '无法确认运行进程状态',
+              'stop_waiting_for_session': '正在等待当前会话结束',
+              'switch_gate_not_closed': '服务切换前尚未进入维护状态'}.get(error, str(error or summary))
     outbox.enqueue('deployment:' + str(event['event_id']) + ':' + event['kind'], 'system',
-        {'text': summary, 'meta': '运行版本：' + str(event.get('sha', ''))[:12],
-         'next_step': str(event.get('error_code') or '可在运行页查看更新状态')}, now)
+        {'text': summary, 'deployment_status': event['kind'], 'module_name': '服务更新',
+         'occurred_at': occurred, 'version': str(event.get('sha') or '')[:12], 'error_reason': reason,
+         'next_step': '请在运行页核对更新状态与当前版本。'}, now)
     client = bot or WebhookBot.from_environment()
     return outbox.dispatch(now, client.send, allowed_kinds={'system'})
 

@@ -45,7 +45,8 @@ class FeishuTests(unittest.TestCase):
         rendered = json.dumps(calls[0][1], ensure_ascii=False)
         self.assertTrue(all(f'Deutsch {i}' in rendered for i in range(3)))
         self.assertIn('task=account%2F0', rendered)
-        self.assertIn('facebook / instagram', calls[0][1]['header']['title']['content'])
+        self.assertIn('Facebook', rendered)
+        self.assertIn('Instagram', rendered)
         self.assertEqual(restarted.dispatch(at('2026-09-12T08:01:00+08:00'),
                                            lambda *args: self.fail('duplicate')), 0)
 
@@ -77,9 +78,9 @@ class FeishuTests(unittest.TestCase):
             'text': '发现 1 篇，成功落档 1 篇，没有失败\n· 42  已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc',
             'permalink': 'https://www.instagram.com/p/abc/'}], self.settings)
         rendered = json.dumps(card, ensure_ascii=False)
-        self.assertIn('原帖抓取结果', rendered)
+        self.assertIn('原帖抓取结果待核对', rendered)
         self.assertIn('已落档 · 4 图 0 视频 · posts/2026-09/M1-Pro/abc', rendered)
-        self.assertIn('查看原帖', rendered)
+        self.assertIn('访问源帖链接', rendered)
         # 没有 task_id 也要给原帖按钮：监测卡发生在有审校任务之前。
         self.assertNotIn('去审校', rendered)
 
@@ -126,7 +127,7 @@ class FeishuTests(unittest.TestCase):
         prepared, sent = [], []
         def prepare(payload):
             prepared.append(payload['task_id'])
-            payload['image_key'] = 'uploaded-key'
+            payload['text'] = 'Current German draft'
         def fails(recipient, card, delivery_id):
             sent.append(card)
             raise FeishuRejected('明确未接受请求')
@@ -136,7 +137,7 @@ class FeishuTests(unittest.TestCase):
         outbox.dispatch(at('2026-09-12T08:16:00+08:00'), fails, prepare_payload=prepare)
         self.assertEqual(prepared, ['account/a'])
         self.assertEqual(sent[0], sent[1])
-        self.assertEqual(sent[0]['elements'][0]['img_key'], 'uploaded-key')
+        self.assertIn('Current German draft', json.dumps(sent[0]))
 
     def test_expired_sent_cards_are_archived_and_never_enqueued_again(self):
         outbox = Outbox(self.path, self.settings)

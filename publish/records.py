@@ -32,7 +32,10 @@ def queue_notification(account, source, attempt, now):
     kind = 'scheduled' if success else 'schedule_failed'
     Outbox(cfg().state_dir / 'feishu_outbox.json', settings).enqueue(kind + ':' + attempt['attempt_id'], kind,
         {'task_id': account.name + '/' + source['post_id'], 'platform': source['platform'],
-         'text': ('排期已确认：' if success else '排期尚未确认：') + attempt['scheduled_at'],
+         'account': source.get('account'), 'published_at': source.get('created_at'),
+         'scheduled_at': attempt.get('scheduled_at'), 'occurred_at': attempt.get('recorded_at'),
+         'module_name': '发布排期',
+         'text': '远端已确认排期，尚不代表已经公开。' if success else '本次排期尚未确认完成。',
          'next_step': '请核对回执。' if success else '请核对远端结果，避免重复提交。'}, now)
     return True
 
