@@ -73,6 +73,40 @@ def check_dropped_partners(rejected: list[dict],
             if (r.get("owner") or "").strip().lower() in partners]
 
 
+def authorized_sources(platform: str) -> set[str]:
+    """`[publish.trusted_owners]` 里该平台的来源，即业务已确认可处理的账号。
+
+    配置写坏时当作空名单：这只是告警口径，不该把一轮监测带崩；
+    真正的结构校验在 `pipeline.engine` 那边，付费处理之前就会拦下。
+    """
+    table = cfg().get('publish', 'trusted_owners', {})
+    owners = table.get(platform) if isinstance(table, dict) else None
+    return {name.strip().lower() for name in owners or []
+            if isinstance(name, str) and name.strip()}
+
+
+def split_suspect_sources(suspect: list[dict], platform: str) -> tuple[list[dict], list[dict]]:
+    """把疑似误丢的节点分成「已授权来源」和「第三方」两堆——两类的处置完全不同。
+
+    `known_partners()` 只从归档的 owner/coauthor 归纳，分不出本品牌自己的另一个账号
+    和真正的第三方。IG 的 `.tech` 与 `.global` 常把同一批文案各发一次（post_id、
+    permalink、发布时刻都不同，不是同一条合作帖），每次重发都会按"合作帖可能漏判"
+    报一次。⛔ 这条是归属红线的哨兵，被训练成噪音之后就没人看了；两类分开说，才保得住它。
+    """
+    trusted = authorized_sources(platform)
+    authorized, third_party = [], []
+    for row in suspect:
+        target = authorized if (row.get('owner') or '').strip().lower() in trusted else third_party
+        target.append(row)
+    return authorized, third_party
+
+
+def name_suspect_owners(rows: list[dict], limit: int = 4) -> str:
+    """告警里那串作者名：去重排序，超出上限写"等"，不假装只有这几个。"""
+    who = sorted({(r.get('owner') or '?') for r in rows})
+    return '、'.join(who[:limit]) + (' 等' if len(who) > limit else '')
+
+
 def params(platform: str | None = None) -> tuple[int, int]:
     """返回 (gap_flag_days, alert_after_quiet_days)，支持按平台取值。"""
     c = cfg()

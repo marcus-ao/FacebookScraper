@@ -532,11 +532,13 @@ async def delta_once(ctx, platform: str, account: str, arc: Archive,
              min(max(1, dcfg.min_own_posts), max(1, len(known))))
     if len(posts) < floor:
         # 中止原因补充疑似合作误丢，便于区分归属错误与访问受阻。
-        hint = ("；其中 %d 篇来自**已知合作方**（%s）—— 优先怀疑合作帖判定失效，"
-                "而不是被拦" % (len(suspect),
-                                "、".join(sorted({(s.get("owner") or "?")
-                                                  for s in suspect})[:4]))
-                if suspect else "")
+        # 自家已授权账号跨账号重发不是合作判定失效的证据，两类分开说。
+        authorized, third_party = integrity.split_suspect_sources(suspect, platform)
+        hint = "".join((
+            ("；其中 %d 篇来自**已知合作方**（%s）—— 优先怀疑合作帖判定失效，而不是被拦"
+             % (len(third_party), integrity.name_suspect_owners(third_party))) if third_party else "",
+            ("；另有 %d 篇来自**已授权来源**（%s），多半只是本品牌另一账号重发，不作判据"
+             % (len(authorized), integrity.name_suspect_owners(authorized))) if authorized else ""))
         if lifecycle:
             lifecycle.interrupt(dcfg.scan_id, utcnow(), '主页覆盖不足，已发现候选保留并转人工核对')
         raise DeltaBlocked(
@@ -752,16 +754,28 @@ def run_integrity(arc: Archive, entry: dict, platform: str,
         arc.rows(), arc.needs_media(), entry, platform,
         gap_days=gap_days, alert_after=alert_after, now=now or utcnow())
     if suspect:
-        who = sorted({(s.get("owner") or "?") for s in suspect})
-        findings.append({
-            "kind": "dropped_partner",
-            "message": ("%s 丢弃的节点里有 %d 篇来自**已知合作方**（%s%s）——"
-                        "合作帖归属判定可能又漏判了。去 _rejected.jsonl 和"
-                        "最新的 _capture_delta_*.json 里离线查这几篇为什么"
-                        "没带上 coauthor 信息，**不要直接放行**。"
-                        % (platform, len(suspect), "、".join(who[:4]),
-                           " 等" if len(who) > 4 else "")),
-        })
+        # 自家已授权账号和第三方合作方的处置完全不同，分开报，否则这条红线哨兵会被当噪音。
+        authorized, third_party = integrity.split_suspect_sources(suspect, platform)
+        if authorized:
+            findings.append({
+                "kind": "dropped_authorized_source",
+                "message": ("%s 丢弃的节点里有 %d 篇来自**已授权来源**（%s）——"
+                            "多半是本品牌另一个账号把同一批文案各发了一次。"
+                            "核对 post_id 与正文是否和本账号已收的帖重复；"
+                            "重复即正常，不重复才按漏判查。"
+                            % (platform, len(authorized),
+                               integrity.name_suspect_owners(authorized))),
+            })
+        if third_party:
+            findings.append({
+                "kind": "dropped_partner",
+                "message": ("%s 丢弃的节点里有 %d 篇来自**已知合作方**（%s）——"
+                            "合作帖归属判定可能又漏判了。去 _rejected.jsonl 和"
+                            "最新的 _capture_delta_*.json 里离线查这几篇为什么"
+                            "没带上 coauthor 信息，**不要直接放行**。"
+                            % (platform, len(third_party),
+                               integrity.name_suspect_owners(third_party))),
+            })
     for f in findings:
         print("[!] %s" % f["message"])
     if findings:

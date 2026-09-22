@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from core import integrity                                   # noqa: E402
 from core import parse                                       # noqa: E402
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
@@ -157,10 +158,15 @@ def run(platform: str, capture: Path | None, break_coauthors: bool) -> int:
 
     print(res.summary())
     if res.suspect:
-        who = sorted({(s.get("owner") or "?") for s in res.suspect})
-        print("[!] 丢弃的 %d 篇里有 %d 篇来自已知合作方（%s%s）"
-              % (res.rejected, len(res.suspect), "、".join(who[:6]),
-                 " 等" if len(who) > 6 else ""))
+        authorized, third_party = integrity.split_suspect_sources(res.suspect, platform)
+        if third_party:
+            print("[!] 丢弃的 %d 篇里有 %d 篇来自已知合作方（%s）"
+                  % (res.rejected, len(third_party),
+                     integrity.name_suspect_owners(third_party, 6)))
+        if authorized:
+            print("[!] 丢弃的 %d 篇里有 %d 篇来自已授权来源（%s），多半是本品牌另一账号重发"
+                  % (res.rejected, len(authorized),
+                     integrity.name_suspect_owners(authorized, 6)))
     print()
     print("解析出的段数 : %d" % res.payloads)
     print("本账号       : %d（原创 %d · 合作 %d）"

@@ -639,15 +639,55 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 两轮之间根本不变，判据再错也不会响。新用例按真实响应的形状写——主机、对象句柄、
 `vs`/`oh`/`oe` 全换一遍，只有 `source_media_id` 不变。
 
-**验证状态：离线通过，待下一轮自然扫描确认。**
+**验证状态：真实通过。**
 [全量 104/104 脚本通过](../state/image-verification-classification/offline-validation-20260922T062154Z/results.json)。
 三条新用例都先在修复前复现失败：`should_append()` 对轮换地址返回假而指向另一条视频仍返回真、
 整轮扫描的"处理已有帖"回到 0、deferred 的混合帖靠本地证据收尾且不发起新请求；
 同时补一条图片用例，确保放宽视频没有顺手放宽图片。
-真机判据：下一轮 `--run` 的 IG 行"处理已有帖"应为 0 篇（除非确有新帖或正文改动）。
+
+服务机同日前后两轮是干净的对照：05:58Z 与 11:22Z 都看到 12 篇（原创 10 · 合作 2，
+2026-09-08 ~ 2026-09-21）、都是 3 篇视频在发布范围外，而"处理已有帖"从 **3 篇变成 0 篇**。
+输入没变、判据变了，正是这条修复该有的差别。
 
 ⚠️ `tests_story_insights` 在空闲机器上要 358.19 秒，超过 `tools/test_offline.py` 的 300 秒默认，
 该次本地验证带 `--timeout 600`，当时 CI 使用默认超时；相关历史修复见上文。当前 Actions 停用决定见 §1。
+
+### 1.29 归属哨兵把自家账号当成合作方（2026-09-22）
+
+2026-09-22 那轮扫描报了
+`instagram 丢弃的节点里有 1 篇来自**已知合作方**（neakasa.tech）—— 合作帖归属判定可能又漏判了`。
+按哨兵的要求离线查过 `_rejected.jsonl`，**结论是没有漏判**：
+
+| | post_id | 正文开头 |
+|---|---|---|
+| FB `neakasaofficial` | `122128375707379375` | `Only 6 days to go! ⌛  Hello, hello! We` |
+| IG `neakasa.global` | `3991125889886213694` | 同一句 |
+| IG `neakasa.tech` | `3991518443455200172` | 同一句，**被丢弃** |
+
+三个不同的 post_id、三条不同的 permalink、发布时刻相差半天。合作帖在 IG 的响应里是**一个**
+media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条各自独立的帖，
+即同一批文案跨账号各发一次，`owner_mismatch` 判对了。同轮另外 8 条丢弃全是同品类第三方
+（`pets_qtr`、`hoopo_design`、`uahpet_official`、`moonlitterbox`、`catloving.club`、
+`hholove_global`、`leo_in_ottawa`），一条都没进哨兵——精度本身是好的。
+
+⛔ **但口径错了。** `neakasa.tech` 不是第三方，是本品牌自己的 IG 账号
+（`config.toml [publish.trusted_owners].instagram` 列着它，[REQUIREMENTS](REQUIREMENTS.md) 把
+`in_neakasa.tech` 记为冻结只读）。而 `known_partners()` 纯粹从归档的 owner/coauthor 归纳，
+分不出自家账号和第三方——归档样本里 `.global` 的合作方几乎全是 `.tech`，所以只要 `.tech`
+再跨账号发一次，这条告警就再响一次。它是归属红线的哨兵，被训练成噪音之后就没人看了。
+
+`split_suspect_sources()` 按 `[publish.trusted_owners]` 把疑似节点分成「已授权来源」和
+「已知合作方」两类，两类各说各的处置；判定逻辑和丢弃行为一个字没改，只改谁该被怎么读。
+监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。
+
+⚠️ **顺带一个业务事实：`.tech` 文档里是冻结的，但它 2026-09-22T03:01Z 还在发帖。**
+这不是代码问题，但监测口径和"冻结"的实际含义对不上，上线前值得跟业务确认一次。
+
+**验证状态：真实通过。** `tests_integrity` 新增八条断言覆盖两类划分、按平台各读各的名单、
+归属未知不算已授权、名单写坏时当空名单、作者名去重排序与超限写"等"；改动涉及的 10 个套件全部通过。
+服务机 2026-09-22 11:22Z 实跑打出的是
+`丢弃的节点里有 1 篇来自**已授权来源**（neakasa.tech）——多半是本品牌另一个账号把同一批文案各发了一次`，
+口径已经生效。
 
 ### 1.30 飞书四机器人统一卡片（2026-09-22）
 
@@ -656,6 +696,8 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 已冻结卡片和未知投递保持原样；旧未分配检测事件缺少分类时使用“监测到帖子变化”，不从旧自由文本猜“新发布”。风险未扫、失效、失败或素材检查有问题时不显示绿色通过。晨报计数与核账恢复建议独立呈现，避免正文摘要限长吃掉关键提示；部署通知保留具体原因。Windows 本地告警和真实群投递边界不变。
 
 **验证状态：离线通过。** [验证清单](../state/feishu-card-redesign/validation-summary.json)记录最终命令及各脚本日志；[用户指定测试](../state/feishu-card-redesign/pytest-feishu.log)为 44 项、30 个子场景通过。相关通知路由、审校、流水线、采集恢复、发布操作、部署宿主、服务地址、Web 入口、本地通知和 hygiene 共 10 个脚本通过。只读代码评审发现的旧分类误报、部署原因丢失及晨报截断三项已用[回归用例](../state/feishu-card-redesign/review-fixes.log)复现并修复。
+
+合入远端监测归属修复后的[通知定向复验](../state/feishu-card-redesign/merge-notifications.log)为 104 项、32 个子场景通过；[归档完整性、采集恢复及 hygiene](../state/offline-validation-20260922T113554Z/results.json)三个脚本通过。两组均使用隔离数据，证据按 SHA-256 保全至主检出，见[合并验证保全清单](../state/feishu-card-redesign/merge-preservation.json)。
 
 [四类卡片 JSON](../state/feishu-card-redesign/cards-preview.json)由 `notifications --self-test --dry-run` 生成；只验证 payload，不证明飞书客户端实际排版。测试使用临时数据、模拟 HTTP 及固定示例，没有真实群消息、业务 Chrome、付费模型或发布操作。新版服务机测试群/手机/桌面排版为 **待真实联调**，步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 

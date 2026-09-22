@@ -304,11 +304,15 @@ def run(platform: str, capture: Path | None, dry_run: bool) -> int:
                                        " …" if len(others) > 6 else ""))
     suspect = integrity.check_dropped_partners(
         rejected, integrity.known_partners([p.to_row() for p in kept], account))
-    if suspect:
-        who = sorted({(s.get("owner") or "?") for s in suspect})
+    authorized, third_party = integrity.split_suspect_sources(suspect, platform)
+    if third_party:
         print("[!] 丢弃的里面有 %d 篇来自**已知合作方**（%s）—— "
               "合作帖判定可能漏判了，这几篇很可能就在本账号主页上"
-              % (len(suspect), "、".join(who[:6])))
+              % (len(third_party), integrity.name_suspect_owners(third_party, 6)))
+    if authorized:
+        print("[!] 丢弃的里面有 %d 篇来自**已授权来源**（%s）—— "
+              "多半是本品牌另一账号重发同一批文案，核对 post_id 与正文是否重复"
+              % (len(authorized), integrity.name_suspect_owners(authorized, 6)))
     print("媒体         : 图片 %d / 视频 %d（视频只记元数据，不下载）" % (imgs, vids))
     print("正文为空     : %d" % sum(1 for p in kept if not (p.text or "").strip()))
     print("无日期       : %d" % sum(1 for p in kept if not p.created_at))

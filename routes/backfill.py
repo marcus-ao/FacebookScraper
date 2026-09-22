@@ -180,11 +180,15 @@ async def run(platform: str, days: int | None = None) -> int:
             rejected,
             integrity.known_partners(
                 arc.rows() + [p.to_row() for p in posts], account))
-        if suspect:
-            who = sorted({(s.get("owner") or "?") for s in suspect})
-            print(f"[!] 丢弃的里面有 {len(suspect)} 篇来自**已知合作方**"
-                  f"（{'、'.join(who[:4])}）—— 合作帖判定可能漏判了。"
+        authorized, third_party = integrity.split_suspect_sources(suspect, platform)
+        if third_party:
+            print(f"[!] 丢弃的里面有 {len(third_party)} 篇来自**已知合作方**"
+                  f"（{integrity.name_suspect_owners(third_party)}）—— 合作帖判定可能漏判了。"
                   f"原始响应在 {dump.name} 里，可离线查，不用重滚。")
+        if authorized:
+            print(f"[!] 丢弃的里面有 {len(authorized)} 篇来自**已授权来源**"
+                  f"（{integrity.name_suspect_owners(authorized)}）—— 多半是本品牌另一账号"
+                  f"重发同一批文案；核对 post_id 与正文是否与本账号已收的帖重复。")
 
         n = 0
         for post in posts:
