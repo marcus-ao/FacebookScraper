@@ -1,8 +1,12 @@
 # 项目交接
 
-**现场同步至 2026-09-21。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
+**现场同步至 2026-09-22。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
+
+**源码交付（2026-09-22 用户决定）。** 用户确认服务机直接运行源码，沿用 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 的拉取、构建和重启流程。Actions 检查与打包工作流移除；自动制品交付及后续联调标为明确延期，保留打包、控制器、兼容协议与既有测试。开发收尾以 [AGENTS 第四节](../AGENTS.md#四按影响选测试默认不跑全量) 的定向验证为准。本次配置与文档调整无需重启服务机，不迁移业务数据。下文 CI 修复记录保留历史证据和仍适用的约束，不是恢复工作流的待办。
+
+本项文档与工作流检查为**离线通过**：核对工作流入口、改动范围、新增链接、既有章节锚点、UTF-8/LF 和 diff；未运行应用回归或操作服务机。远端生效须以移除提交合入 main 后的仓库与运行记录回读为准，不由本地检查推定。
 
 **2026-09-19。开发机只做代码与离线回归，服务机是唯一真实运行业务的机器，两台各一份 `archive/state`。** 2026-09-20 试运营上线。[REQUIREMENTS §10.1–§10.4](REQUIREMENTS.md#10-五阶段验收状态) 已按业务决定标记 `真实通过*`；⛔ **那个星号表示"按决定标记、当时没有可复核证据"**，判据与限制见 [REQUIREMENTS §0](REQUIREMENTS.md#0-状态词)，不要把它读成普通的真实通过。
 
@@ -437,7 +441,7 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
-**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `b7e235c`。
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `769d8f0`。
 Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
 打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
 `tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
@@ -481,6 +485,29 @@ Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没�
 清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
 同一条发布闸上的 `tests_service_address` 间歇失败另见
 [§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
+
+**2026-09-22 续二：离线全量放行之后，浏览器步骤露出两条陈旧判据。** 上面两处修好后，
+[run 35693145553](../state/ci-evidence-35693145553/) 的第 13 步在 CI 上 107/107 通过——
+`tests_story_insights` 168.59 秒（预算的 56%，也是整个 suite 最慢的一个）、`tests_service_address` 2.56 秒——
+但第 14 步 `browser_regression --stage D1` 失败，打包与上传照旧跳过。
+⚠️ 这一步至少 25 轮没被执行过：之前每轮都死在第 13 步，两条陈旧判据因此一直没人看见。
+两条都与本轮改动无关，`b7e235c` 上同样复现（本分支没碰 `web/`、`browser_regression.py`、`browser_lan.py`、`core/maintenance.py`）。
+
+- **D1 挑错了队列。** 它在 `/review` 点一条来自 `/api/tasks`（不分平台）的首个待审行；列表改按原帖时间降序后
+  首行是 IG 行，而 `/review` 是 Facebook 队列，那一行永远不会出现。D2 早就带着 `platform=='facebook'`，D1 补上同一条件。
+- **`browser_lan` 六轮红三轮，堵在同一处。** 测试用 `clear_session` 模拟操作员清理失联的脏草稿，而
+  `clear_session` 把会话连同 `sequence` 水位一起丢弃；关闭途中已经发出的那个状态包随后把会话重新注册成 dirty，
+  维护再也静不下来（每次失败的唯一阻塞项都是刚被清掉的那条，原因 `unsaved`）。操作员真遇到会再清一次，
+  测试的等待里同样重试，其余客户端的干净与确认判据仍由 `try_quiesce` 把关。
+  ⚠️ 维护闸本身没有改：「落后的状态包能把已解决的阻塞项拉回来」要不要在 `core/maintenance.py` 里挡住，
+  留给维护闸的负责人判断。
+
+修后本机按 CI 的顺序跑完整个第 14 步：`browser_regression --stage ALL` 13 组通过（444.03 秒）、
+`cutover_rehearsal` 8.26 秒、`browser_deployment` 6 项、`browser_lan` 22.47 秒；
+`browser_lan` 另单独连跑六轮全过（修前六轮红三轮）。日志见 `state/story-insights-ci-timeout/step14-*.log`。
+最终并回 `769d8f0`（视频来源按媒体标识判断）后重建前端再走一遍：
+[全量 107/107](../state/offline-validation-20260922T071604Z/results.json)，
+第 14 步四条命令 396.84 / 8.33 / 15.69 / 23.50 秒全部通过（`final-step14-*.log`）。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的判据与状态不变。
 
 ### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
@@ -618,7 +645,7 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 真机判据：下一轮 `--run` 的 IG 行"处理已有帖"应为 0 篇（除非确有新帖或正文改动）。
 
 ⚠️ `tests_story_insights` 在空闲机器上要 358.19 秒，超过 `tools/test_offline.py` 的 300 秒默认，
-本轮是带 `--timeout 600` 跑的；CI 仍按默认超时，由另一会话的 `claude/story-insights-ci-timeout` 处理。
+该次本地验证带 `--timeout 600`，当时 CI 使用默认超时；相关历史修复见上文。当前 Actions 停用决定见 §1。
 
 ### 1.29 归属哨兵把自家账号当成合作方（2026-09-22）
 

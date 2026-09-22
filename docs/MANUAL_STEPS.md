@@ -679,18 +679,15 @@ scripts\run_pipeline.bat preflight
 
 只有真实依赖验收完成才用 `scheduler-install` 安装并允许 `--run`。管理入口 `scheduler-disable` 会停用定义并结束常驻实例；`scheduler-enable` 检查旧任务冲突后恢复并启动。它们会改变实际计划任务，按维护窗口执行，不为演示而运行。安装后验证查询、停用、恢复、重启单实例、不补跑睡眠全部轮次与三 profile 隔离；进程中断付费任务仍先核账，不自动重放。
 
-提交最终验收报告前，在全部修改集成后安装锁定依赖、运行 React 测试和构建，再运行隔离测试入口；保存命令、版本与结果。
+提交报告前，按 [AGENTS 第四节](../AGENTS.md#四按影响选测试默认不跑全量) 选取与改动相关的验证，保存命令、版本与结果。Python 定向隔离示例：
 
 ```powershell
-npm.cmd --prefix web/ui ci
-npm.cmd --prefix web/ui test
-npm.cmd --prefix web/ui run build
-scripts\run_python.bat -m tools.test_offline
+scripts\run_python.bat -m tools.test_offline --only tests_parse
 ```
 
-`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——⛔ **它不会让测试结果自动变成真实外部系统结果。** 按 [AGENTS 第四节](../AGENTS.md) 按影响选择范围，不把全量当成每次改动的固定流程；构建保留已有的大 chunk 提示。
+`--only` 可重复，按改动选择脚本；省略时运行全量，仅在影响范围确有需要时使用。`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——⛔ **它不会让测试结果自动变成真实外部系统结果。** 前端改动运行相关单测与构建；构建保留已有的大 chunk 提示。
 
-完整前端验证入口为：
+需要完整前端验证时，再选用以下入口，不逐次全部执行：
 
 ```powershell
 scripts\run_python.bat tests/tests_browser_workflow.py -v
@@ -726,51 +723,62 @@ scripts\run_python.bat tests/cutover_rehearsal.py
 
 ## 13. 更新并启动审校台
 
+**当前服务机采用源码更新，不依赖 GitHub Actions 或云端运行包。** 开发机完成本次改动的定向验证后交付，服务机继续使用已有源码目录、解释器、凭据和数据绑定。仅删除工作流或修改说明无需重启服务机。
+
 Facebook、Instagram 待审核入口的四个子分类均按原帖发布时间从新到旧排列。更新后各选取不同发布时间的帖子，核对列表、分类／月份筛选及详情“上一篇／下一篇”顺序；表格中的“时刻 · 柏林”仍表示候选或已有排期，不作为列表排序依据。
 
 “话题标签与链接”页的两个分区均可直接勾选确认，无须先点“编辑德语”；等待“确认已保存”后，刷新应仍保持勾选。Facebook 先打开检查各落地页，再确认整个链接区；Instagram 核对引导语，也可确认“无链接／不添加引导语”。编辑标签、落地页或引导语会取消相应分区确认，随草稿保存。旧记录升级后，有链接或引导语的帖子须补一次分区确认；保存失败不算确认成功，版本冲突时载入最新内容后重新核对；正文版本已过期时，先进入“编辑德语”复核并保存正文。
 
 项目只维护 `web/ui/` 下的 React + TypeScript 前端。构建输出为 `web/ui/dist/`，`config.toml` 的 `[paths].web_dist` 显式指向该目录；`config.local.toml` 只接续 archive/state，不选择前端。部署契约由 `tests/tests_spa_static.py` 与 `tests/cutover_rehearsal.py` 守住。
 
-源码检出的前端产物不随 `git pull` 更新。安装 Node.js/npm 后，日常更新并启动使用：
+源码检出的前端产物不随 `git pull` 更新，服务机需要 Git、Python 和 Node.js/npm。日常更新按以下顺序执行：
+
+1. 在现有源码目录记录 `git rev-parse HEAD`，检查 `git status --short --branch`。确认当前为 main、工作区干净；有本地改动时先核对和保全。
+2. 保存运营草稿，等待抓取、模型、上传和发布工作结束，在调度器空闲后正常退出需要更新的 Web 与调度进程，不中断正在进行的业务。
+3. 拉取源码；出现冲突或分支分叉时保留现场，不继续启动：
 
 ```powershell
 git pull --ff-only
-scripts\run_web.bat
-# 服务机局域网使用：scripts\run_web_lan.bat（见 §13.1）
+if ($LASTEXITCODE -ne 0) { throw 'Pull failed; stop before restart.' }
 ```
 
-先正常停止旧 Web 进程，再运行启动脚本。脚本每次执行锁定依赖安装（包含构建工具）与前端构建，
-两步都成功后才启动 Python；失败时修正控制台中的 npm 错误后重试，不会继续提供旧页面。
-带 `release.json` 的运行包跳过这两步，不需要 Node，受管实例按第 17 节更新制品。
-直接运行 Uvicorn 不经过此脚本，仍须先执行 `npm.cmd --prefix web/ui ci` 和 `npm.cmd --prefix web/ui run build`。
+4. Python 依赖发生变化时，使用当前绑定解释器更新依赖；无变化时复用已有环境。下面命令失败时停止更新并保留错误，不重跑包含全量测试的 `setup.bat`：
 
-下面的清单用于每次更新前端后的复验。
+```powershell
+scripts\run_python.bat -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed; stop before restart.' }
+```
 
-从上到下检查。任何一步失败就停止更新并保留报告，不对 archive/state 做恢复操作。
+5. 局域网服务机运行 `scripts\run_web_lan.bat`（网络配置见 §13.1）；本机开发运行 `scripts\run_web.bat`。脚本每次安装锁定前端依赖并构建，成功后才启动 Web。失败时保留 npm 错误，修正后重试，不提供旧页面。
+6. 按原有命令和已授权模式恢复调度器，核对页面、运行状态和本次修改涉及的功能。凭据、路径绑定、`archive/state` 及处理权限保持原状。
+
+在服务机本机回环地址查询 `/api/health`，按实际端口访问；预期 HTTP 200 且 `error=null`。`managed=false`、`deployment_ready=false` 是源码模式的正常值；运行版本在实际进程的源码目录用 `git rev-parse HEAD` 核对，不要求制品 SHA 或运行指纹字段。只看 HTTP 200 不能证明所有业务依赖可用。
+
+旧受管实例另见 [第 15 节](#15-服务机部署与日常更新)，不要在 `releases` 内执行源码更新。直接运行 Uvicorn 不经过前端构建入口，不能作为本节重启步骤。
+
+以下清单按本次改动选择；涉及的检查失败时停止更新并保留报告。代码回退通过正常 Git 反向提交恢复已知可运行版本，依赖与前端按该版本重新准备；账本、人工稿和原图保留当前数据，不恢复旧数据副本。
 
 ### 集成前检查
 
-- [ ] 锁定依赖安装 PASS — `npm.cmd --prefix web/ui ci`
-- [ ] React 单测 PASS — `npm.cmd --prefix web/ui test`
-- [ ] React 构建 PASS — `npm.cmd --prefix web/ui run build`
-- [ ] Python 全量 PASS — `scripts\run_python.bat tools/test_offline.py`
-- [ ] FastAPI 静态演练 PASS — `scripts\run_python.bat tests/cutover_rehearsal.py`
-- [ ] `config.toml` 的 `[paths].web_dist` 是 `web/ui/dist`
-- [ ] `web/ui/dist/index.html` 存在
+- [ ] 按改动范围选定检查并记录结果；纯文档或工作流删除检查内容、引用、换行及 diff
+- [ ] Python 改动运行直接相关的隔离测试；跨模块改动先说明影响，再选择子系统或全量回归
+- [ ] 前端改动运行相关单测与构建；浏览器交互选择对应场景
+- [ ] 静态路由或部署形状改动运行 `tests_spa_static.py` 与 `cutover_rehearsal.py`
+- [ ] 涉及配置键、启动入口或模块依赖时补相关测试及必要的 hygiene 检查
 
 ### 合并与启动
 
-- [ ] 把开发分支合并到原 `main`
-- [ ] 在原主工作区运行 `scripts\run_web.bat`；源码局域网使用 `scripts\run_web_lan.bat`
-- [ ] 核对部署模式：独立开发为 `127.0.0.1:8765`；源码局域网读取网络 JSON（§13.1）；受管局域网为显式配置的 `0.0.0.0:8765`，并从标准业务地址验证访问（第 17 节）
+- [ ] 按仓库约定确认推送并将开发分支合入 main
+- [ ] 服务机按上述顺序拉取、构建并启动；源码局域网使用 `scripts\run_web_lan.bat`
+- [ ] 核对 `[paths].web_dist = "web/ui/dist"`、构建产物存在及本次修改的功能
+- [ ] 核对入口：独立开发为 `127.0.0.1:8765`；源码局域网读取网络 JSON（§13.1），从实际业务地址检查访问
 
 `DIST` 的目录在 `web/api/app.py` import 时确定，但每次请求仍读取其中的文件。
 旧版启动脚本只启动 Python，不会将更新后的源码变成新构建；当前脚本已补上构建步骤。
 
 ### 只读检查
 
-每一条都从地址栏直接输入，覆盖服务端深链接回落：
+涉及路由或页面改动时，从下面选择相关入口，直接输入地址覆盖服务端深链接回落：
 
 - [ ] `/review`
 - [ ] `/history`
@@ -791,7 +799,7 @@ scripts\run_web.bat
 只点取消，核对焦点回到三点按钮，再次展开仍正常。恢复原动画偏好后再核对一次。
 若仍出现在屏幕外，记录实际前端资源 hash、动画偏好、菜单坐标与计算后的过渡时长。
 拉取含启动修复的源码后，正常停止旧 Web 进程并重新执行 `scripts\run_web.bat`，确认 npm 构建成功，
-再刷新页面核对菜单；受管实例按第 17 节更新制品。
+再刷新页面核对菜单；旧受管实例的恢复边界见第 15 节。
 本机离线定向命令为 `scripts\run_python.bat tests/browser_regression.py --stage REVIEW_MENU`，运行前先构建。
 
 若优化能力查询 `/api/refinements/task/...` 仍返回 500，另取服务机 Python 日志中该请求的
@@ -857,11 +865,12 @@ scripts\update_service_address.bat 10.66.6.3 --allow-client-subnet 10.66.6.0/24 
 
 脚本校验完两份配置后更新 `ops/service-machine.network.json` 的监听、入口、端口、来源，以及 `config.toml` 中 `[feishu].base_url`；保留其他模型服务入口、注释、凭据和业务数据。相同值重复执行不写文件，配置损坏或输入错误时返回非零。普通写入失败会恢复本次已写的文件；这是开发机的配置修改，不是跨文件断电事务，仍需检查 diff 后再提交。脚本不自动提交、推送、修改 Windows IP、防火墙或受管 `host.json`。
 
-检查 `git diff -- config.toml ops/service-machine.network.json`，提交并合并到 `main`，再让服务机更新。仅推送功能分支不会进入服务机拉取的 `main`。服务机先保存所有草稿，等待抓取、模型、上传和发布工作完成，在调度器空闲后正常退出 Web 与调度器，再执行：
+检查 `git diff -- config.toml ops/service-machine.network.json`，提交并合并到 `main`，再让服务机更新。仅推送功能分支不会进入服务机拉取的 `main`。服务机按 [§13](#13-更新并启动审校台) 记录版本、保全本地改动，保存草稿并在业务空闲后正常退出 Web 与调度器；确认当前为 main 且工作区干净后执行：
 
 ```powershell
 git status --short --branch
 git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw 'Pull failed; stop before restart.' }
 scripts\run_web_lan.bat
 ```
 
@@ -1150,17 +1159,19 @@ scripts\run_scheduler.bat --run --process --once
 
 ## 15. 服务机部署与日常更新
 
-服务机使用 **Actions 构建 → 本机主动获取 → 空闲切换**。开发机负责代码与隔离测试；服务机是唯一真实运行业务的机器。自动部署的验收与真实抓取、付费和发布验收分别记录，见 [REQUIREMENTS §10.7](REQUIREMENTS.md#107-服务机自动部署)。
+**当前服务机直接运行源码，日常操作见 [§13](#13-更新并启动审校台)，局域网改址见 [§13.1](#131-源码服务机一键改址)。** 开发机负责代码与按影响选择的隔离验证，服务机继续使用已有数据和已授权模式。
+
+**Actions 自动制品交付明确延期（2026-09-22 用户决定）。** 工作流移除后不再生成新运行包；§15.2–§15.10 保留原受管安装、维护与恢复说明，供已有实例维护或以后恢复该能力时参考，不是当前源码部署的操作清单。不寻找新的 Actions 制品、不注册部署控制器任务；既有实例需要继续运行旧版时用 §15.8 的 `pause` 暂停发现更新。原离线证据保留，见 [REQUIREMENTS §10.7](REQUIREMENTS.md#107-服务机自动部署)。
 
 ### 15.1 服务机与账户
 
-使用 Windows x64、Python **3.12.9**、系统 Chrome；Node **24.12.0** 只用于 CI/开发机构建，服务机日常更新无需 Node、Git 或访问 PyPI。服务机须可出站访问 GitHub API 和 Actions 制品域名，并保持接电、不休眠、足够磁盘空间。
+源码服务机需要 Windows x64、Python、系统 Chrome、Git 和 Node.js/npm；沿用已验证的 Python **3.12.9**、Node **24.12.0** 工具链，不因停用 CI 更换版本。源码拉取需要访问 GitHub，前端依赖安装需要访问所配置的 npm 源；Python 依赖变化时按 §13 更新。机器保持接电、不休眠及足够磁盘空间。旧运行包自带前端及 wheel，因此其恢复过程不需要 Node 或在线安装依赖；这个条件不适用于源码启动。
 
-所有任务、Python 和三个 Chrome profile 都由**运营账户**运行。控制器计划任务使用 `InteractiveToken`、最小权限和登录触发；Windows 重启后尚无人登录时不保证业务运行。技术账户不能替代运营账户的 Chrome 会话。
+所有业务进程和三个 Chrome profile 都由**运营账户**运行。当前源码调度沿用原有启动方式和已授权模式，管理入口见 §11；不额外安装第二套任务。旧控制器任务使用 `InteractiveToken`、最小权限和登录触发；Windows 重启后尚无人登录时不保证业务运行。技术账户不能替代运营账户的 Chrome 会话。
 
 ### 15.2 首次安装已验证制品
 
-首次安装与真实业务启用分开进行。先在 GitHub 的 `Windows release` 工作流中核对：仓库 `marcus-ao/FacebookScraper`、分支 `main`、当前提交 SHA、全部检查成功；下载该次 `fbscraper-windows` 制品，解压到临时目录。不要从来源不明的 ZIP 启动安装程序。
+本节首次安装随自动制品交付明确延期，当前服务机不执行。旧受管实例恢复使用已保留且可核对来源的历史包：仓库 `marcus-ao/FacebookScraper`、原提交 SHA、制品身份和哈希须一致。历史 `fbscraper-windows` 包解压后的根目录直接包含 `release.json`；不要从来源不明的 ZIP 启动安装程序，也不要把旧包标成当前 main 的新版本。
 
 以下路径仅为示例，在运营账户的 PowerShell 中执行：
 
@@ -1243,7 +1254,9 @@ Set-Location D:\FacebookScraperService\controller
 
 ### 15.7 日常自动更新
 
-服务机每 60 秒核对当前 main 的成功工作流与制品身份。下载、哈希校验、依赖安装和隔离预检发生在旧版本运行期间。候选准备好后等待后台工作及编辑结束，页面预告 60 秒；运营可点击“延后 30 分钟”。持续等待超过 30 分钟通知一次。
+本项明确延期。以下是保留的原控制器行为：每 60 秒核对当前 main 的成功 push 工作流与制品身份；删除工作流后不会产生新候选。旧实例按 §15.8 暂停发现更新，源码服务机按 §13 手动更新。
+
+原流程的下载、哈希校验、依赖安装和隔离预检发生在旧版本运行期间。候选准备好后等待后台工作及编辑结束，页面预告 60 秒；运营可点击“延后 30 分钟”。持续等待超过 30 分钟通知一次。
 
 未保存草稿、上传和正在执行或排队的任务都会阻止切换。失联的脏会话不会因超时自动忽略；先恢复原标签页保存或明确放弃内容。确认原编辑确已不存在后，技术人员才能用 `clear-session` 解除其阻塞。
 
@@ -1264,7 +1277,7 @@ Set-Location D:\FacebookScraperService\controller
 .venv\Scripts\python.exe -m deployment clear-session --root D:\FacebookScraperService --session <已核对的会话ID>
 ```
 
-`pause` 暂停发现和安装自动更新，保留业务进程。`rollback` 仍经过空闲协调；不能直接杀掉可能正在提交的业务。旧代码、环境和版本配置保留在本机，恢复不依赖联网。
+`pause` 暂停发现和安装自动更新，保留业务进程；退出前台控制器也不承诺 Web 已退出。旧实例停机先保存或放弃草稿、关闭标签页，再由技术人员通过维护 Gate 关闭接单、向已登记进程请求退出并核对 PID/创建时间，不靠删除目录解除阻塞。`rollback` 仍经过空闲协调；不能直接杀掉可能正在提交的业务。旧代码、环境和版本配置保留在本机，恢复不依赖联网。
 
 自动回退**不恢复旧业务数据**：发布防重、付费记录、人工稿、审校决定、激活边界和访问额度始终使用最新共享数据。真相源格式变化或需要新控制器的版本交技术维护。控制器切换中断时读取持久记录核对进程；无法确认身份时保持阻塞，不能按窗口标题结束进程。
 
@@ -1279,6 +1292,8 @@ Set-Location D:\FacebookScraperService\controller
 GitHub 构建成功不代表服务机已更新。缺少 Chrome 登录、业务未激活或历史费用待核对属于业务状态；部署检查不自动抓取、付费、自检飞书或排期。
 
 ### 15.10 受控验收与持续运行
+
+以下受管部署验收明确延期，不是当前交付条件；旧证据及演练工具保留。
 
 开发机可先执行版本化本机演练（Python 3.12.9、现有前端依赖及已下载的锁定 wheel）：
 
@@ -1296,9 +1311,9 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --wheelhouse state\
 
 ### 15.11 备份与旧手工流程
 
-普通兼容更新不逐次复制整套图库；保留旧代码只提供代码回退能力。首次接续、数据迁移前完整备份核验；日常继续按第 1 节外拷整个 `shared/archive`、`shared/state` 及受保护凭据，备份须覆盖人工图片与设置。云盘镜像本轮延期；首次真实发布后每天异机备份，不能把制品保留期当作数据备份。
+当前源码服务机按 §13 手动更新；`setup.bat` 用于安装，不是日常更新的固定步骤。首次接续、数据迁移前完整备份核验；日常按第 1 节外拷实际绑定的 archive/state 及受保护凭据，备份覆盖人工图片与设置。旧受管实例对应 `shared/archive`、`shared/state`。普通兼容更新不逐次复制整套图库，保留旧代码只提供代码回退能力。云盘镜像本轮延期；首次真实发布后每天异机备份，不能把制品保留期当作数据备份。
 
-受管实例停用原来的“scheduler-disable → git pull → setup → scheduler-enable”流程。开发检出仍可手动安装和测试；生产目录由控制器管理，不 stash、不原地 pull、不复制旧虚拟环境，不同时安装第二套调度计划任务。
+上述源码流程不能直接用于旧受管实例：其版本目录由控制器管理，不 stash、不原地 pull、不复制旧虚拟环境，不同时安装第二套调度计划任务；维护与代码回退使用 §15.8。
 
 ## 16. 阶段三真实验收：冻结、排期与自动发布
 
@@ -1353,7 +1368,7 @@ scripts\run_pipeline.bat preflight
 
 ## 17. 办公局域网接入
 
-本节为受管安装流程；源码部署用 [§13.1](#131-源码服务机一键改址)。以下具体 IP、网段和网卡属于 2026-09-17 的受管操作示例，改址后不得照抄旧数值；待部署值读取 `ops/service-machine.network.json`，已安装实例以其 `control/host.json` 为准。
+当前源码部署用 [§13.1](#131-源码服务机一键改址)，拉取后的调试见 §17.6。§17.1–§17.5 保留旧受管实例的安装、维护和网络验收说明；新的制品安装明确延期。以下具体 IP、网段和网卡属于 2026-09-17 的受管操作示例，改址后不得照抄旧数值；源码配置读取 `ops/service-machine.network.json`，旧受管实例以其 `control/host.json` 为准。
 
 首版面向 2–5 人同权、受控办公局域网 HTTP。用户确认暂不登录和记录个人身份，`actor: null`；获准进入入口的电脑具有相同业务能力，HTTP 不加密。业务写入仍经过已有预算、来源许可、冻结确认和版本冲突检查。本节只解决访问，不授予抓取、模型或发布权限。
 
@@ -1365,7 +1380,7 @@ scripts\run_pipeline.bat preflight
 
 每次改址均重新现场核对 IP/前缀、DHCP 地址保留、Domain/Private 网络类型、客户端网段及 Wi-Fi 客户端隔离。应用配置不会切换 Wi-Fi，也不会修改 Windows 的 IP、掩码、网关或网卡网络类型。
 
-正式安装按第 15 节选择 main 的成功制品；隔离调试按第 17.6 节。网络配置取服务机上已拉取并核对过的仓库副本，下面下载、仓库和安装目录按现场修改：
+新的受管安装随自动制品交付明确延期；以下仅保留历史包的安装参数示例，包来源与恢复边界见第 15 节。当前源码调试按第 17.6 节。网络配置取服务机上已核对过的仓库副本，下面历史包、仓库和安装目录按现场修改：
 
 ```powershell
 Set-Location D:\Downloads\fbscraper-windows
@@ -1431,7 +1446,7 @@ Test-NetConnection 10.66.4.9 -Port 8765
 3. 控制器退出后，技术人员通过现有维护 Gate 预告，等预告期结束且 operations 和 blockers 清空，确认 `try_quiesce()` 成功；再由 `LocalBackend.stop()` 向登记的准确业务进程请求协作退出，用 `LocalBackend.exited()` 确认 worker 和 launcher 均已退出，核验 PID、创建时间及端口。维护调用不要经过 `deployment exec`，它登记的 manual_cli 本身会阻止进入维护。不可使用 `schtasks /End`、强杀业务进程或删账本来结束任务；只关闭前台窗口不足以完成这一步。
 4. 备份该实例 `control\host.json`，仅将 `public_base_url` 改为 `http://10.66.4.9:8765`、`allowed_client_cidrs` 改为 `["10.66.4.0/24"]`。核对原监听仍为 `0.0.0.0:8765`；保留 instance_id、shared、版本、调度/处理模式等其余字段，不用四字段安装配置替换整个 host 文件，不更改 `releases` 中的配置或 `shared` 数据。使用现有网络策略校验确认 URL、端口和 CIDR 一致。
 5. 核对 WLAN 当前为 `10.66.4.9/24`、Domain/Private 网络，并完成 DHCP 地址保留。按第 17.2 节使用该实例的脚本先预览再应用防火墙：本地地址 `10.66.4.9`，来源仅 `10.66.4.0/24`，TCP 8765。核对旧来源已不在本系统专用规则中，其他放行规则仍按第 17.2 节人工审查。
-6. 保持维护闸关闭，通过原控制器入口启动同一实例，由控制器完成 readiness 后自行开放接单，不手动 `reopen()`。恢复原来已有的控制器启动机制，自动更新先保持暂停。核对本机 `/api/health` 的 readiness、新标准入口、实例、SHA 与前后端指纹，以及实际调度/处理模式；再由开发机 `10.66.4.12` 和另一台同网段办公电脑按第 17.3 节检查页面、刷新和访问限制。记录新网络结果，更新书签；历史飞书卡片不会改写，后续卡片链接使用新入口。检查通过后恢复改址前的自动更新状态，原已暂停的继续暂停。
+6. 保持维护闸关闭，通过原控制器入口启动同一实例，由控制器完成 readiness 后自行开放接单，不手动 `reopen()`。恢复原来已有的控制器启动机制，自动更新保持暂停。核对本机 `/api/health` 的 readiness、新标准入口、实例、SHA 与前后端指纹，以及实际调度/处理模式；再由开发机 `10.66.4.12` 和另一台同网段办公电脑按第 17.3 节检查页面、刷新和访问限制。记录新网络结果，更新书签；历史飞书卡片不会改写，后续卡片链接使用新入口。自动制品交付延期期间继续暂停发现更新，业务运行模式保持原状。
 
 网络切换与业务启用分别验收，改址不打开调度、付费处理或发布。新网段的两台客户端、跨夜及登录恢复尚未验收时，状态继续为「待真实联调」。
 
@@ -1459,74 +1474,22 @@ scripts\run_python.bat tests\windows_deployment_rehearsal.py --lan --wheelhouse 
 
 ### 17.6 拉取主分支后在服务机调试
 
-首次调试使用新的 `C:\FacebookScraperServiceLanTest`，与将来的正式业务实例分开。已经安装的实例按第 17.4.1 节改址，不重复安装。新测试目录不接续既有 archive/state/.env，不注册正式任务；默认调度与付费关闭。端口沿用 8765，因此测试与正式实例不能同时占用该端口。
+当前服务机直接运行源码。本节沿用现有目录、数据与启动方式，不创建新的受管实例，也不下载 Actions 制品。旧受管实例的维护、暂停和协作退出见 [§15.8](#158-状态暂停重试与回退)；不要在其 releases 目录套用本节操作。
 
-1. 在服务机运营账户安装 **Windows x64 Python 3.12.9** 和 Git。本流程拉取源码用于核对版本、网络配置与手册，运行环境使用同一提交的已构建制品，无需安装 Node 或自行运行前端开发服务器。管理员核对：
-
-   ```powershell
-   Get-NetIPAddress -InterfaceAlias WLAN -AddressFamily IPv4
-   Get-NetConnectionProfile -InterfaceAlias WLAN
-   Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
-   ```
-
-   地址应为 `10.66.4.9/24`；网络类型应为 DomainAuthenticated 或 Private。若是 Public，按公司网络政策确认办公网络属性后再由管理员调整；不放宽为 Public。已有监听时先确定归属，不结束不认识的进程。
-
-2. 在服务机现有仓库目录打开普通 PowerShell，先检查是否有本地改动；有改动时先核对和保全，不强制覆盖。工作区干净后拉取 `main`，这些变量在后续同一窗口复用：
+1. 按 [§13](#13-更新并启动审校台) 记录当前 SHA、保全本地改动，在业务空闲后正常停进程，再拉取 main。依赖有变化时使用原绑定解释器更新；启动前保留实际数据与凭据路径。
+2. 使用 `scripts\run_web_lan.bat` 安装锁定前端依赖、构建并启动。失败时保留控制台输出，先处理构建或启动错误，不另起 Uvicorn 提供旧页面。源码运行需要 Node.js/npm。
+3. 另开服务机本机 PowerShell，在同一源码目录核对版本、网络配置及健康响应：
 
    ```powershell
-   git status --short --branch
-   git switch main
-   git pull --ff-only origin main
-   if ($LASTEXITCODE -ne 0) { throw 'Pull failed; stop before installation.' }
-   $Source = (git rev-parse --show-toplevel).Trim()
-   $ExpectedSha = (git rev-parse HEAD).Trim()
-   $Network = Join-Path $Source 'ops\service-machine.network.json'
-   Get-Content $Network
+   git rev-parse HEAD
+   $sourcePolicy = Get-Content -LiteralPath 'ops\service-machine.network.json' -Raw | ConvertFrom-Json
+   $sourcePolicy
+   Invoke-RestMethod -Uri ('http://127.0.0.1:{0}/api/health' -f $sourcePolicy.web_port)
    ```
 
-   在 GitHub Actions 的 **Windows release** 中选择 **main** 和 `$ExpectedSha` 对应的成功运行，下载 `fbscraper-windows`，解压到当前用户 Downloads 下的同名目录，根目录必须直接有 `release.json`。网络配置使用刚拉取的 `ops/service-machine.network.json`；发布制品不含这份文件，也不再单独上传。不要选择合并前的旧包或失败运行；`git pull` 本身不会安装构建产物、更新固定控制器或改变受管实例的 `control/host.json`。
+   `error` 应为空、`managed=false`；`deployment_ready=false` 是源码模式正常值。SHA 通过实际运行目录的 Git 核对，不使用制品字段判断源码版本。页面通过配置中的 `public_base_url` 访问；健康接口只在本机检查，远程返回 403 符合访问策略。
 
-3. 在运营账户普通 PowerShell 中安装；这些变量在后续同一窗口复用：
+4. 核对本次修改涉及的页面、接口及 `/runtime`，记录命令、源码 SHA 和结果。真实业务异常按 [§12](#12-卡住时保留什么) 留取日志；本机响应正常不代表抓取、模型或排期已验收。写入测试使用隔离样本，不在真实账本中造夹具，不为部署检查触发抓取、付费、飞书自检或发布。
+5. 首次接入或网络策略变更时，按 [§13.1](#131-源码服务机一键改址) 核对当前 IP、来源网段、防火墙和至少两台办公电脑的可达性；日常无网络变更时不重复整套局域网验收。按原命令及已授权模式恢复调度器，确认实际心跳。
 
-   ```powershell
-   $Release = Join-Path $env:USERPROFILE 'Downloads\fbscraper-windows'
-   $ServiceRoot = 'C:\FacebookScraperServiceLanTest'
-   Set-Location $Release
-   py -3.12 --version
-   Get-Content $Network
-   py -3.12 -m deployment.release verify . --expected-sha $ExpectedSha
-   if ($LASTEXITCODE -ne 0) { throw 'Release verification failed; stop before installation.' }
-   py -3.12 -m deployment install --root $ServiceRoot --release $Release --network-config $Network
-   ```
-
-   版本、SHA 或校验不符时停止；安装目标非空也会拒绝，不能删除其内容来重试。安装会准备两个最终路径虚拟环境及独立回环预检，期间等命令返回。安装输出须显示真实入口、网段以及 `scheduler_enabled=false`、`process_enabled=false`。
-
-4. 首次运行前暂停自动更新，固定本次主分支版本供调试；保留安装器生成的空业务凭据和空 GitHub token：
-
-   ```powershell
-   Set-Location "$ServiceRoot\controller"
-   .\.venv\Scripts\python.exe -m deployment pause --root $ServiceRoot
-   .\.venv\Scripts\python.exe -m deployment status --root $ServiceRoot
-   .\.venv\Scripts\python.exe -m deployment supervise --root $ServiceRoot
-   ```
-
-   最后一条常驻，保留窗口。另开普通 PowerShell，访问 `http://127.0.0.1:8765/api/health`，确认 `deployment_ready=true`、SHA 等于 `$ExpectedSha`、前后端指纹一致、`web_host=0.0.0.0`、`web_port=8765`、`public_base_url=http://10.66.4.9:8765`。打开本机页面及运行页；空业务列表符合新隔离实例预期，业务尚未验收的状态不等于部署失败。
-
-5. 在管理员 PowerShell 中预览并应用测试实例规则：
-
-   ```powershell
-   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.9 -InterfaceAlias WLAN -WhatIf
-   C:\FacebookScraperServiceLanTest\controller\scripts\configure_lan_firewall.ps1 -Root C:\FacebookScraperServiceLanTest -LocalAddress 10.66.4.9 -InterfaceAlias WLAN
-   Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallAddressFilter
-   Get-NetFirewallRule -Name FBScraper-LAN-Web | Get-NetFirewallPortFilter
-   ```
-
-   应为本地 `10.66.4.9`、远程 `10.66.4.0/24`、TCP 8765。若脚本受执行策略阻止，只按组织政策对已审阅下载文件解锁，不修改全机执行策略或关闭防火墙。
-
-6. 至少两台办公电脑先核对自身 IP 属于 `10.66.4.0/24`，然后运行 `Test-NetConnection 10.66.4.9 -Port 8765`，浏览器访问 **http://10.66.4.9:8765**。核对审校、历史、月历、设置、运行页及深链刷新；`/api/deployment/status` 应可读，`/api/health` 从远端应返回 403。浏览器不需要调整安全选项。
-
-7. 空实例可直接用设置页验证多人保护：两台电脑先打开同一旧值，各自输入不同的合法默认时间；A 保存，B 保存应提示版本冲突且保留 B 的输入。测试结束明确保存或放弃草稿。图片、素材下载和内容编辑须准备隔离样本后再按第 17.3 节验收；不要为造测试数据启动真实抓取、模型或发布。完整假服务回归使用第 17.5 节的源码测试工具，不在业务账本中造夹具。
-
-8. 记录页面、HTTP 结果、版本和两台客户端；按第 17.4 节验证锁屏及跨夜。生产轮询只接受当前 main 的成功制品，调试实例保持暂停以便复核固定版本。正式运行目录、凭据、任务与业务启用按第 15 节另行验收；不把测试实例的账本搬成正式数据。
-
-撤销远程入口用第 17.5 节的 `-Remove`，将 Root 换成测试目录。`pause` 只暂停自动更新，`Ctrl+C` 只退出前台控制器，都不承诺 Web 已退出；不能把窗口消失当作完整停机。结束调试前先保存或放弃所有草稿并关闭标签页，再退出前台控制器；技术人员使用维护 Gate 关闭接单、向已登记的准确进程请求退出并核对 PID/创建时间，不能强杀未完成操作或删除测试目录解除阻塞。
+更新失败时停止后续操作并保留现场；代码按 §13 回退，账本、人工稿、原图和凭据不随代码回退。仅移除工作流或修改文档无需为此重启服务机。
