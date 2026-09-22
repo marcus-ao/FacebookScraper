@@ -33,13 +33,16 @@ def accounts():
     return result
 
 
-def assert_context(page, channel):
-    """Bind the live composer to the same asset used for conflict checks."""
+def assert_context(page, channel, *, asset_context=None):
+    """Bind the live composer to the asset used for this conflict check."""
+    expected = asset_context if asset_context is not None else require(channel)['context_ids']
     url = urlsplit(page.url)
     if (url.scheme != 'https' or url.hostname != 'business.facebook.com'
             or url.path.rstrip('/') != '/latest/composer'
-            or context_ids(page.url) != require(channel)['context_ids']):
-        raise bs.ProbeRequired('当前编辑器资产与渠道录证/月历不一致，请核对发布账号')
+            or context_ids(page.url) != expected):
+        raise bs.ProbeRequired('当前编辑器资产与本次发布目标不一致，请核对发布账号'
+                               if asset_context is not None else
+                               '当前编辑器资产与渠道录证/月历不一致，请核对发布账号')
 
 
 def combo(page):

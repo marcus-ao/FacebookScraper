@@ -24,18 +24,23 @@ def remote_id(card):
     return ';'.join(channel + '=' + ids[channel] for channel in card.channels)
 
 
-async def baseline(page, when, final_text, *, ui_timezone, target_channels, timeout=30):
-    inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-                                          business_timezone=bs.business_timezone(), timeout=timeout)
+def baseline_from_inventory(inventory, when, final_text, target_channels):
+    """用已经读到的整月结果做提交前基线，避免紧接着再读一遍。"""
     cards = matching(inventory, when, final_text, target_channels)
     return bs.ScheduledBaseline(datetime.now().astimezone().isoformat(), len(cards),
                                 tuple(remote_id(card) for card in cards),
                                 tuple(card.card_sha256 for card in cards))
 
 
+async def baseline(page, when, final_text, *, ui_timezone, target_channels, timeout=30, run=None):
+    inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
+                                          business_timezone=bs.business_timezone(), timeout=timeout, run=run)
+    return baseline_from_inventory(inventory, when, final_text, target_channels)
+
+
 async def verify(page, when, final_text, *, ui_timezone, target_channels,
                  expected_image_count=None, pre_submit_baseline=None, expected_remote_id='',
-                 timeout=30, screenshot_path=None):
+                 timeout=30, screenshot_path=None, run=None):
     stamp = datetime.now().astimezone().isoformat()
     base = dict(observed_at=stamp, target_at=when.isoformat(),
                 ui_at=when.astimezone(bs.resolve_ui_timezone(ui_timezone)).isoformat(),
@@ -48,7 +53,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
             raise bs.PublishStepError('提交前已有同条件排期，不能用旧卡片确认本次提交')
         diagnostics['failure_stage'] = 'inventory_read'
         inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-                                              business_timezone=bs.business_timezone(), timeout=timeout)
+                                              business_timezone=bs.business_timezone(), timeout=timeout, run=run)
         diagnostics.update(inventory_cards=len(inventory.cards),
                            complete_month=inventory.decision_complete and inventory.covers((when,)),
                            failure_stage='matching', caption_mismatch=0, time_mismatch=0,

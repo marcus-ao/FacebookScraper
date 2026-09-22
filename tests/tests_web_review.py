@@ -290,15 +290,21 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(review.history(self.account), [])
 
     def test_content_can_be_frozen_and_released_without_a_verified_browser(self):
-        """录证缺失让排期不可用，但不该挡住人确认文案和图片。"""
+        """没有历史录证也能冻结并看到可选时间；提交仍要本次目标。"""
         self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
         options = self.client.get(self.url + "/approval-options")
         self.assertEqual(options.status_code, 200, options.text)
-        self.assertFalse(options.json()["available"])
+        self.assertTrue(options.json()["available"])
         self.assertTrue(options.json()["lockable"])
+        self.assertIsNone(options.json()["preview"])
         locked = self.lock()
         self.assertEqual(locked.status_code, 200, locked.text)
         self.assertEqual(locked.json()["status"], "content_locked")
+        frozen = self.client.get(self.url + "/approval-options").json()
+        self.assertEqual(frozen["preview"]["text"], "Ein sauberes Zuhause. #Neakasa")
+        image = self.client.get(frozen["preview"]["images"][0]["url"])
+        self.assertEqual(image.status_code, 200, image.text)
+        self.assertEqual(image.content[:2], b"\xff\xd8")
         # 冻结期间编辑入口一律拒绝。
         frozen_localization = self.localization_body(body_de="Neu")
         self.assertEqual(self.client.put(self.url + "/text_de", json={

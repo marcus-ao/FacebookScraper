@@ -3,7 +3,8 @@ import { idPath, jsonBody, request } from './http'
 export const approvalOptions = (id: string) => request<ApprovalOptions>(`/api/tasks/${idPath(id)}/approval-options`)
 export const approvalBody = (detail: TaskDetail, scheduled_at: string, options: ApprovalOptions) => ({ scheduled_at,
   source_text_sha256: detail.text.source_text_sha256, human_revision: detail.text.human_revision,
-  review_revision: detail.review.revision, content_fingerprint: options.fingerprint })
+  review_revision: detail.review.revision, content_fingerprint: options.fingerprint,
+  publish_target: options.preview?.target })
 export type ApprovalBody = ReturnType<typeof approvalBody>
 /** 提交立刻返回操作编号；浏览器那几分钟在请求之外跑，页面轮询它。 */
 export const approve = (id: string, body: ApprovalBody) => request<PublishOperation>(`/api/tasks/${idPath(id)}/approve`, jsonBody(body))

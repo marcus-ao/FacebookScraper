@@ -10,6 +10,8 @@
 
 **审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`；构建产物不入版本库。⛔ **源码检出重启 Web 必须走 `scripts/run_web.bat`（局域网用复用它的 `scripts/run_web_lan.bat`）**——它每次按锁文件装依赖再构建。直接跑 Uvicorn 会继续提供旧产物，这个坑真实发生过：服务机 `git pull` 后重启，页面仍是修复前的 CSS。带 `release.json` 的运行包用包内前端，不需要 Node。
 
+**单篇排期。** 审校台冻结后选时刻、再由发布 Chrome 创建定时任务，用的是本次确认的渠道、账号和 `[publish].asset_id` / `business_id`。历史录证和流水线激活不再作为这次提交的许可证；批量批准和 CLI `--submit` 仍走原来的严格条件。`scheduled` 仍可以在远端图片未核验时写下，这条记录不能激活流水线，也不能当作 G8。本段只说明闸的位置，没有新的真实排期证据。
+
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
 **外部依赖。** `[feishu].enabled = true`，未设置显式网络策略的非受管进程读取 `[feishu].base_url`，由改址脚本与网络 JSON 同步；设置 `FBSCRAPER_NETWORK_CONFIG` 时读取该 JSON。服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。

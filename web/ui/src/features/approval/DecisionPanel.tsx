@@ -32,7 +32,7 @@ function SubmissionProgress({ controller: c }: { controller: ApprovalController 
       description={<><Progress percent={Math.round((op.step_index / op.step_total) * 100)} size="small" />
         <Typography.Text type="secondary">浏览器正在后台操作，通常需要几十秒到几分钟。可以离开这个页面，回来还能看到进度。</Typography.Text></>} />
   }
-  if (op.status === 'succeeded') return <Alert type="success" title="排期已创建并回读确认" />
+  if (op.status === 'succeeded') return <Alert type="success" title="排期已确认；排期详情图片未核验" />
   if (op.status === 'uncertain') {
     return <Alert type="warning" title="这次提交结果不明确"
       description={<>{op.message}<br />⛔ 不要直接重新提交：先用下面的「核对并补齐本地回执」查清远端到底有没有收下。</>} />
@@ -63,7 +63,7 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     {/* 选时刻的人在北京，看帖子的人在德国；这一行不显示出来就只能靠记时差。 */}
     {c.eligible && audience && <p className={styles.help} role="note">德国受众那边是 <strong>{audience.text}</strong>
       {audience.quiet && <Alert type="warning" title="这个时刻德国还在凌晨，粉丝多半看不到" description="可以继续排期；如果不是有意选的，换一个白天的时刻。" />}</p>}
-    {c.reason && <p className={styles.help}>{!data?.available && data ? /probe|config|验收证据/i.test(data.reason) ? '发布环境尚未完成本机核验，暂时不能创建排期。' : '内容或发布条件尚未满足；请复核正文、图片和本篇处理状态。' : c.reason}</p>}
+    {c.reason && <p className={styles.help}>{!data?.available && data?.reason ? data.reason : c.reason}</p>}
     {min && max && <div className={styles.help}>可选 {min.replace('T', ' ')} 至 {max.replace('T', ' ')}（北京） <Space wrap>{c.eligible && data?.default_times.map(time => <Button size="small" key={time} disabled={editing || c.busy || !data.available || !isCompleteScheduleTime(c.when)} onClick={() => c.setWhen(c.when.slice(0, 10) + 'T' + time)}>{time} 北京</Button>)}</Space></div>}
     {c.eligible && <Collapse ghost items={[{ key: 'occupancy', label: `${near ? '附近已有同渠道排期 · ' : ''}查看所选时刻前后一天的同渠道占用（间隔 ${calendar.data?.gap_minutes ?? '—'} 分钟）`, children: <>
       <p>依据缓存：<BusinessTime at={calendar.data?.cached_at ? zonedInput(calendar.data.cached_at, zone) : null} />{calendar.data?.stale ? ' · 可能已过期' : ''}；正式排期前会再次核对后台。</p>
@@ -77,9 +77,10 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     {detail.review.wake_at && <p>恢复审校：<ShanghaiTime at={detail.review.wake_at} /></p>}{detail.review.reason && <p>处理理由：{detail.review.reason}</p>}{detail.review.handoff_url && <a href={detail.review.handoff_url} target="_blank" rel="noopener noreferrer">查看手工发布的帖子</a>}
     {data?.reason && !data.available && <Collapse ghost items={[{ key: 'reason', label: '查看核验信息', children: <pre className={styles.diagnostic}>{data.reason}</pre> }]} />}
     <Modal title="确认本篇发布内容与时刻" open={!!c.snapshot} onCancel={() => { if (!c.busy) c.setSnapshot(null) }} okText="确认并创建排期" cancelText="继续核对" confirmLoading={c.busy} onOk={() => void c.submit()}>
-      {c.snapshot && <><p>{c.snapshot.detail.platform === 'facebook' ? 'Facebook' : 'Instagram'} · {c.snapshot.body.scheduled_at.replace('T', ' ')} 北京{audience && <> · 德国 {audience.text}</>}</p><p>{c.snapshot.detail.text.de_human ? '采用人工复核文案' : '采用当前德语文案'} · {c.snapshot.detail.images.length} 张图片，人工图片优先。</p>
-        <div className={styles.preview}>{c.snapshot.detail.text.de_human || c.snapshot.detail.text.de_machine || c.snapshot.detail.localization.body_de}</div>
-        <p>确认后将使用已冻结的这一份内容创建排期。</p></>}
+      {c.snapshot && data?.preview && <><p>{data.preview.target.channel === 'facebook' ? 'Facebook' : 'Instagram'} · {data.preview.target.account} · {c.snapshot.body.scheduled_at.replace('T', ' ')} 北京{audience && <> · 德国 {audience.text}</>}</p>
+        <div className={styles.preview}>{data.preview.text}</div>
+        <div>{data.preview.images.map(image => <img key={image.index} src={image.url} alt={`冻结图片 ${image.index + 1}`} />)}</div>
+        <p>确认后将使用已冻结的这一份内容创建排期。排期详情里的图片要等回读适配，这次不会把它标成已核验。</p></>}
     </Modal>
     <Modal title="登记：已在 Business Suite 删除这条排期" open={undoOpen} okText="我已删除，去核实" cancelText="取消"
       okButtonProps={{ danger: true, disabled: !undoReason.trim() }} confirmLoading={c.busy}

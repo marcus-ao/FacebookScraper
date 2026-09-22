@@ -13,6 +13,7 @@ from core.mirror import MirrorSettings, MirrorService
 from core.paid_model import atomic_write_json
 from core.process_identity import worker_alive
 from publish import business_suite as bs, journal, planner_cache, snapshots
+from publish.manual_run import load as load_manual_run
 
 
 def queue_mirror(source, stage, files, evidence, now):
@@ -124,7 +125,9 @@ async def unschedule(account, indexed, *, reason: str, inventory_reader=None, no
         row = journal.scheduled_record_for_refs(cfg().state_dir, (ref,))
         if row is None:
             raise review.ReviewConflict('这篇没有可撤销的排期记录')
-        inventory = await (inventory_reader or planner_cache.read_live_inventory)()
+        async def _live_month():
+            return await planner_cache.read_live_inventory(run=load_manual_run(source['platform']))
+        inventory = await (inventory_reader or _live_month)()
         if not isinstance(inventory, bs.RemoteSlotInventory) or not inventory.decision_complete:
             raise review.ReviewConflict('这次月历没有读完整，不能据此判定卡片已被删除')
         at = datetime.fromisoformat(row['scheduled_at'])

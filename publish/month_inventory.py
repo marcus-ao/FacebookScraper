@@ -189,15 +189,16 @@ async def recommendation_state(page, item, *, timeout=1.5):
     return 'shown'
 
 
-async def read_item(page, row, item, *, timeout=30, ui_timezone=None):
+async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=None):
     stage = 'item_ready'
     try:
-        ready = await ready_item(page, row, item, timeout=timeout)
+        ready = await ready_item(page, row, item, timeout=timeout, card_spec=card_spec)
         if ready is None:
             return None
         node, raw = ready
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
-        return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone)
+        return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone,
+                                      card_spec=card_spec)
     except Exception as exc:
         raise PlannerItemError(row, item, stage, exc) from exc
     finally:
@@ -205,7 +206,7 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None):
         await page.mouse.move(0, 0)
 
 
-async def ready_item(page, row, item, *, timeout):
+async def ready_item(page, row, item, *, timeout, card_spec=None):
     """Re-read the card and bind a newly opened hover link to its caption and grid time."""
     node = item_locator(page, row, item)
     deadline = time.monotonic() + timeout
@@ -215,7 +216,7 @@ async def ready_item(page, row, item, *, timeout):
     before_hover = set()
     tooltip = ''
     if not fresh['href']:
-        spec = bs.require_readback_evidence()
+        spec = card_spec or bs.require_readback_evidence()
         before_hover = set(await page.get_by_role('link').all_inner_texts())
         tooltip = await recommendation_state(page, node, timeout=min(1.5, max(.001, deadline - time.monotonic())))
         if tooltip == 'shown':
@@ -236,7 +237,7 @@ async def ready_item(page, row, item, *, timeout):
         require_same_item(item, fresh)
         raw = ''
         if not fresh['href']:
-            spec = spec or bs.require_readback_evidence()
+            spec = spec or card_spec or bs.require_readback_evidence()
             candidates = [fresh['aria'], fresh['text'], *fresh['labels']]
             # The recorded hover preview is itself a link, outside the time node.
             # A link already visible before hovering cannot establish this association.
@@ -285,7 +286,8 @@ def require_same_item(item, fresh):
         raise bs.PublishStepError('月历条目已读取的正文发生变化，请重新读取')
 
 
-async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None):
+async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None,
+                           card_spec=None):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -332,7 +334,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
                     await observer.finish()
             finally:
                 await detail.close()
-    spec = bs.require_readback_evidence()
+    spec = card_spec or bs.require_readback_evidence()
     parsed = bs._entry_naive(raw, spec)
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     if parsed is None or parsed != expected:
@@ -348,13 +350,13 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             'caption_status': 'present', 'accounts': {key:accounts()[key] for key in remote_ids}}
 
 
-async def prepare(page, *, timeout=30):
-    proof = require()
-    url = selectors.CONTENT_CALENDAR_URL + '?' + urlencode(proof['context_ids'])
+async def open_calendar(page, asset_context, *, timeout=30):
+    """打开指定业务资产的月历。调用方负责提供资产，这里不读录证文件。"""
+    url = selectors.CONTENT_CALENDAR_URL + '?' + urlencode(asset_context)
     await page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
     await bs.assert_page_usable(page)
-    if context_ids(page.url) != proof['context_ids']:
-        raise bs.PublishStepError('月历当前资产与单渠道控件录证不一致，请核对发布账号')
+    if context_ids(page.url) != asset_context:
+        raise bs.PublishStepError('月历当前资产与本次发布目标不一致，请核对发布账号')
     await page.get_by_role('button', name='Month', exact=True).click(timeout=timeout * 1000)
     for prefix in ('Content type:', 'Shared to:'):
         control = page.get_by_role('button', name=re.compile('^' + re.escape(prefix)))
@@ -362,6 +364,11 @@ async def prepare(page, *, timeout=30):
             await control.click()
             await page.get_by_role('menuitem', name='All', exact=True).click()
         await expect(control).to_have_text(prefix + ' all', timeout=timeout * 1000)
+
+
+async def prepare(page, *, timeout=30):
+    proof = require()
+    await open_calendar(page, proof['context_ids'], timeout=timeout)
 
 
 def moments(day, clock, ui_zone, business_zone):
@@ -372,15 +379,21 @@ def moments(day, clock, ui_zone, business_zone):
     return tuple(at.astimezone(business_zone) for at in ((first, second) if first.utcoffset() != second.utcoffset() else (first,)))
 
 
-async def read(page, *, ui_timezone, business_timezone, timeout=30):
-    await prepare(page, timeout=timeout)
+async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
+    if run is None:
+        await prepare(page, timeout=timeout)
+        card_spec = None
+    else:
+        await open_calendar(page, run.asset_context, timeout=timeout)
+        card_spec = run.planner_card
     rows = await read_grid(page, timeout=timeout)
     ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_ui_timezone(business_timezone)
     cards, occupied, diagnostics = [], {}, []
     for row in rows:
         for item in row['items']:
             try:
-                material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone)
+                material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone,
+                                           card_spec=card_spec)
             except PlannerItemError as exc:
                 diagnostics.append(exc.diagnostic)
                 material = {'channels': (), 'remote_ids': {}, 'text': '', 'delivery': 'unknown',

@@ -102,10 +102,15 @@ def get_tasks(status: str | None = None, tag: str | None = None, month: str | No
 # 图片路由须先于贪婪的 task_id:path 注册。
 @app.get("/api/tasks/{task_id:path}/image/{index}")
 def get_task_image(task_id: str, index: int,
-                   variant: str = Query("de", pattern="^(de|original)$")
+                   variant: str = Query("de", pattern="^(de|original)$"),
+                   snapshot: str | None = None
                    ) -> Response:
-    """直接读归档字节。``variant=de`` 缺德语图时回退原图（降级另有明示）。"""
-    found = reader.image_bytes(task_id, index, variant)
+    """直接读归档字节。``variant=de`` 缺德语图时回退原图（降级另有明示）。
+
+    ``snapshot`` 只读该冻结快照的字节，不回退当前稿或原图。
+    """
+    found = (reader.snapshot_image_bytes(task_id, snapshot, index) if snapshot
+             else reader.image_bytes(task_id, index, variant))
     if found is None:
         raise HTTPException(status_code=404, detail="图片不存在")
     data, media_type = found

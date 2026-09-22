@@ -427,15 +427,29 @@ export interface TaskDetail {
 }
 
 
+export interface FrozenPreview {
+  readonly snapshot_id: string
+  readonly text: string
+  readonly images: readonly { readonly index: number; readonly url: string }[]
+  readonly target: {
+    readonly channel: Platform
+    readonly account: string
+    readonly asset_id: string
+    readonly business_id: string
+  }
+}
+
 export interface ApprovalOptions {
   readonly available: boolean
-  /** 不可用原因可能含内部标识，展示前须转为业务提示。 */
+  /** 当前阶段的具体原因。 */
   readonly reason: string
   /** 批准时必须回传同一个值；available 为假时是 null。 */
   readonly fingerprint: string | null
-  /** 内容本身能否冻结；与 available 分开——缺录证不该挡住人确认文案和图片。 */
+  /** 内容本身能否冻结。选时刻还要求能算出时间范围，两者都不看历史录证。 */
   readonly lockable: boolean
   readonly lock_reason: string
+  /** 已冻结时是将要提交的正文和图片；未冻结或快照损坏时为 null。 */
+  readonly preview: FrozenPreview | null
   readonly platform: Platform
   readonly business_timezone: string
   readonly audience_timezone: string

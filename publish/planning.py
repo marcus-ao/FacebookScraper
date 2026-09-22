@@ -54,6 +54,34 @@ def configured_window(platform: str) -> ScheduleWindow:
     return verified_constraints_from_config(platform)[1]
 
 
+def config_window() -> ScheduleWindow:
+    """审校台选时刻用的窗口。只读配置时区，不回查 G1 录证。"""
+    ui_timezone = str(cfg().get("publish", "ui_timezone", "") or "").strip()
+    if not ui_timezone:
+        raise ValueError("[publish].ui_timezone 为空；无法计算可选排期范围")
+    resolve_ui_timezone(ui_timezone)
+    return ScheduleWindow("", timedelta(0), None, ui_timezone)
+
+
+def next_selectable_minute(now: datetime) -> datetime:
+    """时间输入只到分钟。最早可选是严格晚于现在的下一个完整分钟。"""
+    utc = aware_utc(now).astimezone(timezone.utc)
+    return utc.replace(second=0, microsecond=0) + timedelta(minutes=1)
+
+
+def slot_refusal(decision: SlotDecision) -> str:
+    """把空档判定写成页面能直接显示的原因，不把内部代码留给运营猜。"""
+    messages = {
+        "outside_ui_month": "所选时刻不在当前月历范围内",
+        "outside_window": "所选时刻已经过去或不在本月可选范围内",
+        "ambiguous_ui_time": "这个时刻在时区切换中不明确，请重新选择",
+        "calendar_incomplete": "某条月历记录未读完整，不能确认这个时刻空闲",
+        "channels_unavailable": "月历里的渠道无法识别，不能确认这个时刻空闲",
+        "conflict": "所选时刻冲突",
+    }
+    return messages.get(decision.reason, "这个时刻暂不能排期（%s）" % decision.reason)
+
+
 def calendar_bounds(now: datetime, *, window: ScheduleWindow) -> CalendarBounds:
     """UTC 边界供日期选择器换算展示；月份来自实测 UI 时区。"""
     utc_now = aware_utc(now)

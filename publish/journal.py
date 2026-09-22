@@ -151,6 +151,8 @@ class PublishAttempt:
     manual_evidence: bool = False
     snapshot_id: str = ''
     source_fingerprint: str = ''
+    # 空字符串是旧记录和 CLI。审校台新尝试写成 review_desk，用来判断点击前失败能否重试。
+    origin: str = ''
 
     def __post_init__(self) -> None:
         if not (self.post_id or "").strip():
@@ -171,6 +173,8 @@ class PublishAttempt:
             self.platform, self.post_id, self.source_refs))
         if not self.final_text_sha256:
             object.__setattr__(self, "final_text_sha256", self.text_de_sha256)
+        if self.origin not in {"", "review_desk"}:
+            raise ValueError("未知发布入口：%r" % self.origin)
         channels = tuple(dict.fromkeys(
             str(value).strip().lower() for value in self.target_channels
             if str(value).strip()))
@@ -218,6 +222,7 @@ def _compat_row(row: dict) -> dict:
     out.setdefault("manual_evidence", False)
     out.setdefault('snapshot_id', '')
     out.setdefault('source_fingerprint', '')
+    out.setdefault('origin', '')
     return out
 
 
@@ -311,13 +316,29 @@ def history_for(state_dir: Path, post_id: str,
                          for ref in _row_refs(row)))]
 
 
+def pre_click_failure_closed(rows, attempt_id) -> bool:
+    """审校台新尝试若在点击意图落盘前就明确失败，不再挡住下一次确认。
+
+    旧账本没有 origin，保持原来的人工结转要求。出现过点击意图的链一律继续防重。
+    """
+    chain = [row for row in rows if str(row.get("attempt_id")) == str(attempt_id)]
+    if not chain or not any(row.get("origin") == "review_desk" for row in chain):
+        return False
+    if any(row.get("status") in {STATUS_SUBMIT_AMBIGUOUS, STATUS_SUBMITTED_UNVERIFIED}
+           for row in chain):
+        return False
+    return chain[-1].get("status") == STATUS_FAILED_PRE_SUBMIT
+
+
 def last_resolvable(state_dir: Path, post_id: str) -> dict | None:
     """返回最近未闭合证据；已经人工结转后不再穿透到旧状态。"""
-    for row in reversed(history_for(state_dir, post_id)):
+    history = history_for(state_dir, post_id)
+    for row in reversed(history):
         status = row.get("status")
         if status == STATUS_SCHEDULED or (
                 status == STATUS_FAILED_PRE_SUBMIT
-                and row.get("manual_evidence")):
+                and (row.get("manual_evidence")
+                     or pre_click_failure_closed(history, row.get("attempt_id")))):
             return None
         if status in {
                 STATUS_PREPARED, STATUS_SUBMIT_AMBIGUOUS,
@@ -374,7 +395,8 @@ def pending_record_for_refs(state_dir: Path,
             if status == STATUS_SCHEDULED:
                 break
             if status == STATUS_FAILED_PRE_SUBMIT:
-                if not row.get("manual_evidence"):
+                if not row.get("manual_evidence") and not pre_click_failure_closed(
+                        rows, row.get("attempt_id")):
                     pending.append(row)
                 break
             if status in BLOCKING_STATUSES:

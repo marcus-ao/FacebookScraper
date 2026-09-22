@@ -1,7 +1,6 @@
 """审校台指定时刻的真实批准入口：同一把锁内复核、冻结、提交、记录回执。"""
 from __future__ import annotations
 
-from publish import capabilities
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +9,7 @@ from core import maintenance, notify, paid_consent, review, translated
 from core.config import cfg
 from core.store import read_post_truth
 from pipeline import engine
-from publish import business_suite as bs, compose, journal, planner_cache, planning, workflow, records, snapshots
+from publish import business_suite as bs, compose, journal, manual_run, planner_cache, planning, workflow, records, snapshots
 
 
 class ApprovalConflict(review.ReviewConflict):
@@ -40,28 +39,41 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
     moment = now or datetime.now(timezone.utc)
     source, _ = read_post_truth(account_dir, indexed)
     result = {'available': False, 'reason': '', 'fingerprint': None,
-              'lockable': False, 'lock_reason': '',
+              'lockable': False, 'lock_reason': '', 'preview': None,
               'platform': source['platform'], 'business_timezone': bs.business_timezone(),
               'audience_timezone': planning.AUDIENCE_TIMEZONE,
               'audience_quiet_hours': [planning.AUDIENCE_QUIET_HOURS.start, planning.AUDIENCE_QUIET_HOURS.stop],
               'default_times': cfg().get('publish', 'schedule_rule', {}).get('times', ['10:00', '17:00'])}
-    # 冻结只认内容本身：录证缺失让排期不可用，但不该挡住人确认文案和图片。
+    # 冻结和选时刻只认内容与时间窗口，不读录证、不看激活、不打开浏览器。
     try:
         result['fingerprint'] = engine._publish_fingerprint(
             composed_post(account_dir, source, now=moment))
         result['lockable'] = True
     except (ValueError, compose.ComposeError, engine.PipelineRunError) as exc:
         result['lock_reason'] = str(exc)
-    try:
-        window = planning.configured_window(source['platform'])
-        bounds = planning.calendar_bounds(moment, window=window)
-        result.update(earliest=bounds.earliest.isoformat(), latest=bounds.latest.isoformat(),
-                      ui_timezone=bounds.ui_timezone)
-        composed_post(account_dir, source, now=moment, strict=True)
-        capabilities.require(source['platform'])
-        result['available'] = True
-    except (ValueError, compose.ComposeError, bs.PublishStepError, bs.ProbeRequired, engine.PipelineRunError) as exc:
         result['reason'] = str(exc)
+    try:
+        window = planning.config_window()
+        bounds = planning.calendar_bounds(moment, window=window)
+        earliest = max(bounds.earliest, planning.next_selectable_minute(moment))
+        if earliest > bounds.latest:
+            raise ValueError('本月已经没有可选择的发布时间')
+        result.update(earliest=earliest.isoformat(), latest=bounds.latest.isoformat(),
+                      ui_timezone=bounds.ui_timezone)
+        if result['lockable']:
+            result['available'] = True
+    except (ValueError, compose.ComposeError, bs.PublishStepError, bs.ProbeRequired) as exc:
+        result['available'] = False
+        if result['lockable']:
+            result['reason'] = str(exc)
+    state = review.latest(account_dir).get(source['post_id'])
+    if result['lockable'] and state and state.get('status') == 'content_locked':
+        try:
+            result['preview'] = _preview(account_dir, source, state)
+        except review.ReviewConflict as exc:
+            result['preview'] = None
+            result['available'] = False
+            result['reason'] = str(exc)
     return result
 
 
@@ -97,27 +109,53 @@ def unlock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
                               now=now or datetime.now(timezone.utc))
 
 
-def _bind(post, snapshot_id, source, account_dir):
+def _bind(post, snapshot_id, source, account_dir, target=None):
     """把已冻结内容接到本次提交上：先核内容，再绑时刻。"""
     account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
     candidate = replace(post, snapshot_id=snapshot_id,
                         source_fingerprint=paid_consent.fingerprint(source, account))
     try:
-        return snapshots.ensure(candidate, bind=True)
+        return snapshots.ensure(candidate, bind=True, target=target)
     except review.ReviewConflict as exc:
         raise ApprovalConflict(str(exc)) from exc
+
+
+def _preview(account_dir: Path, source: dict, state: dict) -> dict:
+    """弹窗只展示冻结字节。快照坏了就报错，不用当前稿填上。"""
+    metadata, _, files, _ = snapshots.load(state['snapshot_id'])
+    if metadata.get('status') != 'frozen':
+        raise review.ReviewConflict('这份冻结内容已作废，请重新确认')
+    task = '%s/%s' % (account_dir.name, source['post_id'])
+    channel = source['platform']
+    account = str(cfg().get('publish', 'facebook_page_name' if channel == 'facebook' else 'instagram_account', '') or '').strip()
+    return {
+        'snapshot_id': metadata['snapshot_id'],
+        'text': files['text_de.txt'].decode('utf-8'),
+        'images': [{'index': index, 'url': '/api/tasks/%s/image/%d?snapshot=%s' % (
+            task, index, metadata['snapshot_id'])} for index, _name in enumerate(metadata['images'])],
+        'target': {'channel': channel, 'account': account,
+                   'asset_id': str(cfg().get('publish', 'asset_id', '') or '').strip(),
+                   'business_id': str(cfg().get('publish', 'business_id', '') or '').strip()},
+    }
+
+
+def _operation_status(attempt: dict) -> str:
+    if attempt.get('status') == journal.STATUS_SCHEDULED:
+        return 'succeeded'
+    if journal.pre_click_failure_closed(journal.load(cfg().state_dir), attempt.get('attempt_id')):
+        return 'failed'
+    return 'uncertain'
 
 
 @maintenance.guarded('publication')
 async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text_sha256: str,
                   human_revision: str | None, review_revision: str | None, content_fingerprint: str,
-                  now=None, inventory_reader=None, executor=None, report=None) -> dict:
+                  now=None, inventory_reader=None, executor=None, report=None,
+                  publish_target=None) -> dict:
     c = cfg()
     moment, target = now or datetime.now(timezone.utc), _moment(scheduled_at)
     if account_dir.name not in c.active_accounts():
         raise ApprovalConflict('此来源账号已冻结或未配置')
-    if engine.activation_time(c.state_dir) is None:
-        raise ApprovalConflict('流水线尚未激活，请先完成本机发布核验')
     c.state_dir.mkdir(parents=True, exist_ok=True)
     with journal.PublishOperationLock(c.state_dir / 'publish.lock', allow_reentrant=True):
         source, _ = read_post_truth(account_dir, indexed)
@@ -130,13 +168,19 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             if state['status'] != 'content_locked':
                 raise ApprovalConflict('请先确认内容无误并冻结，再选择发布时间')
             snapshot_id = state['snapshot_id']
-        capabilities.require(source['platform'])
-        window = planning.configured_window(source['platform'])
-        inventory = (await inventory_reader(now=moment) if inventory_reader is not None
-                     else await planner_cache.read_live_inventory())
+        try:
+            run = manual_run.load(source['platform'])
+            manual_run.confirm_target(publish_target, run)
+        except manual_run.ManualRunError as exc:
+            raise ApprovalConflict(str(exc)) from exc
+        window = planning.config_window()
+        if inventory_reader is not None:
+            inventory = await inventory_reader(now=moment, run=run)
+        else:
+            inventory = await planner_cache.read_live_inventory(run=run)
         decision = planning.evaluate_slot(target, source['platform'], inventory, now=moment, window=window)
         if not decision.allowed:
-            raise ApprovalConflict('这个时刻暂不能排期（%s）；请重新选择，系统不会自动顺延。' % decision.reason,
+            raise ApprovalConflict(planning.slot_refusal(decision) + '；请重新选择，系统不会自动顺延。',
                                    suggestions=decision.suggestions)
         with review.transaction(account_dir) as session:
             source, state = session.validate(source, expected_revision=review_revision,
@@ -153,10 +197,10 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                 raise ApprovalConflict(issue.summary)
             post = compose.compose_post(source['post_id'], target, archive_root=account_dir.parent,
                 account=account_dir.name, price_map=engine.publish_rules().price_map, now=moment,
-                require_verified_ui_constraints=True, warning_sink=None)
+                warning_sink=None)
             if engine._publish_fingerprint(post) != content_fingerprint:
                 raise ApprovalConflict('内容在确认之后已有变化，请重新核对并冻结')
-            frozen = _bind(post, snapshot_id, source, account_dir)
+            frozen = _bind(post, snapshot_id, source, account_dir, run.target())
             approved = session.change(source, 'approved', expected_revision=review_revision,
                                       expected_source_sha256=source_text_sha256, now=moment, snapshot_id=snapshot_id)
         records.queue_approved(snapshot_id, now=moment)
@@ -165,7 +209,7 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             outcome = await (executor or workflow.execute)(frozen, target, ui_timezone=window.ui_timezone,
                 timeout=float(c.get('publish', 'ui_timeout_seconds', bs.DEFAULT_UI_TIMEOUT)),
                 stamp=approved['revision'], submit_enabled=True, source_refs=(ref,),
-                target_channels=(source['platform'],), **extra)
+                target_channels=(source['platform'],), run=run, opening_inventory=inventory, **extra)
             attempt = asdict(outcome.attempt)
         except Exception:
             # 无回执时保留快照；下面只恢复审校状态，绝不声称远端已经排期。
@@ -186,4 +230,6 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             projection = {'status': 'pending', 'error': type(exc).__name__}
             notify.notify('发布回执留档待补齐', '发布账本已保留结果，请在恢复入口补齐记录。', popup=False)
         return {'ok': success, 'status': 'scheduled' if success else 'pending_review',
+                'operation_status': _operation_status(attempt),
+                'suggestions': [value.isoformat() for value in getattr(outcome, 'suggestions', ())],
                 'publication': attempt, 'projection': projection, 'message': outcome.message}

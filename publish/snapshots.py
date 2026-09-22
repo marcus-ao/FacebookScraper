@@ -60,7 +60,7 @@ def freeze(post, source: dict, *, expected_fingerprint: str, scheduled_at=None):
                    snapshot_id=directory.name, source_fingerprint=source_fingerprint), files, directory
 
 
-def bind_schedule(snapshot_id: str, when: datetime) -> dict:
+def bind_schedule(snapshot_id: str, when: datetime, *, target=None) -> dict:
     """把已冻结内容绑到一个时刻；调用方须持发布锁。重复绑同一时刻幂等。"""
     if not isinstance(when, datetime) or when.tzinfo is None or when.utcoffset() is None:
         raise review.ReviewValidationError('发布时间需要包含时区')
@@ -70,6 +70,13 @@ def bind_schedule(snapshot_id: str, when: datetime) -> dict:
     bound = metadata.get('scheduled_at')
     if bound is not None and datetime.fromisoformat(bound) != when:
         raise review.ReviewConflict('这份冻结内容已绑定其它时刻，请重新确认后再排期')
+    if target is not None:
+        if not isinstance(target, dict):
+            raise review.ReviewConflict('发布目标无效，请重新确认')
+        previous = metadata.get('publish_target')
+        if previous is not None and previous != target:
+            raise review.ReviewConflict('发布目标已变化，请重新确认')
+        metadata['publish_target'] = target
     metadata['scheduled_at'] = when.isoformat()
     atomic_write_json(directory / 'snapshot.json', metadata)
     return metadata
@@ -124,7 +131,7 @@ def load(snapshot_id: str):
     return metadata, source, files, directory
 
 
-def ensure(post, *, bind: bool = False):
+def ensure(post, *, bind: bool = False, target=None):
     """核对 post 与其冻结快照一致。`bind=True` 在核对通过后才绑定时刻——顺序反过来会
     在内容不符时留下一个已绑错时刻、只能解冻才能脱身的快照。"""
     if getattr(post, 'snapshot_id', ''):
@@ -135,7 +142,7 @@ def ensure(post, *, bind: bool = False):
                 or metadata.get('source_fingerprint') != post.source_fingerprint):
             raise review.ReviewConflict('提交身份或内容与冻结快照不一致，请重新审核')
         if bind:
-            metadata = bind_schedule(post.snapshot_id, post.scheduled_at)
+            metadata = bind_schedule(post.snapshot_id, post.scheduled_at, target=target)
         if require_bound(metadata) != post.scheduled_at:
             raise review.ReviewConflict('提交时间与冻结快照不一致，请重新审核')
         return replace(post, image_paths=tuple(directory / name for name in metadata['images']))

@@ -22,6 +22,7 @@ class AttemptOutcome:
     code: int
     attempt: journal.PublishAttempt
     message: str
+    suggestions: tuple = ()
 
 
 def _independent_refs(post, source_refs: tuple[str, ...],
@@ -35,7 +36,8 @@ def _independent_refs(post, source_refs: tuple[str, ...],
 
 def new_attempt(post, when: datetime, *, ui_timezone: str,
                 source_refs: tuple[str, ...] = (),
-                target_channels: tuple[str, ...] | None = None
+                target_channels: tuple[str, ...] | None = None,
+                origin: str = "",
                 ) -> journal.PublishAttempt:
     """为一次浏览器尝试冻结所有内容指纹。"""
     target_channels = target_channels or (post.platform,)
@@ -61,6 +63,7 @@ def new_attempt(post, when: datetime, *, ui_timezone: str,
         ui_scheduled_at=when.astimezone(ZoneInfo(ui_timezone)).isoformat(),
         snapshot_id=getattr(post, 'snapshot_id', ''),
         source_fingerprint=getattr(post, 'source_fingerprint', ''),
+        origin=origin,
     )
 
 
@@ -80,16 +83,17 @@ async def _screenshot(page, attempt_id: str, phase: str, *,
     return str(target)
 
 
-async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeout: float):
+async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeout: float,
+                           run=None, now=None):
     """在单次提交意图落盘前再读远端；缓存从不参与最终裁决。"""
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-        business_timezone=bs.business_timezone(), timeout=timeout)
+        business_timezone=bs.business_timezone(), timeout=timeout, run=run)
+    window = planning.config_window() if run is not None else planning.configured_window(post.platform)
     decision = planning.evaluate_slot(when, post.platform, inventory,
-        now=datetime.now().astimezone(), window=planning.configured_window(post.platform))
+        now=now or datetime.now().astimezone(), window=window)
     if not decision.allowed:
-        alternatives = '、'.join(value.isoformat() for value in decision.suggestions)
-        raise bs.PublishStepError('提交前时刻复核未通过（%s）；未自动顺延。可选时刻：%s'
-                                  % (decision.reason, alternatives or '当前可见范围内暂无可用时刻'))
+        raise bs.PublishStepError(planning.slot_refusal(decision) + "；未自动顺延。",
+                                  suggestions=decision.suggestions)
 
 
 def print_progress(index: int, text: str) -> None:
@@ -101,21 +105,28 @@ async def _execute_unlocked(
         stamp: str, submit_enabled: bool,
         source_refs: tuple[str, ...] = (),
         target_channels: tuple[str, ...] | None = None,
-        report=print_progress
+        report=print_progress, run=None, opening_inventory=None,
         ) -> AttemptOutcome:
     """核验目标、填写内容并提交；保留人工会话和其他远端内容。"""
     c = cfg()
     target_channels = target_channels or (post.platform,)
-    c.assert_publish_chrome_isolated()
+    try:
+        c.assert_publish_chrome_isolated()
+    except SystemExit as exc:
+        if run is None:
+            raise
+        raise bs.PublishStepError(str(exc)) from exc
     bs.assert_ui_time_unambiguous(when, ui_timezone)
-    if submit_enabled:
+    if run is not None:
+        channels.require_independent_channel_evidence(target_channels, run=run)
+    elif submit_enabled:
         capabilities.require(post.platform)
     else:
         channels.require_independent_channel_evidence(target_channels)
 
     base = new_attempt(
         post, when, ui_timezone=ui_timezone, source_refs=source_refs,
-        target_channels=target_channels)
+        target_channels=target_channels, origin="review_desk" if run is not None else "")
     pw = page = planner_page = None
     pre_submit_baseline: bs.ScheduledBaseline | None = None
     step = "附着发布 Chrome"
@@ -123,20 +134,29 @@ async def _execute_unlocked(
     prepared: journal.PublishAttempt | None = None
     current = base
     try:
-        pw, _browser, context = await attach(
-            port=c.publish_debug_port,
-            profile=c.publish_profile_dir,
-            start_script=r"scripts\start_chrome_publish.bat",
-            login_hint="DE 发布账号")
+        try:
+            pw, _browser, context = await attach(
+                port=c.publish_debug_port,
+                profile=c.publish_profile_dir,
+                start_script=r"scripts\start_chrome_publish.bat",
+                login_hint="DE 发布账号")
+        except SystemExit as exc:
+            if run is None:
+                raise
+            raise bs.PublishStepError("发布浏览器未启动：" + str(exc)) from exc
 
         if submit_enabled:
             step = "G6 提交前 Planner 基线"
             report(0, "提交前确认远端没有同槽/同文案/同素材卡片 …")
-            planner_page = await context.new_page()
-            pre_submit_baseline = await month_readback.baseline(
-                planner_page, when, post.text_de, ui_timezone=ui_timezone,
-                target_channels=target_channels,
-                timeout=timeout)
+            if opening_inventory is not None:
+                pre_submit_baseline = month_readback.baseline_from_inventory(
+                    opening_inventory, when, post.text_de, target_channels)
+            else:
+                planner_page = await context.new_page()
+                pre_submit_baseline = await month_readback.baseline(
+                    planner_page, when, post.text_de, ui_timezone=ui_timezone,
+                    target_channels=target_channels,
+                    timeout=timeout, run=run)
             if pre_submit_baseline.match_count:
                 raise bs.PublishStepError(
                     "提交前已经存在 %d 张同条件排期卡片；为防旧卡冒充本次结果，"
@@ -145,12 +165,13 @@ async def _execute_unlocked(
 
         step = "G1-1 打开 composer"
         report(1, "新开标签页进 composer …")
-        page = await bs.open_composer(context,
-            asset_context=channel_evidence.require(post.platform)['context_ids'], timeout=timeout)
+        asset_context = (run.asset_context if run is not None
+                         else channel_evidence.require(post.platform)['context_ids'])
+        page = await bs.open_composer(context, asset_context=asset_context, timeout=timeout)
 
         step = "G2 登录态与目标主页"
         report(2, "核对登录态与目标主页 …")
-        selection = await channels.select(page, target_channels, timeout=timeout)
+        selection = await channels.select(page, target_channels, timeout=timeout, run=run)
         notes.append('已核对单渠道目标：' + selection['channel'] + ' / ' + selection['account'])
 
         step = "G3 图片上传"
@@ -170,7 +191,7 @@ async def _execute_unlocked(
         report(5, "设排期并回读 …")
         ui_readback = await bs.set_schedule(
             page, when, ui_timezone=ui_timezone, timeout=timeout, target_channels=target_channels)
-        await channels.verify_before_submit(page, target_channels)
+        await channels.verify_before_submit(page, target_channels, run=run)
         prepared_shot = await _screenshot(
             page, base.attempt_id, "prepared", state_dir=c.state_dir,
             timeout=timeout)
@@ -189,9 +210,11 @@ async def _execute_unlocked(
             return AttemptOutcome(0, prepared, "已准备，停在提交前")
 
         step = "提交前实时复核同渠道间隔"
-        await check_live_slot(planner_page or page, post, when,
-                              ui_timezone=ui_timezone, timeout=timeout)
-        await channels.verify_before_submit(page, target_channels)
+        if planner_page is None:
+            planner_page = await context.new_page()
+        await check_live_slot(planner_page, post, when,
+                              ui_timezone=ui_timezone, timeout=timeout, run=run)
+        await channels.verify_before_submit(page, target_channels, run=run)
         step = "G6 单次提交"
         # 点击前先耐久记录未决意图，避免点击后崩溃又被当作可安全重试。
         armed = journal.transition(
@@ -202,7 +225,9 @@ async def _execute_unlocked(
         journal.append(c.state_dir, armed)
         current = armed
         report(6, "点击一次提交并等待已录证的成功信号 …")
-        result = await bs.submit(page, timeout=timeout)
+        result = await bs.submit(page, timeout=timeout,
+                                 button_spec=None if run is None else run.submit_button,
+                                 success_spec=None if run is None else run.success_signal)
         submitted_shot = await _screenshot(
             page, base.attempt_id, "submitted", state_dir=c.state_dir,
             timeout=timeout)
@@ -240,7 +265,7 @@ async def _execute_unlocked(
             expected_image_count=len(post.image_paths),
             pre_submit_baseline=pre_submit_baseline,
             expected_remote_id=result.remote_id,
-            screenshot_path=readback_path)
+            screenshot_path=readback_path, run=run)
         if not readback.found:
             unresolved = journal.transition(
                 unverified, journal.STATUS_SUBMITTED_UNVERIFIED,
@@ -295,7 +320,7 @@ async def _execute_unlocked(
             step=step, screenshot=screenshot, note=message,
             warnings=tuple(base.warnings) + tuple(notes))
         journal.append(c.state_dir, failed)
-        return AttemptOutcome(1, failed, message)
+        return AttemptOutcome(1, failed, message, tuple(getattr(exc, "suggestions", ()) or ()))
     finally:
         # 只断开自动化侧；不关闭标签页，不关闭用户 Chrome。
         if pw is not None:
@@ -310,7 +335,8 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
                   stamp: str, submit_enabled: bool,
                   source_refs: tuple[str, ...] = (),
                   target_channels: tuple[str, ...] | None = None,
-                  force: bool = False, report=print_progress) -> AttemptOutcome:
+                  force: bool = False, report=print_progress,
+                  run=None, opening_inventory=None) -> AttemptOutcome:
     """在全局发布锁内重查 journal，再执行一次浏览器尝试。"""
     c = cfg()
     target_channels = target_channels or (post.platform,)
@@ -328,7 +354,9 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
             if status != journal.STATUS_PREPARED or not force:
                 raise bs.PublishStepError(
                     "锁内重查发现未闭合状态 %s；本次零浏览器操作" % status)
-        if submit_enabled:
+        if run is not None:
+            channels.require_independent_channel_evidence(target_channels, run=run)
+        elif submit_enabled:
             capabilities.require(post.platform)
         else:
             channels.require_independent_channel_evidence(target_channels)
@@ -337,7 +365,8 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
         outcome = await _execute_unlocked(
             post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
             submit_enabled=submit_enabled, source_refs=refs,
-            target_channels=target_channels, report=report)
+            target_channels=target_channels, report=report, run=run,
+            opening_inventory=opening_inventory)
         try:
             records.project(outcome.attempt)
         except Exception:

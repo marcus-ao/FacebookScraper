@@ -96,8 +96,9 @@ class ScheduleWindow:
     ui_timezone: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.probe_dump, str) or not self.probe_dump.strip():
-            raise ValueError("定时窗口必须写明来自哪份 G1 probe dump")
+        # 空字符串是没有录证来源的配置窗口。严格入口仍要单独核对 dump，不能在这里填一个假名字。
+        if not isinstance(self.probe_dump, str) or self.probe_dump != self.probe_dump.strip():
+            raise ValueError("定时窗口的录证来源不能是空白；没有录证的配置窗口用空字符串")
         if not isinstance(self.min_ahead, timedelta) or (self.max_ahead is not None
                 and not isinstance(self.max_ahead, timedelta)):
             raise ValueError("定时窗口上下限必须是 timedelta")

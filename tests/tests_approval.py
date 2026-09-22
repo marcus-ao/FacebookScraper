@@ -14,6 +14,7 @@ import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, review, translated
 from pipeline import approval, engine
+from publish import manual_run
 from publish import business_suite as bs, compose, journal, snapshots, workflow
 from web.api.approval import business_time
 
@@ -29,12 +30,15 @@ class ApprovalTests(unittest.TestCase):
         self.account, self.source = self.fixture.account, self.fixture.source
         self.fixture.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         c = verified_probe_config(config.cfg(), self.fixture.root / 'state')
+        c._d['publish']['asset_id'] = '1001'
+        c._d['publish']['business_id'] = '2002'
         patch.object(config, '_cfg', c).start()
         fixture_activate(engine, c.state_dir, g8_verified=True, now=NOW - timedelta(days=2))
         self.post = compose.compose_post(self.source['post_id'], TARGET, archive_root=config.cfg().archive_dir,
             account=self.account.name, now=NOW, require_verified_ui_constraints=True, warning_sink=None)
         self.params = {'scheduled_at': TARGET, 'source_text_sha256': translated.source_text_sha256(self.source['text']),
-            'human_revision': None, 'review_revision': None, 'content_fingerprint': engine._publish_fingerprint(self.post), 'now': NOW}
+            'human_revision': None, 'review_revision': None, 'content_fingerprint': engine._publish_fingerprint(self.post),
+            'publish_target': manual_run.load(self.source['platform']).target(), 'now': NOW}
         self.inventory = bs.RemoteSlotInventory((), 'America/Los_Angeles', date(2026, 9, 1), date(2026, 9, 30),
                                                 cards=(), cards_loaded=True)
 
@@ -56,21 +60,28 @@ class ApprovalTests(unittest.TestCase):
         params.update(kwargs.pop('params', {}))
         return asyncio.run(approval.approve(self.account, self.source, **params, **kwargs))
 
-    def test_missing_channel_evidence_means_zero_remote_reads_or_state_change(self):
+    def test_missing_asset_config_means_zero_remote_reads(self):
+        config.cfg()._d['publish']['asset_id'] = ''
         reader, execute = AsyncMock(), AsyncMock()
-        with self.assertRaises(bs.ProbeRequired):
+        with self.assertRaises(approval.ApprovalConflict) as error:
             self.approve(inventory_reader=reader, executor=execute)
+        self.assertIn('asset_id', str(error.exception))
         reader.assert_not_called()
         execute.assert_not_called()
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
-        self.assertFalse(approval.options(self.account, self.source, now=NOW)['available'])
+        options = approval.options(self.account, self.source, now=NOW)
+        self.assertTrue(options['lockable'])
+        self.assertTrue(options['available'])
+        self.assertGreater(options['earliest'], NOW.isoformat())
 
     def test_content_can_be_frozen_before_the_publish_gate_is_open(self):
-        """录证缺失让排期不可用，但不该挡住人确认文案和图片。"""
+        """内容合格就可以选时刻；历史录证不参与这个判断。"""
         options = approval.options(self.account, self.source, now=NOW)
-        self.assertFalse(options['available'])
+        self.assertTrue(options['available'])
         self.assertTrue(options['lockable'])
+        self.assertIsNone(options['preview'])
         self.assertEqual(options['fingerprint'], self.params['content_fingerprint'])
+        self.assertGreater(options['earliest'], NOW.isoformat())
 
     def test_selected_conflicting_time_is_rejected_with_three_alternatives(self):
         self.allow_fixture_evidence()

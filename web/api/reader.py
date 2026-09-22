@@ -707,6 +707,29 @@ def source_post(task_id: str) -> engine.SourcePost | None:
     return engine.SourcePost(platform, directory, row, created, journal.source_ref(platform, pid))
 
 
+def snapshot_image_bytes(task_id: str, snapshot_id: str, index: int) -> tuple[bytes, str] | None:
+    """只读冻结快照里的第 index 张图。对不上这篇、或快照损坏时不回退当前稿。"""
+    from publish import snapshots
+    source = source_post(task_id)
+    if source is None or index < 0 or not snapshot_id:
+        return None
+    try:
+        metadata, _snap_source, files, _directory = snapshots.load(snapshot_id)
+    except (review.ReviewConflict, OSError, ValueError):
+        return None
+    if (metadata.get('post_id') != source.post_id or metadata.get('platform') != source.platform
+            or metadata.get('account') != source.account_dir.name):
+        return None
+    images = metadata.get('images') or []
+    if index >= len(images):
+        return None
+    name = images[index]
+    data = files.get(name)
+    if not isinstance(data, bytes):
+        return None
+    return data, (mimetypes.guess_type(name)[0] or "application/octet-stream")
+
+
 def image_bytes(task_id: str, index: int, variant: str = "de", *,
                 days: int = DEFAULT_DAYS,
                 now: datetime | None = None) -> tuple[bytes, str] | None:

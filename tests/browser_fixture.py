@@ -213,10 +213,19 @@ def calendar_payload(local=(), local_error=None):
                               "quiet_hours": False}}]}
 
 
+def frozen_preview(**overrides):
+    """确认弹窗要展示的冻结快照；未提供时页面不能提交。"""
+    preview = {"snapshot_id": "offline-snapshot", "text": "Offline frozen caption",
+               "images": [], "target": {"channel": "facebook", "account": "Neakasa Deutschland",
+                                        "asset_id": "1001", "business_id": "2002"}}
+    preview.update(overrides)
+    return preview
+
+
 def approval_options(**overrides):
     """⚠️ available（能不能排期）与 lockable（能不能冻结内容）是两件事。"""
     return {"available": True, "reason": "", "fingerprint": "offline-fingerprint",
-            "lockable": True, "lock_reason": "",
+            "lockable": True, "lock_reason": "", "preview": frozen_preview(),
             "earliest": "2026-09-13T08:00:00Z", "latest": "2026-10-01T08:00:00Z",
             "default_times": ["16:00", "23:00"], "business_timezone": "Asia/Shanghai",
             "audience_timezone": "Europe/Berlin", "audience_quiet_hours": [0, 6],
