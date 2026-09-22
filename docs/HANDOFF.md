@@ -433,9 +433,10 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
-**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`。
-Windows release 在 main 上连续五次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
-打包与上传两步都排在离线全量之后，全量一失败就跳过。直接原因是
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `1d75df6`。
+Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
+打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
+`tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
 [run 35590918182 的取证](../state/ci-evidence-35590918182/offline-validation-20260921T105323Z/results.json)：
 `tests_story_insights` 300.02 秒、退出码 124，另外 103 个脚本全绿；同目录日志显示它被杀之前跑完了 23 个测试里的 17 个、
 没有失败，照这个速度整文件在 CI 上要约 400 秒。
@@ -470,8 +471,11 @@ Windows release 在 main 上连续五次失败，`fbscraper-windows` 一直没�
 未拆分的文件在同样负载下必然越线。同一轮里 `tests_browser_workflow` 因界面 5 秒预算红了 7 项，
 机器空闲后同一脚本 13 项全过（[单跑](../state/story-insights-ci-timeout/browser-workflow-quiet.log) 101.05 秒、
 上面那次全量里 95.61 秒）；它与本轮改动无关——production 侧只改了地址更新器，没有任何模块导入它。
-同一条发布闸上还有 `tests_service_address` 的间歇失败，不修它照样产不出制品，
-根因与修复见 [§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)。
+并回 `1d75df6`（只有文档变化）后，[定向复跑](../state/offline-validation-20260922T042213Z/results.json)
+四个脚本加 hygiene、服务地址共 6/6 通过。本节及 §1.26 引用的证据已按 SHA-256 保全到主检出同名目录，
+清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
+同一条发布闸上的 `tests_service_address` 间歇失败另见
+[§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的判据与状态不变。
 
 ### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
@@ -495,8 +499,8 @@ Windows release 在 main 上连续五次失败，`fbscraper-windows` 一直没�
 **验证状态：离线通过。** [修前](../state/offline-validation-20260921T080707Z/results.json)复现显式源码 JSON 未控制飞书入口；[修后](../state/offline-validation-20260921T080811Z/results.json)更新器 12 项与 Web 策略 15 项通过；[相关回归](../state/offline-validation-20260921T081120Z/results.json)飞书、通知路由、webhook、更新器、Web 策略及仓库卫生检查共 6/6 脚本通过。新增集成覆盖实际改址后 11 组按钮生成场景及端口同步，原帖链接保持；隔离发件箱中新事件使用新入口，已发送及结果未知的投递不改写、不重发。没有给真实群发消息，服务机与客户端可达性仍为 **待真实联调**。证据在本功能工作树与主检出各保留一份，校验见 [保全清单](../state/service-address-audit/preservation.json)。
 
 **2026-09-22 续：改址后同进程仍按旧地址生成链接，`tests_service_address` 在 CI 上因此间歇性红。**
-三次 main 运行里 [35580002694](https://github.com/marcus-ao/FacebookScraper/actions/runs/35580002694) 与
-[35594234370](https://github.com/marcus-ao/FacebookScraper/actions/runs/35594234370) 失败、35590918182 通过，本机怎么跑都绿。
+main 上 `67daab4`、`5a3152c`、`1d75df6` 三次运行的取证里它都失败（2.47 / 2.27 / 2.53 秒），
+中间 `d7b7cd9` 那次却通过，本机怎么跑都绿。
 ⚠️ 根因是一次"看不出来"的改写：新旧地址等长，`config.toml` 改写后大小不变（185→185），
 而 Windows 的最后写入时间取自约 15.6 毫秒一跳的时钟，夹具写入与改写可能落在同一跳。
 `cfg()` 正是按 `(mtime_ns, size)` 这一对判断要不要重读，于是本进程继续拿旧的 `[feishu].base_url` 生成全部按钮。
