@@ -67,7 +67,7 @@
 
 **减少动画偏好下的弹层定位。** 全局把 `transition-duration` 设成非零的 `0.01ms !important`，会让弹层的同步测量读到 `-1000vh` 的过渡起点，菜单跑到屏幕外（隔离 Chromium 实测 `y=-7300`）。⛔ **过渡时间必须是 `0s`**，动画时长可以留 `0.01ms`；机制见[上游 #618](https://github.com/react-component/trigger/issues/618)。
 
-**采集表的每页条数。** 运行状态「新帖采集状态」在浏览器里对当前记录分页。`pagination.pageSize` 是受控值；写成固定的 `10` 时，条数菜单的选择会在配置合并里被盖回 10。初始条数用 `defaultPageSize`，并显式打开条数选择。离开本页或整页刷新不要求记住条数。离线证据：`tests_browser_workflow.test_13_capture_table_page_size_follows_the_size_changer`，78 条夹具，在工作树 `state/monitor-page-size/`。
+**采集表的每页条数。** 运行状态「新帖采集状态」在浏览器里对当前记录分页。`pagination.pageSize` 是受控值；写成固定的 `10` 时，条数菜单的选择会在配置合并里被盖回 10。初始条数用 `defaultPageSize`，并显式打开条数选择。离开本页或整页刷新不要求记住条数。离线证据：`tests_browser_workflow.test_13_capture_table_page_size_follows_the_size_changer`，78 条夹具，在 `state/monitor-page-size/`。
 
 **上传绕过刷新等待的测试写法。** 按钮禁用时直接设置隐藏文件输入会绕过页面的刷新等待，得到 409。测试要点击可用按钮后经文件选择器上传，不放宽业务版本检查，也不自动重试。
 
@@ -79,19 +79,21 @@
 
 `state/` 不随 Git 提交，本文的相对链接从主检出解析。⛔ **清理任何 worktree 之前，先确认它引用的证据不是只存在于那一个 worktree 里**——证据没了，结论按[第三节](#三证据的说法要准)要跟着降级。
 
-2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。`review-section-confirmations` 仍在，未纳入那次清理。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
+2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
+
+2026-09-22 清理了余下 11 个已并入 main 的工作树。本文引用但当时只存在于其中的证据已拷到主检出同名路径，**本文的相对链接因此无需改写**；清单在 `state/worktree-cleanup-20260922/preservation.json`，拷贝脚本 `state/preserve_worktree_cleanup_evidence.py`（`.jsonl`/`.sqlite`/`.lock` 一律不跨实例搬运，可重建的测试轮次未拷）。`calendar-data-sync-fix-646a9e`、`social-media-image-verification-fix-938aa1`、`story-insights-ci-timeout`、`manual-schedule-readiness` 四个工作树仍在，未纳入这次清理——⚠️ **本文引用的 `state/calendar-data-sync-fix/`、`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 仍只存在于那几个工作树里**，从主检出解析不到，清理它们之前照上面一条先保全。
 
 ### 1.19 待审核列表按原帖时间降序（2026-09-19）
 
-分支 `codex/review-newest-first`，工作树 `.worktrees/review-newest-first`，基点 `f05f8bb`。两个平台的四个子分类原先沿用候选排期升序，无排期时按任务 ID 排列；现统一按原帖发布时间从新到旧展示，筛选、分页和详情前后导航继承此顺序。候选排期仍按旧帖优先分配。
+分支 `codex/review-newest-first`，基点 `f05f8bb`。两个平台的四个子分类原先沿用候选排期升序，无排期时按任务 ID 排列；现统一按原帖发布时间从新到旧展示，筛选、分页和详情前后导航继承此顺序。候选排期仍按旧帖优先分配。
 
 **验证状态：离线通过。** [修前回归](../state/review-newest-first/order-before.log)的 8 个平台／子分类场景均因顺序不符失败；[修后浏览器报告](../state/review-newest-first/browser-after/report.json)及同目录 8 张列表截图可复核。测试用 24 篇临时图文记录覆盖待我审、未就绪、已挂起、已处理，检查分类筛选、接口分页、跨时区原帖时间、前后导航及候选排期分配；[Web 审校 54 项](../state/review-newest-first/tests_web_review.log)、[历史 6 项](../state/review-newest-first/tests_history.log)、[查询索引 13 项](../state/review-newest-first/tests_query_index.log)和[前端构建](../state/review-newest-first/build.log)通过。构建保留已有大 chunk 提示。
 
-工作树 archive/state/.env 独立，测试写入临时归档，浏览器仅连接隔离本地服务，无真实账号、模型、抓取或发布操作。证据位于该工作树 `state/review-newest-first/`，不随 Git 提交，清理前须保全。服务机更新及业务人员复验为 **待真实联调**，见 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)。
+工作树 archive/state/.env 独立，测试写入临时归档，浏览器仅连接隔离本地服务，无真实账号、模型、抓取或发布操作。证据在主检出 `state/review-newest-first/`，不随 Git 提交。服务机更新及业务人员复验为 **待真实联调**，见 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台)。
 
 ### 1.20 夜间监测首屏与采集恢复修复（2026-09-20）
 
-分支 `codex/monitor-capture-recovery`，工作树 `.worktrees/monitor-capture-recovery`，基点 `984f4c4`。
+分支 `codex/monitor-capture-recovery`，基点 `984f4c4`。
 用户提供服务机 `92e8718` 的持续运行日志与三份完整 capture；本轮修复基于当前主干，保留已有 IG 自动核验。
 归档与状态使用工作树默认独立路径，验证进一步使用临时目录，只复用主检出 Python，没有复制凭据。
 
@@ -136,7 +138,7 @@ FB 身份/媒体、访问及调度；[存储/监测等前期 7/7](../state/offli
 [独立复审](../state/monitor-capture-recovery/review.md)已关闭原四项及跨轮通知漏报；
 其后主代理另以失败/成功回归验证采集进行中不提前确认旧事件。
 
-证据在本工作树 `state/`，不随 Git 推送，清理前须保全。没有连接真实社媒/业务 Chrome、CDN、模型、飞书或发布。
+证据在主检出 `state/`，不随 Git 推送。没有连接真实社媒/业务 Chrome、CDN、模型、飞书或发布。
 服务机普通首屏来源/到达时间、晨扫完整执行、原始图片与两篇未覆盖旧异常仍为 **待真实联调**；
 按 [MANUAL_STEPS §14 D](MANUAL_STEPS.md#d-核对事实与卡片)更新并在正常节奏复验。
 
@@ -401,15 +403,15 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 
 ### 1.24 源码服务地址更新（2026-09-20）
 
-**验证状态：离线通过。** `scripts/update_service_address.bat` 同步网络 JSON 与非受管飞书 URL；`scripts/run_web_lan.bat` 读取同一配置启动。初次交付时未替换主检出原地址，`10.66.6.3/24` 当时仅为测试及操作示例；后续实际配置以网络 JSON 为准。工作树 `.worktrees/service-address-updater`，分支 `codex/service-address-updater`。
+**验证状态：离线通过。** `scripts/update_service_address.bat` 同步网络 JSON 与非受管飞书 URL；`scripts/run_web_lan.bat` 读取同一配置启动。初次交付时未替换主检出原地址，`10.66.6.3/24` 当时仅为测试及操作示例；后续实际配置以网络 JSON 为准。分支 `codex/service-address-updater`。
 
 [定向回归 6/6 脚本](../state/offline-validation-20260921T062357Z/results.json)覆盖 Web 访问 14 项、启动批处理 8 项、受管部署 19 项、发布后台维护保护 25 项、更新器初版 9 项及 hygiene；[更新器最终 10 项](../state/offline-validation-20260921T062550Z/results.json)另补实际 `.bat` 的交互/参数模式、带空格目录、异目录启动和解释器绑定。独立只读复审再次执行更新器及启动脚本共 18 项通过，未发现阻塞问题。
 
-测试均用临时配置和隔离数据；启动测试执行真实 Windows 批处理，但 npm 和最终 Web 服务器为夹具，没有连接真实账号、发送飞书、修改防火墙或读写业务账本。服务机拉取、监听、防火墙及同事电脑访问仍为 **待真实联调**，按 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址) 操作。日志位于本工作树 `state/`，不随 Git 提交，清理前须保全。
+测试均用临时配置和隔离数据；启动测试执行真实 Windows 批处理，但 npm 和最终 Web 服务器为夹具，没有连接真实账号、发送飞书、修改防火墙或读写业务账本。服务机拉取、监听、防火墙及同事电脑访问仍为 **待真实联调**，按 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址) 操作。日志在主检出 `state/`，不随 Git 提交。
 
 ### 1.25 Story/已发布媒体离线回归耗时（2026-09-21）
 
-基点 `bfd846c`，工作树 `.worktrees/story-insights-timeout`，分支 `codex/story-insights-timeout`。
+基点 `bfd846c`，分支 `codex/story-insights-timeout`。
 [原版默认入口](../state/offline-validation-20260921T071100Z/results.json)复现 `tests_story_insights` 300.05 秒、退出码 124。
 `month.read(timeout=5)` 的五秒是各读取步骤的预算，不是整次月份读取的总时限；负向子测试各自等待身份核验超时，
 并在详情前后分别扫描两遍完整月历。逐格 `Locator.evaluate()` 会反复获取、执行、释放元素句柄；
@@ -438,7 +440,7 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 用户报告的原始 `invalid='platform'` ERROR 尚缺完整堆栈，本轮修前整文件、修前/后单条及最终全量均未复现；
 不能将它归因于已确认的 HTML 污染，也不能声称已证明其独立或已彻底修复。收到原日志后在本节续查；
 `platform` 实际走 Facebook Feed 适配器，当前明确拒绝原因是 `owner`，不是 IG `media_channel`。
-证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
+证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
 **2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `769d8f0`。
