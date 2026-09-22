@@ -10,6 +10,7 @@ import re
 import sys
 import tomllib
 
+from core.config import invalidate_cfg_cache
 from core.paid_model import atomic_write_text
 from core.web_access import WebAccess
 
@@ -85,6 +86,12 @@ def update_address(root: Path, address: str, *, cidrs=None, port=None, dry_run=F
             for path in reversed(written):
                 atomic_write_text(path, originals[path], newline='')
             raise
+        finally:
+            # ⚠️ 旧地址与新地址等长，改写后 config.toml 的 size 不变，mtime 也可能与原写入
+            # 落在同一跳：cfg() 正按这两个值判断是否重读，本进程会继续用旧地址生成飞书链接。
+            # 回滚同样落盘，两条路径都要失效缓存。
+            if config_path in written:
+                invalidate_cfg_cache()
     return policy
 
 
