@@ -435,7 +435,7 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
-**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `1d75df6`。
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `b7e235c`。
 Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
 打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
 `tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
@@ -473,8 +473,9 @@ Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没�
 未拆分的文件在同样负载下必然越线。同一轮里 `tests_browser_workflow` 因界面 5 秒预算红了 7 项，
 机器空闲后同一脚本 13 项全过（[单跑](../state/story-insights-ci-timeout/browser-workflow-quiet.log) 101.05 秒、
 上面那次全量里 95.61 秒）；它与本轮改动无关——production 侧只改了地址更新器，没有任何模块导入它。
-并回 `1d75df6`（只有文档变化）后，[定向复跑](../state/offline-validation-20260922T042213Z/results.json)
-四个脚本加 hygiene、服务地址共 6/6 通过。本节及 §1.26 引用的证据已按 SHA-256 保全到主检出同名目录，
+并回 `b7e235c`（带监测分页修复与其浏览器用例）后重建前端并
+[定向复跑](../state/offline-validation-20260922T055248Z/results.json)：四个脚本加 hygiene、服务地址、
+`tests_browser_workflow` 共 7/7 通过，前端 589 项单测通过。本节及 §1.26 引用的证据已按 SHA-256 保全到主检出同名目录，
 清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
 同一条发布闸上的 `tests_service_address` 间歇失败另见
 [§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
