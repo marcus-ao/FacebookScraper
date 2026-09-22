@@ -12,7 +12,7 @@ from core.integrity import parse_ts
 from core.media import image_facts
 from core.paid_model import FileLock, atomic_write_json
 from core.process_identity import current_worker
-from core.store import Archive, Post, resolve_media_path, read_post_truth, same_media_locator
+from core.store import Archive, Post, resolve_media_path, read_post_truth, same_source_media
 
 
 class CaptureStateError(ValueError):
@@ -167,7 +167,7 @@ class CaptureState:
                                                  for k in ('created_at', 'permalink')):
                 return False
             media = source.get('media') or []
-            if len(media) != len(post.media) or any(not same_media_locator(m, n) for m, n in zip(media, post.media)):
+            if len(media) != len(post.media) or any(not same_source_media(m, n) for m, n in zip(media, post.media)):
                 return False
         if verified_images(arc.base, post.to_row()) != sum(m.kind == 'image' for m in post.media):
             return False

@@ -82,6 +82,58 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         await self.scan([self.post()])
         self.assertEqual(self.ctx.request.get.await_count, 1)
 
+    async def test_rotating_video_address_is_not_re_captured_every_scan(self):
+        # 2026-09-22 服务机那轮：视线内 3 篇视频帖全被算进"处理已有帖"，8 篇图片帖一篇没有。
+        # 图片有 sha256 可比，视频没有，于是判据落到地址上——而地址每次响应都换一批。
+        posted_at = (self.now + timedelta(seconds=1)).isoformat()
+
+        def video(url):  # 发布时刻固定，两轮之间只有地址变了。
+            return self.post('v1', created_at=posted_at,
+                             media=[Media(url, 'video', source_media_id='17900000000000001')])
+
+        first, _ = await self.scan([video('https://instagram.fbom33-1.fna.fbcdn.net/o1/v/t2/f2/m86/'
+                                          'AQN1aaa.mp4?vs=17800000000000001_1&oh=00_AfAaaa&oe=6AA7C003')])
+        self.assertEqual((first.new, first.upgraded), (1, 0))
+        self.now += timedelta(hours=4)
+        self.dcfg.scan_id = 'scan-two'
+        second, _ = await self.scan([video('https://instagram.flhe5-2.fna.fbcdn.net/o1/v/t2/f2/m86/'
+                                           'AQN9zzz.mp4?vs=17800000000000001_2&oh=00_AfAzzz&oe=6AB0FF77')])
+        self.assertEqual((second.new, second.upgraded), (0, 0),
+                         '同一条视频不该每轮都算一次"处理已有帖" —— 那会让这个数字永远读不出健康')
+        self.assertEqual(second.summary().count('处理已有帖 0 篇'), 1)
+
+    async def test_deferred_mixed_post_closes_locally_when_the_video_address_rotated(self):
+        # 退役回 deferred 的那批里有图文+视频的混合帖。本地证据早就齐了，只有视频地址在变；
+        # 拿地址比视频会让 reconcile_local 拒绝收尾，把一篇白白推去再采一次。
+        posted_at = (self.now + timedelta(seconds=1)).isoformat()
+        address = ('https://instagram.f%s.fna.fbcdn.net/o1/v/t2/f2/m86/AQN%s.mp4'
+                   '?vs=17800000000000001_%d&oh=00_AfA%s&oe=6AA7C00%d')
+
+        def mixed(host, token, serial):
+            return self.post('m1', created_at=posted_at, source_media_count=2,
+                             media=[Media('https://cdn.invalid/m1', 'image', source_media_id='17900000000000001'),
+                                    Media(address % (host, token, serial, token, serial), 'video',
+                                          source_media_id='17900000000000002')])
+
+        await self.scan([mixed('bom33-1', 'aaa', 1)])
+        row = self.arc.rows()[0]
+        self.assertTrue(row['media_complete'])
+        key = post_key('instagram', 'target', 'm1')
+        self.now += timedelta(hours=4)
+        # 后一轮把它重新收进候选后被预算拦下 —— 那 33 条退役项就是这个形状。
+        self.state.begin('scan-two', [mixed('lhe5-2', 'bbb', 2)], {row['post_id']: row}, self.now)
+        self.state.interrupt('scan-two', self.now, '本轮预算耗尽')
+        self.assertEqual(self.state.status()['items'][key]['status'], 'deferred')
+
+        fresh = mixed('mrs2-1', 'ccc', 3)  # 再下一轮，地址又换了一批
+        for media in fresh.media:
+            if media.kind == 'image':
+                delta.reuse_image(self.arc, fresh, media)
+        self.assertTrue(self.state.reconcile_local(fresh, self.arc, self.now),
+                        '视频地址轮换不该挡住本地证据收尾 —— 否则这一篇还要再采一次')
+        self.assertEqual(self.state.status()['items'][key]['status'], 'complete')
+        self.assertEqual(self.ctx.request.get.await_count, 1, '收尾全靠本地证据，没有新的平台请求')
+
     async def test_cdn_429_stops_following_files_and_posts(self):
         self.ctx.request.get.return_value = SimpleNamespace(status=429, ok=False)
         self.ctx.request.get.side_effect = None
