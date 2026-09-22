@@ -277,6 +277,43 @@ async def read_facebook_story(page, row, expected_accounts, evidence, *, ui_time
         await asyncio.sleep(.2)
 
 
+async def read_aggregate(page, row, item, expected_accounts, evidence, channel, *, timeout):
+    """Read one channel of an aggregate detail that swaps its content in place.
+
+    This layout has no tabpanel: selecting a channel rewrites the shared header,
+    so the selected tab together with the header's own platform badge is what
+    proves which channel is on screen. Each channel keeps its own publication
+    minute, so the header time is read per channel and never carried across.
+    """
+    deadline = time.monotonic()+timeout
+    tab = page.get_by_role('tab', name=channel.title(), exact=True)
+    previous, stable_since = None, time.monotonic()
+    last_error = DetailReadError('identity_unverified', missing_fields=('aggregate_identity',))
+    while True:
+        if len(evidence.aggregate_members) > 1:
+            raise DetailReadError('identity_unverified', missing_fields=('consistent_aggregate_identity',))
+        identity = evidence.aggregate_owner(channel)
+        header = await header_snapshot(page)
+        selected = await tab.count() == 1 and await tab.get_attribute('aria-selected') == 'true'
+        material = None
+        if identity and header:
+            if not selected or header['platforms'] != [channel.title()]:
+                last_error = DetailReadError('identity_unverified', missing_fields=('selected_channel',))
+            else:
+                observation = {**header, **identity, 'owner_verified': True, 'media_kind': 'unknown'}
+                try:
+                    material = classify_published(observation, row['date'], expected_accounts)
+                except DetailReadError as exc:
+                    last_error, material = exc, None
+        if material != previous:
+            previous, stable_since = material, time.monotonic()
+        if material and time.monotonic()-stable_since >= .4:
+            return material
+        if time.monotonic() >= deadline:
+            raise last_error
+        await asyncio.sleep(.2)
+
+
 async def read_facebook_only_story(page, row, item, expected_accounts, evidence, *, timeout):
     """Read a Story published to Facebook alone: no Instagram root, no channel tab.
 
@@ -470,7 +507,13 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
             await asyncio.sleep(.2)
         if await node.get_attribute('aria-selected') != 'true':
             raise DetailReadError('identity_unverified',missing_fields=('selected_channel',))
-        variants.append(await read_view(page,row,item,expected_accounts,channel=channel,aggregate=True,timeout=timeout))
+        # A detail that owns per-channel tabpanels keeps the recorded scoped read.
+        # The observed aggregate has none and rewrites the shared header instead,
+        # so its channels are separated by the selection and the response entity.
+        if evidence is not None and not await page.get_by_role('tabpanel').count():
+            variants.append(await read_aggregate(page,row,item,expected_accounts,evidence,channel,timeout=timeout))
+        else:
+            variants.append(await read_view(page,row,item,expected_accounts,channel=channel,aggregate=True,timeout=timeout))
     if [(key,await node.count()) for key,node in tabs] != [(key,int(any(key==found for found,_ in available))) for key,_ in tabs]:
         raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
     if not set(header['platforms']).issubset({channel.title() for channel,_ in available}):

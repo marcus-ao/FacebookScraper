@@ -291,10 +291,10 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 | 条目 | code / 缺失 | 现状 |
 |---|---|---|
 | 09-05 11:48、09-06 02:09 Feed、09-08 23:36 Reel | `unsupported_type` / `channel_identity_adapter` | **已按现场结构实现 `read_media`**，离线通过，服务机待复验 |
-| 09-15 19:17 #1 | `identity_unverified` / `instagram_channel_tab` | FB 单渠道 Story 被路由进跨发读取器，死等不存在的 IG 页签。**已实现 `read_facebook_only_story`**，离线通过，服务机待复验 |
-| 09-15 19:17 #0 | `identity_unverified` / `channel` | 同格另一条，FB+IG 双图标的聚合 Post；页签迟挂载被提前采样。**页签判定已改为按表头徽标等待**，但该页每个渠道视图的响应结构还没取证，适配器仍未写 |
-| 09-27 17:00 | `read_failed`，阶段 `item_ready` | ⭐ 图标项是**平台按历史数据推荐的活跃时段占位**，不是真实任务（用户明确）。tooltip 原文其实没变；诊断已改为报出是哪一步拒绝的，**为什么拒绝仍未知** |
-| 09-30 17:30 | `load_timeout`，阶段 `item_ready` | 真实 IG 排期项；2026-09-21 第二次刷新后已不在诊断里，随 `read_media` 一并解决 |
+| 09-15 19:17 #1 | `identity_unverified` / `instagram_channel_tab` | FB 单渠道 Story 被路由进跨发读取器，死等不存在的 IG 页签。`read_facebook_only_story` **已真实通过**（第三次刷新起不再出现在诊断里） |
+| 09-15 19:17 #0 | `identity_unverified` / `channel` | 同格另一条，FB+IG 双图标的聚合 Post；页签迟挂载被提前采样。页签判定已改为按表头徽标等待，**逐渠道适配器 `read_aggregate` 已按现场结构实现**，离线通过，服务机待复验 |
+| 09-27 17:00 | `read_failed`，阶段 `item_ready` | ⭐ 图标项是**平台按历史数据推荐的活跃时段占位**，不是真实任务（用户明确）。tooltip 原文其实没变；第三次刷新已被正确跳过，推荐时刻每次会挪位置 |
+| 09-30 17:30 | `structure_unknown` / `item_caption` + `recommendation_absent` | 真实 IG 排期项。新诊断把两件事分开了：悬停确实没出 tooltip（**本来就不是推荐，判定正确**），真正缺的是这张卡的完整正文证据。⛔ 仍未解决 |
 
 **2026-09-21 第二次刷新：未核实从 7 条降到 3 条**（09-15 两条 + 09-27 一条），`read_media` 在服务机真实通过。
 剩下三条这一轮的根因如下，都不是先前猜的那个：
@@ -330,8 +330,22 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
   （合作内容会出现在合作者主页，确实挤占发布节奏）。`classify_published` 因此只对响应已核验的 owner 放行差异，
   DOM 推出来的 owner 仍须等于配置账号。`occupied_for_channel` 按渠道选卡片、与账号无关，冲突逻辑不用改。
 
-**当前边界：9 月 4 日跨发 Story 与 IG Feed/Reel 真实通过；FB 单渠道 Story 与渠道页签等待离线通过、服务机待复验；
-聚合 Post 的逐渠道适配器和 ⭐ 占位项的判定仍为代码未完成。**
+**聚合 Post 的字段契约（2026-09-21 `--reload`，content_id=122187915260939228）。**
+
+- ⛔ **这一类详情没有 `role=tabpanel`。** 选中渠道是把同一个表头就地改写：徽标、正文、时刻全换。
+  按 tabpanel 取作用域的既有聚合路径在真实页面上不成立，因此按「有没有 tabpanel」分流，无则走 `read_aggregate`。
+- **每个渠道有各自的分钟**：Facebook `7:17pm`，Instagram `7:18pm`；正文长度也不同（336/312，响应 334/309）。
+  日期格只对得上 Facebook，所以整条的时刻校验只要求**至少一个**变体匹配，不得把一个渠道的分钟套到另一个上。
+- 成员表在根实体上：`tofu_entity.entity_id` 等于 content_id、`entity_info.__typename` 为 `TofuFBStoryEntityInfo`，
+  其 `cross_posted_entities` 给出 FB（entity_id 等于 content_id）与 IG（`18129143875786241`，带 `ig_media.permalink`）两个成员及各自 `owner.entity_id`。
+- 名字在别的响应里，按**成员自己的两个 ID** 回接：FB 用 `entity_info.story.post_id` 等于 content_id 的那份，
+  取 `feedback.owning_profile` 与 `actors[0]` 一致的 `name`；IG 用 `instagram_post.id` 等于成员 entity_id 的那份，取 `bizlink_instagram_actor.username`。
+- ⚠️ 同一份 FB 响应里的 `feedback_context…viewer_actor.id`（`61589751128761`）是登录账号，不是作者。
+- ⚠️ 这一版 FB 预览的 permalink 是 `permalink.php?id=<profile>`，**不带 `story_fbid`**，既有 Feed DOM 判据在这页取不到 remote_id；
+  ID 只从响应取，不从预览链接凑。
+
+**当前边界：9 月 4 日跨发 Story、IG Feed/Reel、FB 单渠道 Story 真实通过；聚合 Post 逐渠道适配器离线通过、服务机待复验；
+09-30 17:30 那条真实 IG 排期项的正文证据仍为代码未完成。**
 预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，基点 `c0e734c`；
 **离线通过**，逐脚本结果与限制见该工作树 [state/calendar-data-sync-fix/validation.json](../state/calendar-data-sync-fix/validation.json)，清理前须保全。
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、

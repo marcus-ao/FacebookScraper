@@ -12,8 +12,32 @@ class InsightsEvidence:
         self.page, self.source_id = page, source_id
         self.tasks, self.identities = [], []
         self.facebook_identities = []
-        self.media_identities = []
+        self.media_owners = []
         self.story_identities = []
+        self.story_actors = []
+        self.aggregate_members = []
+
+    @property
+    def media_identities(self):
+        """Instagram accounts observed on this detail's own media ID."""
+        return [value for value in self.media_owners if value['remote_id'] == self.source_id]
+
+    def aggregate_owner(self, channel):
+        """Join this detail's cross-posted member for `channel` to its account name.
+
+        The member list is bound to the request's content_id, so joining a name
+        onto a member's own entity and owner ID is what binds the name here; an
+        account observed on some other ID never reaches a member.
+        """
+        if len(self.aggregate_members) != 1:
+            return None
+        member = self.aggregate_members[0].get(channel)
+        named = self.story_actors if channel == 'facebook' else self.media_owners
+        for value in named if member else ():
+            if value['remote_id'] == member['remote_id'] and value['owner_id'] == member['owner_id']:
+                return {'channel': channel, 'remote_id': member['remote_id'],
+                        'owner': value['owner'], 'owner_id': member['owner_id']}
+        return None
 
     def start(self):
         self.page.on('response', self.observe)
@@ -31,16 +55,72 @@ class InsightsEvidence:
         the author; bind only through `instagram_post.id`.
         """
         post = (document.get('data') or {}).get('instagram_post')
-        if not isinstance(post, dict) or str(post.get('id', '')) != self.source_id:
+        if not isinstance(post, dict) or not re.fullmatch(r'\d{6,}', str(post.get('id', ''))):
             return
         actor = post.get('bizlink_instagram_actor') or {}
         if (not isinstance(actor.get('username'), str) or not actor['username'].strip()
                 or not re.fullmatch(r'\d{6,}', str(actor.get('id', '')))):
             return
-        value = {'channel': 'instagram', 'remote_id': self.source_id,
+        value = {'channel': 'instagram', 'remote_id': str(post['id']),
                  'owner': actor['username'], 'owner_id': str(actor['id'])}
-        if value not in self.media_identities:
-            self.media_identities.append(value)
+        if value not in self.media_owners:
+            self.media_owners.append(value)
+
+    def observe_story_actor(self, document):
+        """A published Facebook post names its author on the story holding its ID.
+
+        ⚠️ The same document's `viewer_actor` is the signed-in profile, not the
+        author; only `owning_profile` and `actors`, agreeing with each other, do.
+        """
+        story = (((document.get('data') or {}).get('tofu_entity') or {})
+                 .get('entity_info') or {}).get('story')
+        if not isinstance(story, dict) or str(story.get('post_id', '')) != self.source_id:
+            return
+        actors = story.get('actors')
+        profile = story.get('feedback', {}).get('owning_profile') or {}
+        actor = actors[0] if isinstance(actors, list) and len(actors) == 1 and isinstance(actors[0], dict) else {}
+        if (not re.fullmatch(r'\d{6,}', str(actor.get('id', ''))) or str(profile.get('id', '')) != str(actor.get('id'))
+                or not isinstance(actor.get('name'), str) or not actor['name'].strip()
+                or profile.get('name') != actor['name'] or type(story.get('creation_time')) is not int):
+            return
+        value = {'channel': 'facebook', 'remote_id': self.source_id, 'owner': actor['name'],
+                 'owner_id': str(actor['id']), 'created_at': story['creation_time']}
+        if value not in self.story_actors:
+            self.story_actors.append(value)
+
+    def observe_aggregate(self, document):
+        """An aggregate detail lists its channels on the root entity it names.
+
+        The root repeats the request's content_id and each cross-posted entry
+        carries its own entity and owner ID. Only IDs are taken here: the names
+        arrive in other documents and are joined back through `aggregate_owner`.
+        """
+        entity = (document.get('data') or {}).get('tofu_entity') or {}
+        info = entity.get('entity_info') or {}
+        if (info.get('__typename') != 'TofuFBStoryEntityInfo'
+                or str(entity.get('entity_id', '')) != self.source_id):
+            return
+        related = info.get('cross_posted_entities')
+        if not isinstance(related, list) or not related:
+            return
+        members = {}
+        for entry in related:
+            if not isinstance(entry, dict):
+                return
+            nested = entry.get('entity_info') or {}
+            channel = {'TofuFBStoryEntityInfo': 'facebook',
+                       'TofuIGPostEntityInfo': 'instagram'}.get(nested.get('__typename'))
+            remote = str(entry.get('entity_id', ''))
+            owner = str((nested.get('owner') or {}).get('entity_id', ''))
+            # The Facebook member is this detail itself; a different ID there
+            # would mean the root is not the entity this request asked for.
+            if (channel is None or channel in members or not re.fullmatch(r'\d{6,}', remote)
+                    or not re.fullmatch(r'\d{6,}', owner)
+                    or (channel == 'facebook' and remote != self.source_id)):
+                return
+            members[channel] = {'channel': channel, 'remote_id': remote, 'owner_id': owner}
+        if members not in self.aggregate_members:
+            self.aggregate_members.append(members)
 
     def observe_story_page(self, document):
         """A Story published to Facebook alone repeats this detail's own content_id.
@@ -83,6 +163,8 @@ class InsightsEvidence:
             for document in response_documents(raw):
                 self.observe_media(document)
                 self.observe_story_page(document)
+                self.observe_story_actor(document)
+                self.observe_aggregate(document)
                 info = document.get('data', {}).get('tofu_entity', {}).get('entity_info', {})
                 if info.get('__typename') != 'TofuIGPostEntityInfo':
                     continue
