@@ -1647,59 +1647,6 @@ check(_sched_src.index("wait_for") < _sched_src.index(".all()"),
       "排期区还没渲染出来时它返回 0 个")
 
 
-# 页面标题可早于日历数据出现。
-class LoadingPlanner:
-    """前 `ticks` 次读到的只有导航 link，之后日历条目才渲染出来。"""
-
-    def __init__(self, ticks):
-        self.ticks = ticks
-        self.reads = 0
-        self.focused = None
-        self.select_all = False
-
-    def get_by_role(self, role, name=None, exact=True):
-        self.reads += 1
-        # _node_text 读取 aria_label/text，不读取 name。
-        found = [FakeElement("link", aria_label="Create post")]
-        if self.reads > self.ticks:
-            found.append(FakeElement(
-                "link",
-                aria_label="Probe caption September 15, 2026, 10:00 AM"))
-        return FakeLocator(self, found)
-
-
-_ENTRY_SPEC = selectors.EvidenceSignal(
-    key="planner_scheduled_card", step="G6c", kind="semantic",
-    surface="content_calendar", source_dump="fixture.json", sequences=(1,),
-    breaks_when="fixture", role="link", name="Probe caption",
-    attributes={"entry_role": "link",
-                "datetime_regex": (r"(?P<date>[A-Z][a-z]{2,8} \d{1,2}, \d{4})"
-                                   r"\D{0,10}?(?P<time>\d{1,2}:\d{2} [AaPp][Mm])")})
-
-
-async def planner_waits_for_entries():
-    page = LoadingPlanner(ticks=2)          # 前两次只有导航 link
-    cards = await bs._entries_when_ready(page, _ENTRY_SPEC, "link", timeout=5)
-    texts = [await bs._node_text(item) for item in cards]
-    return page.reads, texts
-
-
-reads, texts = asyncio.run(planner_waits_for_entries())
-check(reads > 2 and any("September 15, 2026" in item for item in texts),
-      "G6c 等到**真的能解析出时刻的条目**才读，不把「还在转圈」当成零占用"
-      "（读了 %d 次）" % reads)
-
-
-async def planner_empty_stays_empty():
-    page = LoadingPlanner(ticks=10 ** 6)   # 永远只有导航 link = 真的空日历
-    cards = await bs._entries_when_ready(page, _ENTRY_SPEC, "link", timeout=1)
-    return [await bs._node_text(item) for item in cards]
-
-
-check(not any("September" in item
-              for item in asyncio.run(planner_empty_stays_empty())),
-      "真的空日历仍然读作空：等满预算后原样返回，由调用方按内容筛出零条")
-
 # ---- ：React 受控开关的 aria-checked 是异步翻的，点击返回 ≠ 已打开 ----
 lag_readback, lag_parts = asyncio.run(schedule(
     datetime(2026, 9, 8, 8, 0, tzinfo=timezone.utc), switch_lag=3))
@@ -1736,11 +1683,6 @@ check(dead_clicks == 2,
 
 check("_SWITCH_ON_BUDGET" in inspect.getsource(bs._switch_is_on),
       "开关等待预算是有上界的常量，不是整个 ui_timeout")
-
-check("_PLANNER_ENTRY_BUDGET" in inspect.getsource(bs._entries_when_ready),
-      "等待预算是有上界的常量，不是整个 ui_timeout —— "
-      "空日历每次发布都会真的等满这一段")
-
 
 async def schedule_bad_date():
     def hook(element):

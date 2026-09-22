@@ -55,7 +55,7 @@ export function ImageWorkspace({ images, detail, versions, editing, maxImageCoun
       {!image.de_present && <span className={styles.missing}>缺德语图，显示的是原图</span>}</figcaption><img src={image.de_url || image.original_url} alt={`德语图 ${current + 1}`} /></figure>
   </div>
   return <section aria-label="图片对照">
-    <p className={styles.help}>共 {images.length} 张 · {maxImageCount ? `已核验发布上限 ${maxImageCount} 张` : '发布张数上限未知（待平台录证）'}{imageModel && ` · 当前图片模型：${imageModel}`}</p>
+    <p className={styles.help}>共 {images.length} 张 · {maxImageCount ? `已核验发布上限 ${maxImageCount} 张` : '发布张数由实际发布界面校验'}{imageModel && ` · 当前图片模型：${imageModel}`}</p>
     <div className={styles.controls}><span>第 {current + 1} / {images.length} 张 · {Math.max(0, images.length - seen.size) ? `还有 ${images.length - seen.size} 张没看` : '都看过了'}</span><Space><Button disabled={current === 0} onClick={() => choose(current - 1)}>上一张</Button><Button disabled={current >= images.length - 1} onClick={() => choose(current + 1)}>下一张</Button><Button onClick={() => setZoom(true)}>放大对照</Button></Space></div>
     {!image.de_present && <Alert type="warning" showIcon title="这一张缺少德语图，当前展示原图，请人工核对" />}
     {image.metrics?.changed_pixel_ratio === 0 && <Alert type="warning" showIcon

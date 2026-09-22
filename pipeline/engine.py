@@ -413,8 +413,8 @@ def resolve_cleared_items(state_dir: Path, source_refs: Iterable[str], *,
 _GATE_ITEM_KINDS = {
     "material_gate": "补齐素材（重跑增量把图下全）后重跑 pipeline run",
     "unknown_owner": "确认归属后重跑 pipeline run",
-    "unknown_collaborator": "确认二次使用授权，把作者加进 config.toml 的 "
-                            "[publish.trusted_owners]，再重跑 pipeline run",
+    "unknown_collaborator": "在审校台确认这篇帖子的来源与付费加工许可，再重跑 pipeline run；"
+                            "长期合作方的全局信任另由 [publish.trusted_owners] 配置",
     "unmapped_price": "在 config.toml 的 [publish.price_map] 补上这几个金额串的"
                       "德国站定价，再重跑 pipeline run",
     "offline_gate": "按说明修好离线硬闸点名的问题后重跑 pipeline run",

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -43,6 +45,24 @@ def _parse_aware(value: object) -> datetime | None:
 
 # 仅缓存 JSON 结构；截图每次回查，迁移或删除证据后不能沿用旧结论。
 _DUMP_CACHE: dict[tuple, tuple[dict, str]] = {}
+_VALIDATION_SCOPE = ContextVar('publish_evidence_validation', default=None)
+
+
+@contextmanager
+def validation_scope():
+    """仅用于一次同步静态核验；不得跨排队、浏览器等待或付费请求复用。"""
+    active = _VALIDATION_SCOPE.get()
+    token = _VALIDATION_SCOPE.set({} if active is None else active)
+    try:
+        yield
+    finally:
+        _VALIDATION_SCOPE.reset(token)
+
+
+def _path_stamp(path):
+    stat = path.lstat()
+    return (stat.st_dev, stat.st_ino, stat.st_mode, stat.st_size,
+            stat.st_mtime_ns, stat.st_ctime_ns, getattr(stat, 'st_file_attributes', 0))
 
 
 def clear_dump_cache() -> None:
@@ -60,12 +80,20 @@ def screenshot_path(raw: str, source_dump: str, dumps_dir: Path) -> Path:
             or ':' in recorded.name or not recorded.name.lower().endswith('.png')):
         raise ValueError("截图不属于本轮直属截图目录")
     root = Path(dumps_dir).absolute()
+    cache = _VALIDATION_SCOPE.get()
+    paths = (root, root / directory, root / directory / recorded.name)
+    key = ('screenshot', paths)
+    stamps = tuple(_path_stamp(path) for path in paths)
+    if cache is not None and cache.get(key) == stamps:
+        return paths[-1]
     shots = assert_physical_direct_path(
         root, root / directory, kind='directory', label='probe 截图目录')
     shot = assert_physical_direct_path(
         shots, shots / recorded.name, kind='file', label='probe 截图')
     if not shot.is_file() or shot.stat().st_size <= 0:
         raise ValueError("本轮截图不存在或为空：%s" % shot)
+    if cache is not None:
+        cache[key] = stamps
     return shot
 
 
@@ -95,7 +123,7 @@ def validate_v2_dump(source_dump: str, dumps_dir: Path
         ) % source_dump
     try:
         stat = path.stat()
-        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+        cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
     except OSError:
         cache_key = None
     if cache_key is not None and cache_key in _DUMP_CACHE:
@@ -190,7 +218,9 @@ def verify(spec: Locator, dumps_dir: Path) -> tuple[bool | None, str]:
             "        scripts\\run_probe_signals.bat  （详见 docs/MANUAL_STEPS.md 第 3 节）"
         ) % spec.source_dump
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        stat = path.stat()
+        cached = _DUMP_CACHE.get((str(path.resolve()), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size))
+        data = cached[0] if cached else json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         return False, "dump 读不了：%s" % exc
     collection = (data.get("snapshots") if spec.evidence_kind == "snapshot"
@@ -405,6 +435,19 @@ def verify_signal(spec: EvidenceSignal,
     data, detail = validate_v2_dump(spec.source_dump, dumps_dir)
     if data is None:
         return (None if detail.startswith("本机没有") else False), detail
+    cache = _VALIDATION_SCOPE.get()
+    key = ('signal', repr(spec), id(data))
+    if cache is not None and key in cache:
+        return cache[key]
+    result = _verify_signal_data(spec, data)
+    if cache is not None:
+        # Keep the object alive so a rewritten dump cannot reuse its Python identity.
+        cache[key] = result
+        cache[('dump', id(data))] = data
+    return result
+
+
+def _verify_signal_data(spec, data):
     by_sequence = {row.get("sequence"): row
                    for row in (data.get("snapshots") or [])
                    if isinstance(row, dict)}

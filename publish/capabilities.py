@@ -2,10 +2,14 @@
 from datetime import datetime
 
 from core.config import ROOT, cfg
-from publish import business_suite as bs, channels, journal, planning, snapshots, month_inventory
+from publish import business_suite as bs, channels, evidence, journal, planning, snapshots, month_inventory
 
 
-def checks():
+@evidence.validation_scope()
+def checks(channel=None):
+    if channel not in {None, 'facebook', 'instagram'}:
+        raise bs.ProbeRequired('每篇仅接受一个来源对应的发布渠道')
+    selected = (channel,) if channel else ('facebook', 'instagram')
     # Config.state_dir creates directories; a preflight on a fresh checkout must not.
     if not (ROOT / cfg().get('paths', 'state', 'state')).is_dir():
         return [{'name': 'state_directory', 'available': False, 'reason': '运行状态目录尚未建立，缺少本机验收证据'}]
@@ -16,9 +20,9 @@ def checks():
                   ('calendar_coverage', month_inventory.require)]
     operations.extend((f'{channel}_controls', lambda channel=channel:
                        channels.require_independent_channel_evidence((channel,)))
-                      for channel in ('facebook', 'instagram'))
+                      for channel in selected)
     operations.extend((f'{channel}_window', lambda channel=channel: planning.configured_window(channel))
-                      for channel in ('facebook', 'instagram'))
+                      for channel in selected)
     result = []
     for name, operation in operations:
         try:
@@ -32,9 +36,7 @@ def checks():
 def require(channel):
     if channel not in {'facebook', 'instagram'}:
         raise bs.ProbeRequired('每篇仅接受一个来源对应的发布渠道')
-    for item in checks():
-        if item['name'].startswith(('facebook_', 'instagram_')) and not item['name'].startswith(channel + '_'):
-            continue
+    for item in checks(channel):
         if not item['available']:
             raise bs.ProbeRequired(item['reason'])
 

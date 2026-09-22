@@ -53,48 +53,6 @@ def success_spec(kind="semantic"):
                     if kind == "url" else ""))
 
 
-def write_v2(root: Path, *, interactions: list[dict], snapshots: list[dict]) -> Path:
-    shots = root / "fixture_screenshots"
-    shots.mkdir(parents=True, exist_ok=True)
-    final_shot = shots / "final.png"
-    final_shot.write_bytes(b"masked-png")
-    for sequence, row in enumerate(interactions, 1):
-        row.setdefault("sequence", sequence)
-        row.setdefault("page_id", "page-001")
-        row.setdefault("recorded_at", "2026-09-01T12:00:00+00:00")
-    for sequence, row in enumerate(snapshots, 1):
-        row.setdefault("sequence", sequence)
-        row.setdefault("page_id", "page-001")
-        row.setdefault("recorded_at", "2026-09-01T12:00:01+00:00")
-    finals = [row for row in snapshots if row.get("reason") == "final"]
-    if not finals:
-        snapshots.append({
-            "sequence": len(snapshots) + 1,
-            "page_id": "page-001",
-            "evidence_order": len(interactions) + len(snapshots) + 1,
-            "recorded_at": "2026-09-01T12:00:03+00:00",
-            "reason": "final",
-            "page_url": "https://business.facebook.com/latest/content_calendar",
-            "semantic_items": [],
-        })
-        finals = [snapshots[-1]]
-    for row in finals:
-        row["screenshot"] = str(final_shot)
-        row["screenshot_error"] = None
-    dump = {
-        "schema_version": 2,
-        "mode": "record-and-passive-evidence",
-        "session_id": "fixture-session",
-        "started_at": "2026-09-01T11:59:00+00:00",
-        "finished_at": "2026-09-01T12:01:00+00:00",
-        "interactions": interactions,
-        "snapshots": snapshots,
-    }
-    path = root / "fixture.json"
-    path.write_text(json.dumps(dump), encoding="utf-8")
-    return path
-
-
 TARGET_FB = "Neakasa Deutschland"
 TARGET_IG = "neakasa.de"
 
@@ -125,48 +83,11 @@ def dialog_text(channel, *, remote_id, account, caption) -> str:
             % (remote_id, surface, account, caption))
 
 
-def planner_semantics(caption="Probe caption", *, instagram=True,
-                      moment=ENTRY_MOMENT) -> list[dict]:
-    rows = [
-        {"tag": "div", "role": "heading", "accessible_name": "September",
-         "visible_text": "September"},
-        {"tag": "span", "role": "heading", "accessible_name": "2026",
-         "visible_text": "2026"},
-        {"tag": "div", "role": "link",
-         "accessible_name": "%s %s" % (caption, moment),
-         "visible_text": "%s %s" % (caption, moment)},
-        {"tag": "div", "role": "dialog",
-         "accessible_name": dialog_text(
-             "facebook", remote_id="1887083152480681", account=TARGET_FB,
-             caption=caption),
-         "visible_text": ""},
-    ]
-    if instagram:
-        rows.append({"tag": "div", "role": "dialog",
-                     "accessible_name": dialog_text(
-                         "instagram", remote_id="4378984725697354",
-                         account=TARGET_IG, caption=caption),
-                     "visible_text": ""})
-    return rows
-
-
 # 此夹具的编辑器只提供 FB 账号证据。
 ACCOUNT_ATTRIBUTES = {
     "facebook_account_token": TARGET_FB,
     "facebook_account_regex": r"@?(?P<account>.+)",
 }
-
-
-def account_semantics(*, facebook=TARGET_FB, instagram=TARGET_IG) -> list[dict]:
-    """构造 FB 预览身份；instagram 参数仅兼容调用，不出现在该结构中。"""
-    preview = "%s Just now · Hello Like Comment Share" % facebook
-    return [
-        {"tag": "div", "role": "article", "accessible_name": preview,
-         "visible_text": preview},
-        {"container_role": "article", "container_accessible_name": preview,
-         "tag": "h2", "role": "heading", "accessible_name": facebook,
-         "visible_text": facebook},
-    ]
 
 
 print("\n[2] submit() 只点击一次，成功/超时/跳转都返回结构化结论")
@@ -368,79 +289,18 @@ caption = "Hallo Berlin\nZweite Zeile"
 FLAT = "Hallo Berlin Zweite Zeile"
 
 
-def entries_for(text=FLAT, *, moment=ENTRY_MOMENT, facebook=True,
-                instagram=True, fb_id="1887083152480681",
-                ig_id="4378984725697354", fb_account=TARGET_FB,
-                ig_account=TARGET_IG):
-    """同一时刻两条条目 —— FB 一条、IG 一条，各自点开各自的弹窗。"""
-    rows = []
-    if facebook:
-        rows.append(("%s %s" % (text, moment), dialog_text(
-            "facebook", remote_id=fb_id, account=fb_account, caption=text)))
-    if instagram:
-        rows.append(("%s %s" % (text, moment), dialog_text(
-            "instagram", remote_id=ig_id, account=ig_account, caption=text)))
-    if not rows:
-        rows.append(("%s %s" % (text, moment), ""))
-    return rows
+from publish import month_inventory, month_readback
 
-
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for()), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(readback.found and readback.channels == ("facebook", "instagram")
-      and "1887083152480681" in readback.remote_id
-      and "4378984725697354" in readback.remote_id,
-      "目标/UI 时刻 + 完整正文 + FB/IG 各自的独立弹窗齐了才回读成功，"
-      "并且两个渠道的 remote id 都留了下来")
-
-baseline = asyncio.run(bs.snapshot_scheduled_matches(
-    PlannerPage(entries_for()), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-
-print("\n[S0-2] 长文案回读失败要留下可区分、有界的诊断")
 long_caption = "Dies ist eine lange deutsche Produktbeschreibung. " * 24
 truncated = long_caption[:250] + "…"
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for(truncated)), when, long_caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-diagnostics = getattr(readback, "diagnostics", {})
-truncated_readback = readback
-samples = diagnostics.get("samples", [])
-check(not readback.found and diagnostics.get("caption_mismatch") == 2
-      and "正文不匹配" in readback.error,
-      "同一目标时刻的截断文案不算成功，并明确报告正文不匹配")
-check(bool(samples) and samples[0].get("text_length") == len(
-          truncated + " " + ENTRY_MOMENT)
-      and samples[0].get("text_preview") == truncated[:200],
-      "诊断保留实际回读文本长度与前200字符，供判断长文是否被截断")
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for(long_caption)), when, long_caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(readback.found, "完整长文案仍可正常核验，诊断不放宽或限制正文判据")
-
-for moment, expected_reason, text in (
-        ("unrecognized time", "datetime_parse_failed", "时刻无法解析"),
-        ("September 09, 2026, 1:00 AM", "time_mismatch", "时刻不匹配")):
-    # 一个无关但可解析的条目代表日历已经加载，避免等待真实20秒UI预算。
-    rows = entries_for(moment=moment) + [("Other " + ENTRY_MOMENT, "")]
-    readback = asyncio.run(bs.verify_scheduled(
-        PlannerPage(rows), when, caption,
-        ui_timezone="America/Los_Angeles", card_spec=card_spec))
-    diagnostics = getattr(readback, "diagnostics", {})
-    check(not readback.found and diagnostics.get(expected_reason) == 2
-          and text in readback.error,
-          "完整正文存在时区分%s，不再合并成找不到卡片" % text)
-
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage([("Home", ""), ("Inbox", "")] + [
-        ("Other %d %s" % (index, ENTRY_MOMENT), "") for index in range(30)]),
-    when, caption, ui_timezone="America/Los_Angeles", card_spec=card_spec))
-diagnostics = getattr(readback, "diagnostics", {})
-check(diagnostics.get("datetime_parse_failed") == 0
-      and diagnostics.get("caption_mismatch") == 30
-      and len(diagnostics.get("samples", [])) == 20,
-      "导航链接不会冒充时刻解析失败，大量卡片诊断最多保留20条样本")
+cards = tuple(bs.RemotePlannerCard(when, ("facebook",), (("facebook", str(12345678+i)),),
+    truncated, "hash", "scheduled", placement="feed") for i in range(2))
+inventory = bs.RemoteSlotInventory((when,), "Europe/Berlin", when.date(), when.date(), cards, True)
+with patch.object(month_inventory, "read", AsyncMock(return_value=inventory)), \
+        patch.object(bs, "_readback_screenshot", AsyncMock(return_value="")):
+    truncated_readback = asyncio.run(month_readback.verify(None, when, long_caption,
+        ui_timezone="Europe/Berlin", target_channels=("facebook",)))
+diagnostics = truncated_readback.diagnostics
 
 with tempfile.TemporaryDirectory() as folder:
     attempt = journal.PublishAttempt(
@@ -470,13 +330,17 @@ with tempfile.TemporaryDirectory() as folder:
     page = PlannerPage([])
     session = SimpleNamespace(new_page=AsyncMock(return_value=page), stop=AsyncMock())
     account = bs.AccountContext(True, TARGET_FB, True, TARGET_IG, True, True)
+    async def submit_with_durable_intent(*args, **kwargs):
+        check(journal.load(state)[-1]['status'] == journal.STATUS_SUBMIT_AMBIGUOUS,
+              '提交点击前必须已经耐久写入未决意图')
+        return bs.SubmitResult(True, True, success_signal='fixture-success')
     with patch.object(workflow, "cfg", return_value=config), \
             patch.object(workflow.snapshots, 'ensure', return_value=SimpleNamespace(**vars(post), snapshot_id='')), \
             patch.object(workflow.records, 'queue_approved'), \
             patch.object(workflow.records, 'project'), \
             patch.object(workflow, "attach", AsyncMock(return_value=(session, None, session))), \
             patch.object(workflow.channels, "require_independent_channel_evidence", return_value=None), \
-            patch.object(workflow.capabilities, 'require', return_value=None), \
+            patch.object(workflow.capabilities, 'require', return_value=None) as capability_check, \
             patch.object(workflow.channels, 'select', AsyncMock(return_value={'channel': 'facebook', 'account': 'fixture'})), \
             patch.object(workflow.channels, 'verify_before_submit', AsyncMock()), \
             patch.object(workflow, "check_live_slot", AsyncMock()), \
@@ -486,14 +350,15 @@ with tempfile.TemporaryDirectory() as folder:
             patch.object(bs, "upload_images", AsyncMock(return_value=())), \
             patch.object(bs, "fill_caption", AsyncMock()), \
             patch.object(bs, "set_schedule", AsyncMock(return_value="fixture-time")), \
-            patch.object(bs, "submit", AsyncMock(return_value=
-                         bs.SubmitResult(True, True, success_signal="fixture-success"))), \
+            patch.object(bs, "submit", AsyncMock(side_effect=submit_with_durable_intent)), \
             patch.object(workflow.month_readback, "verify", AsyncMock(return_value=truncated_readback)), \
             patch.object(workflow.media, 'verify_upload', AsyncMock(return_value={'image_count': 1})), \
             patch.object(workflow.channel_evidence, 'require', return_value={'context_ids': {'asset_id': '123', 'business_id': '456'}}):
         outcome = asyncio.run(workflow.execute(
             post, when, ui_timezone="America/Los_Angeles", timeout=0.1,
             stamp="fixture", submit_enabled=True))
+    check(capability_check.call_count == 1,
+          "锁内静态能力核验执行一次，内部浏览器流程不重复执行")
     saved = journal.load(state)[-1]
     check(outcome.code == 5 and saved["status"] == journal.STATUS_SUBMITTED_UNVERIFIED
           and saved.get("readback_diagnostics", {}).get("caption_mismatch") == 2
@@ -501,52 +366,6 @@ with tempfile.TemporaryDirectory() as folder:
               "text_preview") == truncated[:200],
           "真实状态机把失败诊断追加到journal，保持未核验态且不自动补提")
 
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for()), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec,
-    pre_submit_baseline=baseline))
-check(baseline.match_count == 2 and not readback.found
-      and "提交前已经存在" in readback.error,
-      "提交前同槽同文案条目会被记成基线，旧卡不能冒充本次 submit 的回读")
-
-pre = PlannerPage(entries_for())
-asyncio.run(bs.snapshot_scheduled_matches(
-    pre, when, caption, ui_timezone="America/Los_Angeles",
-    card_spec=card_spec))
-check(pre.keyboard.pressed == [],
-      "提交前基线只读条目文本，**一次弹窗都不点开** —— 提交前在远端页面上"
-      "点东西是没必要的风险")
-
-try:
-    asyncio.run(bs.snapshot_scheduled_matches(
-        PlannerPage(entries_for("irrelevant")),
-        datetime.fromisoformat("2026-12-15T10:00:00+01:00"), caption,
-        ui_timezone="America/Los_Angeles", card_spec=card_spec))
-except bs.PublishStepError as exc:
-    baseline_outside_blocked = "不在本次 Planner 可见范围" in str(exc)
-else:
-    baseline_outside_blocked = False
-check(baseline_outside_blocked,
-      "目标日期在当前 Planner 可见月份之外时零 click 失败闭合"
-      "（可见区间由 September + 2026 两条 heading 推出来）")
-
-with tempfile.TemporaryDirectory() as folder:
-    page = PlannerPage(entries_for(instagram=False))
-    readback = asyncio.run(bs.verify_scheduled(
-        page, when, caption, ui_timezone="America/Los_Angeles",
-        card_spec=card_spec, screenshot_path=Path(folder) / "failed.png"))
-    check(not readback.found and readback.missing_channels == ("instagram",)
-          and readback.success_signal == ""
-          and Path(readback.screenshot).is_file(),
-          "只点得开 FB 弹窗时不记 scheduled；不伪造 readback signal，"
-          "并保留失败截图")
-
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for(ig_account=TARGET_IG + "als")),
-    when, caption, ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(not readback.found and readback.missing_channels == ("instagram",),
-      "弹窗里是 neakasa.deals 这种近碰撞账号时 IG 不算命中 —— "
-      "整串文本里按**独立词**判，不是子串")
 # 显示名后缀由提交前完整值比较拦截，token 边界检查不能代替。
 account_signal = EvidenceSignal(
     key="composer_account_context", step="G2", kind="semantic",
@@ -588,120 +407,6 @@ check(suffix_blocked,
       "composer 上显示 'Neakasa Deutschland Test' 时提交前失败闭合 —— "
       "完整值比较，多一个词就是另一个主页")
 
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for(FLAT + " EXTRA CTA")), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(readback.found,
-      "条目文本是「完整正文 + 时刻」，正文被完整包含即命中"
-      "（Planner 上正文本来就和时刻拼在一起）")
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage(entries_for("Ganz andere Zeile")), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(not readback.found,
-      "正文对不上时不记 scheduled")
-
-# 正文中的渠道词不能替代详情弹窗证据。
-poison = FLAT + " Facebook Instagram Neakasa Deutschland neakasa.de 5 photos"
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage([("%s %s" % (poison, ENTRY_MOMENT), "")]), when, poison,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(not readback.found and set(readback.missing_channels) == {
-          "facebook", "instagram"},
-      "条目文本里写着 Facebook/Instagram/账号名也不能冒充渠道证据 —— "
-      "渠道只认点开弹窗后读到的 `ID: <数字>` + 渠道标记")
-
-no_id = dialog_text("facebook", remote_id="", account=TARGET_FB, caption=FLAT)
-readback = asyncio.run(bs.verify_scheduled(
-    PlannerPage([("%s %s" % (FLAT, ENTRY_MOMENT), no_id)]), when, caption,
-    ui_timezone="America/Los_Angeles", card_spec=card_spec))
-check(not readback.found and "facebook" in readback.missing_channels,
-      "弹窗读不到 remote id 时该渠道不算命中")
-
-ambiguous = datetime.fromisoformat("2026-11-01T10:00:00+01:00")
-check(bs.ui_time_is_ambiguous(ambiguous, "America/Los_Angeles"),
-      "美西回拨日德国 10:00 映射成重复的 1:00 AM，不能当成普通时刻")
-occupied = asyncio.run(bs.read_remote_occupied_slots(
-    PlannerPage([("anything November 01, 2026, 1:00 AM", "")],
-                month="November"),
-    ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
-    card_spec=card_spec))
-check(len(occupied) == 2 and {item.hour for item in occupied} == {9, 10},
-      "日历条目不带 offset 时把回拨小时两种解释都视为占用，避免重复排期")
-
-inventory = asyncio.run(bs.read_remote_slot_inventory(
-    PlannerPage([("anything September 08, 2026, 1:00 AM", "")]),
-    ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
-    card_spec=card_spec))
-check(inventory.covers([when])
-      and not inventory.covers([
-          datetime.fromisoformat("2026-12-15T10:00:00+01:00")]),
-      "远端占位回读同时冻结当前 Planner 可见月份，区间外槽位整批失败闭合")
-
-with_cards = asyncio.run(bs.read_remote_slot_inventory(
-    PlannerPage(entries_for()), ui_timezone="America/Los_Angeles",
-    business_timezone="Europe/Berlin", card_spec=card_spec, include_cards=True))
-check(with_cards.channels_complete and len(with_cards.cards) == 2
-      and with_cards.occupied_for_channel("facebook") == (when,)
-      and with_cards.occupied_for_channel("instagram") == (when,),
-      "月历可选读取真实详情渠道，保留不同渠道的两张原始卡片")
-unknown_cards = asyncio.run(bs.read_remote_slot_inventory(
-    PlannerPage([("%s %s" % (poison, ENTRY_MOMENT), "")]),
-    ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
-    card_spec=card_spec, include_cards=True))
-check(len(unknown_cards.cards) == 1 and not unknown_cards.channels_complete
-      and unknown_cards.cards[0].channels == (),
-      "月历正文里提及FB/IG不能证明渠道；未知卡片仍保留但不能判为空档")
-same_zone_fold = asyncio.run(bs.read_remote_slot_inventory(
-    PlannerPage([("anything November 01, 2026, 1:00 AM", "")], month="November"),
-    ui_timezone="America/Los_Angeles", business_timezone="America/Los_Angeles",
-    card_spec=card_spec))
-check(len(same_zone_fold.occupied) == 2,
-      "展示时区与UI时区相同时也保留回拨小时的两个绝对占位")
-try:
-    asyncio.run(bs.read_remote_slot_inventory(
-        PlannerPage([("anything March 08, 2026, 2:30 AM", "")], month="March"),
-        ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
-        card_spec=card_spec))
-except bs.PublishStepError:
-    nonexistent_card_blocked = True
-else:
-    nonexistent_card_blocked = False
-check(nonexistent_card_blocked,
-      "Planner卡片出现UI时区不存在的夏令时时刻时不可推算成真实排期")
-
-try:
-    asyncio.run(bs.read_remote_occupied_slots(
-        PlannerPage([("two September 08, 2026, 1:00 AM "
-                      "September 09, 2026, 2:00 AM", "")]),
-        ui_timezone="America/Los_Angeles",
-        business_timezone="Europe/Berlin", card_spec=card_spec))
-except bs.PublishStepError:
-    multiple_times_blocked = True
-else:
-    multiple_times_blocked = False
-check(multiple_times_blocked,
-      "一条条目里解析出两个**不同**时刻时整批失败闭合")
-
-nav_only = asyncio.run(bs.read_remote_occupied_slots(
-    PlannerPage([("Home", ""), ("Inbox", ""), ("Planner", "")]),
-    ui_timezone="America/Los_Angeles", business_timezone="Europe/Berlin",
-    card_spec=card_spec))
-check(nav_only == (),
-      "日历上的导航 link 读不出时刻，跳过而不是报错"
-      "（真实 Planner 上 link 有几十条，绝大多数是侧栏导航）")
-
-try:
-    asyncio.run(bs.read_remote_occupied_slots(
-        PlannerPage([]), ui_timezone="America/Los_Angeles",
-        business_timezone="Europe/Berlin", card_spec=card_spec))
-except bs.PublishStepError:
-    empty_blocked = True
-else:
-    empty_blocked = False
-check(empty_blocked,
-      "没有条目也没有已录证 empty state 时失败闭合，不把 React 未加载当零占用")
-
-
 print("\n[4] 五态 journal、旧行兼容与禁止模糊状态自动重试")
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
@@ -727,10 +432,6 @@ with tempfile.TemporaryDirectory() as folder:
         "facebook:p1", "instagram:i1"},
         "只有最终 scheduled 才把全部 source_refs 视为已发布")
 
-workflow_source = (ROOT / "publish" / "workflow.py").read_text(encoding="utf-8")
-check(workflow_source.index("journal.append(c.state_dir, armed)")
-      < workflow_source.index("result = await bs.submit(page, timeout=timeout)"),
-      "任何可能点击提交前先耐久写 submit_ambiguous intent，崩溃后也不能 force 重试")
 with tempfile.TemporaryDirectory() as folder:
     state = Path(folder)
     prepared = journal.PublishAttempt(

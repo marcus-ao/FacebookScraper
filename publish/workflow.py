@@ -117,13 +117,6 @@ async def _execute_unlocked(
             raise
         raise bs.PublishStepError(str(exc)) from exc
     bs.assert_ui_time_unambiguous(when, ui_timezone)
-    if run is not None:
-        channels.require_independent_channel_evidence(target_channels, run=run)
-    elif submit_enabled:
-        capabilities.require(post.platform)
-    else:
-        channels.require_independent_channel_evidence(target_channels)
-
     base = new_attempt(
         post, when, ui_timezone=ui_timezone, source_refs=source_refs,
         target_channels=target_channels, origin="review_desk" if run is not None else "")

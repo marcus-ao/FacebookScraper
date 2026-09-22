@@ -1,6 +1,7 @@
 """The production submission path retains grid dates and exact full captions."""
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -63,6 +64,46 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(bs.PublishStepError):
                 await month_readback.baseline(None, WHEN, TEXT, ui_timezone='UTC',
                                                     target_channels=('facebook',))
+
+    async def test_existing_match_missing_id_and_uncovered_time_cannot_certify_submission(self):
+        inventory = self.inventory([self.card()])
+        baseline = month_readback.baseline_from_inventory(inventory, WHEN, TEXT, ('facebook',))
+        self.assertFalse((await self.readback(inventory, pre_submit_baseline=baseline)).found)
+        self.assertFalse((await self.readback(self.inventory([replace(self.card(), remote_ids=())]))).found)
+        for incomplete in (replace(inventory, visible_start=None),
+                           replace(inventory, visible_end=WHEN.date().replace(day=14))):
+            self.assertFalse((await self.readback(incomplete)).found)
+            with self.assertRaises(bs.PublishStepError):
+                month_readback.baseline_from_inventory(incomplete, WHEN, TEXT, ('facebook',))
+
+    async def test_diagnostics_distinguish_time_and_channel_and_bound_samples(self):
+        cards = [replace(self.card(), at=WHEN.replace(hour=19)), self.card(channel='instagram')]
+        cards.extend(self.card('Wrong caption') for _ in range(30))
+        result = await self.readback(self.inventory(cards))
+        self.assertFalse(result.found)
+        self.assertEqual(result.diagnostics['time_mismatch'], 1)
+        self.assertEqual(result.diagnostics['channel_mismatch'], 1)
+        self.assertEqual(result.diagnostics['caption_mismatch'], 30)
+        self.assertEqual(len(result.diagnostics['samples']), 20)
+
+    async def test_month_reader_preserves_both_dst_occurrences_and_rejects_missing_hour(self):
+        material = {'channels': ('facebook',), 'remote_ids': {'facebook': '123456789'},
+                    'text': TEXT, 'delivery': 'scheduled', 'placement': 'feed'}
+        for date, clock, expected in ((datetime(2026, 11, 1).date(), '1:00 AM', 2),
+                                      (datetime(2026, 3, 8).date(), '2:30 AM', None)):
+            rows = [{'date': date, 'items': [{'index': 0, 'time': clock}]}]
+            with patch.object(month_inventory, 'prepare', AsyncMock()), \
+                    patch.object(month_inventory, 'read_grid', AsyncMock(return_value=rows)), \
+                    patch.object(month_inventory, 'read_item', AsyncMock(return_value=material)):
+                call = month_inventory.read(None, ui_timezone='America/Los_Angeles',
+                                            business_timezone='America/Los_Angeles')
+                if expected is None:
+                    with self.assertRaises(bs.PublishStepError):
+                        await call
+                else:
+                    inventory = await call
+                    self.assertEqual(len(inventory.occupied_for_channel('facebook')), 2)
+                    self.assertEqual(inventory.occupied[1].timestamp() - inventory.occupied[0].timestamp(), 3600)
 
 
 if __name__ == '__main__':

@@ -195,6 +195,7 @@ def _parse_probe_number(observations: dict, key: str, *, integer: bool):
         raise ComposeError("G1 probe 的 %s 不是有效实测数字：%r" % (key, raw)) from exc
 
 
+@evidence.validation_scope()
 def require_probe_evidence(probe_dumps: tuple[str, ...] = ()) -> dict:
     """核验已审核的录制文件和浏览器角色，不要求人工测量 UI 边界。"""
     c = cfg()
