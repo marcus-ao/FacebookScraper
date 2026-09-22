@@ -90,7 +90,7 @@ class BrowserFixture:
                     if self.deployment_coordination and method == "POST":
                         safe_write |= path in {"/api/deployment/session", "/api/deployment/defer"}
                     if self.local_image_writes and method == "POST":
-                        safe_write |= path.endswith(("/image/0/upload", "/export"))
+                        safe_write |= path.endswith(("/image/0/upload", "/image/0/selection", "/export"))
                         safe_write |= path.startswith("/api/image-versions/task/")
                     if method not in {"GET", "HEAD"} and not safe_write:
                         self.denied_backend_requests.append(method + " " + path)

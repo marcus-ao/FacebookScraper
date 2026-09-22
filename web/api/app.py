@@ -205,6 +205,17 @@ async def post_image_upload(task_id: str, index: int, request: Request) -> JSONR
         review_revision=revision))
 
 
+@app.post('/api/tasks/{task_id:path}/image/{index}/selection')
+async def post_image_selection(task_id: str, index: int, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    digest = body.get('source_image_sha256')
+    if not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest):
+        raise HTTPException(status_code=400, detail='原图版本无效，请刷新后重试')
+    return JSONResponse(await run_in_threadpool(writer.select_image, task_id, index,
+        choice=body.get('choice'), source_image_sha256=digest,
+        source_text_sha256=_source_digest(body), review_revision=_state_revision(body)))
+
+
 @app.put("/api/tasks/{task_id:path}/tags")
 async def put_tags(task_id: str, request: Request) -> JSONResponse:
     body = await _json_body(request)

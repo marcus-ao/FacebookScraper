@@ -190,14 +190,15 @@ def run_review(arc_base: Path) -> int:
             for pair in image_pairs:
                 source_ref = pair.source_rel.replace("\\", "/")
                 original_cell = f"![{pid} 原图 {pair.media_index + 1}](<{source_ref}>)"
-                if pair.localized_rel:
-                    localized_ref = pair.localized_rel.replace("\\", "/")
-                    kind = "人工覆盖" if pair.manual else "程序产出"
+                if pair.selected_rel:
+                    localized_ref = pair.selected_rel.replace("\\", "/")
+                    kind = ('已确认使用原图' if pair.selection == 'original_confirmed'
+                            else '人工覆盖' if pair.manual else '程序产出')
                     localized_cell = (
                         f"![{pid} 德语图 {pair.media_index + 1}](<{localized_ref}>)"
                         f"<br>{kind}")
                 else:
-                    localized_cell = "⚠️ **尚未生成德语图**"
+                    localized_cell = pair.conflict or "⚠️ **尚未生成德语图**"
                 lines.append(f"| {original_cell} | {localized_cell} |")
             lines.append("")
 

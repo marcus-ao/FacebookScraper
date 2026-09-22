@@ -45,7 +45,7 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: consent })
   const nextReason = refinementDisabledReason({ editing, busy, eligible, running: jobRunning(next.job),
     interrupted: next.job?.status === 'interrupted', instruction, capabilitiesLoaded: !!capabilities.data, kind, remaining,
-    manualImage: !!detail.images[media]?.manual })
+    manualImage: !!detail.images[media]?.manual, originalConfirmed: detail.images[media]?.selection === 'original_confirmed' })
   const act = async (family: 'initial' | 'refine') => {
     setBusy(true); setError(null)
     try { if (family === 'initial' && initial.data) { first.accept(await initialTranslate(detail, initial.data, consent)); setConsent(false); await initial.refetch() }

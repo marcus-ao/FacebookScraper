@@ -1,4 +1,4 @@
-import type { ContentJob, ImageVersion, InitialTranslationCapabilities, PromptTemplate, RefinementCapabilities, TaskDetail } from '@/types/domain'
+import type { ContentJob, ImageAsset, ImageVersion, InitialTranslationCapabilities, PromptTemplate, RefinementCapabilities, TaskDetail } from '@/types/domain'
 import { idPath, jsonBody, request } from './http'
 export type JobFamily = 'initial-translation' | 'refinements'
 export const initialCapabilities = (id: string) => request<InitialTranslationCapabilities>(`/api/initial-translation/task/${idPath(id)}`)
@@ -17,3 +17,8 @@ export const selectImageVersion = (detail: TaskDetail, mediaIndex: number, outPa
 /** 上传自己处理好的图片替换这一张；状态不变，这篇继续走系统排期。 */
 export const uploadImage = (detail: TaskDetail, mediaIndex: number, base64: string, filename: string) =>
   request<TaskDetail>(`/api/tasks/${idPath(detail.id)}/image/${mediaIndex}/upload`, jsonBody({ image_base64: base64, filename, source_text_sha256: detail.text.source_text_sha256, review_revision: detail.review.revision }))
+export const selectOriginalImage = (detail: TaskDetail, image: ImageAsset, choice: 'original' | 'automatic') =>
+  request<TaskDetail>(`/api/tasks/${idPath(detail.id)}/image/${image.index}/selection`, jsonBody({
+    choice, source_image_sha256: image.source_image_sha256,
+    source_text_sha256: detail.text.source_text_sha256, review_revision: detail.review.revision,
+  }))

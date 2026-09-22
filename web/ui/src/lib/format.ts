@@ -136,4 +136,5 @@ export const ACTION_LABEL: Record<TrailAction, string> = {
   content_locked: '确认内容无误并冻结',
   unlocked: '解除冻结',
   text_edited: '修改了德语译文',
+  image_selected: '更新了图片选择',
 }

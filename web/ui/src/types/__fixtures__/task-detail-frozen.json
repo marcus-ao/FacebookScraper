@@ -159,7 +159,10 @@
    "original_url": "/api/tasks/in_neakasa.tech/3975547640610092585/image/0?variant=original&v=fd523750c1594a07dc8af358bd1b255612a64440af04be9f22272beaf47a77cd",
    "de_url": "/api/tasks/in_neakasa.tech/3975547640610092585/image/0?variant=de&v=fd523750c1594a07dc8af358bd1b255612a64440af04be9f22272beaf47a77cd-none-manual",
    "de_present": false,
-   "metrics": null
+   "metrics": null,
+   "selection": "original",
+   "ready": false,
+   "source_image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
  ],
  "schedule": null,

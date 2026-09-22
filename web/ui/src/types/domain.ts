@@ -20,6 +20,7 @@ export type DisplayStatus = ReviewStatus | 'not_ready'
 
 export type ReviewAction =
   | 'edited'
+  | 'image_selected'
   | 'content_locked'
   | 'unlocked'
   | 'snoozed'
@@ -308,6 +309,9 @@ export interface ImageAsset {
   readonly de_url: string
   /** false 表示缺德语图，当前为原图回退。 */
   readonly de_present: boolean
+  readonly selection: 'original' | 'original_confirmed' | 'manual' | 'generated' | 'conflict'
+  readonly source_image_sha256: string
+  readonly ready: boolean
   /** 当前用的是人工放置或上传的图；模型优化不会被采用，入口须禁用。 */
   readonly manual?: boolean
   readonly replaced_at?: string | null

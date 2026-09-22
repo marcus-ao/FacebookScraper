@@ -24,7 +24,7 @@ from PIL import Image, ImageChops, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from core import maintenance
+from core import maintenance, review
 from core.config import cfg                         # noqa: E402
 from core.console import force_utf8                 # noqa: E402
 from core import paid_model                        # noqa: E402
@@ -1008,6 +1008,13 @@ class ReviewImagePair:
     localized_rel: str | None
     record: dict[str, Any] | None
     manual: bool
+    selection: str = 'original'
+    source_sha256: str = ''
+    conflict: str = ''
+
+    @property
+    def selected_rel(self) -> str | None:
+        return self.source_rel if self.selection == 'original_confirmed' else self.localized_rel
 
 
 def _safe_rel_string(value: Any) -> str | None:
@@ -1081,6 +1088,12 @@ def load_image_state(path: Path) -> ImageState:
             out_rel = _safe_rel_string(row.get("out_path"))
             output_sha = row.get("output_sha256")
             model_verification = row.get("model_verification")
+            # 旧账本只有输出身份时仍可证明“不是人工图”，但不能证明生成依据仍有效。
+            if (isinstance(post_id, str) and post_id.strip() and type(media_index) is int and media_index >= 0
+                    and out_rel and (output_sha is None or _valid_sha256(output_sha))
+                    and _record_path_matches_key(post_id, media_index, out_rel, row.get('folder_name'))):
+                owned_paths.add(out_rel)
+                owned_hashes.setdefault(out_rel, set()).add(output_sha)
             if (not isinstance(post_id, str) or not post_id.strip()
                     or not isinstance(media_index, int) or isinstance(media_index, bool)
                     or media_index < 0
@@ -1142,22 +1155,6 @@ def _extension(output_format: str) -> str:
     return {"jpeg": ".jpg", "png": ".png", "webp": ".webp"}[output_format]
 
 
-def image_record_is_current(job: ImageJob, record: Mapping[str, Any] | None) -> bool:
-    """核验来源、版本、产物及目标路径；输出格式变化后旧路径不算当前结果。"""
-    if not isinstance(record, Mapping):
-        return False
-    return (record.get("post_id") == job.post_id
-            and record.get("media_index") == job.media_index
-            and record.get("source_sha256") == job.source_sha256
-            and record.get("text_de_sha256") == job.text_de_sha256
-            and record.get("prompt_version") == IMAGE_PROMPT_VERSION
-            and isinstance(record.get("out_path"), str)
-            and PurePosixPath(record["out_path"]).suffix == job.out_path.suffix
-            # 目录归属以本次 job 规划的产物路径为准，不采信记录自报的 folder_name。
-            and _record_path_matches_key(job.post_id, job.media_index, record["out_path"],
-                                         _folder_of(job.out_rel)))
-
-
 def _source_from_manifest(arc_base: Path, row: Mapping[str, Any],
                           media: Mapping[str, Any]) -> tuple[Path, str]:
     raw = _safe_rel_string(media.get("local_path"))
@@ -1216,17 +1213,28 @@ def _candidate_is_program_owned(candidate: Path, rel: str, state: ImageState) ->
     return sha256_file(candidate) in expected_hashes
 
 
+def image_record_matches(arc_base: Path, record, source_sha: str, text_sha: str | None = None) -> bool:
+    """有效生成图的共同判据；翻译尚未产生的预算预览只判断来源与文件。"""
+    return bool(record and record.get('source_sha256') == source_sha
+                and (text_sha is None or record.get('text_de_sha256') == text_sha)
+                and record.get('prompt_version') == IMAGE_PROMPT_VERSION
+                and _record_output_exists(arc_base, record))
+
+
 def manual_override_paths(job: ImageJob, state: ImageState) -> list[Path]:
     """同一序号下没有程序所有权记录的文件都视为人工版本。"""
-    media_de = job.out_path.parent
+    return _manual_paths(job.arc_base, job.out_path.parent, job.media_index, state)
+
+
+def _manual_paths(arc_base, media_de, media_index, state):
     post_dir = media_de.parent
     assert_physical_direct_path(post_dir, media_de, kind="directory", label="media_de 目录")
     if not media_de.exists():
         return []
     manual: list[Path] = []
-    for candidate in sorted(media_de.glob(f"{job.media_index + 1:02d}.*")):
+    for candidate in sorted(media_de.glob(f"{media_index + 1:02d}.*")):
         assert_physical_direct_path(media_de, candidate, kind="file", label="media_de 图片")
-        rel = candidate.relative_to(job.arc_base).as_posix()
+        rel = candidate.relative_to(arc_base).as_posix()
         if not _candidate_is_program_owned(candidate, rel, state):
             manual.append(candidate)
     return manual
@@ -1277,11 +1285,21 @@ def image_jobs_for_translation(settings: Settings, arc_base: Path, row: dict,
     media_list = row.get("media") or []
     if not isinstance(media_list, list):
         raise ValueError(f"帖子 {post_id} 的 media 不是数组")
+    pairs = {pair.media_index: pair for pair in review_image_pairs(arc_base, row, trans, state)}
     for media_index, media in enumerate(media_list):
         if (media_index_filter is not None
                 and media_index != media_index_filter):
             continue
         if not isinstance(media, dict) or media.get("kind") != "image":
+            continue
+        pair = pairs.get(media_index)
+        if pair and pair.conflict:
+            raise ValueError(pair.conflict)
+        if pair and pair.selection in {'manual', 'original_confirmed'}:
+            stats.skipped_manual += 1
+            continue
+        if pair and pair.selection == 'generated' and not force:
+            stats.skipped_current += 1
             continue
         try:
             source_path, source_rel = _source_from_manifest(
@@ -1329,17 +1347,6 @@ def image_jobs_for_translation(settings: Settings, arc_base: Path, row: dict,
             out_path=out_path,
             out_rel=out_rel,
         )
-        manual = manual_override_paths(job, state)
-        if manual:
-            stats.skipped_manual += 1
-            message = (f"  ! {post_id}[{media_index}] 跳过：发现人工德语图 "
-                       + "、".join(path.name for path in manual))
-            (print if report is None else report)(message)
-            continue
-        if (not force and image_record_is_current(job, record)
-                and _record_output_exists(arc_base, record)):
-            stats.skipped_current += 1
-            continue
         jobs.append(job)
     return jobs
 
@@ -1491,6 +1498,8 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
           f"当前跳过 {stats.skipped_current} / 人工优先 {stats.skipped_manual} / "
           f"缺当前译文 {stats.skipped_no_translation} / "
           f"素材问题 {stats.skipped_bad_source}")
+    if not jobs:
+        return stats
     prompt_cache: dict[str, str] = {}
     editor = editor if editor is not None else (None if dry_run else ImageEditor(settings))
     consecutive_failures = 0
@@ -1508,6 +1517,17 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
             continue
 
         try:
+            indexed = next(row for row in rows if row['post_id'] == job.post_id)
+            current, _ = read_post_truth(arc_base, indexed)
+            pair = next((pair for pair in review_image_pairs(arc_base, current, {'text_de': job.text_de})
+                         if pair.media_index == job.media_index), None)
+            if pair and pair.conflict:
+                raise ValueError(pair.conflict)
+            if pair and pair.selection == 'original_confirmed':
+                stats.skipped_manual += 1
+                continue
+            if pair is None or pair.source_sha256 != job.source_sha256:
+                raise ValueError('请求前原图已有变化，请重新核对')
             manual = manual_override_paths(job, state)
             if manual:
                 stats.skipped_manual += 1
@@ -1604,66 +1624,79 @@ def run_localize(settings: Settings, editor: ImageEditor | None, arc_base: Path,
 
 # 审校清单的只读图片配对
 
+def image_selection_record(arc_base: Path, row: Mapping[str, Any], media_index: int,
+                           choice: str, expected_sha: str | None = None) -> dict:
+    """把人的决定绑定到当前序号、实际字节和已有媒体身份，不制造生成记录。"""
+    media = row.get('media') or []
+    if (type(media_index) is not int or not 0 <= media_index < len(media)
+            or media[media_index].get('kind') != 'image'
+            or not isinstance(choice, str) or choice not in {'original', 'automatic'}):
+        raise review.ReviewValidationError('图片序号或选择动作无效')
+    source, _ = _source_from_manifest(arc_base, row, media[media_index])
+    digest = sha256_file(source)
+    if expected_sha is not None and digest != expected_sha:
+        raise review.ReviewConflict('原图已有更新，请刷新图片后重新确认')
+    if choice == 'original':
+        if source.suffix.lower() not in {'.jpg', '.jpeg', '.png', '.webp'}:
+            raise review.ReviewValidationError('发布原图仅支持 JPEG / PNG / WebP')
+        with Image.open(source) as image:
+            image.load()
+            if image.format not in {'JPEG', 'PNG', 'WEBP'}:
+                raise review.ReviewValidationError('原图实际格式不支持发布')
+        if sha256_file(source) != digest:
+            raise review.ReviewConflict('核对期间原图已有更新，请刷新后重试')
+    return {'media_index': media_index, 'choice': choice, 'source_sha256': digest,
+            'source_media_id': str(media[media_index].get('source_media_id') or '')}
+
+
 def review_image_pairs(arc_base: Path, row: Mapping[str, Any],
-                       translated: Mapping[str, Any],
+                       translated: Mapping[str, Any] | None,
                        state: ImageState | None = None) -> list[ReviewImagePair]:
-    """返回当前原图与可用德语图；旧程序产物不会错配新原图/新译文。"""
-    state = state or load_image_state(arc_base / "images_de.jsonl")
-    post_id = row.get("post_id")
+    """预览、规划、冻结及导出共用有效选择；冲突不猜选，未确认原图不算就绪。"""
+    state = state or load_image_state(arc_base / 'images_de.jsonl')
+    post_id = row.get('post_id')
     if not isinstance(post_id, str) or not post_id.strip():
         return []
-    text_de = translated.get("text_de")
-    if not isinstance(text_de, str) or not text_de.strip():
-        return []
-    media_list = row.get("media") or []
+    media_list = row.get('media') or []
     if not isinstance(media_list, list):
         return []
-
-    pairs: list[ReviewImagePair] = []
+    pairs = []
+    choices = review.image_choices(arc_base, post_id)
     translation_history = load_image_translation_history(arc_base)
     for media_index, media in enumerate(media_list):
-        if not isinstance(media, Mapping) or media.get("kind") != "image":
+        if not isinstance(media, Mapping) or media.get('kind') != 'image':
             continue
         try:
             source_path, source_rel = _source_from_manifest(arc_base, row, media)
         except (ValueError, ArchivePathError):
-            # 仅比较实际存在的图片；缺图与布局异常由配图检查报告。
             continue
         source_sha = sha256_file(source_path)
+        choice = choices.get(media_index) or {}
+        if (choice.get('choice') == 'original' and choice.get('source_sha256') == source_sha
+                and choice.get('source_media_id') == str(media.get('source_media_id') or '')):
+            pairs.append(ReviewImagePair(media_index, source_rel, None, None, False,
+                                         'original_confirmed', source_sha))
+            continue
+        manual = _manual_paths(arc_base, source_path.parent / 'media_de', media_index, state)
+        if len(manual) > 1:
+            conflict = '第 %d 张有多个人工图片候选（%s），请只保留一个或明确确认使用原图' % (
+                media_index + 1, '、'.join(path.name for path in manual))
+            pairs.append(ReviewImagePair(media_index, source_rel, None, None, False,
+                                         'conflict', source_sha, conflict))
+            continue
+        if manual:
+            pairs.append(ReviewImagePair(media_index, source_rel,
+                manual[0].relative_to(arc_base).as_posix(), None, True, 'manual', source_sha))
+            continue
         record = state.latest.get((post_id, media_index))
-        basis = _image_text_basis(arc_base, row, translated, record, source_sha,
-                                  translation_history.get(post_id, []))
-        text_sha = text_de_sha256(basis["text_de"])
-        localized_rel: str | None = None
-        current_record: dict[str, Any] | None = None
-        manual = False
-        # 人工修订优先，包括与程序图片同序号、不同扩展名的文件。
-        media_de = source_path.parent / "media_de"
-        assert_physical_direct_path(
-            source_path.parent, media_de, kind="directory", label="media_de 目录")
-        if media_de.exists():
-            for candidate in sorted(media_de.glob(f"{media_index + 1:02d}.*")):
-                assert_physical_direct_path(
-                    media_de, candidate, kind="file", label="media_de 图片")
-                rel = candidate.relative_to(arc_base).as_posix()
-                if not _candidate_is_program_owned(candidate, rel, state):
-                    localized_rel = rel
-                    manual = True
-                    break
-        if (not manual and isinstance(record, dict)
-                and record.get("source_sha256") == source_sha
-                and record.get("text_de_sha256") == text_sha
-                and record.get("prompt_version") == IMAGE_PROMPT_VERSION
-                and _record_output_exists(arc_base, record)):
-            localized_rel = record["out_path"]
-            current_record = record
-        pairs.append(ReviewImagePair(
-            media_index=media_index,
-            source_rel=source_rel,
-            localized_rel=localized_rel,
-            record=current_record,
-            manual=manual,
-        ))
+        current = None
+        if translated and translated.get('text_de'):
+            basis = _image_text_basis(arc_base, row, translated, record, source_sha,
+                                      translation_history.get(post_id, []))
+            if image_record_matches(arc_base, record, source_sha, text_de_sha256(basis['text_de'])):
+                current = record
+        pairs.append(ReviewImagePair(media_index, source_rel, current['out_path'] if current else None,
+            current, False, 'generated' if current else 'original', source_sha))
     return pairs
 
 
@@ -1730,6 +1763,10 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
             assert_physical_direct_path(media_de, path, kind="file", label="德语图")
             manual |= not _candidate_is_program_owned(path, path.relative_to(arc_base).as_posix(), state)
 
+    choice = review.image_choices(arc_base, post_id).get(media_index) or {}
+    original_confirmed = (choice.get('choice') == 'original' and choice.get('source_sha256') == source_sha
+        and 0 <= media_index < len(media_list or [])
+        and choice.get('source_media_id') == str(media_list[media_index].get('source_media_id') or ''))
     seen: dict[str, dict[str, Any]] = {}
     for record in ledger:
         out_rel = record["out_path"]
@@ -1762,7 +1799,7 @@ def image_versions(arc_base: Path, row: Mapping[str, Any], media_index: int,
             "refine_instruction": record.get("refine_instruction"),
             "model": record.get("model"),
             "available": available,
-            "current": not manual and not reasons and out_rel == current,
+            "current": not original_confirmed and not manual and not reasons and out_rel == current,
             "usable": available and not reasons,
             "unusable_reasons": reasons,
             "metrics": {

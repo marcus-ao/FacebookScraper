@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Collapse, Empty, Modal, Space, Tag, Upload } from 'antd'
 import { CheckOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons'
 import type { ImageAsset, ImageVersion, TaskDetail } from '@/types/domain'
-import { selectImageVersion, uploadImage } from '@/services/jobs'
+import { selectImageVersion, selectOriginalImage, uploadImage } from '@/services/jobs'
 import { downloadPost } from '@/services/review'
 import { canEditTask } from '@/features/localization/model'
 import { ShanghaiTime } from '@/components/Time'
@@ -37,6 +37,7 @@ export function ImageWorkspace({ images, detail, versions, editing, maxImageCoun
   const image = images[current]
   if (!image) return <Empty description="这篇没有图片" />
   const history = versions[String(image.index)] ?? []
+  const originalConfirmed = image.selection === 'original_confirmed'
   const disabled = busy || editing || !canEditTask(detail)
   const act = async (run: () => Promise<unknown>) => {
     setBusy(true); setError(null)
@@ -49,26 +50,31 @@ export function ImageWorkspace({ images, detail, versions, editing, maxImageCoun
     return uploadImage(detail, image.index, await readAsDataUrl(file), file.name)
   })
   const pair = (large = false) => <div className={`${styles.pair} ${large ? styles.large : ''}`}>
-    <figure><figcaption>原图（英文）</figcaption><img src={image.original_url} alt={`原图 ${current + 1}`} /></figure>
-    <figure><figcaption>德语图 {image.manual && <Tag color="green">人工图片</Tag>}
+    <figure><figcaption>原图</figcaption><img src={image.original_url} alt={`原图 ${current + 1}`} /></figure>
+    <figure><figcaption>最终图片 {originalConfirmed && <Tag color="green">已确认使用原图</Tag>}{image.manual && <Tag color="green">人工图片</Tag>}
       {image.replaced_at && <>替换于 <ShanghaiTime at={image.replaced_at} /></>}
-      {!image.de_present && <span className={styles.missing}>缺德语图，显示的是原图</span>}</figcaption><img src={image.de_url || image.original_url} alt={`德语图 ${current + 1}`} /></figure>
+      {!image.ready && <span className={styles.missing}>缺德语图，显示的是原图</span>}</figcaption><img src={image.de_url || image.original_url} alt={`最终图片 ${current + 1}`} /></figure>
   </div>
   return <section aria-label="图片对照">
     <p className={styles.help}>共 {images.length} 张 · {maxImageCount ? `已核验发布上限 ${maxImageCount} 张` : '发布张数由实际发布界面校验'}{imageModel && ` · 当前图片模型：${imageModel}`}</p>
     <div className={styles.controls}><span>第 {current + 1} / {images.length} 张 · {Math.max(0, images.length - seen.size) ? `还有 ${images.length - seen.size} 张没看` : '都看过了'}</span><Space><Button disabled={current === 0} onClick={() => choose(current - 1)}>上一张</Button><Button disabled={current >= images.length - 1} onClick={() => choose(current + 1)}>下一张</Button><Button onClick={() => setZoom(true)}>放大对照</Button></Space></div>
-    {!image.de_present && <Alert type="warning" showIcon title="这一张缺少德语图，当前展示原图，请人工核对" />}
+    {!image.ready && <Alert type="warning" showIcon title="这一张尚未就绪，请核对图片选择" />}
     {image.metrics?.changed_pixel_ratio === 0 && <Alert type="warning" showIcon
       title="未检测到明显像素变化"
       description="这张图可能本来就没有需要本地化的英文，也可能生成没有照做；较小的颜色变化不会计入此指标。请先核对图内文字，再决定是否需要优化。" />}
     {image.warnings?.map(warning => <Alert key={warning} type="warning" showIcon title={warning} />)}
     {error && <Alert type="warning" showIcon title={error} />}
     {pair()}
-    <div className={styles.sheet} aria-label="图片缩略图">{images.map((item, index) => <button type="button" key={item.index} className={styles.thumb} aria-label={`第 ${index + 1} 张${seen.has(index) ? '（看过）' : '（未看）'}`} aria-current={current === index} onClick={() => choose(index)}><img src={item.de_url || item.original_url} alt="" loading="lazy" /><span>{index + 1} {seen.has(index) && <CheckOutlined />}{!item.de_present && ' · 缺德语图'}</span></button>)}</div>
+    <div className={styles.sheet} aria-label="图片缩略图">{images.map((item, index) => <button type="button" key={item.index} className={styles.thumb} aria-label={`第 ${index + 1} 张${seen.has(index) ? '（看过）' : '（未看）'}`} aria-current={current === index} onClick={() => choose(index)}><img src={item.de_url || item.original_url} alt="" loading="lazy" /><span>{index + 1} {seen.has(index) && <CheckOutlined />}{!item.ready && ' · 缺德语图'}</span></button>)}</div>
     <div className={styles.replace}>
       {!detail.read_only && <Button aria-label="下载本篇素材" icon={<DownloadOutlined />} disabled={busy || editing}
         onClick={() => void act(() => downloadPost(detail))}>下载本篇素材</Button>}
       {canEditTask(detail) && <>
+      <Button disabled={disabled || !image.source_image_sha256} loading={busy}
+        onClick={() => void act(() => selectOriginalImage(detail, image, originalConfirmed ? 'automatic' : 'original'))}>
+        {originalConfirmed ? '撤销原图确认' : '确认使用原图'}
+      </Button>
+      <span className={styles.help}>确认本张原图无需本地化后直接用于发布，并跳过出图；更换原图后需要重新确认。</span>
       <Upload beforeUpload={file => { void upload(file as File); return false }} showUploadList={false}
         accept="image/jpeg,image/png,image/webp" disabled={disabled}>
         <Button icon={<UploadOutlined />} disabled={disabled} loading={busy}>上传图片替换第 {current + 1} 张</Button>

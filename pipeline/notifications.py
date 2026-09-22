@@ -7,7 +7,8 @@ from core.integrity import parse_ts
 from core.store import assert_physical_direct_path
 from localize import images as image_de
 
-IMAGE_NOTES = {'de': '德语首图', 'original': '尚无有效德语首图，预览使用原图',
+IMAGE_NOTES = {'de': '德语首图', 'original_confirmed': '首图已确认使用原图',
+               'original': '尚无有效德语首图，预览使用原图',
                'unreadable': '首图读不出，请进入审校台核对'}
 
 def _origin(row) -> str:
@@ -74,14 +75,14 @@ def material(account, source):
     if effective and effective.get('stale'):
         notes.append('当前德语稿的源文已有变化，请重新核对。')
     image_text = translated.image_translation(source, machine, human)
-    pairs = image_de.review_image_pairs(account, source, image_text) if image_text else []
+    pairs = image_de.review_image_pairs(account, source, image_text)
     # 首图取第一项 image；media_index 可能包含前置视频。
     lead = next(((index, item) for index, item in enumerate(source.get('media') or [])
                  if isinstance(item, dict) and item.get('kind') == 'image'), None)
     first = next((p for p in pairs if lead is not None and p.media_index == lead[0]), None)
     path, variant = None, 'original'
-    if first and first.localized_rel:
-        path, variant = account / first.localized_rel, 'de'
+    if first and first.selected_rel:
+        path, variant = account / first.selected_rel, ('original_confirmed' if first.selection == 'original_confirmed' else 'de')
     try:
         if path is None and lead is not None:
             path, _ = image_de._source_from_manifest(account, source, lead[1])

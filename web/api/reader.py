@@ -408,12 +408,10 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
     """复用 review_image_pairs，读取人工优先的逐图对照与指标。"""
     task_id = task_id_of(source)
     pairs = []
-    if entry:
-        try:
-            pairs = image_de.review_image_pairs(
-                source.account_dir, source.row, entry)
-        except (OSError, ValueError, ArchivePathError):
-            pairs = []
+    try:
+        pairs = image_de.review_image_pairs(source.account_dir, source.row, entry)
+    except (OSError, ValueError, ArchivePathError):
+        pairs = []
     by_index = {pair.media_index: pair for pair in pairs}
     source_version = translation.source_text_sha256(source.text)
     text_version = translation.source_text_sha256(entry["text_de"]) if entry else "none"
@@ -424,6 +422,8 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
         record = pair.record if pair is not None else None
         manual_record = None
         output_digest = (record or {}).get("output_sha256") or "missing"
+        if pair and pair.selection == 'original_confirmed':
+            output_digest = pair.source_sha256
         if pair and pair.manual and pair.localized_rel:
             path = source.account_dir / pair.localized_rel
             output_digest = image_de.sha256_file(path)
@@ -433,13 +433,16 @@ def _images_of(source: engine.SourcePost, entry: dict | None) -> list[dict]:
         out.append({
             "index": index,
             "original_url": "/api/tasks/%s/image/%d?variant=original&v=%s" % (
-                task_id, index, source_version),
+                task_id, index, pair.source_sha256 if pair else source_version),
             "de_url": "/api/tasks/%s/image/%d?variant=de&v=%s" % (task_id, index, version),
             "de_present": bool(pair is not None and pair.localized_rel),
+            "selection": pair.selection if pair else 'original',
+            "source_image_sha256": pair.source_sha256 if pair else '',
+            "ready": bool(pair and pair.selected_rel),
             # 人工图不能被模型重生成覆盖（红线 6），所以这一张的优化入口要禁用。
             "manual": bool(pair is not None and pair.manual),
             "replaced_at": (manual_record or {}).get("replaced_at"),
-            "warnings": (manual_record or {}).get("warnings", []),
+            "warnings": ([pair.conflict] if pair and pair.conflict else []) + (manual_record or {}).get("warnings", []),
             "metrics": _metrics(record),
         })
     return out
@@ -746,15 +749,13 @@ def image_bytes(task_id: str, index: int, variant: str = "de", *,
     if variant == "de":
         entry = translation.image_translation(
             dict(source.row), _translation_of(source), _human_translation_of(source))
-        if entry:
-            try:
-                for pair in image_de.review_image_pairs(
-                        source.account_dir, source.row, entry):
-                    if pair.media_index == index and pair.localized_rel:
-                        path = source.account_dir / Path(pair.localized_rel)
-                        break
-            except (OSError, ValueError, ArchivePathError):
-                path = None
+        try:
+            for pair in image_de.review_image_pairs(source.account_dir, source.row, entry):
+                if pair.media_index == index and pair.selected_rel:
+                    path = source.account_dir / Path(pair.selected_rel)
+                    break
+        except (OSError, ValueError, ArchivePathError):
+            path = None
     if path is None:
         raw = media[index].get("local_path")
         if not isinstance(raw, str) or not raw.strip():

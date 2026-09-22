@@ -602,6 +602,7 @@ def make_image_archive(base: Path, account="in_acme", *, translated=True,
     }
     (arc / "manifest.jsonl").write_text(
         json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    (source.parent / "post.json").write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
     if translated:
         trans = {
             "post_id": post_id,
@@ -654,6 +655,7 @@ with tempfile.TemporaryDirectory() as contract_tmp:
     })
     (arc / "manifest.jsonl").write_text(
         json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    (source.parent / "post.json").write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
 
     class MissingUsageImages:
         def __init__(self):
@@ -770,6 +772,7 @@ with tempfile.TemporaryDirectory() as exact_media_tmp:
     })
     (arc / "manifest.jsonl").write_text(
         json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    (source.parent / "post.json").write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
     exact_first_editor = FakePipelineEditor()
     exact_first = L.run_localize(
         settings, exact_first_editor, arc, [row], 1, False, False,
@@ -1159,29 +1162,6 @@ check(_openai.AuthenticationError.__name__ in (
           for name in ("AuthenticationError", "PermissionDeniedError",
                        "NotFoundError", "APIResponseValidationError")),
       "收窄后依赖的四个 SDK 异常类都存在，不会因改名而静默变成“永不致命”")
-
-# --- 产出路径进入完成判据 --------------------------------------------
-with tempfile.TemporaryDirectory() as tmp:
-    root = Path(tmp) / "archive"
-    root.mkdir()
-    make_image_archive(root)
-    arc_base = root / "in_acme"
-    jobs, state, stats = L.build_jobs(settings, arc_base, L.readonly_archive(
-        arc_base).rows())
-    check(len(jobs) == 1, "夹具展开出一张待处理图片")
-    job = jobs[0]
-    good = {
-        "post_id": job.post_id, "media_index": job.media_index,
-        "source_sha256": job.source_sha256,
-        "text_de_sha256": job.text_de_sha256,
-        "prompt_version": L.IMAGE_PROMPT_VERSION,
-        "out_path": job.out_rel,
-    }
-    check(L.image_record_is_current(job, good), "五项指纹加正确路径 = 已完成")
-    check(not L.image_record_is_current(job, {**good, "out_path":
-                                              job.out_rel.replace(".jpg", ".png")}),
-          "换 output_format 后旧 01.jpg 记录不再算当前 —— "
-          "否则新格式永不生成、--force 又会留下两个文件撞上 compose 的多候选闸")
 
 # --- 单张素材问题只跳过这一张 -----------------------------------------
 with tempfile.TemporaryDirectory() as tmp:

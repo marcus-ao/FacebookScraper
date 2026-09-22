@@ -14,6 +14,9 @@ const asset = (patch: Partial<ImageAsset> = {}): ImageAsset => ({
   original_url: '/api/tasks/acme/1/image/0?variant=original',
   de_url: '/api/tasks/acme/1/image/0?variant=de',
   de_present: true,
+  selection: 'generated',
+  ready: true,
+  source_image_sha256: 'a'.repeat(64),
   metrics: metrics(0.0123),
   ...patch,
 })
@@ -110,6 +113,18 @@ describe('历史版本：3 次预算的前提是上一版还找得回来', () =>
 })
 
 describe('上传替换：是换素材，不是转交人工', () => {
+  it('已确认的原图显示选择和撤销入口，不再提示缺德语图', () => {
+    const markup = html([asset({ selection: 'original_confirmed', ready: true, de_present: false })])
+    expect(markup).toContain('已确认使用原图')
+    expect(markup).toContain('撤销原图确认')
+    expect(markup).not.toContain('缺德语图')
+  })
+
+  it('未确认的原图仍提示未就绪，并提供逐图确认入口', () => {
+    const markup = html([asset({ selection: 'original', ready: false, de_present: false })])
+    expect(markup).toContain('确认使用原图')
+    expect(markup).toContain('缺德语图')
+  })
   it('入口写明替换后仍走系统发布，避免与转交人工混淆', () => {
     const markup = html([asset()])
     expect(markup).toContain('上传图片替换第 1 张')

@@ -228,8 +228,9 @@ def select_version(account_dir: Path, indexed: dict, *, media_index: int, out_pa
                 translation_entry=basis)
         except (OSError, ValueError) as exc:
             raise review.ReviewValidationError('未能采用这一版：%s' % exc) from exc
-        session.change(source, 'edited', expected_revision=review_revision,
-                       expected_source_sha256=source_text_sha256)
+        session.change(source, 'image_selected', expected_revision=review_revision,
+                       expected_source_sha256=source_text_sha256,
+                       image_selection=image_de.image_selection_record(account_dir, source, media_index, 'automatic'))
     return chosen
 
 
@@ -412,6 +413,12 @@ def execute(row: dict, indexed: dict, *, translator=None, editor=None) -> dict:
 
 def _require_model_image(account_dir: Path, source: dict, entry: dict | None,
                          media_index: int) -> None:
-    if entry and any(pair.media_index == media_index and pair.manual for pair in
-                     image_de.review_image_pairs(account_dir, source, entry)):
-        raise review.ReviewConflict('这一张已换成人工图片，模型优化不会被采用')
+    for pair in image_de.review_image_pairs(account_dir, source, entry):
+        if pair.media_index != media_index:
+            continue
+        if pair.conflict:
+            raise review.ReviewConflict(pair.conflict)
+        if pair.manual:
+            raise review.ReviewConflict('这一张已换成人工图片，模型优化不会被采用')
+        if pair.selection == 'original_confirmed':
+            raise review.ReviewConflict('这一张已确认使用原图；需要出图时请先撤销原图确认')

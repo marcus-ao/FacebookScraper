@@ -122,7 +122,7 @@ class DePost:
     text_de: str
     scheduled_at: datetime
     image_paths: tuple[Path, ...]
-    image_sources: tuple[Literal["media_de", "original"], ...]
+    image_sources: tuple[Literal["media_de", "original", "original_confirmed"], ...]
     prompt_version: int
     source_author: str | None
     source_author_name: str | None
@@ -503,118 +503,10 @@ def _validate_image(path: Path, post_id: str) -> tuple[int, int]:
         raise _fail(post_id, "图片无法由 Pillow 完整打开：%s（%s）" % (path, exc)) from exc
 
 
-def _program_owned_media_de(account_dir: Path) -> dict[str, set[str | None]]:
-    """读取程序图片所有权；含 output_sha256 时核对字节，旧记录仅按路径兼容。"""
-    path = account_dir / "images_de.jsonl"
-    owned: dict[str, set[str | None]] = {}
-    if not path.is_file():
-        return owned
-    try:
-        assert_physical_direct_path(
-            account_dir, path, kind="file", label="images_de.jsonl")
-    except ArchivePathError:
-        return owned
-    try:
-        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return owned
-    for line in raw_lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue            # 逐行独立解码：一条坏行不该让整篇发不出去
-        if not isinstance(row, dict):
-            continue
-        rel = row.get("out_path")
-        if not isinstance(rel, str) or not rel.strip():
-            continue
-        pure = PurePosixPath(rel.strip().replace("\\", "/"))
-        if pure.is_absolute() or ".." in pure.parts or not pure.parts:
-            continue
-        digest = row.get("output_sha256")
-        owned.setdefault(pure.as_posix(), set()).add(
-            digest if isinstance(digest, str) and len(digest) == 64 else None)
-    return owned
-
-
-def _is_program_output(account_dir: Path, candidate: Path,
-                       owned: dict[str, set[str | None]]) -> bool:
-    if image_de.manual_upload_record(candidate):
-        return False
-    try:
-        rel = candidate.relative_to(account_dir).as_posix()
-    except ValueError:
-        return False
-    digests = owned.get(rel)
-    if not digests:
-        return False
-    if None in digests:
-        return True             # 旧 schema 没有哈希，只能按路径认
-    try:
-        with candidate.open("rb") as handle:
-            digest = hashlib.sha256()
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError:
-        return False
-    # 字节被改过就不再是程序产出 —— 人在程序产出上改了几笔，也算人工版本。
-    return digest.hexdigest() in digests
-
-
-def _pick_localized(account_dir: Path, candidates: list[Path], *,
-                    post_id: str, position: int,
-                    owned: dict[str, set[str | None]]) -> tuple[Path, bool]:
-    """同序号图片优先人工版；多个人工候选时拒绝猜选。"""
-    manual = [item for item in sorted(candidates)
-              if not _is_program_output(account_dir, item, owned)]
-    if len(manual) > 1:
-        raise _fail(post_id, "media_de 里第 %d 张图有多个**人工**候选（%s）；"
-                             "分不清该发哪张，请只保留一个"
-                    % (position, "、".join(item.name for item in manual)))
-    if manual:
-        return manual[0], True
-    program = sorted(candidates)
-    if len(program) > 1:
-        raise _fail(post_id, "media_de 里第 %d 张图有多个程序产出（%s）；"
-                             "多半是改过 [image].output_format，"
-                             "请清理掉旧格式那张再发" % (
-                                 position, "、".join(i.name for i in program)))
-    return program[0], False
-
-
-def _check_program_source(account_dir: Path, source: Path, output: Path, *,
-                           post_id: str, position: int) -> None:
-    """只校验已知程序输出的原图依据；人工文件仍由人工审校负责。"""
-    path = account_dir / "images_de.jsonl"
-    output_hash = hashlib.sha256(output.read_bytes()).hexdigest()
-    relative = output.relative_to(account_dir).as_posix()
-    matches = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if (isinstance(row, dict) and row.get("post_id") == post_id
-                and isinstance(row.get("out_path"), str)
-                and row["out_path"].replace("\\", "/") == relative
-                and row.get("output_sha256") == output_hash
-                and row.get("source_sha256")):
-            matches.append(row)
-    if not matches and source.stem != f"{position:02d}":
-        raise _fail(post_id, "第 %d 张源图版本已变化，程序德语图缺少可匹配的原图依据，请重新生成" % position)
-    if matches:
-        source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-        if not any(row["source_sha256"] == source_hash for row in matches):
-            raise _fail(post_id, "第 %d 张原图已变化，现有程序德语图仍绑定旧源图，请重新生成并审校" % position)
-
-
 def _choose_images(arc: Archive, source: dict, post_dir: Path,
                    warnings: list[str]) -> tuple[
                        tuple[Path, ...],
-                       tuple[Literal["media_de", "original"], ...],
+                       tuple[Literal["media_de", "original", "original_confirmed"], ...],
                        tuple[tuple[int, int], ...]]:
     post_id = source.get("post_id") or "?"
     if source.get("media_complete") is not True:
@@ -636,90 +528,28 @@ def _choose_images(arc: Archive, source: dict, post_dir: Path,
                 % (position, kind))
         images.append(item)
 
-    media_de = post_dir / "media_de"
-    try:
-        assert_physical_direct_path(
-            post_dir, media_de, kind="directory", label="media_de 目录")
-    except ArchivePathError as exc:
-        raise _fail(post_id, str(exc)) from exc
-    owned_media_de = _program_owned_media_de(arc.base)
-    image_state = image_de.load_image_state(arc.base / "images_de.jsonl")
     image_text = image_translation(
-        source, load_translated(arc.base / "translated.jsonl").get(post_id),
-        load_human_translated(arc.base / "translated_human.jsonl").get(post_id))
-    current_pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(
-        arc.base, source, image_text, image_state)} if image_text else {}
-    latest_images = {}
-    ledger = arc.base / "images_de.jsonl"
-    if ledger.is_file():
-        for line in ledger.read_text(encoding="utf-8", errors="replace").splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict) and row.get("post_id") == post_id:
-                latest_images[row.get("media_index")] = row
-
-    selected: list[Path] = []
-    sources: list[Literal["media_de", "original"]] = []
-    dimensions: list[tuple[int, int]] = []
-    for position, item in enumerate(images, 1):
-        raw = item.get("local_path")
-        if not isinstance(raw, str) or not raw.strip():
-            raise _fail(post_id, "第 %d 张图没有 local_path" % position)
-        original = _relative_archive_path(arc.base, raw, post_id=post_id)
+        source, load_translated(arc.base / 'translated.jsonl').get(post_id),
+        load_human_translated(arc.base / 'translated_human.jsonl').get(post_id))
+    pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(arc.base, source, image_text)}
+    selected, sources, dimensions = [], [], []
+    for index, item in enumerate(images):
+        original = _relative_archive_path(arc.base, item.get('local_path'), post_id=post_id)
         if original.parent != post_dir:
-            raise _fail(post_id, "第 %d 张图不在该帖目录内：%s" % (position, original))
-
-        localized: list[Path] = []
-        if media_de.is_dir():
-            try:
-                localized = [candidate for candidate in media_de.iterdir()
-                             if candidate.stem == f"{position:02d}"
-                             and candidate.is_file()]
-            except OSError as exc:
-                raise _fail(post_id, "无法读取 media_de：%s" % exc) from exc
-
-        chosen: Path | None = None
-        source_kind: Literal["media_de", "original"] = "original"
-        latest = latest_images.get(position - 1) or {}
-        manual = [path for path in localized if not _is_program_output(arc.base, path, owned_media_de)]
-        if not manual:
-            if (post_id, position - 1) in image_state.latest:
-                # 与审校台共用版本判据；不能把页面已判过期的程序图冻结为发布素材。
-                pair = current_pairs.get(position - 1)
-                if pair is None or not pair.localized_rel:
-                    raise _fail(post_id, "第 %d 张德语图依据已过期或文件缺失，请重新生成并审校" % position)
-                localized = [_relative_archive_path(arc.base, pair.localized_rel, post_id=post_id)]
-            elif latest.get("refine_id"):
-                refined = _relative_archive_path(arc.base, latest.get("out_path", ""), post_id=post_id)
-                expected_stem = f"{position:02d}_v{latest['refine_id']}"
-                if (refined.parent != media_de or refined.stem != expected_stem
-                        or not refined.is_file() or not _is_program_output(arc.base, refined, owned_media_de)):
-                    raise _fail(post_id, "第 %d 张优化图片缺失或已变化，请重新核对" % position)
-                localized = [refined]
-        if localized:
-            chosen, manual = _pick_localized(
-                arc.base, localized, post_id=post_id, position=position,
-                owned=owned_media_de)
-            source_kind = "media_de"
-            if manual:
-                warnings.append(
-                    "第 %d 张用的是**人工放置**的德语图 %s（不是程序产出），"
-                    "已按人工优先选用" % (position, chosen.name))
-            else:
-                _check_program_source(arc.base, original, chosen,
-                                      post_id=post_id, position=position)
-        if chosen is None:
-            chosen = original
-            source_kind = "original"
-            warnings.append(
-                "第 %d 张缺少德语图，已回退原图 %s；图内可能仍有英文"
-                % (position, original.name))
+            raise _fail(post_id, '第 %d 张图不在该帖目录内' % (index + 1))
+        pair = pairs.get(index)
+        if pair and pair.conflict:
+            raise _fail(post_id, pair.conflict)
+        chosen = arc.base / pair.selected_rel if pair and pair.selected_rel else original
+        kind = ('original_confirmed' if pair and pair.selection == 'original_confirmed'
+                else 'media_de' if pair and pair.localized_rel else 'original')
+        if pair and pair.manual:
+            warnings.append('第 %d 张采用人工放置的图片 %s' % (index + 1, chosen.name))
+        if kind == 'original':
+            warnings.append('第 %d 张缺少当前德语图，回退未确认原图 %s；图内可能仍有英文' % (index + 1, original.name))
         dimensions.append(_validate_image(chosen, post_id))
         selected.append(chosen)
-        sources.append(source_kind)
-
+        sources.append(kind)
     return tuple(selected), tuple(sources), tuple(dimensions)
 
 

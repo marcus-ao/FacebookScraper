@@ -124,8 +124,29 @@ def replace_image(task_id: str, index: int, data: bytes, filename: str, *,
         except (OSError, ValueError) as exc:
             # 上传内容的问题是人能当场改的，给 400 和原因，不要报成服务器故障。
             raise review.ReviewValidationError("替换图片未保存：%s" % exc) from exc
-        session.change(truth, "edited", expected_revision=review_revision,
-                       expected_source_sha256=source_text_sha256)
+        session.change(truth, "image_selected", expected_revision=review_revision,
+                       expected_source_sha256=source_text_sha256,
+                       image_selection=images.image_selection_record(source.account_dir, truth, index, 'automatic'))
+    return _detail(task_id)
+
+
+def select_image(task_id: str, index: int, *, choice: str, source_image_sha256: str,
+                 source_text_sha256: str, review_revision: str | None) -> dict:
+    source = _source(task_id)
+    with images.FileLock(cfg().state_dir / 'images.lock',
+            busy_message='图片正在生成，请完成后再更改选择'), review.transaction(source.account_dir) as session:
+        truth, state = session.validate(dict(source.row), expected_revision=review_revision,
+            expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
+        if state['status'] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict('这篇已冻结内容、结束审校或正在提交，不能更改图片选择')
+        try:
+            selection = images.image_selection_record(source.account_dir, truth, index, choice, source_image_sha256)
+        except review.ReviewConflict:
+            raise
+        except (OSError, ValueError) as exc:
+            raise review.ReviewValidationError('图片选择未保存：%s' % exc) from exc
+        session.change(truth, 'image_selected', expected_revision=review_revision,
+            expected_source_sha256=source_text_sha256, image_selection=selection)
     return _detail(task_id)
 
 

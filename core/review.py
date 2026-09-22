@@ -18,7 +18,7 @@ STATUSES = frozenset({"pending_review", "edited", "content_locked", "snoozed",
 TERMINAL = frozenset({"skipped", "handed_off", "scheduled"})
 ACTIONS = frozenset({"edited", "content_locked", "unlocked", "snoozed", "woke",
                      "skipped", "handed_off", "handoff_link", "approved",
-                     "scheduled", "submit_failed", "unscheduled"})
+                     "scheduled", "submit_failed", "unscheduled", "image_selected"})
 # 内容已冻结但尚未提交：四个编辑入口共用这个集合判闸。
 LOCKED = frozenset({"content_locked", "approved"})
 
@@ -84,6 +84,8 @@ def history(account_dir: Path, post_id: str | None = None) -> list[dict]:
                         or not re.fullmatch(r"[0-9a-f]{64}", event.get("source_text_sha256", ""))):
                     raise ValueError('invalid review record')
                 UUID(event["revision"])
+                if event['action'] == 'image_selected':
+                    _validate_image_selection(event.get('image_selection'))
                 _moment(event["recorded_at"])
                 if event["status"] == "snoozed":
                     if not event.get("wake_at"):
@@ -104,6 +106,20 @@ def history(account_dir: Path, post_id: str | None = None) -> list[dict]:
 
 def latest(account_dir: Path) -> dict[str, dict]:
     return {event["post_id"]: event for event in history(account_dir)}
+
+
+def _validate_image_selection(selection):
+    if (not isinstance(selection, dict) or selection.get('choice') not in {'original', 'automatic'}
+            or type(selection.get('media_index')) is not int or selection['media_index'] < 0
+            or not re.fullmatch(r'[0-9a-f]{64}', str(selection.get('source_sha256') or ''))
+            or not isinstance(selection.get('source_media_id'), str)):
+        raise ReviewValidationError('图片选择记录不完整')
+
+
+def image_choices(account_dir: Path, post_id: str) -> dict[int, dict]:
+    """逐图选择独立折叠，后续文字编辑和状态事件不会抹掉人的图片决定。"""
+    return {event['image_selection']['media_index']: event['image_selection']
+            for event in history(account_dir, post_id) if event['action'] == 'image_selected'}
 
 
 def state_for(account_dir: Path, source: dict, *, default_status: str = "pending_review",
@@ -159,11 +175,16 @@ class transaction:
     def change(self, indexed: dict, action: str, *, expected_revision: str | None,
                expected_source_sha256: str, reason: str = "", wake_at=None,
                handoff_url: str = "", now=None, scheduled: bool = False,
-               snooze_days: int = 3, default_status: str = "pending_review", snapshot_id: str = '') -> dict:
+               snooze_days: int = 3, default_status: str = "pending_review", snapshot_id: str = '',
+               image_selection: dict | None = None) -> dict:
         if not isinstance(action, str) or action not in ACTIONS:
             raise ReviewValidationError("未知的审校动作")
         if snapshot_id and not re.fullmatch(r'[0-9a-f]{32}', snapshot_id):
             raise ReviewValidationError('批准快照编号无效')
+        if action == 'image_selected':
+            _validate_image_selection(image_selection)
+        elif image_selection is not None:
+            raise ReviewValidationError('图片选择必须使用对应审校动作')
         source, current = self.validate(
             indexed, expected_revision=expected_revision, expected_source_sha256=expected_source_sha256,
             default_status=default_status, scheduled=scheduled)
@@ -215,13 +236,13 @@ class transaction:
                 raise ReviewValidationError("请填写 http 或 https 开头的帖子链接")
         status = {"woke": "pending_review", "submit_failed": "pending_review",
                   "unscheduled": "pending_review", "unlocked": "edited",
-                  "handoff_link": "handed_off"}.get(action, action)
+                  "handoff_link": "handed_off", "image_selected": "edited"}.get(action, action)
         deadline = None
         if action == "snoozed":
             deadline = _moment(wake_at) if wake_at is not None else business_day_wakeup(moment, snooze_days)
             if deadline <= moment:
                 raise ReviewValidationError("挂起到期时间须晚于当前时间")
-        elif action == "edited" and previous == "snoozed":
+        elif action in {"edited", "image_selected"} and previous == "snoozed":
             status, deadline = "snoozed", _moment(current["wake_at"])
             reason = current["reason"]
         event = {
@@ -235,6 +256,8 @@ class transaction:
             # 解冻作废那份快照，不能让编号继承下去再被当成仍然有效的冻结内容。
             "snapshot_id": '' if action == "unlocked" else snapshot_id or current.get('snapshot_id') or '',
         }
+        if image_selection is not None:
+            event['image_selection'] = dict(image_selection)
         append_jsonl(_path(self.account_dir), event, guard=lambda path: _path(path.parent))
         return event
 

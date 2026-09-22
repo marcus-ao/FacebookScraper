@@ -78,6 +78,7 @@ export interface RefinementGate {
   readonly remaining: number
   /** 选中的这一张当前是人工图。 */
   readonly manualImage?: boolean
+  readonly originalConfirmed?: boolean
 }
 
 export function refinementDisabledReason(gate: RefinementGate): string {
@@ -90,6 +91,7 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   if (!gate.capabilitiesLoaded) return '正在读取可用次数与费用'
   // 人工图优先于程序产出，所以模型再生成一版也不会被采用——那笔钱是白花的。
   if (gate.kind === 'image' && gate.manualImage) return '这一张已换成人工图片，模型优化不会被采用'
+  if (gate.kind === 'image' && gate.originalConfirmed) return '这一张已确认使用原图，需要出图时请先撤销原图确认'
   if (gate.kind === 'image' && !gate.remaining) return '这张图片的优化次数已用完'
   return ''
 }

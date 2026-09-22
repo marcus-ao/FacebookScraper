@@ -176,6 +176,9 @@ export const IMAGE_ASSET_SHAPE: ShapeSpec = {
   original_url: shape.string,
   de_url: shape.string,
   de_present: shape.boolean,
+  selection: shape.string,
+  source_image_sha256: shape.string,
+  ready: shape.boolean,
   metrics: shape.nullable(shape.object),
 }
 

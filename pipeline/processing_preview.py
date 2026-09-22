@@ -1,7 +1,6 @@
 """当前本地批次的只读处理预览；不调用执行器，也不创建账本或派生文件。"""
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -31,10 +30,7 @@ def _image_plan(source: engine.SourcePost, needs_translation: bool,
         required = []
         for job in jobs:
             record = state.latest.get(job.key)
-            same_basis = replace(job, text_de_sha256=str(
-                (record or {}).get("text_de_sha256") or ""))
-            if (images.image_record_is_current(same_basis, record)
-                    and images._record_output_exists(source.account_dir, record)):
+            if images.image_record_matches(source.account_dir, record, job.source_sha256):
                 conditional.append(job.media_index)
             else:
                 required.append(job)

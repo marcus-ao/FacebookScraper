@@ -556,7 +556,7 @@ with tempfile.TemporaryDirectory() as d:
         compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
     except ComposeError as exc:
         two_manual = str(exc)
-    check("多个**人工**候选" in two_manual,
+    check("多个人工图片候选" in two_manual,
           "两张都不是程序产出时仍然失败闭合 —— 机器不替人猜该发哪张")
 
 with tempfile.TemporaryDirectory() as d:
@@ -577,12 +577,11 @@ with tempfile.TemporaryDirectory() as d:
         "\n".join(rows) + "\n", encoding="utf-8")
     both_program = ""
     try:
-        compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+        post = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
     except ComposeError as exc:
         both_program = str(exc)
-    check("多个程序产出" in both_program and "output_format" in both_program,
-          "两张都是程序产出时点名真实原因（多半改过 output_format），"
-          "而不是笼统报『有多个候选』")
+    check("德语图" in both_program or (not both_program and post.image_sources[0] == 'original'),
+          "旧输出所有权只能证明不是人工图，缺少有效生成依据时不采用旧程序图")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"

@@ -24,7 +24,7 @@ def package_post(account_dir: Path, indexed: dict, *, handoff: bool = True) -> t
     caption = localization.render(localization.effective_draft(account_dir, source, effective))
     image_entry = translated.image_translation(source, machine, human)
     pairs = {pair.media_index: pair for pair in image_de.review_image_pairs(
-        account_dir, source, image_entry)} if image_entry else {}
+        account_dir, source, image_entry)}
     media = source.get("media")
     if not isinstance(media, list) or not media or any(item.get("kind") != "image" for item in media):
         raise ReviewConflict("源帖不是完整图文帖，无法准备资源包")
@@ -43,6 +43,8 @@ def package_post(account_dir: Path, indexed: dict, *, handoff: bool = True) -> t
         for index, media_item in enumerate(media):
             original, _ = image_de._source_from_manifest(account_dir, source, media_item)
             pair = pairs.get(index)
+            if pair and pair.conflict:
+                raise ReviewConflict(pair.conflict)
             used_original = not (pair and pair.localized_rel)
             path = original if used_original else account_dir / pair.localized_rel
             parent = post_dir if used_original else assert_physical_direct_path(
@@ -59,8 +61,9 @@ def package_post(account_dir: Path, indexed: dict, *, handoff: bool = True) -> t
             if not data:
                 raise ReviewConflict("图片文件为空，请补齐素材后再下载")
             package.writestr(name, data)
-            metadata["images"].append({"index": index, "file": name, "used_original": used_original})
-            if used_original:
+            metadata["images"].append({"index": index, "file": name, "used_original": used_original,
+                                       "selection": pair.selection if pair else 'original'})
+            if used_original and not (pair and pair.selection == 'original_confirmed'):
                 notes.append("第 %d 张缺少当前德语图，包内使用原图，请人工处理后再发布。" % (index + 1))
         package.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"))
         package.writestr("README.txt", "\n".join(notes).encode("utf-8"))

@@ -177,7 +177,10 @@
    "original_url": "/api/tasks/fa_neakasaofficial/122100548013379375/image/0?variant=original&v=07f4b78e6f1c59041bb0b276481d37ee1ceb4a4a351d7ab48affa7882c9bf672",
    "de_url": "/api/tasks/fa_neakasaofficial/122100548013379375/image/0?variant=de&v=07f4b78e6f1c59041bb0b276481d37ee1ceb4a4a351d7ab48affa7882c9bf672-none-manual",
    "de_present": false,
-   "metrics": null
+   "metrics": null,
+   "selection": "original",
+   "ready": false,
+   "source_image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
  ],
  "schedule": null,

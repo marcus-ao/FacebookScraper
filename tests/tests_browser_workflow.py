@@ -88,7 +88,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             allowed = request.method == "PUT" and (parsed.path == "/api/settings" or parsed.path.endswith("/localization"))
             allowed |= request.method == "POST" and parsed.path.endswith("/check")
             if self.fixtures.local_image_writes and request.method == "POST":
-                allowed |= parsed.path.endswith(("/image/0/upload", "/export"))
+                allowed |= parsed.path.endswith(("/image/0/upload", "/image/0/selection", "/export"))
                 allowed |= parsed.path.startswith("/api/image-versions/task/")
             if not allowed:
                 self.denied.append(request.method + " " + parsed.path)
@@ -644,7 +644,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                     "name": "manual.png", "mimeType": "image/png", "buffer": data.getvalue()})
             self.assertEqual(response.value.status, 200, response.value.text())
             current = self.fixtures.detail(task_id)
-            expect(self.page.get_by_role("img", name="德语图 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
+            expect(self.page.get_by_role("img", name="最终图片 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
             expect(self.page.get_by_text("人工图片", exact=True)).to_be_visible()
             expect(self.page.get_by_role("alert").filter(has_text="宽高比")).to_be_visible()
             self.assertEqual(current["status"], "edited")
@@ -656,6 +656,26 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.get_by_role("note", name=re.compile("生成图片.*人工图片")).hover()
         expect(self.page.get_by_text("这一张已换成人工图片，模型优化不会被采用", exact=True)).to_be_visible()
         self.assertFalse((self.fixtures.root / "state/paid_requests.jsonl").exists())
+
+    def test_14_original_confirmation_uses_real_selection_api_and_can_be_revoked(self):
+        task_id = self.fixtures.add_post('fa_neakasaofficial', '4234567890', 'facebook')
+        self.fixtures.local_image_writes = True
+        self.addCleanup(setattr, self.fixtures, 'local_image_writes', False)
+        self.open_task(task_id)
+        self.page.get_by_role('tab', name=re.compile('图片')).click()
+        for action, selection in (('确认使用原图', 'original_confirmed'), ('撤销原图确认', 'original')):
+            with self.page.expect_response(lambda response: response.request.method == 'POST'
+                    and response.url.endswith('/image/0/selection')) as response:
+                self.page.get_by_role('button', name=action, exact=True).click()
+            self.assertEqual(response.value.status, 200, response.value.text())
+            self.assertEqual(self.fixtures.detail(task_id)['images'][0]['selection'], selection)
+            if selection == 'original_confirmed':
+                expect(self.page.get_by_text('已确认使用原图', exact=True)).to_be_visible()
+                expect(self.page.get_by_text('缺德语图，显示的是原图', exact=True)).to_have_count(0)
+            else:
+                expect(self.page.get_by_text('缺德语图，显示的是原图', exact=True)).to_be_visible()
+        self.assertEqual(self.fixtures.detail(task_id)['review']['status'], 'edited')
+        self.assertFalse((self.fixtures.root / 'state/paid_requests.jsonl').exists())
 
     def test_13_capture_table_page_size_follows_the_size_changer(self):
         """Client-side capture table: the size changer must change the rows actually shown."""
