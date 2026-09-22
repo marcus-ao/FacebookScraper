@@ -10,8 +10,9 @@ from core.console import force_utf8   # noqa: E402
 force_utf8()   # 输出被重定向到文件/管道时，cp936 编不出 ß/⚠ 会让整套测试崩掉
 
 from core.integrity import (check_continuity, check_dropped_partners,
-                            check_undated,
-                            known_partners, params, run_checks)
+                            check_undated, name_suspect_owners,
+                            known_partners, params, run_checks,
+                            split_suspect_sources)
 from core.store import Archive, Media, Post
 
 fails = []
@@ -214,6 +215,45 @@ check(check_dropped_partners([{"post_id": "7", "owner": None}], partners) == [],
 check(check_dropped_partners([{"post_id": "6", "owner": "PARTNER.ONE"}],
                              partners)[0]["post_id"] == "6",
       "丢弃记录里的 owner 大小写不影响命中")
+
+
+# ==========================================================================
+print("\n[第四项 b] 自家已授权账号与第三方合作方分开报")
+
+# 真实形状：neakasa.tech 与 neakasa.global 是同一品牌的两个 IG 账号，
+# 2026-09-22 它们把同一批文案各发了一次（post_id、permalink、时刻都不同），
+# .tech 那篇被正常丢弃，却按"合作帖可能漏判"报了一次。
+import core.config as _config                                        # noqa: E402
+
+_saved = _config._cfg
+_config._cfg = _config.Config()
+_config._cfg._d["publish"] = {"trusted_owners": {"instagram": ["Neakasa.Tech", "neakasa.global"]}}
+try:
+    own_brand = {"post_id": "3991518443455200172", "owner": "neakasa.tech",
+                 "reason": "owner_mismatch"}
+    outsider = {"post_id": "3990436574948923460", "owner": "hholove_global",
+                "reason": "owner_mismatch"}
+    authorized, third_party = split_suspect_sources([own_brand, outsider], "instagram")
+    check([r["post_id"] for r in authorized] == ["3991518443455200172"],
+          "[publish.trusted_owners] 里的账号归『已授权来源』——跨账号重发不是漏判证据")
+    check([r["post_id"] for r in third_party] == ["3990436574948923460"],
+          "名单外的账号仍归『已知合作方』，红线哨兵的口径没有被放宽")
+    check(split_suspect_sources([own_brand], "facebook") == ([], [own_brand]),
+          "按平台各读各的名单 —— IG 的授权不能让 FB 的丢弃变安静")
+    check(split_suspect_sources([{"post_id": "5", "owner": None}], "instagram") == (
+              [], [{"post_id": "5", "owner": None}]),
+          "归属未知不算已授权，宁可多报一次")
+    _config._cfg._d["publish"] = {"trusted_owners": "坏配置"}
+    check(split_suspect_sources([own_brand], "instagram") == ([], [own_brand]),
+          "名单写坏时当空名单照常报警，不把一轮监测带崩")
+finally:
+    _config._cfg = _saved
+
+check(name_suspect_owners([{"owner": "b.one"}, {"owner": "a.two"}, {"owner": "b.one"}])
+      == "a.two、b.one", "作者名去重并排序，同一个账号不重复占位")
+check(name_suspect_owners([{"owner": str(n)} for n in range(6)], 4).endswith(" 等"),
+      "超过上限时明确写『等』，不假装只有这几个")
+check(name_suspect_owners([{"post_id": "x"}]) == "?", "归属缺失写成 ?，不写空字符串")
 
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)

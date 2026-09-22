@@ -620,6 +620,40 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 ⚠️ `tests_story_insights` 在空闲机器上要 358.19 秒，超过 `tools/test_offline.py` 的 300 秒默认，
 本轮是带 `--timeout 600` 跑的；CI 仍按默认超时，由另一会话的 `claude/story-insights-ci-timeout` 处理。
 
+### 1.29 归属哨兵把自家账号当成合作方（2026-09-22）
+
+2026-09-22 那轮扫描报了
+`instagram 丢弃的节点里有 1 篇来自**已知合作方**（neakasa.tech）—— 合作帖归属判定可能又漏判了`。
+按哨兵的要求离线查过 `_rejected.jsonl`，**结论是没有漏判**：
+
+| | post_id | 正文开头 |
+|---|---|---|
+| FB `neakasaofficial` | `122128375707379375` | `Only 6 days to go! ⌛  Hello, hello! We` |
+| IG `neakasa.global` | `3991125889886213694` | 同一句 |
+| IG `neakasa.tech` | `3991518443455200172` | 同一句，**被丢弃** |
+
+三个不同的 post_id、三条不同的 permalink、发布时刻相差半天。合作帖在 IG 的响应里是**一个**
+media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条各自独立的帖，
+即同一批文案跨账号各发一次，`owner_mismatch` 判对了。同轮另外 8 条丢弃全是同品类第三方
+（`pets_qtr`、`hoopo_design`、`uahpet_official`、`moonlitterbox`、`catloving.club`、
+`hholove_global`、`leo_in_ottawa`），一条都没进哨兵——精度本身是好的。
+
+⛔ **但口径错了。** `neakasa.tech` 不是第三方，是本品牌自己的 IG 账号
+（`config.toml [publish.trusted_owners].instagram` 列着它，[REQUIREMENTS](REQUIREMENTS.md) 把
+`in_neakasa.tech` 记为冻结只读）。而 `known_partners()` 纯粹从归档的 owner/coauthor 归纳，
+分不出自家账号和第三方——归档样本里 `.global` 的合作方几乎全是 `.tech`，所以只要 `.tech`
+再跨账号发一次，这条告警就再响一次。它是归属红线的哨兵，被训练成噪音之后就没人看了。
+
+`split_suspect_sources()` 按 `[publish.trusted_owners]` 把疑似节点分成「已授权来源」和
+「已知合作方」两类，两类各说各的处置；判定逻辑和丢弃行为一个字没改，只改谁该被怎么读。
+监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。
+
+⚠️ **顺带一个业务事实：`.tech` 文档里是冻结的，但它 2026-09-22T03:01Z 还在发帖。**
+这不是代码问题，但监测口径和"冻结"的实际含义对不上，上线前值得跟业务确认一次。
+
+**验证状态：离线通过。** `tests_integrity` 新增七条断言覆盖两类划分、按平台各读各的名单、
+归属未知不算已授权、作者名去重排序与超限写"等"；改动涉及的 10 个套件全部通过。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
