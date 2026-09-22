@@ -244,7 +244,14 @@ def main():
                                             and not row['dirty'] and not row['busy'] for row in gate.status()['sessions'])
                                        for session_id in active_ids), 'Clean clients did not acknowledge the maintenance epoch')
             report['before_quiescence'] = gate.status()
-            wait_for(first, lambda: gate.try_quiesce(now=future), 'Maintenance did not quiesce after all clients became safe')
+
+            def resolved_and_quiesced():
+                # ⚠️ clear_session 连同 sequence 水位一起丢弃，关闭途中已经发出的那个状态包
+                # 会把这条会话重新注册成 dirty，维护就再也静不下来。操作员遇到会再清一次，
+                # 这里同样重试；其余客户端的干净与确认判据不变，照旧由 try_quiesce 把关。
+                gate.clear_session(session_ids[3])
+                return gate.try_quiesce(now=future)
+            wait_for(first, resolved_and_quiesced, 'Maintenance did not quiesce after all clients became safe')
             refresh_status(first)
             expect(first.get_by_role('status').filter(has_text='系统正在更新，请稍候')).to_be_visible()
             gate.reopen()
