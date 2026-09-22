@@ -437,7 +437,7 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
-**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `b7e235c`。
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `769d8f0`。
 Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
 打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
 `tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
@@ -501,6 +501,9 @@ Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没�
 修后本机按 CI 的顺序跑完整个第 14 步：`browser_regression --stage ALL` 13 组通过（444.03 秒）、
 `cutover_rehearsal` 8.26 秒、`browser_deployment` 6 项、`browser_lan` 22.47 秒；
 `browser_lan` 另单独连跑六轮全过（修前六轮红三轮）。日志见 `state/story-insights-ci-timeout/step14-*.log`。
+最终并回 `769d8f0`（视频来源按媒体标识判断）后重建前端再走一遍：
+[全量 107/107](../state/offline-validation-20260922T071604Z/results.json)，
+第 14 步四条命令 396.84 / 8.33 / 15.69 / 23.50 秒全部通过（`final-step14-*.log`）。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的判据与状态不变。
 
 ### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
