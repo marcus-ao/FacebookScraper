@@ -182,7 +182,7 @@ scripts\run_python.bat -m routes.delta --status --platform instagram
 
 | `detail` | `action` | 你要做的事 |
 |---|---|---|
-| `never_downloaded` / `file_absent` / `undecodable` | `refetch` | 原图得重新取。报告里 `source_url_expired` 为 `true` 时**不要直接重下**，归档里那个地址已经过期，只会拿到 403；按下面的人工恢复走，它会开一次详情换新地址 |
+| `never_downloaded` / `file_absent` / `undecodable` | `refetch` | 原图得重新取，走下面的人工恢复。`source_url_expired` 为 `false` 时直接用归档里的地址重下即可；为 `true` 时那个地址已过期、单独重下只会拿到 403，恢复会自动先开一次详情换新地址 |
 | `digest_mismatch` / `size_mismatch` | `adjudicate` | 文件是好图，但和归档记的哈希/字节数对不上。**先别动**：比对 `post.json.before-*.bak` 与当前文件，确认是谁改的再决定 |
 | `changed_while_reading` / `locked` | `transient` | 什么都不用做。`locked` 通常是审校台正在预览这张图占住了文件，关掉那一页下一轮自己就好 |
 | `read_error` / `path_rejected` | `local` | 本地磁盘、权限或归档目录的问题，先修好再核验 |
@@ -195,9 +195,11 @@ scripts\run_python.bat -m routes.delta --recover-post instagram:<账号>:<post_i
 
 ⚠️ 它只对已登记为采集项（`--status` 里 `capture_status` 不是 `not_in_capture_state`）且状态为 `manual` 的帖有效。地址确已过期时这一次会开详情换新地址；没有 `oe` 参数、失效时刻未知的按仍可用处理，不开详情。
 
+⚠️ **地址显示未过期、但恢复仍然报下载失败**，说明 Meta 提前作废了这个签名（`oe` 到点之前被服务端失效是已知行为）。此时**不要反复重试**：每次都是一次真实平台请求。把该轮输出留下，按 §4.1 用明确 capture 定点处理，或等下一轮自然扫描带回新地址。
+
 修复后的列表/详情从真相读取，SQLite 在展示入口按现有刷新机制更新（历史页可能保留短时缓存）。即使真相已写入而 manifest 中断，下一次普通监测也能继续同步；原图与备份无需移动或删除。单帖工具 §4.1 仍可用于明确指定证据的定点操作，并支持 `media_type=2` 的明确单视频。
 
-本机只用隔离归档及构造 capture 验证自动处理；服务机的 7 篇是否都有可用证据、实际修复数量以服务机输出为准。
+本机只用隔离归档及构造 capture 验证自动处理，实际修复数量以服务机输出为准。2026-09-22 服务机实测：归档 29 篇中 1 篇缺图，判为 `never_downloaded`／`refetch`，人工恢复后回到 `complete`；人工队列 37 条退役 33 条、保留 4 条真实失败。
 
 ## 5. 付费模型操作
 
