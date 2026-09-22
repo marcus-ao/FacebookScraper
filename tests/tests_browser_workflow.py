@@ -417,7 +417,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
         detail["publish_operation"] = publish_operation(status="succeeded", step_index=7,
             step="提交并回读月历", message="自动提交并回读为 scheduled")
-        expect(self.page.get_by_text("排期已创建并回读确认", exact=True)).to_be_visible(timeout=15000)
+        expect(self.page.get_by_text("排期已确认；排期详情图片未核验", exact=True)).to_be_visible(timeout=15000)
         expect(self.page.get_by_role("status")).to_contain_text("排期已确认。")
         expect(self.page.get_by_text("已排期", exact=True)).to_be_visible()
         self.assertEqual(len(posted), 1)
@@ -499,7 +499,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_text("这个时刻德国还在凌晨，粉丝多半看不到")).to_be_visible()
         approve.click()
         dialog = self.page.get_by_role("dialog")
-        expect(dialog).to_contain_text("Facebook · 2026-09-15 09:00 北京")
+        expect(dialog).to_contain_text("Facebook · Neakasa Deutschland · 2026-09-15 09:00 北京")
         expect(dialog).to_contain_text("德国 9/15 03:00 柏林")
         dialog.get_by_role("button", name="继续核对", exact=True).click()
         expect(dialog).to_have_count(0)

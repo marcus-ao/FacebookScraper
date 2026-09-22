@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from core import maintenance, review
 from pipeline import approval
-from publish import business_suite as bs, compose, operations, records
+from publish import business_suite as bs, compose, manual_run, operations, records
 from starlette.concurrency import run_in_threadpool
 from web.api import reader
 
@@ -84,7 +84,7 @@ async def _run(operation_id: str, account_dir, row, body, fingerprint):
             scheduled_at=business_time(body.get('scheduled_at')),
             source_text_sha256=body.get('source_text_sha256'),
             human_revision=body.get('human_revision'), review_revision=body.get('review_revision'),
-            content_fingerprint=fingerprint, report=report)
+            content_fingerprint=fingerprint, publish_target=body.get('publish_target'), report=report)
     except approval.ApprovalConflict as exc:
         operations.finish(operation_id, status=operations.FAILED, message=str(exc),
                           result={'suggestions': [value.isoformat() for value in exc.suggestions]})
@@ -100,8 +100,8 @@ async def _run(operation_id: str, account_dir, row, body, fingerprint):
         operations.finish(operation_id, status=operations.UNCERTAIN,
                           message='提交结果不明确（%s）；请核对发布回执，不要直接重试。' % type(exc).__name__)
     else:
-        operations.finish(operation_id,
-                          status=operations.SUCCEEDED if result['ok'] else operations.UNCERTAIN,
+        operations.finish(operation_id, status=result.get('operation_status')
+                          or (operations.SUCCEEDED if result['ok'] else operations.UNCERTAIN),
                           message=result['message'], result=result)
 
 
@@ -126,6 +126,13 @@ async def post_approve(task_id: str, request: Request):
         ready = approval.options(source.account_dir, dict(source.row))
         if not ready['available']:
             raise review.ReviewConflict(ready['reason'])
+        if not ready.get('preview'):
+            raise review.ReviewConflict(ready.get('reason') or '冻结内容无法读取，请重新确认')
+        try:
+            checked = manual_run.load(source.row['platform'])
+            manual_run.confirm_target(body.get('publish_target'), checked)
+        except manual_run.ManualRunError as exc:
+            raise review.ReviewConflict(str(exc)) from exc
         busy = operations.active()
         if busy is not None:
             # ⛔ 不排队：并发直接拒绝，见 FUNCTIONALITY F5-9。

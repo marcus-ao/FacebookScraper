@@ -35,7 +35,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/tasks?scope=history` | page、limit、platform、month、tag、status 筛选；limit 为 1–100，默认 50；pagination.total 为全部匹配数，range.days 为 null |
 | `GET /api/tasks/{id}` | 人工优先内容、来源指纹、子资源版本、风险、模型任务与发布状态；按 ID 查询不受 90 天限制 |
 | `GET /api/tasks/{id}/image/{index}` | 原图或德语图，缺德语图须显式标识回退 |
-| `GET /api/tasks/{id}/approval-options` | 可用范围、许可、content_fingerprint；不可用不能推定可排期 |
+| `GET /api/tasks/{id}/approval-options` | `lockable` 表示内容可冻结，`available` 表示还能算出可选时间；`preview` 在已冻结时给出将提交的正文、图片和目标。历史录证缺失不能代替内容原因 |
 | `GET /api/calendar` | 月历缓存、业务/UI/受众时区、完整性与 stale；`local` 为本地图层，`local_error` 表示本地账本读不出来 |
 | `GET /api/publish-operations/{id}` | 一次提交的当前步骤与终态；进程消失的记录读回来是 uncertain |
 | `GET /api/templates/{kind}` | text/image 模板，只读 |

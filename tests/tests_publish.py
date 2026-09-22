@@ -746,11 +746,12 @@ with tempfile.TemporaryDirectory() as d:
 print("\n[4] G1 数值未实测时不造事实；有 dump 来源后契约可离线执行")
 check(raises(ValueError, lambda: InstagramConstraints(probe_dump=""), "probe"),
       "IG 数值约束必须点名真实 probe dump 来源")
+ScheduleWindow("", timedelta(0), None, "America/Los_Angeles")
 check(raises(ValueError,
-             lambda: ScheduleWindow("", timedelta(minutes=1), timedelta(days=1),
+             lambda: ScheduleWindow("  ", timedelta(minutes=1), timedelta(days=1),
                                     "America/Los_Angeles"),
-             "probe"),
-      "定时窗口同样必须点名真实 probe dump 来源")
+             "空白"),
+      "空白不能冒充录证来源；没有录证的配置窗口用空字符串")
 check(raises(ValueError,
              lambda: InstagramConstraints(
                  probe_dump="x", min_aspect_ratio=float("nan")),

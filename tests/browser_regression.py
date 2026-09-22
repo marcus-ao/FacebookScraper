@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, expect
+from browser_fixture import frozen_preview
 from ui_fixture import EVIDENCE, BrowserFixture, ROOT, UIFixture
 
 
@@ -244,7 +245,8 @@ def stage_d4(page, ui):
     options=ui.fx.client.get(f'/api/tasks/{task_id}/approval-options').json()
     options.update(available=True,reason='',fingerprint='fixture-fingerprint',lockable=True,lock_reason='',
                    earliest='2026-09-14T08:00:00+08:00',latest='2026-10-28T23:00:00+08:00',default_times=['09:00','17:00'],
-                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6])
+                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6],
+                   preview=options.get('preview') or frozen_preview())
     ui.overrides[('GET',f'/api/tasks/{task_id}/approval-options')]=(200,options)
     running={'version':1,'operation_id':'regression-op','task_id':task_id,'platform':detail['platform'],
              'snapshot_id':'regression-snapshot','scheduled_at':'2026-09-15T10:30:00+08:00','status':'running',
@@ -259,7 +261,7 @@ def stage_d4(page, ui):
     page.get_by_role('button',name='确认并创建排期',exact=True).click()
     expect(page.get_by_text('排期没有创建成功',exact=True)).to_be_visible(timeout=15000)
     body=[r['body'] for r in ui.requests if r['path'].endswith('/approve')][-1]
-    assert body=={'scheduled_at':'2026-09-15T10:30','source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision'],'content_fingerprint':'fixture-fingerprint'}
+    assert body=={'scheduled_at':'2026-09-15T10:30','source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision'],'content_fingerprint':'fixture-fingerprint','publish_target':options['preview']['target']}
     # 非严格成功回执也须重读详情，使本地回执恢复入口可见。
     order=[i for i,r in enumerate(ui.requests) if r['method']=='POST' and r['path'].endswith('/approve')]
     reread=[i for i,r in enumerate(ui.requests) if r['method']=='GET' and r['path']==f'/api/tasks/{task_id}' and i>order[-1]]
@@ -340,7 +342,8 @@ def stage_d(page, ui):
     options=ui.fx.client.get(f'/api/tasks/{task_id}/approval-options').json()
     options.update(available=True,reason='',fingerprint='fixture',lockable=True,lock_reason='',
                    earliest='2026-03-01T08:00:00+08:00',latest='2026-11-01T20:00:00+08:00',
-                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6])
+                   business_timezone='Asia/Shanghai',audience_timezone='Europe/Berlin',audience_quiet_hours=[0,6],
+                   preview=options.get('preview') or frozen_preview())
     ui.overrides[('GET',f'/api/tasks/{task_id}/approval-options')]=(200,options)
     states={}
     for status in ['not_ready','pending_review','edited','content_locked','snoozed','approved','scheduled','skipped','handed_off']:

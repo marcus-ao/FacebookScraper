@@ -21,21 +21,29 @@ from publish.planner_content import PLACEMENTS, MEDIA_KINDS, DELIVERIES, READ_ST
 
 
 @maintenance.guarded('planner_read')
-async def read_live_inventory() -> RemoteSlotInventory:
+async def read_live_inventory(run=None) -> RemoteSlotInventory:
     """供已持发布锁的调用者读取；只新开并关闭自己的页，不启动/登录浏览器。"""
-    bs.require_readback_evidence()
+    if run is None:
+        bs.require_readback_evidence()
     config = cfg()
     config.assert_publish_chrome_isolated()
     pw = page = None
     try:
-        pw, _browser, context = await attach(
-            port=config.publish_debug_port, profile=config.publish_profile_dir,
-            start_script=r"scripts\start_chrome_publish.bat", login_hint="DE 发布账号")
+        try:
+            pw, _browser, context = await attach(
+                port=config.publish_debug_port, profile=config.publish_profile_dir,
+                start_script=r"scripts\start_chrome_publish.bat", login_hint="DE 发布账号")
+        except SystemExit as exc:
+            if run is None:
+                raise
+            raise bs.PublishStepError("发布浏览器未启动：" + str(exc)) from exc
         page = await context.new_page()
+        timezone_name = run.ui_timezone if run is not None else str(config.get("publish", "ui_timezone", ""))
         return await month_inventory.read(
-            page, ui_timezone=str(config.get("publish", "ui_timezone", "")),
+            page, ui_timezone=timezone_name,
             business_timezone=bs.business_timezone(),
-            timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)))
+            timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)),
+            run=run)
     finally:
         try:
             if page is not None:

@@ -59,8 +59,10 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const locked = detail.status === 'content_locked'
   const eligible = locked
   const lockable = ['pending_review', 'edited'].includes(detail.status) && !!options.data?.lockable
+  const previewMissing = locked && !!options.data && !options.data.preview
   const reason = approvalDisabledReason({ editing, busy, fetching: options.isFetching, eligible, status: detail.status,
     optionsFailed: options.isError, available: !!options.data?.available, when })
+    || (previewMissing ? (options.data?.reason || '冻结内容无法读取，请重新确认') : '')
 
   const lock = async () => {
     if (!options.data?.fingerprint || busy) return
@@ -109,7 +111,7 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,
     snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover,
-    open: () => { if (deploymentStore.canStartEditing() && !reason && options.data) setSnapshot({ detail: structuredClone(detail), body: approvalBody(detail, when, options.data) }) },
+    open: () => { if (deploymentStore.canStartEditing() && !reason && options.data?.preview) setSnapshot({ detail: structuredClone(detail), body: approvalBody(detail, when, options.data) }) },
     refresh: async () => { await refresh(); await options.refetch(); setError(null); setOperation(null) } }
 }
 export type ApprovalController = ReturnType<typeof useApproval>

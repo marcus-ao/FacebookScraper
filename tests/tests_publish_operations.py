@@ -63,14 +63,16 @@ class PublishOperationTests(unittest.TestCase):
             source = SimpleNamespace(account_dir=self.f.account, row=self.f.source)
             with patch.dict(os.environ, FBSCRAPER_CONTROL_DIR=str(control)), \
                     patch.object(web_approval, '_source', return_value=source), \
-                    patch.object(web_approval.approval, 'options', return_value={'available': True}), \
+                    patch.object(web_approval.approval, 'options', return_value={
+                        'available': True, 'reason': '', 'preview': {'target': self.f.params['publish_target']}}), \
                     patch.object(web_approval.approval, 'approve', side_effect=approve):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=('192.168.10.21', 41000)),
                                             base_url=network['public_base_url'],
                                             headers={'Origin': network['public_base_url']}) as client:
                     response = await client.post('/api/tasks/fa_example/x/approve', json={
                         'scheduled_at': fixtures.TARGET.isoformat(), 'content_fingerprint': 'fixture',
-                        'review_revision': locked['revision']})
+                        'review_revision': locked['revision'],
+                        'publish_target': self.f.params['publish_target']})
                 self.assertEqual(response.status_code, 202, response.text)
                 await asyncio.wait_for(started.wait(), timeout=3)
                 pending = list(web_approval._running)

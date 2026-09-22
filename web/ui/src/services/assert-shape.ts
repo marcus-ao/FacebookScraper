@@ -185,6 +185,7 @@ export const APPROVAL_OPTIONS_SHAPE: ShapeSpec = {
   fingerprint: shape.nullable(shape.string),
   lockable: shape.boolean,
   lock_reason: shape.string,
+  preview: shape.nullable(shape.object),
   platform: PLATFORM,
   business_timezone: shape.string,
   audience_timezone: shape.string,

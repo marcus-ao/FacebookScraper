@@ -48,6 +48,10 @@ class ProbeRequired(RuntimeError):
 class PublishStepError(RuntimeError):
     """某一步在真实 UI 上失败了（定位没找到、回读对不上、页面不可用）。"""
 
+    def __init__(self, message, *, suggestions=()):
+        super().__init__(message)
+        self.suggestions = tuple(suggestions)
+
 
 @dataclass(frozen=True)
 class AccountContext:
