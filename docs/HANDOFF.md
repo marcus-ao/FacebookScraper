@@ -63,6 +63,8 @@
 
 **减少动画偏好下的弹层定位。** 全局把 `transition-duration` 设成非零的 `0.01ms !important`，会让弹层的同步测量读到 `-1000vh` 的过渡起点，菜单跑到屏幕外（隔离 Chromium 实测 `y=-7300`）。⛔ **过渡时间必须是 `0s`**，动画时长可以留 `0.01ms`；机制见[上游 #618](https://github.com/react-component/trigger/issues/618)。
 
+**采集表的每页条数。** 运行状态「新帖采集状态」在浏览器里对当前记录分页。`pagination.pageSize` 是受控值；写成固定的 `10` 时，条数菜单的选择会在配置合并里被盖回 10。初始条数用 `defaultPageSize`，并显式打开条数选择。离开本页或整页刷新不要求记住条数。离线证据：`tests_browser_workflow.test_13_capture_table_page_size_follows_the_size_changer`，78 条夹具，在工作树 `state/monitor-page-size/`。
+
 **上传绕过刷新等待的测试写法。** 按钮禁用时直接设置隐藏文件输入会绕过页面的刷新等待，得到 409。测试要点击可用按钮后经文件选择器上传，不放宽业务版本检查，也不自动重试。
 
 **开发代理的 Host。** Vite 代理改写 Host 之后与浏览器 Origin 不符，会被来源检查拒绝；开发代理保留原 Host。
@@ -435,6 +437,52 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)；工作树仍保留供续查。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `b7e235c`。
+Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
+打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
+`tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
+[run 35590918182 的取证](../state/ci-evidence-35590918182/offline-validation-20260921T105323Z/results.json)：
+`tests_story_insights` 300.02 秒、退出码 124，另外 103 个脚本全绿；同目录日志显示它被杀之前跑完了 23 个测试里的 17 个、
+没有失败，照这个速度整文件在 CI 上要约 400 秒。
+
+⚠️ **"本机 287.97 秒、只剩十几秒余量"这个前提已经过期。** 那次
+[本机全量](../state/story-insights-ci-timeout/local-20260921T103033Z-results.json)跑的是 **20** 个测试，
+早于 `a773b51` 加进来的聚合 Post 一类；当前 main 的 23 个测试在同一台机器空闲时要
+[356.23 秒](../state/story-insights-ci-timeout/baseline-single-quiet.log)，本机也已经越线。
+上一轮把它压到 237.80 秒，这一轮再加三个场景就又满了——症状不是某处变慢，是一个脚本装了四类详情。
+
+**没有调高上限，两个理由。** 其一，要盖住现在的 356 秒得放到 420 秒以上，等于把这条线整轮往后挪；
+其二，"CI 机器慢"这个说法不成立：[同一份提交的逐脚本对照](../state/story-insights-ci-timeout/ci-vs-local.json)里
+104 个脚本只有 8 个在 CI 上更慢，其余比率多在 0.5–0.8，而更慢的那几个都是靠固定等待的浏览器脚本，也只到 1 附近
+——`tests_month_inventory` 1.12、`tests_browser_workflow` 1.01、`tests_publish_v2` 0.99。
+这个文件的耗时几乎全是等待：23 个测试各起一次隔离 Chromium，四个带 subTest 的负向用例逐项等身份核验超时，
+仅这四个就占整文件 56%（56.88 / 52.26 / 48.82 / 41.95 秒，见
+[逐测试计时](../state/story-insights-ci-timeout/baseline-durations.log)）。这些等待压不下去，压下去就是削弱判据。
+
+**按场景拆成四个脚本，判据一条没动。** 隔离浏览器、月历夹具和 `month.read` 收进 `tests/month_detail_fixtures.py`，
+四个脚本各留自己的响应与 DOM 夹具：`tests_story_insights`（跨发 Story，10 项）、`tests_published_media`（6 项）、
+`tests_story_facebook_only`（4 项）、`tests_aggregate_post`（3 项），合计仍是原来的 23 个测试；
+[逐条对照](../state/story-insights-ci-timeout/split-equivalence.json)记录方法体与夹具常量的比对结果，
+只另删掉基线里零引用的 `COLLABORATORS`。浏览器逐测试隔离、负向五秒等待、默认 300 秒上限均不变，
+新场景以后各自开脚本，不再往同一个文件里叠。
+
+**验证：离线通过。** [全量 107/107](../state/offline-validation-20260922T034246Z/results.json)退出码均为 0，
+最长的 `tests_story_insights` 153.39 秒（预算的 51%），另外三个 71.80 / 68.67 / 65.70 秒；
+四个合计 359.56 秒，与同机同条件下未拆分文件的 356.23 秒相当，拆分本身没有可观成本。
+前端 32 个文件 589 项单测通过，生产构建通过并保留既有大 chunk 提示。
+⚠️ 本机计时会被并行会话拖慢，[另一轮全量](../state/offline-validation-20260922T024841Z/results.json)与别的会话并行，
+脚本普遍慢到 2–2.4 倍：四个脚本 275.80 / 138.34 / 129.83 / 121.12 秒仍全部通过且留在预算内，
+未拆分的文件在同样负载下必然越线。同一轮里 `tests_browser_workflow` 因界面 5 秒预算红了 7 项，
+机器空闲后同一脚本 13 项全过（[单跑](../state/story-insights-ci-timeout/browser-workflow-quiet.log) 101.05 秒、
+上面那次全量里 95.61 秒）；它与本轮改动无关——production 侧只改了地址更新器，没有任何模块导入它。
+并回 `b7e235c`（带监测分页修复与其浏览器用例）后重建前端并
+[定向复跑](../state/offline-validation-20260922T055248Z/results.json)：四个脚本加 hygiene、服务地址、
+`tests_browser_workflow` 共 7/7 通过，前端 589 项单测通过。本节及 §1.26 引用的证据已按 SHA-256 保全到主检出同名目录，
+清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
+同一条发布闸上的 `tests_service_address` 间歇失败另见
+[§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
+不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的判据与状态不变。
+
 ### 1.26 服务地址引用与飞书历史链接核查（2026-09-21）
 
 用户确认旧地址出现在**改址前已发送的历史卡片**。此时两份当前配置均为 `http://10.66.6.3:8765`；新卡片生成链没有遗漏第三份源码入口配置。发现并修复了显式源码网络环境变量的读取差异：Web 原本读取该 JSON，飞书却回退 TOML；现在二者共用显式策略，受管 `host.json` 仍优先。README 的过期办公入口与 heartbeat 注释中的旧 IP 已移除，使用配置引用，避免下次改址再次过期。
@@ -454,6 +502,21 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 | 其他工作树、测试夹具、旧制品和历史文档示例 | 版本/验证副本，不参与当前源码进程；保留历史数值与证据 |
 
 **验证状态：离线通过。** [修前](../state/offline-validation-20260921T080707Z/results.json)复现显式源码 JSON 未控制飞书入口；[修后](../state/offline-validation-20260921T080811Z/results.json)更新器 12 项与 Web 策略 15 项通过；[相关回归](../state/offline-validation-20260921T081120Z/results.json)飞书、通知路由、webhook、更新器、Web 策略及仓库卫生检查共 6/6 脚本通过。新增集成覆盖实际改址后 11 组按钮生成场景及端口同步，原帖链接保持；隔离发件箱中新事件使用新入口，已发送及结果未知的投递不改写、不重发。没有给真实群发消息，服务机与客户端可达性仍为 **待真实联调**。证据在本功能工作树与主检出各保留一份，校验见 [保全清单](../state/service-address-audit/preservation.json)。
+
+**2026-09-22 续：改址后同进程仍按旧地址生成链接，`tests_service_address` 在 CI 上因此间歇性红。**
+main 上 `67daab4`、`5a3152c`、`1d75df6` 三次运行的取证里它都失败（2.47 / 2.27 / 2.53 秒），
+中间 `d7b7cd9` 那次却通过，本机怎么跑都绿。
+⚠️ 根因是一次"看不出来"的改写：新旧地址等长，`config.toml` 改写后大小不变（185→185），
+而 Windows 的最后写入时间取自约 15.6 毫秒一跳的时钟，夹具写入与改写可能落在同一跳。
+`cfg()` 正是按 `(mtime_ns, size)` 这一对判断要不要重读，于是本进程继续拿旧的 `[feishu].base_url` 生成全部按钮。
+CI 日志里只看到三条断言，是因为 `tools/test_offline` 失败时只回显日志末 3500 字符，前面九条被截掉——
+本机复现时 12 条断言全红，与"只有三条不对"看着像两回事。
+修复照 `core/operating_settings.py` 的既有做法：`update_address` 写完 `config.toml` 后调用
+`core.config.invalidate_cfg_cache()`，回滚路径同样失效缓存。两个通过 `cfg()` 读配置的用例改用
+`update_inside_one_timestamp_tick` 显式还原改写前的 mtime，判据不再依赖时钟运气。
+[修前](../state/story-insights-ci-timeout/service-address-red.log)12 条失败、
+[修后](../state/story-insights-ci-timeout/service-address-green.log)12 项通过。
+`scripts/update_service_address.bat` 是独立进程、改完还要重启服务，真实链路没有发出过旧链接；这条修的是同进程写后读。
 
 ### 1.27 原图不可用按原因分类、过期地址恢复与陈旧人工项退役（2026-09-21）
 

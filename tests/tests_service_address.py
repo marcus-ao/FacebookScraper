@@ -50,6 +50,19 @@ class AddressTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return updater.update_address(self.root, *args, **kwargs)
 
+    def update_inside_one_timestamp_tick(self, *args, **kwargs):
+        """Update, then give config.toml back the mtime it had before the rewrite.
+
+        ⚠️ Windows takes the last-write time from a clock that advances in ~15.6 ms steps,
+        and both addresses are the same length, so the fixture write and the rewrite can
+        share one `(mtime, size)` — the pair `cfg()` compares. Left to the clock this is a
+        coin flip: the same assertions passed here and failed on the CI runner.
+        """
+        before = self.config.stat()
+        result = self.update(*args, **kwargs)
+        os.utime(self.config, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return result
+
     def snapshot(self):
         return self.network.read_bytes(), self.config.read_bytes()
 
@@ -151,7 +164,7 @@ class AddressTests(unittest.TestCase):
         ]
         with patch.object(config, '_cfg', cached), patch.dict(os.environ, FBSCRAPER_NETWORK_CONFIG=''):
             self.assertEqual(FeishuSettings.load().base_url, 'http://10.66.4.9:8765')
-            self.update('10.66.6.3/24', port=9876)
+            self.update_inside_one_timestamp_tick('10.66.6.3/24', port=9876)
             for kind, payload, suffix in cases:
                 with self.subTest(kind=kind, suffix=suffix):
                     payload = {**payload, 'permalink': 'https://www.instagram.com/p/original/'}
@@ -178,7 +191,7 @@ class AddressTests(unittest.TestCase):
                 raise TimeoutError('fixture')
             old.dispatch(now, timeout)
             before = path.read_bytes()
-            self.update('10.66.6.3/24')
+            self.update_inside_one_timestamp_tick('10.66.6.3/24')
             self.assertEqual(path.read_bytes(), before)
             current = Outbox(path, FeishuSettings.load())
             current.enqueue('new', 'system', {'run_id': 'new'}, now)

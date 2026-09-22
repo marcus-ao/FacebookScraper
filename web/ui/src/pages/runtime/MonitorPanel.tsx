@@ -27,7 +27,9 @@ export function MonitorPanel({ data, busy, action }: { data: MonitorStatus | und
     {Object.entries(data.baselines).map(([platform, baseline]) => <p key={platform}>{platform} 基线：最近 {baseline.lookback_days} 天已核对 {baseline.recent_count} 篇 · 启用 <ShanghaiTime at={baseline.enabled_at} /></p>)}
     {data.revision !== null && (data.status === 'paused' || Object.values(data.platforms).some(p => p.paused)) && <Button disabled={busy} onClick={() => open('monitor')}>登记处理说明并恢复监测</Button>}
     {(key || scan) && <p><Link to="/runtime">查看全部采集记录</Link></p>}
-    <Table<CaptureItem> rowKey="key" size="small" dataSource={[...items].reverse()} pagination={{ pageSize: 10 }} scroll={{ x: 820 }} columns={[
+    {/* ⚠️ pageSize 是受控值，会盖掉条数选择；defaultPageSize 只定初始 10 条。 */}
+    <Table<CaptureItem> rowKey="key" size="small" dataSource={[...items].reverse()} scroll={{ x: 820 }}
+      pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100] }} columns={[
       { title: '原帖', render: (_, item) => <>{item.platform} · {item.post_id}<br />{categories[item.classification] ?? '时间待核对'}</> },
       { title: '结果', render: (_, item) => <>{item.status === 'complete' ? '完整' : item.status === 'manual' ? '待人工' : item.status === 'deferred' ? '尚未开始，等待后续扫描' : '采集中'}<br />已校验 {item.saved_images ?? '未知'} / {item.source_media_count ?? '总数待核对'} 张{item.reason && <p>{item.reason}</p>}</> },
       { title: '发现 / 结束（北京时间）', render: (_, item) => <><ShanghaiTime at={item.first_seen_at} /><br /><ShanghaiTime at={item.finished_at} /><br />发现等待 {item.discovery_wait_seconds == null ? '未知' : `${Math.round(item.discovery_wait_seconds / 60)} 分钟`} · 本次抓取 {item.capture_seconds == null ? '未知' : `${Math.round(item.capture_seconds)} 秒`}</> },
