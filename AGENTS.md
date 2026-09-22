@@ -79,7 +79,7 @@ npm.cmd --prefix web/ui run build                 # 浏览器回归需要 dist
 
 ## 五、Windows 上的三个坑
 
-- ⛔ **别用 `rm -rf` 删工作树目录。** MSYS 的 `rm -rf` 对符号链接只删链接本身，对 Windows 目录联接（`mklink /J`）却会进去删**目标内容**——而工作树里的 `.venv`、`node_modules`、`archive/`、`state/` 都可能是指回主检出的联接。2026-09-22 清理残壳时，一条 `rm -rf .worktrees/story-insights-timeout` 顺着 `.venv` 联接把主检出的环境删得只剩 3 个当时被占用的 `.exe`，所有并行会话一起失去环境。那次删掉的只是可重装的依赖，同一条命令指向 `archive/` 或 `state/` 就是删真相源，**不可重建**。先用 `cmd //c dir /AL <目录>` 查联接，删用不穿联接的 `cmd //c rmdir /S /Q <目录>`。
+- ⛔ **别用 `rm -rf` 删工作树目录。** MSYS 的 `rm -rf` 对符号链接只删链接本身，对 Windows 目录联接（`mklink /J`）却会进去删**目标内容**——而工作树里的 `.venv`、`node_modules`、`archive/`、`state/` 都可能是指回主检出的联接。2026-09-22 清理残壳时，一条 `rm -rf .worktrees/story-insights-timeout` 顺着 `.venv` 联接把主检出的环境删得只剩 3 个当时被占用的 `.exe`，所有并行会话一起失去环境。那次删掉的只是可重装的依赖，同一条命令指向 `archive/` 或 `state/` 就是删真相源，**不可重建**。查联接用 `cmd //c dir //AL //S //B "<目录>"`，删用不穿联接的 `cmd //c rmdir //S //Q "<目录>"`。**开关必须写双斜杠**：Git Bash 会把 `/S` 当成路径改写掉，`dir /AL` 于是报 `Invalid switch`、`rmdir /S /Q` 报 `Parameter format not correct`——而 `dir` 那条失败时只是没有输出，看起来和"没有联接"一模一样。
 - **`scripts/*.bat` 必须是 CRLF**，裸 LF 会让 cmd 误解析整行，表现为 "'xxx' 不是内部或外部命令"。`.gitattributes` 已规定，`tests_hygiene` 检查 [5] 会验。
 - **`*.py` / `*.md` / `*.toml` 必须是 LF。** 用 Python 批量改文件时记得 `newline=""`——默认换行翻译会把读进来的 `\n` 写成 `\r\n`，把 LF 文件变成 CRLF。这个坑刚让 `config.toml` 变成 CRLF，再经夹具二次翻译成 `\r\r\n`，浏览器回归里报出一个完全看不出是换行问题的 TOML 解析错误。
 
