@@ -657,6 +657,82 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_text("这一张已换成人工图片，模型优化不会被采用", exact=True)).to_be_visible()
         self.assertFalse((self.fixtures.root / "state/paid_requests.jsonl").exists())
 
+    def test_13_capture_table_page_size_follows_the_size_changer(self):
+        """Client-side capture table: the size changer must change the rows actually shown."""
+        payload = runtime_payload()
+        items = []
+        for index in range(78):
+            number = f"{index:03d}"
+            items.append({
+                "key": f"facebook:neakasaofficial:{number}", "scan_id": "scan-keep" if index < 12 else "scan-other",
+                "status": "complete", "post_id": f"post-{number}", "platform": "facebook",
+                "account_dir": "fa_neakasaofficial", "classification": "new", "reason": None,
+                "archived": True, "saved_images": 1, "source_media_count": 1,
+                "source_media_complete": True, "media_complete": True,
+                "first_seen_at": "2026-09-20T00:00:00Z", "finished_at": "2026-09-20T00:00:01Z",
+                "permalink": None, "discovery_wait_seconds": 60, "capture_seconds": 1})
+        payload["monitoring"] = {
+            "status": "ready", "revision": 3, "capture_revision": 4, "reason": None,
+            "baselines": {"facebook": {"enabled_at": "2026-09-01T00:00:00Z", "lookback_days": 30, "recent_count": 78}},
+            "platforms": {"facebook": {"paused": False, "failures": 0, "reason": None,
+                "next_due_at": "2026-09-20T01:00:00Z", "homepage_used": 1, "homepage_limit": 24,
+                "detail_used": 1, "detail_limit": 12}},
+            "items": items}
+        self.responses[("GET", "/api/runtime")] = {"body": payload}
+        self.page.goto(self.fixtures.base_url + "/runtime")
+        panel = self.page.get_by_role("region", name="新帖采集状态", exact=True)
+        rows = panel.locator("tbody tr.ant-table-row")
+
+        def choose(size):
+            panel.locator(".ant-pagination-options-size-changer").click()
+            self.page.locator(".ant-select-dropdown:visible .ant-select-item-option-content").filter(
+                has_text=re.compile(rf"^{size}\b")).click()
+
+        def expect_window(size, count, last_page, first_post):
+            expect(panel.locator(".ant-pagination-options-size-changer")).to_contain_text(f"{size} 条/页")
+            expect(rows).to_have_count(count)
+            expect(rows.first).to_contain_text(first_post)
+            expect(panel.locator(f".ant-pagination-item-{last_page}")).to_have_count(1)
+            expect(panel.locator(f".ant-pagination-item-{last_page + 1}")).to_have_count(0)
+
+        expect_window(10, 10, 8, "post-077")
+        choose(20)
+        expect_window(20, 20, 4, "post-077")
+        choose(50)
+        expect_window(50, 50, 2, "post-077")
+        choose(100)
+        expect_window(100, 78, 1, "post-077")
+        expect(rows.last).to_contain_text("post-000")
+        choose(10)
+        panel.locator(".ant-pagination-item-5").click()
+        expect(rows.first).to_contain_text("post-037")
+        choose(100)
+        expect_window(100, 78, 1, "post-077")
+        expect(rows.last).to_contain_text("post-000")
+        with self.page.expect_response(lambda response: response.request.method == "GET" and response.url.endswith("/api/runtime")) as refreshed:
+            self.page.get_by_role("button", name="刷新状态", exact=True).click()
+        self.assertEqual(refreshed.value.status, 200, refreshed.value.text())
+        expect_window(100, 78, 1, "post-077")
+
+        self.page.goto(self.fixtures.base_url + "/runtime?scan=scan-keep")
+        expect(panel).not_to_contain_text("post-012")
+        expect_window(10, 10, 2, "post-011")
+        panel.locator(".ant-pagination-item-2").click()
+        expect(rows).to_have_count(2)
+        expect(rows.first).to_contain_text("post-001")
+        expect(rows.last).to_contain_text("post-000")
+        choose(20)
+        expect_window(20, 12, 1, "post-011")
+        expect(rows.last).to_contain_text("post-000")
+
+        key = "facebook:neakasaofficial:005"
+        self.page.goto(self.fixtures.base_url + "/runtime?capture=" + quote(key, safe=""))
+        expect(rows).to_have_count(1)
+        expect(rows.first).to_contain_text("post-005")
+        expect(panel).not_to_contain_text("post-004")
+        expect(panel.locator(".ant-pagination-item-2")).to_have_count(0)
+        self.assertEqual(self.writes, [])
+
 
 if __name__ == "__main__":
     unittest.main()
