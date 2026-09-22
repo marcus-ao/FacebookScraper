@@ -298,6 +298,37 @@ class StorageContractTests(unittest.TestCase):
         self.assertEqual(store.media_storage_info(self.arc.base, self.arc.rows()[0])[0]['sha256'],
                          hashlib.sha256(png('blue')).hexdigest())
 
+    def video_post(self, url, source_media_id='17900000000000001'):
+        return store.Post('123', 'instagram', 'neakasa.global', 'P1 Pro launch',
+                          '2026-08-31T20:00:00Z',
+                          media=[store.Media(url, 'video', source_media_id=source_media_id)],
+                          source_media_complete=True, source_media_count=1)
+
+    def test_rotating_video_address_is_not_a_source_change(self):
+        # 同一条视频在两轮响应里的地址：主机、路径里的对象句柄、efg/vs/oh/oe 全换了一遍。
+        # 真实 Meta 响应就是这样，固定不变的只有 source_media_id。
+        first = ('https://instagram.fbom33-1.fna.fbcdn.net/o1/v/t2/f2/m86/AQN1aaa_1.mp4'
+                 '?efg=eyJ2ZW5jb2RlX3RhZyI6InEifQ%3D%3D&vs=17800000000000001_1'
+                 '&_nc_ht=instagram.fbom33-1.fna.fbcdn.net&oh=00_AfAaaa&oe=6AA7C003')
+        second = ('https://instagram.flhe5-2.fna.fbcdn.net/o1/v/t2/f2/m86/AQN9zzz_2.mp4'
+                  '?efg=eyJ2ZW5jb2RlX3RhZyI6InIifQ%3D%3D&vs=17800000000000001_2'
+                  '&_nc_ht=instagram.flhe5-2.fna.fbcdn.net&oh=00_AfAzzz&oe=6AB0FF77')
+        self.assertTrue(self.arc.append(self.video_post(first)))
+        self.assertFalse(self.arc.should_append(self.video_post(second)),
+                         '视频只存元数据，地址轮换不是来源变化 —— 否则每轮扫描都白重采一遍')
+        # 指向了另一条视频仍然要重采，这条判据不能被上面那句一起放倒。
+        self.assertTrue(self.arc.should_append(self.video_post(second, '17900000000000002')))
+
+    def test_image_address_change_still_counts_as_a_source_change(self):
+        # 图片落了字节，地址是取回那些字节的凭据 —— 放宽视频不能顺手放宽图片。
+        original = self.post(url='https://cdn.invalid/v/t51/s1080x1080/a.jpg?stp=dst-jpg_e35&oe=6AA7C003')
+        original.media[0].source_media_id = '17900000000000001'
+        self.arc.append(original)
+        derivative = self.post(url='https://cdn.invalid/v/t51/s640x640/a.jpg?stp=dst-jpg_e15&oe=6AB0FF77')
+        derivative.media[0].source_media_id = '17900000000000001'
+        self.assertTrue(self.arc.should_append(derivative),
+                        '同一张图的另一个尺寸派生仍须核验，不能当成签名刷新放过')
+
     def test_download_rechecks_directory_after_concurrent_classification(self):
         initial = self.post(url='https://cdn.invalid/a.png')
         self.save_image(initial)

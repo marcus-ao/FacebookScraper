@@ -87,6 +87,25 @@ def same_media_locator(old: dict, new: Media) -> bool:
     return locator(old.get('url')) == locator(new.url)
 
 
+def same_source_media(old: dict, new: Media) -> bool:
+    """归档里的这一项和来源里的这一项是不是同一条媒体。
+
+    图片落了字节，地址就是取回那些字节的凭据，仍按 `same_media_locator` 核对。
+    视频按设计只存元数据——归档里没有任何会变旧的字节，而 Meta 每次响应都换一批
+    地址（边缘主机、路径里的对象句柄、efg/vs/oh/oe 全是临时的）。拿地址比视频，
+    等于每轮扫描都把同一条视频判成"来源变了"：2026-09-22 的真实扫描里视线内 3 篇
+    视频帖全部重采，8 篇图片帖一篇没有，就是这条判据在响。视频只认 `source_media_id`
+    ——`content_revision()` 早就是这么认的，这里跟它对齐。
+    """
+    if old.get('kind') != new.kind:
+        return False
+    if new.kind != 'video':
+        return same_media_locator(old, new)
+    # 两边都没有身份时地址也证明不了什么（它本来就每次都变），不据此重采。
+    return not ((old.get('source_media_id') or new.source_media_id)
+                and old.get('source_media_id') != new.source_media_id)
+
+
 def signed_url_expiry(url: str | None) -> datetime | None:
     """Meta CDN 图片地址的失效时刻；没有 `oe` 参数时返回 None（失效时间未知）。
 
@@ -1343,7 +1362,7 @@ class Archive:
             if item.get('sha256') and media.sha256:
                 if item['sha256'] != media.sha256:
                     return True
-            elif item.get('url') != media.url and (media.kind != 'video' or not same_media_locator(item, media)):
+            elif item.get('url') != media.url and not same_source_media(item, media):
                 return True
         return False
 
