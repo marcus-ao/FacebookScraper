@@ -379,10 +379,11 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F5-5 FB 单渠道 Story 读取 | 离线通过 | 该页无渠道页签也无 IG 根；身份取 `tofu_object_insights.entity.entity_id`=content_id，页名取同响应里 `id` 等于 `entity_info.lwi_info.page_id` 的页节点 | ⚠️ `supported_actions[*]…owner.entity_id` 是 profile 标识不是发布页；`tofu_business_content` 不带 content_id 无法绑定，时刻仍按表头与日期格比对；`relationships` 记空 | `tests_story_facebook_only` 4 项：完整读取、六种未绑定拒绝、IG 徽标仍等自己的页签、迟挂载页签报 `channel_tabs` |
 | F5-5 渠道页签按表头徽标等待 | 离线通过 | 页签晚于表头挂载，只数一次会把双平台详情读成单渠道；表头两个徽标即等待其页签，单徽标维持原路径并保留事后页签核对 | 聚合详情逐渠道的响应结构尚未取证，IG 侧在聚合视图下仍无身份适配器 | `tests_published_media::test_a_two_platform_header_waits_for_its_own_channel_tabs`（旧代码复现服务机的 `['channel']`） |
 | F5-5 聚合 Post 逐渠道读取 | 离线通过 | 该类详情无 tabpanel，选中渠道就地改写同一表头；成员表取 `tofu_entity` 根实体的 `cross_posted_entities`，名字按成员自己的 entity/owner 两个 ID 回接 | ⚠️ 各渠道分钟与正文不同（7:17/7:18），时刻只要求至少一个变体匹配日期格；`viewer_actor` 是登录账号；该版 FB 预览 permalink 不带 `story_fbid`，ID 只从响应取 | `tests_aggregate_post` 3 项：双渠道各自身份与分钟、六种未绑定拒绝、表头未跟随选中渠道时拒绝 |
-| F5-5 月历展示/公开观察代码 | 离线通过 | 截至时间/范围/完整性/stale/busy，公开以 remote ID 和明确观察为准，不按时钟推算 | 真实新 scheduled 形态另验 | runtime recovery/浏览器 UI：未知不报公开，建议不计帖子 |
+| F5-5 月历展示/公开观察代码 | 离线通过 | 同步新鲜度与明细缺口分开；未读卡片可展示。格子上的已发布/定时仅表示有 insights 链接，不写入公开观测；公开仍以 remote ID 和完整详情为准 | 真实新 scheduled 形态另验 | `tests_runtime_recovery`、`tests_calendar_api`、`CalendarPage.test.tsx` |
+| F5-5 占用与明细分层 | 离线通过 | 网格对齐即可更新缓存；`cards_in_range` 在目标前后 90 分钟内拒绝未知渠道，时刻未核实或旧缓存缺字段时不借外层时间排除；目标回读核相关范围，远端删除仍要求整月 `decision_complete` | 服务机整月、全部类型和新排期尚未验收 | 定向证据见 [HANDOFF §1.33](HANDOFF.md#133-月历同步与占用分层2026-09-23) |
 | F5-6 提交前实时复核 | 离线通过 | 缓存仅提示，持发布锁重读；目标范围未知即拒绝；读完后只读核对正文、图片数量/顺序、账号、唯一渠道和时间，再耐久记录意图、单击 | 真实账号表单与远端图片另验 | `tests_occupancy_range`、`tests_final_form`、规划/批准/回读测试；等待中改正文/图片/日期/时间/开关均不写提交意图；证据见 HANDOFF §1.31 |
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |
-| F5-8 ZIP/人工结转 | 离线通过 | 包完整后 `handed_off`；缺德语图标原图；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |
+| F5-8 ZIP/人工结转 | 离线通过 | 包完整后 `handed_off`；每张图片使用有效德语图，或对当前原图作明确确认；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |
 | F5-9 发布锁/不确定恢复 | 离线通过 | Web/CLI/Planner 同锁，中断只补证据充分投影，不重提 | 真实 Planner 核对另验 | `tests_publication_recovery`：重复恢复、缺冻结版、ambiguous 阻塞 |
 | S2-1 单渠道控件录证 | 待真实联调 | 2026-09-20 被动 probe 已收到；专用 `channel_controls.json` 仍须重录，FB 成功截图中 Story 开启 | 9223 会话 | 控件名称采集与迁移校验修复为离线通过，见 [HANDOFF §1.21](HANDOFF.md#121-g1-录证迁移与静态控件名称2026-09-20)；不升级为单渠道提交验收 |
 | S2-1 G1 共通控件与录制验收 | 真实通过 | 2026-09-20 用户接受 IG 复用 FB 详情结构，确认北京时间并取消 UI 边界测量前置；五项结构信号及因果链通过，G1 关闭 | 原 JSON 与同名截图目录须保全；无需重复录制 | [原始录制只读验收](../state/publish-probe-g1/g1_acceptance.json)；适配代码为离线验证，不升级成 IG 实际提交或 G8 通过 |

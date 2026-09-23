@@ -24,7 +24,8 @@ NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
 WINDOW = ScheduleWindow("fixture", timedelta(minutes=20), timedelta(days=30), "America/Los_Angeles")
 SLOT = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)  # Berlin 06:00, LA Sep 30 21:00
 ROWS = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, date(2026, 9, 1), date(2026, 9, 30),
-                          (RemotePlannerCard(SLOT, ("facebook",), (("facebook", "123456"),), "Manual post", placement="feed"),), True)
+                          (RemotePlannerCard(SLOT, ("facebook",), (("facebook", "123456"),), "Manual post",
+                                             placement="feed", time_verified=True),), True)
 
 
 class CalendarApiTests(unittest.TestCase):
@@ -93,32 +94,36 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(data["bounds"]["facebook"]["end_exclusive"], "2026-10-01T07:00:00+00:00")
         self.assertFalse(self.state.exists())
 
-    def test_partial_attempt_has_separate_cards_coverage_and_safe_failure_reason(self):
+    def test_an_unreadable_item_updates_the_month_and_reports_itself_without_leaking(self):
+        """明细读不出来的条目照常进这个月，页面不再被整体标成过期。
+
+        它自己仍然可数：unresolved_count 加一，诊断保留结构而不带正文或 URL。
+        """
         self.populate()
         failure = PlannerItemError({'date':date(2026,9,4)},
             {'index':0,'time':'6:39 PM','text':'private caption','href':'https://example.test/?token=secret'},
             'published_detail', DetailReadError(
                 'missing_fields', placement='story', missing_fields=('owner',)))
-        partial = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, ROWS.visible_start, ROWS.visible_end,
+        unread = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, ROWS.visible_start, ROWS.visible_end,
             (RemotePlannerCard(SLOT, placement='story', read_status='incomplete'),), True, (failure.diagnostic,))
         later = NOW + timedelta(minutes=1)
         with patch('web.api.calendar.current_time', return_value=later), \
-                patch('web.api.calendar.read_live_inventory', AsyncMock(return_value=partial)):
+                patch('web.api.calendar.read_live_inventory', AsyncMock(return_value=unread)):
             result = self.client.post('/api/calendar/refresh')
             data = result.json()
-        self.assertEqual(result.status_code,502)
-        self.assertEqual(data['status'],'partial')
-        self.assertEqual(data['cached_at'],NOW.isoformat())
-        self.assertEqual(data['cards'][0]['rendered'],'Manual post')
-        self.assertEqual(data['partial_cached_at'],later.isoformat())
-        self.assertEqual(data['partial_cards'][0]['placement'],'story')
-        self.assertTrue(data['coverage']['decision_complete'])
-        self.assertTrue(data['attempt_coverage']['entries_complete'])
-        self.assertFalse(data['attempt_coverage']['decision_complete'])
-        self.assertEqual(data['attempt_coverage']['unresolved_count'],1)
-        self.assertIn('必要业务字段',data['error'])
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(data['status'],'ready')
+        self.assertEqual(data['cached_at'],later.isoformat())
+        self.assertEqual(data['cards'][0]['placement'],'story')
+        self.assertEqual(data['cards'][0]['read_status'],'incomplete')
+        self.assertFalse(data['stale'])
+        self.assertIsNone(data['error'])
+        self.assertTrue(data['coverage']['grid_complete'])
+        self.assertFalse(data['coverage']['decision_complete'])
+        self.assertTrue(data['coverage']['occupancy_complete'])
+        self.assertEqual(data['coverage']['unresolved_count'],1)
         self.assertEqual(data['refresh_diagnostic']['missing_fields'],['owner'])
-        self.assertTrue(data['stale'])
+        self.assertNotIn('partial_cards',data)
         for private in ('private caption','token=secret'):
             self.assertNotIn(private,result.text)
 

@@ -127,8 +127,9 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
         return SlotDecision(False, "calendar_incomplete")
 
     def occupancy(at):
+        # 严格小于间隔才算冲突；边界上的卡片由 include_bounds=False 排除。
         return tuple(aware_utc(card.at) for card in inventory.cards_in_range(
-            channel, at-gap, at+gap, include_bounds=False))
+            channel, at - gap, at + gap, include_bounds=False))
 
     try:
         occupied = occupancy(utc_target)

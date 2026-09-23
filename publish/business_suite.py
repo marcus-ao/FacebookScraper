@@ -150,6 +150,7 @@ class RemotePlannerCard:
     relationships: tuple[str, ...] = ()
     read_status: str = 'complete'
     source_content_id: str = ''
+    # 缺省为假：旧缓存没有该字段时不能把外层时刻当成已核实。
     time_verified: bool = False
     diagnostic_index: int | None = None
 
@@ -183,22 +184,37 @@ class RemoteSlotInventory:
         return (self.cards_loaded
                 and all(card.channels and set(card.channels) <= {"facebook", "instagram"}
                         for card in self.cards)
+                and self.occupancy_complete)
+
+    @property
+    def occupancy_complete(self) -> bool:
+        """网格占用与卡片时刻对齐；不证明渠道、正文或聚合变体已读全。"""
+        return (self.cards_loaded
+                and all(set(card.channels) <= {"facebook", "instagram"} for card in self.cards)
                 and {card.at.timestamp() for card in self.cards}
                 == {item.timestamp() for item in self.occupied})
 
     def occupied_for_channel(self, channel: str) -> tuple[datetime, ...]:
+        """列出已标记渠道的时刻；空档许可另由 cards_in_range 判断。"""
         if channel not in {"facebook", "instagram"}:
             raise ValueError("未知目标渠道：%s" % channel)
-        if not self.decision_complete:
-            raise ProbeRequired("Planner 渠道信息不完整，不能把未识别卡片当作空档")
+        if not self.occupancy_complete:
+            raise ProbeRequired("Planner 槽位与卡片对不上，不能把未读取的时刻当作空档")
         # UTC 时间戳去重，避免同一 ZoneInfo 的 fold 比较吞掉回拨时刻。
         selected = {card.at.timestamp(): card.at for card in self.cards
                     if channel in card.channels}
         return tuple(selected[key] for key in sorted(selected))
 
+    def unverified_moments(self) -> tuple[datetime, ...]:
+        """渠道未知卡片的观测时刻；不授权相邻分钟排期。"""
+        if not self.occupancy_complete:
+            raise ProbeRequired("Planner 槽位与卡片对不上，不能把未读取的时刻当作空档")
+        selected = {card.at.timestamp(): card.at for card in self.cards if not card.channels}
+        return tuple(selected[key] for key in sorted(selected))
+
     def cards_in_range(self, channel: str, start: datetime, end: datetime, *,
                        include_bounds: bool = True) -> tuple[RemotePlannerCard, ...]:
-        """Unverified variant times cannot borrow an aggregate card's clock."""
+        """目标范围内的已核实同渠道卡片；未知渠道或时刻证据拒绝空档。"""
         if channel not in {'facebook', 'instagram'} or start.timestamp() > end.timestamp():
             raise ValueError('无效的月历渠道或时间范围')
         if (not self.cards_loaded or not self.covers((start, end))

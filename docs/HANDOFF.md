@@ -300,8 +300,8 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 本地实现将位置、媒体形式、发布状态、账号/渠道、关系与读取状态分开；明确无正文提示转换为空正文状态。
 媒体形式缺少结构证据时保留 unknown，不从缩略图猜单图/视频/轮播。已发布详情按元数据与独立渠道证据读取，
 不等待互动统计。无证据的类型/身份继续形成未核实条目，不计为推荐时段或空档。
-部分结果单独保存 `partial_inventory/partial_observed_at`；此前完整数据与观测时间保留。
-槽位判断、排期回读和远端删除登记必须使用决策完整的数据。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
+当时部分结果单独保存 `partial_inventory/partial_observed_at`；2026-09-23 的缓存迁移见 [§1.33](#133-月历同步与占用分层2026-09-23)。
+槽位判断须证实目标范围空闲；目标排期回读核实相关卡片，远端删除登记仍须整月决策完整。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
 
 **2026-09-21 服务机现场：9 月 4 日两个渠道已真实通过（`complete=true`），整月仍 partial，7 条未核实。**
 日期格与条目本身读全了（`2026-08-30`–`2026-10-03`、`grid_complete`、`entries_complete` 均 true），缺口按类型分五类：
@@ -753,6 +753,16 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 两张表在设置页只读展示。保存端点只接受默认时刻和挂起天数。付费入口严格解析：缺表当作空名单；名单里的空字符串、坏表、冻结名单超出品牌名单，或 `[targets]` 落在冻结名单上，都停止付费。监测告警用宽松解析，坏表当空集继续报。抓取入口只拦能读出的冻结目标；名单结构读不出来时不中止轮次。大小写和首尾空白在付费、告警和抓取入口都归一。
 
 **验证状态：离线通过。** [原分支 6 个脚本](../state/offline-validation-20260923T033817Z/results.json)覆盖品牌角色、完整性哨兵、内容级许可、初翻、运营设置与 hygiene；[集成复验 6 个脚本](../state/offline-validation-20260923T034200Z/results.json)还覆盖来源指纹 v2 与旧许可。设置形状单测 56 项通过。页面标签、浏览器场景、审校与回填的先前结果仍在 `state/offline-validation-20260922T130248Z/`、`state/offline-validation-20260922T130139Z/` 与 `state/offline-validation-20260922T130521Z/`。原分支这四份目录的 16 个文件已按 SHA-256 复制到本工作树，清单在 `state/brand-evidence-copy-20260923.json`；证据不随 Git 提交。全部使用隔离归档与临时配置，没有真实账号、模型或发布。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 拉取这份配置并重启后，用真实合作帖核对分流：`.tech`、`.de`、`Neakasa Deutschland` 作为目标帖合作者时走既有付费或内容级许可，未授权第三方仍停在人工许可，监测目标仍是 `neakasaofficial` 与 `neakasa.global`。开发机离线测试不能代替这一步。
+
+### 1.33 月历同步与占用分层（2026-09-23）
+
+日历分支 `claude/calendar-data-sync-fix-646a9e` 的功能提交 `3e12010` 已进入本集成线。网格与卡片时刻对齐即可更新主缓存；`status` 只表示同步新鲜度。未读明细留在卡片、`diagnostics` 和 `unresolved_count`。不再保存 `partial_inventory`；读到旧缓存的该字段及 `partial_observed_at` 时丢弃。页面同步可用不等于发布许可。
+
+空档确认使用 `cards_in_range`。同渠道且 `time_verified` 的卡片严格小于 90 分钟才冲突；目标相关范围内渠道未知则拒绝确认，不给出把未知渠道当某一渠道的建议。独立时刻未核实或旧缓存缺 `time_verified` 时，不能借外层卡片时刻证明条目在范围外。聚合变体各自核时；`occupancy_complete` 只说明网格时刻集合对齐，不证明详情或每个变体已读。格子时钟按 `%I:%M %p` 解析，秒和微秒为零；夏令时回拨的两个绝对时刻分别保留。
+
+`has_href` 只影响未读卡片的展示状态。公开观测仍要求 `delivery=published`、`read_status=complete` 和已绑定远端 ID。提交基线及结果回读按目标时刻核完整正文、账号、唯一渠道、ID 和前后因果；已证明在目标范围外的异常不阻断，相关未知项继续拒绝。远端删除核实仍要求整月 `decision_complete`。提交前的编辑器最终复核也保留，不能用页面图片代替 G8 远端详情。
+
+**验证状态：离线通过。** 原分支[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过，[月份读取](../state/offline-validation-20260923T033459Z/results.json)通过；同次 Story 脚本因 300 秒上限中止，[复跑](../state/offline-validation-20260923T034141Z/results.json)用 343.77 秒通过。三份原分支日志的 12 个文件已按 SHA-256 复制到本树，见 `state/calendar-evidence-copy-20260923.json`。本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过；[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/ui-regression/browser-stage-f.json)通过，均未连接真实账号。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
 
 ## 2. 红线
 

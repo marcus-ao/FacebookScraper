@@ -7,6 +7,7 @@ from publish.channel_evidence import accounts
 
 
 def matching(inventory, when, final_text, target_channels):
+    # 网格对齐不证明目标卡片详情；按目标时刻核验，范围外的详情缺口不参与本次回读。
     if len(target_channels) != 1:
         raise bs.PublishStepError('排期回读必须且只能有一个目标渠道')
     try:

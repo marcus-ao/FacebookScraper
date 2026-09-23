@@ -577,7 +577,7 @@ export interface CalendarCard {
   readonly at_business: string
   readonly channels: readonly Platform[]
   readonly card_sha256: string
-  /** 除 published、scheduled 外均显示待核验。 */
+  /** 除 published、scheduled 外均显示待核验；read_status 非 complete 时它只是格子上的推断。 */
   readonly delivery: string
   readonly rendered: string
   readonly remote_ids?: Readonly<Partial<Record<Platform, string>>>
@@ -587,6 +587,9 @@ export interface CalendarCard {
   readonly accounts?: Readonly<Partial<Record<Platform, string>>>
   readonly relationships?: readonly string[]
   readonly read_status?: 'complete' | 'unsupported' | 'unavailable' | 'incomplete' | 'legacy'
+  /** 为假时不能用这张卡的时刻证明它落在目标范围外。旧缓存缺这个字段时按未核实。 */
+  readonly time_verified?: boolean
+  readonly diagnostic_index?: number | null
   readonly audience?: AudienceMoment | null
 }
 
@@ -643,9 +646,6 @@ export interface CalendarPayload {
   readonly refresh_status: string | null
   readonly age_seconds: number | null
   readonly cards: readonly CalendarCard[]
-  readonly partial_cards?: readonly CalendarCard[]
-  readonly partial_cached_at?: string | null
-  readonly attempt_coverage?: CalendarCoverage | null
   readonly refresh_diagnostic?: Readonly<Record<string, unknown>> | null
   /** 本地图层只作展示；占用判定永远只看远端读到的 cards。 */
   readonly local: readonly CalendarLocalEntry[]
@@ -674,6 +674,8 @@ export interface CalendarCoverage {
   readonly entries_complete?: boolean
   readonly classification_complete?: boolean
   readonly decision_complete?: boolean
+  /** 网格与卡片时刻对齐。不表示渠道、正文或每个聚合变体都已读取。 */
+  readonly occupancy_complete?: boolean
   readonly unresolved_count?: number
 }
 

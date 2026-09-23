@@ -437,22 +437,29 @@ def stage_f(page, ui):
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
-    partial={**data,'status':'partial','refresh_status':'failed','stale':True,'error':'Story 缺少独立渠道身份',
-        'partial_cached_at':'2026-09-20T08:00:00Z','attempt_coverage':{**data['coverage'],'decision_complete':False},
-        'partial_cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
-                          'channels':[],'read_status':'incomplete'}]}
-    ui.overrides[('POST','/api/calendar/refresh')]=(502,partial)
+    # 明细读不出来的条目照常进这个月：整月不再被标成过期，卡片自己说明它是什么。
+    unread={**data,'status':'ready','refresh_status':'refreshed','stale':False,'error':None,
+        'coverage':{**data['coverage'],'decision_complete':False,'unresolved_count':1},
+        'cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
+                  'card_sha256':'story','delivery':'published','read_status':'complete'},
+                 {**data['cards'][0],'placement':'unknown','caption_status':'unknown','rendered':'',
+                  'card_sha256':'unread','channels':[],'read_status':'incomplete','delivery':'scheduled'}]}
+    ui.overrides[('POST','/api/calendar/refresh')]=(200,unread)
     page.get_by_role('button',name='刷新月历',exact=True).click()
-    expect(page.get_by_text('部分结果 · 不可判断空档',exact=True)).to_be_visible()
-    expect(page.get_by_text('渠道待确认',exact=True)).to_be_visible()
-    expect(page.get_by_text('Story 缺少独立渠道身份',exact=True)).to_be_visible()
-    expect(page.get_by_text(re.compile('上次完整读取：'))).to_be_visible()
+    expect(page.get_by_text('后台定时任务',exact=True)).to_be_visible()
+    expect(page.get_by_text('明细未读取',exact=True)).to_be_visible()
+    expect(page.get_by_text('渠道未读取',exact=True)).to_be_visible()
+    expect(page.get_by_text('此条尚未核实',exact=True)).to_have_count(0)
+    expect(page.get_by_text('数据可能已过期',exact=True)).to_have_count(0)
+    page.get_by_role('button',name=re.compile('后台定时任务')).click()
+    expect(page.get_by_text('这条的明细没读出来。展示上的已发布或定时只说明格子里有没有链接，不能当作公开事实，也不能据此确认可排时段。',exact=True)).to_be_visible()
+    page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name=re.compile('Story')).click()
     expect(page.get_by_text('此内容无独立正文',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
-    page.screenshot(path=str(EVIDENCE/'calendar-partial-story.png'))
+    page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
     return {'F':'PASS','published_scheduled_distinct':True,'failure_payload_cards_retained':True,
-            'partial_story_separate':True,'empty_caption_not_placeholder':True,
+            'unread_item_still_occupies':True,'empty_caption_not_placeholder':True,
             'refresh_body':{},'empty_day_min_height':min(heights)}
 
 

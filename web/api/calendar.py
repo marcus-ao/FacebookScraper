@@ -18,7 +18,6 @@ _ERRORS = {
     "timeout": "刷新超时，保留上次读取的数据。",
     "coverage_unavailable": "未能确认本次日历覆盖的月份，保留上次读取的数据。",
     "read_failed": "未能读取发布日历，请检查发布浏览器后重试。",
-    "items_incomplete": "日期格已读取，但部分详情尚未核实；排期时按目标渠道和相关时段重新核验。",
     "cache_unavailable": "月历缓存无法读取，请联系维护人员检查。",
 }
 
@@ -79,14 +78,6 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             cards.append({**card, "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
     cards.sort(key=lambda item: item["at"])
-    partial = inventory_from_cache({'inventory':snapshot.get('partial_inventory')})
-    partial_cards = []
-    for card in (snapshot.get('partial_inventory') or {}).get('cards', []):
-        at = datetime.fromisoformat(card['at'])
-        if at.astimezone(ui_zone).strftime('%Y-%m') == local.strftime('%Y-%m'):
-            partial_cards.append({**card, 'at_business':at.astimezone(business_zone).isoformat(),
-                                  'audience':planning.audience_local(at)})
-    partial_cards.sort(key=lambda item:item['at'])
 
     def coverage(value):
         return {'grid_complete': bool(value and value.cards_loaded),
@@ -94,6 +85,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                 'classification_complete': bool(value and value.classification_complete),
                 'decision_complete': bool(value and value.decision_complete),
                 'channels_complete': bool(value and value.channels_complete),
+                'occupancy_complete': bool(value and value.occupancy_complete),
                 'unresolved_count': sum(card.read_status!='complete' for card in value.cards) if value else 0,
                 'visible_start': str(value.visible_start) if value and value.visible_start else None,
                 'visible_end': str(value.visible_end) if value and value.visible_end else None,
@@ -122,14 +114,12 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             diagnostic['date'], diagnostic['time'], stages.get(diagnostic['stage'], '条目读取'))
         error += _DETAIL_ERRORS.get(diagnostic.get('code'), '条目读取失败') + '。'
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
-            "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable", "partial"} or
+            "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable"} or
                      snapshot.get('refresh_status')=='failed' or
                      bool(snapshot.get("observed_at") and not matches),
             "error": error, "refresh_diagnostic": diagnostic,
             "refresh_status": snapshot.get("refresh_status"),
             "age_seconds": snapshot.get("age_seconds"), "cards": cards,
-            "partial_cards": partial_cards, "partial_cached_at": snapshot.get('partial_observed_at'),
-            "attempt_coverage": coverage(partial) if partial else None,
             "local": local_layer, "local_error": local_error,
             "coverage": coverage(inventory),
             "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 90),

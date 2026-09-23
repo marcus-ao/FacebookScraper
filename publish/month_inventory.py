@@ -396,7 +396,10 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
                                            card_spec=card_spec)
             except PlannerItemError as exc:
                 diagnostics.append(exc.diagnostic)
-                material = {'channels': (), 'remote_ids': {}, 'text': '', 'delivery': 'unknown',
+                # has_href 只区分展示：有 insights 链接看成已发布，否则看成定时。
+                # 这不是详情核实过的公开事实，时刻也还没按变体独立核对。
+                material = {'channels': (), 'remote_ids': {}, 'text': '',
+                            'delivery': 'published' if exc.diagnostic['has_href'] else 'scheduled',
                             'placement': exc.diagnostic['placement'],
                             'time_verified': False, 'diagnostic_index': len(diagnostics)-1,
                             'read_status': 'unsupported' if exc.diagnostic['code']=='unsupported_type' else

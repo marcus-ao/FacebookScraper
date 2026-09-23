@@ -15,34 +15,46 @@ function render(data: CalendarPayload) {
   </QueryClientProvider>).replace(/<[^>]+>/g, '')
 }
 
-describe('月历完整缓存与部分读取', () => {
-  it('部分 Story 独立展示、提示未核实并保留完整缓存时间', () => {
+describe('月历同步展示', () => {
+  it('明细未读取的卡片照常占位，说清它是已发布还是定时任务', () => {
     const base = fixture as unknown as CalendarPayload
     const card = base.cards[0]!
-    const data: CalendarPayload = { ...base, status: 'partial', stale: true,
-      error: '条目必要字段缺失', refresh_status: 'failed',
-      partial_cached_at: '2026-09-04T11:00:00+00:00',
-      partial_cards: [{ ...card, placement: 'story', channels: [], caption_status: 'empty',
-        rendered: '', read_status: 'incomplete', delivery: 'published' }],
-      attempt_coverage: { ...base.coverage, matches_current_month: true, decision_complete: false },
+    const data: CalendarPayload = { ...base, status: 'ready', stale: false, error: null,
+      refresh_status: 'refreshed',
+      cards: [{ ...card, placement: 'unknown', channels: [], caption_status: 'unknown',
+        rendered: '', read_status: 'incomplete', delivery: 'scheduled' }],
+      coverage: { ...base.coverage, matches_current_month: true, decision_complete: false,
+        unresolved_count: 1 },
     }
     const text = render(data)
-    expect(text).toContain('Story')
-    expect(text).toContain('渠道待确认')
-    expect(text).toContain('此条尚未核实')
-    expect(text).toContain('部分结果 · 不可判断空档')
-    expect(text).toContain('上次完整读取：')
-    expect(text).toContain('条目必要字段缺失')
-    expect(text).not.toContain('本次完整读取的月份中没有内容记录')
+    expect(text).toContain('后台定时任务')
+    expect(text).toContain('明细未读取')
+    expect(text).toContain('渠道未读取')
+    // 四个「待核实」占位没有信息量；未读的卡片不再显示位置/形式那一行。
+    expect(text).not.toContain('此条尚未核实')
+    expect(text).not.toContain('位置待识别')
+    expect(text).not.toContain('形式待核实')
+    // 两条读不出明细的卡片不再把整月染成过期。
+    expect(text).not.toContain('数据可能已过期')
+    expect(text).toContain('不能用来确认任何目标时刻空闲')
+    expect(text).not.toContain('只挡它自己那一分钟')
+    expect(text).not.toContain('本次读取的月份中没有内容记录')
   })
 
-  it('读取失败且无完整性证据时不能把空数组显示为完整空月历', () => {
+  it('读取失败时保留上次数据并说明失败，不把空数组显示为空月历', () => {
     const base = fixture as unknown as CalendarPayload
-    const text = render({ ...base, cards: [], status: 'partial', stale: true,
-      error: '尚有未识别内容', refresh_status: 'failed',
-      coverage: { ...base.coverage, decision_complete: false },
+    const text = render({ ...base, cards: [], status: 'stale', stale: true,
+      error: '未能读取发布日历，请检查发布浏览器后重试。', refresh_status: 'failed',
     })
-    expect(text).toContain('尚有未识别内容')
-    expect(text).not.toContain('本次完整读取的月份中没有内容记录')
+    expect(text).toContain('未能读取发布日历')
+    expect(text).not.toContain('本次读取的月份中没有内容记录')
+  })
+
+  it('覆盖范围仍有缺口时不把空卡片数组宣称为空月份', () => {
+    const base = fixture as unknown as CalendarPayload
+    const text = render({ ...base, cards: [], status: 'ready', stale: false,
+      coverage: { ...base.coverage, matches_current_month: true, decision_complete: false },
+    })
+    expect(text).not.toContain('本次读取的月份中没有内容记录')
   })
 })

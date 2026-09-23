@@ -18,9 +18,12 @@ WINDOW = ScheduleWindow("offline-fixture", timedelta(minutes=20), timedelta(days
 
 
 def inventory(*entries, start=date(2026, 9, 1), end=date(2026, 9, 30)):
-    cards = tuple(RemotePlannerCard(at=at, channels=channels, rendered="fixture", placement="feed", time_verified=True)
-                  for at, channels in entries)
-    return RemoteSlotInventory(tuple(card.at for card in cards), UI, start, end,
+    cards = tuple(RemotePlannerCard(
+        at=entry[0], channels=entry[1], rendered="fixture", placement="feed",
+        time_verified=entry[2] if len(entry) > 2 else True)
+        for entry in entries)
+    occupied = tuple(dict((card.at.timestamp(), card.at) for card in cards).values())
+    return RemoteSlotInventory(tuple(sorted(occupied, key=lambda at: at.timestamp())), UI, start, end,
                                cards=cards, cards_loaded=True)
 
 
@@ -38,7 +41,8 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(evaluate_slot(now, 'facebook', rows, now=now, window=window).allowed)
 
         target = now + timedelta(minutes=90)
-        occupied = RemotePlannerCard(at=target, channels=('facebook',), rendered='fixture', placement='feed', time_verified=True)
+        occupied = RemotePlannerCard(at=target, channels=('facebook',), rendered='fixture',
+                                     placement='feed', time_verified=True)
         rows = RemoteSlotInventory((target,), 'Asia/Shanghai', date(2026, 9, 1), date(2026, 9, 30),
                                    cards=(occupied,), cards_loaded=True)
         result = evaluate_slot(target, 'facebook', rows, now=now, window=window)
@@ -83,11 +87,55 @@ class PlanningTests(unittest.TestCase):
         self.assertTrue(all(abs((a-b).total_seconds()) >= 5400
                             for i, a in enumerate(result.suggestions) for b in result.suggestions[i+1:]))
 
-    def test_missing_channel_evidence_never_means_empty(self):
+    def test_unknown_channel_inside_the_gap_refuses_an_empty_slot(self):
+        """渠道未知的卡片不能当空档，也不能只挡住同一分钟。
+
+        格子时刻已独立核实时，它落在目标前后 90 分钟内就拒绝确认；
+        恰好 90 分钟与已核实渠道一样，不算冲突。相邻一分钟不是空档。
+        """
         target = NOW + timedelta(hours=4)
-        rows = inventory((target, ()))
+        rows = inventory((target, (), True))
+        self.assertEqual(rows.occupied_for_channel("facebook"), ())
+        self.assertEqual(rows.unverified_moments(), (target,))
+        for channel in ("facebook", "instagram"):
+            for shift in (timedelta(0), timedelta(seconds=30), timedelta(minutes=1),
+                          timedelta(minutes=89, seconds=59)):
+                result = evaluate_slot(target + shift, channel, rows, now=NOW, window=WINDOW)
+                self.assertFalse(result.allowed)
+                self.assertEqual(result.reason, "channels_unavailable")
+                self.assertEqual(result.suggestions, ())
+            self.assertTrue(evaluate_slot(target + timedelta(minutes=90), channel, rows,
+                                          now=NOW, window=WINDOW).allowed)
+
+    def test_unverified_time_cannot_be_excluded_by_an_outer_clock(self):
+        """聚合变体没有自己的时刻时，不能用外层时间证明它在目标范围外。"""
+        target = NOW + timedelta(hours=4)
+        outer = target + timedelta(hours=3)
+        rows = inventory((outer, (), False))
+        result = evaluate_slot(target, "instagram", rows, now=NOW, window=WINDOW)
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "channels_unavailable")
+        verified = RemotePlannerCard(at=outer, channels=("facebook",), rendered="fixture",
+                                     placement="feed", time_verified=True)
+        borrowed = RemotePlannerCard(at=outer, rendered="fixture", placement="feed",
+                                     read_status="incomplete", time_verified=False)
+        mixed = RemoteSlotInventory((outer,), UI, date(2026, 9, 1), date(2026, 9, 30),
+                                    cards=(verified, borrowed), cards_loaded=True)
+        self.assertTrue(mixed.occupancy_complete)
+        self.assertFalse(mixed.decision_complete)
+        self.assertEqual(evaluate_slot(target, "instagram", mixed, now=NOW, window=WINDOW).reason,
+                         "channels_unavailable")
+
+    def test_slots_and_cards_that_disagree_still_refuse_to_answer(self):
+        """卡片与观测时刻对不上，说明这次读取讲不了占用，宁可不回答。"""
+        target = NOW + timedelta(hours=4)
+        rows = RemoteSlotInventory((), UI, date(2026, 9, 1), date(2026, 9, 30),
+                                   cards=(RemotePlannerCard(at=target, rendered="fixture"),),
+                                   cards_loaded=True)
         with self.assertRaises(ProbeRequired):
             rows.occupied_for_channel("facebook")
+        with self.assertRaises(ProbeRequired):
+            rows.unverified_moments()
         result = evaluate_slot(target, "facebook", rows, now=NOW, window=WINDOW)
         self.assertEqual(result.reason, "channels_unavailable")
         self.assertFalse(result.allowed)
