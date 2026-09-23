@@ -77,7 +77,7 @@
 
 **CI 环境的三个坑。** job 级表达式取不到 `runner.temp`，要在 runner 启动后的步骤里写 `GITHUB_ENV`；runner 的账户临时目录是 `RUNNER~1` 短路径，要在 runner 下显式创建临时目录；生产运行标识不能在普通单测之前注入，否则单测会进维护状态。
 
-**品牌账号的两个角色。** `[publish.brand_accounts]` 是显式列出的品牌自有账号，不按 `neakasa.*` 前缀扩大。作为合作者时与 `[publish.trusted_owners]` 取并集，照常进入付费处理；`trusted_owners` 仍只表示第三方逐个授权。作为来源时只有 `[targets]` 会抓取、加工和发布。`[publish.frozen_sources]` 里的账号（现为 IG `neakasa.tech`）即使被写进 `[targets]`，监测和回填也会在打开浏览器前报错，不能靠改目标静默恢复抓取。`active_accounts()` 不返回品牌名单。详见 [§1.31](#131-品牌账号的来源冻结与合作者放行2026-09-22)。
+**品牌账号的两个角色。** `[publish.brand_accounts]` 是显式列出的品牌自有账号，不按 `neakasa.*` 前缀扩大。作为合作者时与 `[publish.trusted_owners]` 取并集，照常进入付费处理；`trusted_owners` 仍只表示第三方逐个授权。作为来源时只有 `[targets]` 会抓取、加工和发布。`[publish.frozen_sources]` 里的账号（现为 IG `neakasa.tech`）即使被写进 `[targets]`，监测和回填也会在打开浏览器前报错，不能靠改目标静默恢复抓取。`active_accounts()` 不返回品牌名单。详见 [§1.32](#132-品牌账号的来源冻结与合作者放行2026-09-22)。
 
 ### 1.3 证据边界
 
@@ -686,7 +686,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 `split_suspect_sources()` 把疑似节点分成「已授权来源」和「已知合作方」。已授权来源是
 `[publish.brand_accounts]` 与 `[publish.trusted_owners]` 的同平台并集；判定和丢弃行为不变。
-监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。`.de` 的划分见 [§1.31](#131-品牌账号的来源冻结与合作者放行2026-09-22)。
+监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。`.de` 的划分见 [§1.32](#132-品牌账号的来源冻结与合作者放行2026-09-22)。
 
 `.tech` 在 2026-09-22T03:01Z 仍有发帖。来源冻结表示系统不再抓取、加工或发布 `in_neakasa.tech` 自己的目录；该账号可以继续在平台发帖，也可以作为目标帖的合作者进入监测和付费。
 
@@ -744,7 +744,7 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 最终集成工作树的 [组合验证](../state/offline-validation-20260922T131016Z/results.json) 5/5 通过：原图选择与冻结、范围占用、最终表单、指纹兼容、发布恢复。[最终前端构建](../state/final-ui-build.log)通过，保留既有大 chunk 提示。各工作包的其它定向证据保留在上述独立工作树；没有运行全量或追修无关 Actions。
 
-### 1.31 品牌账号的来源冻结与合作者放行（2026-09-22）
+### 1.32 品牌账号的来源冻结与合作者放行（2026-09-22）
 
 分支 `codex/brand-account-roles`，基点 `28066f8`。用户确认品牌自有账号只有 FB `neakasaofficial`、`Neakasa Deutschland` 与 IG `neakasa.global`、`neakasa.tech`、`neakasa.de`。`.tech` 不是监测目标；它和 `.de`、`Neakasa Deutschland` 出现在两个目标账号帖子的 owner/coauthor 上时，监测与付费处理照常走，不因它们停住。
 
@@ -752,7 +752,7 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 两张表在设置页只读展示。保存端点只接受默认时刻和挂起天数。付费入口严格解析：缺表当作空名单；名单里的空字符串、坏表、冻结名单超出品牌名单，或 `[targets]` 落在冻结名单上，都停止付费。监测告警用宽松解析，坏表当空集继续报。抓取入口只拦能读出的冻结目标；名单结构读不出来时不中止轮次。大小写和首尾空白在付费、告警和抓取入口都归一。
 
-**验证状态：离线通过。** [本轮 6 个脚本](../state/offline-validation-20260923T033817Z/results.json) 覆盖品牌角色、完整性哨兵、内容级许可、初翻、运营设置与 hygiene。设置形状单测 56 项通过。页面标签、浏览器场景、审校与回填的先前结果仍在 `state/offline-validation-20260922T130248Z/`、`state/offline-validation-20260922T130139Z/` 与 `state/offline-validation-20260922T130521Z/`；本轮没有改设置页组件，也没有重跑这些脚本。隔离归档和临时配置，没有真实账号、模型或发布。证据在本工作树 `state/`，不随 Git 提交，清理前按 §1.3 保全。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 拉取这份配置并重启后，用真实合作帖核对分流：`.tech`、`.de`、`Neakasa Deutschland` 作为目标帖合作者时走既有付费或内容级许可，未授权第三方仍停在人工许可，监测目标仍是 `neakasaofficial` 与 `neakasa.global`。开发机离线测试不能代替这一步。
+**验证状态：离线通过。** [原分支 6 个脚本](../state/offline-validation-20260923T033817Z/results.json)覆盖品牌角色、完整性哨兵、内容级许可、初翻、运营设置与 hygiene；[集成复验 6 个脚本](../state/offline-validation-20260923T034200Z/results.json)还覆盖来源指纹 v2 与旧许可。设置形状单测 56 项通过。页面标签、浏览器场景、审校与回填的先前结果仍在 `state/offline-validation-20260922T130248Z/`、`state/offline-validation-20260922T130139Z/` 与 `state/offline-validation-20260922T130521Z/`。原分支这四份目录的 16 个文件已按 SHA-256 复制到本工作树，清单在 `state/brand-evidence-copy-20260923.json`；证据不随 Git 提交。全部使用隔离归档与临时配置，没有真实账号、模型或发布。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 拉取这份配置并重启后，用真实合作帖核对分流：`.tech`、`.de`、`Neakasa Deutschland` 作为目标帖合作者时走既有付费或内容级许可，未授权第三方仍停在人工许可，监测目标仍是 `neakasaofficial` 与 `neakasa.global`。开发机离线测试不能代替这一步。
 
 ## 2. 红线
 

@@ -949,8 +949,8 @@ def validate_output(payload: str, source_path: Path,
                 "模型可能整张重画，产出未写盘")
         # ⚠️ 像素一个没动**不拒绝**。它有两种成因，本地分不开：图里本来就没有要译的英文
         # （此时原样返回是对的），或者模型没照做（此时钱白花了）。人在审校台一眼能分开，
-        # 代码不能。而 [publish].require_all_media_de=true 要求每张都有德语图，在这里拒绝会让
-        # 前一种情况的帖子永远发不出去。所以只把占比记下来并在 CLI/审校台显著标出。
+        # 代码不能。发布要求每张有德语图或明确确认当前原图；在这里拒绝会让前一种情况的
+        # 帖子无从确认原图。所以只把占比记下来并在 CLI/审校台显著标出。
         return ValidatedImage(data, output.width, output.height, actual_format,
                               distance, changed)
     finally:
