@@ -28,7 +28,9 @@ def record(state_dir, inventory, observed_at):
     """Caller holds publish.lock and has just performed a live Planner read."""
     data = _load(state_dir)
     for card in inventory.cards:
-        if card.delivery != 'published':
+        # ⛔ 明细未读取的卡片，delivery 只是格子上「有 insights 链接」的推断，
+        # 不是详情页核实过的公开事实；真相源只收 read_status=complete 的观测。
+        if card.delivery != 'published' or card.read_status != 'complete':
             continue
         for channel, remote in card.remote_ids:
             if channel not in card.channels or not re.fullmatch(r'\d{6,}', remote):

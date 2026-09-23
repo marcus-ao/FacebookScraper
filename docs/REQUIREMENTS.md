@@ -366,7 +366,8 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F5-5 FB 单渠道 Story 读取 | 离线通过 | 该页无渠道页签也无 IG 根；身份取 `tofu_object_insights.entity.entity_id`=content_id，页名取同响应里 `id` 等于 `entity_info.lwi_info.page_id` 的页节点 | ⚠️ `supported_actions[*]…owner.entity_id` 是 profile 标识不是发布页；`tofu_business_content` 不带 content_id 无法绑定，时刻仍按表头与日期格比对；`relationships` 记空 | `tests_story_insights::FacebookOnlyStoryTests` 4 项：完整读取、六种未绑定拒绝、IG 徽标仍等自己的页签、迟挂载页签报 `channel_tabs` |
 | F5-5 渠道页签按表头徽标等待 | 离线通过 | 页签晚于表头挂载，只数一次会把双平台详情读成单渠道；表头两个徽标即等待其页签，单徽标维持原路径并保留事后页签核对 | 聚合详情逐渠道的响应结构尚未取证，IG 侧在聚合视图下仍无身份适配器 | `tests_story_insights::PublishedMediaTests::test_a_two_platform_header_waits_for_its_own_channel_tabs`（旧代码复现服务机的 `['channel']`） |
 | F5-5 聚合 Post 逐渠道读取 | 离线通过 | 该类详情无 tabpanel，选中渠道就地改写同一表头；成员表取 `tofu_entity` 根实体的 `cross_posted_entities`，名字按成员自己的 entity/owner 两个 ID 回接 | ⚠️ 各渠道分钟与正文不同（7:17/7:18），时刻只要求至少一个变体匹配日期格；`viewer_actor` 是登录账号；该版 FB 预览 permalink 不带 `story_fbid`，ID 只从响应取 | `tests_story_insights::AggregatePostTests` 3 项：双渠道各自身份与分钟、六种未绑定拒绝、表头未跟随选中渠道时拒绝 |
-| F5-5 月历展示/公开观察代码 | 离线通过 | 截至时间/范围/完整性/stale/busy，公开以 remote ID 和明确观察为准，不按时钟推算 | 真实新 scheduled 形态另验 | runtime recovery/浏览器 UI：未知不报公开，建议不计帖子 |
+| F5-5 月历展示/公开观察代码 | 离线通过 | 新鲜度与明细缺口分开；未读卡片可展示。格子上的已发布/定时只是有没有 insights 链接，不写入公开观测；公开仍以 remote ID 和完整详情为准 | 真实新 scheduled 形态另验 | `tests_runtime_recovery`、`tests_calendar_api`、`CalendarPage.test.tsx` |
+| F5-5 占用与明细分层 | 离线通过 | 网格对齐即可更新缓存。`cards_in_range` 在目标前后 90 分钟内拒绝未知渠道；`time_verified` 为假或旧缓存缺该字段时，不能把外层时刻当成范围外。回读和远端删除仍要求 `decision_complete` | 服务机整月、全部类型和新排期未因此验收。`state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本行证据 | 离线证据见 [HANDOFF §1.31](HANDOFF.md#131-月历同步与占用分层2026-09-23) |
 | F5-6 提交前实时复核 | 离线通过 | 缓存仅提示，持发布锁重读；未读完不能判空档 | 完整月历真实输入另验 | 缓存后新增人工项造成冲突，busy/不完整即拒绝 |
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |
 | F5-8 ZIP/人工结转 | 离线通过 | 包完整后 `handed_off`；缺德语图标原图；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |

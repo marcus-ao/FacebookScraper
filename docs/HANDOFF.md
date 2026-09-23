@@ -507,6 +507,30 @@ WinError 32/33 和读取期间的 mtime/ctime 变动限时重试，与 `localize
 最后对剩下的真实失败逐帖 `--recover-post`。步骤见
 [MANUAL_STEPS §4.2](MANUAL_STEPS.md#42-历史-ig-完整性自动核验)与 [§14 E](MANUAL_STEPS.md#e-cas-恢复与证据)。
 
+### 1.31 月历同步与占用分层（2026-09-23）
+
+工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，分支 `claude/calendar-data-sync-fix-646a9e`。
+网格与卡片时刻对齐即可更新主缓存。`status` 只表示新鲜度。未读明细留在卡片、`diagnostics` 和 `unresolved_count`。
+不再保存 `partial_inventory`；[§1.23](#123-月历内容类型兼容与无正文-story2026-09-20) 当时单独保存的那一层，读到旧缓存时丢弃。
+
+空档确认使用 `cards_in_range`。同渠道且 `time_verified` 的卡片，严格小于 90 分钟才冲突。
+目标前后 90 分钟内渠道未知则拒绝确认，不给出把未知渠道当成某一渠道的建议。
+`time_verified` 为假，或旧缓存没有该字段，不能用外层时刻证明条目在范围外。
+格子时钟按 `%I:%M %p` 解析，秒和微秒为 0；比较用绝对时间差；夏令时回拨小时保留两个绝对时刻。
+`occupancy_complete` 只说明时刻集合对齐，不证明每个聚合变体都已读取。
+
+`has_href` 只影响未读卡片的展示措辞。公开观测仍要求 `read_status=complete` 和已绑定远端 ID。
+`month_readback.matching` 与远端删除核实仍要求整月 `decision_complete`。
+
+**验证状态：离线通过。** 这不是整月或全类型真实通过。
+`state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。
+[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过。
+[月份读取](../state/offline-validation-20260923T033459Z/results.json) 通过；同一次 Story 脚本因 300 秒上限被中止，不是断言失败。
+[Story 读取复跑](../state/offline-validation-20260923T034141Z/results.json) 用 343.77 秒通过。
+写入都在隔离临时目录，解释器复用主检出 `.venv`，本树没有 `config.local.toml`。没有登录、滚历史、真实发布或付费调用。
+前端 `CalendarPage` 单测和构建没有跑成：共用 `web/ui/node_modules/antd` 缺少 `package.json`。界面文案已改，浏览器场景未复跑。
+服务机完整月份、全部内容类型和本轮新排期仍是 **待真实联调**。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

@@ -3,6 +3,7 @@ import calendar
 import sys
 import unittest
 from datetime import date
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -404,8 +405,13 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.cards),2)
         self.assertEqual([d['code'] for d in result.diagnostics], ['unsupported_type','permission_denied'])
         self.assertNotIn('Private caption', str(result.diagnostics))
-        with self.assertRaises(ProbeRequired):
-            result.occupied_for_channel('facebook')
+        # 明细没读出来，但格子上的 insights 链接已经说明这两条是后台的已发布内容。
+        self.assertEqual({card.delivery for card in result.cards}, {'published'})
+        self.assertEqual({card.read_status for card in result.cards}, {'unsupported','unavailable'})
+        # 渠道未知：授权不了任何渠道的槽位，也绝不留成空档。
+        self.assertEqual(result.occupied_for_channel('facebook'), ())
+        self.assertEqual(result.unverified_moments(), result.occupied)
+        self.assertTrue(all(card.time_verified is False for card in result.cards))
 
     async def test_published_detail_waits_for_caption_author_and_platform_but_not_metrics(self):
         await self.page.locator(month.DAY_SELECTOR).nth(31).evaluate('''el=>el.insertAdjacentHTML(
@@ -424,6 +430,21 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
             result = await month.read_item(self.page, rows[31], rows[31]['items'][0], timeout=4)
         self.assertEqual(result['variants'][0]['text'], 'Complete caption')
         self.assertEqual(result['variants'][0]['remote_ids'], {'facebook': '12345678'})
+
+
+class GridClockTests(unittest.TestCase):
+    def test_parsed_clocks_are_minute_precision_and_keep_dst_folds(self):
+        zone, business = ZoneInfo('Europe/Berlin'), ZoneInfo('Asia/Shanghai')
+        ordinary = month.moments(date(2026, 9, 4), '6:39 PM', zone, business)
+        self.assertEqual(len(ordinary), 1)
+        self.assertEqual((ordinary[0].second, ordinary[0].microsecond), (0, 0))
+        self.assertEqual(ordinary[0].astimezone(zone).strftime('%I:%M %p'), '06:39 PM')
+        folds = month.moments(date(2026, 10, 25), '2:30 AM', zone, business)
+        self.assertEqual(len(folds), 2)
+        self.assertEqual(len({item.timestamp() for item in folds}), 2)
+        self.assertEqual(len({item.astimezone(zone).utcoffset() for item in folds}), 2)
+        with self.assertRaises(PublishStepError):
+            month.moments(date(2026, 3, 29), '2:30 AM', zone, business)
 
 
 if __name__ == '__main__':

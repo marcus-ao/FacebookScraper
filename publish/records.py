@@ -125,6 +125,7 @@ async def unschedule(account, indexed, *, reason: str, inventory_reader=None, no
         if row is None:
             raise review.ReviewConflict('这篇没有可撤销的排期记录')
         inventory = await (inventory_reader or planner_cache.read_live_inventory)()
+        # 撤销核实要整月详情。网格对齐不够：未读卡片里的 remote ID 不能被当成已经删除。
         if not isinstance(inventory, bs.RemoteSlotInventory) or not inventory.decision_complete:
             raise review.ReviewConflict('这次月历没有读完整，不能据此判定卡片已被删除')
         at = datetime.fromisoformat(row['scheduled_at'])

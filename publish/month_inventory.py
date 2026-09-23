@@ -383,14 +383,25 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30):
                 material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone)
             except PlannerItemError as exc:
                 diagnostics.append(exc.diagnostic)
-                material = {'channels': (), 'remote_ids': {}, 'text': '', 'delivery': 'unknown',
+                # has_href 只区分展示：有 insights 链接看成已发布，否则看成定时。
+                # 这不是详情核实过的公开事实，时刻也还没按变体独立核对。
+                material = {'channels': (), 'remote_ids': {}, 'text': '',
+                            'delivery': 'published' if exc.diagnostic['has_href'] else 'scheduled',
                             'placement': exc.diagnostic['placement'],
+                            'time_verified': False, 'diagnostic_index': len(diagnostics)-1,
                             'read_status': 'unsupported' if exc.diagnostic['code']=='unsupported_type' else
                                            'unavailable' if exc.diagnostic['code']=='permission_denied' else 'incomplete'}
                 material = {'variants': [*exc.variants, material]}
             if material is None:
                 continue
             for variant in material.get('variants', [material]):
+                diagnostic_index = variant.get('diagnostic_index')
+                if variant.get('read_status', 'complete') != 'complete' and diagnostic_index is None:
+                    diagnostic_index = len(diagnostics)
+                    diagnostics.append({'date':row['date'].isoformat(), 'time':item['time'],
+                        'item_index':item['index'], 'stage':'detail',
+                        'code':'missing_fields', 'placement':variant.get('placement','unknown'),
+                        'missing_fields':list(variant.get('missing_fields', ()))})
                 at = variant.get('ui_at')
                 for moment in moments(at.date() if at else row['date'],
                                       at.strftime('%I:%M %p') if at else item['time'], ui_zone, business_zone):
@@ -403,6 +414,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30):
                         accounts=tuple(sorted(variant.get('accounts',{}).items())),
                         relationships=tuple(variant.get('relationships',())),
                         read_status=variant.get('read_status','complete'),
+                        time_verified=variant.get('time_verified', True), diagnostic_index=diagnostic_index,
                         source_content_id=variant.get('source_content_id','')))
     # Verify a final sweep so edits/late rendering during detail reads invalidate the inventory.
     if rows != await read_grid(page, timeout=timeout):

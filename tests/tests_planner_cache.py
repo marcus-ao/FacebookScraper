@@ -23,7 +23,8 @@ def inventory():
     return RemoteSlotInventory(
         (SLOT,), "America/Los_Angeles", date(2026, 9, 1), date(2026, 9, 30),
         (RemotePlannerCard(SLOT, ("instagram",), (("instagram", "123456"),),
-                           "Manual phone post September 12, 2026, 7:00 AM", "fixture-sha", placement='feed'),), True)
+                           "Manual phone post September 12, 2026, 7:00 AM", "fixture-sha",
+                           placement='feed', time_verified=True),), True)
 
 
 class PlannerCacheTests(unittest.TestCase):
@@ -87,29 +88,55 @@ class PlannerCacheTests(unittest.TestCase):
         self.assertIsNone(result["observed_at"])
         self.assertIsNone(inventory_from_cache(result))
 
-    def test_partial_attempt_does_not_replace_last_complete_inventory_or_its_time(self):
-        self.refresh(AsyncMock(return_value=inventory()))
-        partial = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026,9,1), date(2026,9,30),
-            (RemotePlannerCard(SLOT, placement='story', read_status='incomplete'),), True,
-            ({'code':'identity_unverified','date':'2026-09-12','time':'7:00 AM','stage':'published_detail'},))
-        result = self.refresh(AsyncMock(return_value=partial), NOW + timedelta(minutes=1))
-        self.assertEqual(result['refresh_status'], 'failed')
-        self.assertEqual(result['refresh_error'], 'items_incomplete')
-        self.assertEqual(result['observed_at'], NOW.isoformat())
-        self.assertEqual(inventory_from_cache(result).cards, inventory().cards)
-        self.assertEqual(result['partial_inventory']['cards'][0]['placement'], 'story')
-        self.assertEqual(result['partial_observed_at'], (NOW + timedelta(minutes=1)).isoformat())
-        refreshed = self.refresh(AsyncMock(return_value=inventory()), NOW + timedelta(minutes=2))
-        self.assertIsNone(refreshed['partial_inventory'])
+    def test_a_month_whose_details_are_unreadable_is_still_the_stored_sync(self):
+        """整月网格读全了，就是一次真实同步——逐条明细读不出来不作废这个月。
 
-    def test_first_partial_attempt_is_displayable_but_cannot_supply_slot_inventory(self):
+        旧行为把它降级成第二层 partial_inventory，观测时间永不前进，页面于是一直
+        说「数据可能已过期 / 不可判断空档」，而那个月的占用其实是完整的。
+        """
+        self.refresh(AsyncMock(return_value=inventory()))
+        unread = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026,9,1), date(2026,9,30),
+            (RemotePlannerCard(SLOT, placement='story', read_status='incomplete',
+                               time_verified=False, diagnostic_index=0),), True,
+            ({'code':'identity_unverified','date':'2026-09-12','time':'7:00 AM','stage':'published_detail'},))
+        result = self.refresh(AsyncMock(return_value=unread), NOW + timedelta(minutes=1))
+        self.assertEqual(result['refresh_status'], 'refreshed')
+        self.assertIsNone(result['refresh_error'])
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['observed_at'], (NOW + timedelta(minutes=1)).isoformat())
+        stored = inventory_from_cache(result)
+        self.assertEqual(stored.cards[0].read_status, 'incomplete')
+        self.assertFalse(stored.cards[0].time_verified)
+        # 那一刻仍然被占着，只是没人能说它属于哪个渠道，也不能据此确认空档。
+        self.assertEqual(stored.unverified_moments(), (SLOT,))
+        self.assertEqual(stored.occupied_for_channel('instagram'), ())
+        self.assertFalse(stored.decision_complete)
+        self.assertEqual(result['refresh_diagnostic']['code'], 'identity_unverified')
+        self.assertNotIn('partial_inventory', result)
+
+    def test_a_legacy_partial_layer_on_disk_is_dropped_instead_of_shown(self):
+        """服务机现有缓存里还留着上一版的第二层，它不能再盖住这次的读取。"""
+        self.refresh(AsyncMock(return_value=inventory()))
+        data = json.loads(self.path.read_text('utf-8'))
+        data['partial_inventory'] = data['inventory']
+        data['partial_observed_at'] = (NOW - timedelta(days=3)).isoformat()
+        self.path.write_text(json.dumps(data), encoding='utf-8')
+        snapshot = read_cache(self.path, now=NOW)
+        self.assertEqual(snapshot['status'], 'ready')
+        self.assertNotIn('partial_inventory', snapshot)
+        self.assertNotIn('partial_observed_at', snapshot)
+        self.refresh(AsyncMock(return_value=inventory()), NOW + timedelta(minutes=1))
+        self.assertNotIn('partial_inventory', json.loads(self.path.read_text('utf-8')))
+
+    def test_first_read_with_an_unreadable_item_still_becomes_a_calendar(self):
         rows = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026,9,1),date(2026,9,30),
             (RemotePlannerCard(SLOT, placement='unknown', read_status='unsupported'),),True)
         result = self.refresh(AsyncMock(return_value=rows))
-        self.assertEqual(result['status'], 'partial')
-        self.assertIsNone(result['observed_at'])
-        self.assertIsNone(inventory_from_cache(result))
-        self.assertTrue(result['partial_inventory']['cards_loaded'])
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['observed_at'], NOW.isoformat())
+        stored = inventory_from_cache(result)
+        self.assertTrue(stored.cards_loaded)
+        self.assertEqual(stored.unverified_moments(), (SLOT,))
 
     def test_item_failure_retains_safe_location_and_clears_it_after_success(self):
         self.refresh(AsyncMock(return_value=inventory()))
@@ -150,21 +177,25 @@ class PlannerCacheTests(unittest.TestCase):
         rows = RemoteSlotInventory((SLOT,), "America/Los_Angeles", date(2026, 9, 1),
                                    date(2026, 9, 30), (RemotePlannerCard(SLOT),), True)
         result = self.refresh(AsyncMock(return_value=rows))
-        self.assertEqual(result["status"], "partial")
-        self.assertIsNone(inventory_from_cache(result))
-        self.assertFalse(inventory_from_cache({'inventory':result['partial_inventory']}).channels_complete)
+        self.assertEqual(result["status"], "ready")
+        stored = inventory_from_cache(result)
+        self.assertTrue(stored.occupancy_complete)
+        self.assertFalse(stored.channels_complete)
+        self.assertFalse(stored.decision_complete)
 
     def test_legacy_cache_is_displayable_but_does_not_prove_classified_inventory(self):
         self.refresh(AsyncMock(return_value=inventory()))
         data = json.loads(self.path.read_text('utf-8'))
         for card in data['inventory']['cards']:
-            for field in ('placement','media_kind','caption_status','read_status'):
+            for field in ('placement','media_kind','caption_status','read_status','time_verified'):
                 card.pop(field)
         self.path.write_text(json.dumps(data),encoding='utf-8')
         snapshot = read_cache(self.path,now=NOW)
-        self.assertEqual(snapshot['status'],'partial')
+        # status 只讲新鲜度；「分类过没有」是卡片自己的事，两者不能再混。
+        self.assertEqual(snapshot['status'],'ready')
         loaded = inventory_from_cache(snapshot)
         self.assertEqual(loaded.cards[0].rendered,inventory().cards[0].rendered)
+        self.assertFalse(loaded.cards[0].time_verified)
         self.assertFalse(loaded.decision_complete)
 
     def test_unproven_month_does_not_replace_last_full_calendar(self):

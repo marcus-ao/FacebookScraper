@@ -1436,7 +1436,8 @@ pending_review ──编辑──> edited ──确认无误──> content_lock
 页面上必须显示**「数据截至 HH:MM」**——不显示的话业务会以为看到的是实时状态。
 
 时间子节点不等于完整卡片。读取器在单张卡片内取得正文标签，限时等待并重新读取悬浮后的完整日期/正文；
-详情须等所需业务字段稳定，无须等互动统计。未知条目仍使刷新失败，保留此前有效缓存及原观测时间。
+详情须等所需业务字段稳定，无须等互动统计。网格与卡片时刻对齐时，未读明细留在对应卡片上并更新这次同步的时间；
+时刻对不齐、覆盖不明或读取失败仍保留此前缓存及原观测时间。
 失败条目在页面报错中显示日期、UI 时刻和读取阶段；API 的 `refresh_diagnostic` 另提供条目索引与字段存在性/长度，
 不输出正文、链接参数或原始异常。`[calendar].enabled` 只控制后台刷新，页面手动刷新不受它限制。
 
@@ -1502,11 +1503,19 @@ FB Story 使用已绑定 IG 根对象的 cross_posted_entities 中唯一 TofuFBS
 媒体形式没有充分证据时保留 unknown；本轮没有自动推断单图/轮播/混合媒体，也不把未观察的状态写成 published。
 
 覆盖分别输出 `grid_complete`、`entries_complete`、`classification_complete`（位置识别）、
-`channels_complete`、`decision_complete` 和 `unresolved_count`。媒体子类型/分享关系是否已核实仍看各卡片字段，
-不因位置已识别就视为全部类型字段已知。只有决策完整的数据可进入同渠道占用、排期回读和远端删除登记。
-部分读取单独保存 `partial_inventory/partial_observed_at`，API 对应 `partial_cards/partial_cached_at/attempt_coverage`；
-`cards/cached_at/coverage` 始终属于最后一次完整数据。旧版缺少分类字段的缓存可展示，但不授予决策完整性。
-前端明确展示部分结果、未核实卡片及安全错误分类；不改变最后完整缓存的真实时间，不把空数组当完整空月历。
+`channels_complete`、`occupancy_complete`、`decision_complete` 和 `unresolved_count`。
+`occupancy_complete` 只表示每张卡的时刻与占用集合对齐。多个聚合变体可以共用一个时间戳，所以它不证明每个变体都已读取。
+媒体子类型和分享关系是否已核实仍看各卡片字段，不因位置已识别就视为全部类型字段已知。
+缓存 `status` 表示这份同步有多新。网格对齐即可更新主缓存，不再另存 `partial_inventory`；
+读到旧的 `partial_inventory`/`partial_observed_at` 时丢弃。明细缺口留在卡片的 `read_status`、`diagnostics` 和 `unresolved_count`。
+旧版缺少分类字段的缓存仍可展示，但不授予决策完整性。前端展示未读卡片及安全错误分类，不把空数组当完整空月历。
+
+空档确认走 `cards_in_range`，不走 `occupancy_complete`。同渠道且 `time_verified` 的卡片按目标时刻前后 90 分钟比较，严格小于间隔才冲突。
+目标相关时段内渠道未知则拒绝确认空档，也不给出把未知渠道当成某一渠道的建议时刻。
+`time_verified` 为假的卡片不能用外层时刻证明自己在范围外；旧缓存缺少该字段时按未核实。
+格子时刻来自 `%I:%M %p`，秒和微秒为 0。比较用绝对时间差；夏令时回拨小时保留两个绝对时刻。
+`has_href` 只把未读卡片的展示状态标成已发布或定时。公开观测只收 `delivery=published`、`read_status=complete` 且带已绑定远端 ID 的记录。
+提交前的目标卡片回读和远端删除核实仍要求整月 `decision_complete`。
 
 #### F5-6　冲突判定做成两段式
 
@@ -1519,6 +1528,7 @@ FB Story 使用已绑定 IG 根对象的 cross_posted_entities 中唯一 TofuFBS
 | **选时刻时** | 缓存（快） | **乐观提示**："这个时刻可能和 X 冲突"，并给空档 |
 | **提交前** | **实时读一次 Planner** | **悲观裁决**：最终判定，冲突则拒绝 |
 
+缓存里若有渠道未知或时刻未独立核实的条目，选时提示拒绝确认空档，不能把它们附近的分钟显示成可排。
 这样既不牺牲交互体验，也不会因为缓存过时而排重。
 
 #### F5-7　驳回后的修改循环
