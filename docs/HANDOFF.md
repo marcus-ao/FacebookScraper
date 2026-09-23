@@ -1,6 +1,6 @@
 # 项目交接
 
-**现场同步至 2026-09-22。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
+**代码与证据同步至 2026-09-23；服务机事实以各条观测日期为准。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
 
@@ -47,7 +47,7 @@
 
 按主题记，不按分支和日期记——**这些是踩过的坑，退回去就会重犯**。逐项验收状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)。
 
-**Facebook 响应结构。** Comet 的图片 URL 不在附件外层：`attachments[].media` 可能只有类型和 ID，单图实际在 `styles.attachment.media.photo_image`，相册在 `styles.attachment.all_subattachments.nodes`。相册按内部节点顺序逐项取，外层封面不另算一张。⚠️ 只有宽高、没有 `uri` 的 `viewer_image` **不是可下载地址**。缺 `attachments` 字段表示"数量未知"，只有明确的空数组才表示没有附件；已知图片不能被空片段覆盖。作者身份只接受同批响应里的明确关联——同一作者或主页对象的 ID↔URL，或 `ProfileActionMessage.profile_owner.id` 与 `/messages/t/<用户名>/` 的绑定；不从显示名、目标配置或帖子 permalink 推断，未关联的数字 ID 仍然拒绝。
+**Facebook 响应结构。** Comet 的图片 URL 不在附件外层：`attachments[].media` 可能只有类型和 ID，单图实际在 `styles.attachment.media.photo_image`，相册在 `styles.attachment.all_subattachments.nodes`。相册按内部节点顺序逐项取，外层封面不另算一张。⚠️ 只有宽高、没有 `uri` 的 `viewer_image` **不是可下载地址**。缺 `attachments` 字段表示"数量未知"，只有明确的空数组才表示没有附件；已知图片不能被空片段覆盖。作者身份只接受同批响应里的明确关联——同一作者或主页对象的 ID↔URL，或 `ProfileActionMessage.profile_owner.id` 与 `/messages/t/<用户名>/` 的绑定；不从显示名、目标配置或帖子 permalink 推断，未关联的数字 ID 仍然拒绝。已接受合作者只取该帖 `collaborators`（含 Comet 标题上的同名列表）里的 ID 与主页 URL。⚠️ 不要把 `actors` 里除主作者以外的对象改成合作者。
 
 **Instagram 响应结构。** `media_type=1` 的单图允许 `carousel_media` 为 `null` 或空数组，**字段存在本身不是轮播证据**。`media_type=8` 缺子项、未知类型或类型与轮播字段矛盾仍算不完整。视频 `kind=video` 且 `local_path=null` 是设计行为，不是下载失败。
 
@@ -89,7 +89,7 @@
 
 同日按用户确认清理 `social-media-image-verification-fix-938aa1`、`story-insights-ci-timeout`、`feishu-card-redesign` 三个工作树及本地、远端同名分支。三个分支头 `cf1ed29`、`bd8b475`、`56b80d8` 均已包含在本地与远端 `main` 的 `28066f8` 中。其全部 2,722 份 `state/` 文件已按 SHA-256 核对：1,846 份补到主检出同名路径，853 份已有相同副本，23 份同名异字节文件保存在 `state/branch-cleanup-20260922/collisions/`，没有覆盖原文件。[保全清单](../state/branch-cleanup-20260922/preservation.json)记录每份来源、去向与摘要；三树未发现业务账本、原图或凭据。
 
-`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 现已能从主检出解析。`state/calendar-data-sync-fix/` 仍只在保留的 `.claude/worktrees/calendar-data-sync-fix-646a9e` 中；该树还有未提交的月历改动，清理前须保全。其余未合入功能分支的验证仍以各自工作树为准，不能把主检出的旧同名结果当作新分支的验证。
+`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 现已能从主检出解析。`state/calendar-data-sync-fix/` 的独有证据仍由保留的 `.claude/worktrees/calendar-data-sync-fix-646a9e` 保管，清理前须保全。2026-09-23 复查时日历树 `a22ba9b` 与品牌树 `7a436f2` 均干净，功能已进入 main；本次未清理这些工作树。其余分支的验证仍以对应代码与工作树为准，不能把旧同名结果当作新版本的验证。
 
 ### 1.19 待审核列表按原帖时间降序（2026-09-19）
 
@@ -746,6 +746,10 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 2026-09-23 已合入本地 `main` 的 `af80b0c`，其证据清理事实保留在 §1.3。`tests_scheduler` 现按 publish 角色与发件箱里 `ready/sent` 的持久记录核对“内容就绪后投递、投递后关闭”，不再依赖飞书卡片标题；[修前复现](../state/offline-validation-20260923T033236Z/results.json)与[修后验证](../state/offline-validation-20260923T034105Z/results.json)保留。[最新定向复验](../state/offline-validation-20260923T041115Z/results.json) 的 scheduler、品牌、初翻和旧许可 4/4 通过。品牌与日历整合见 §1.32–§1.33。
 
+**当前主干整合：离线通过。** 发布精简线吸收 main `7a436f2`，完整保留 `2377290` 的 Facebook 已接受合作者归属修复及原有监测目标。十个冲突文件按 §1.32–§1.33 的共同规则整合；正式结果的 459 个受版本管理文件与[审计快照](../state/merge-audit-20260923T060659Z/candidate-manifest.json)逐字节一致，见[比对记录](../state/publishing-integration-20260923/resolved-tree-check.json)。快照的 [31 个定向脚本](../state/merge-audit-20260923T060659Z/validation-summary.json)、[两项抓取到许可交互](../state/merge-audit-20260923T060659Z/capture-consent-bridge.log)、[59 项前端检查](../state/merge-audit-20260923T060659Z/ui-calendar-shape.log)及[构建](../state/merge-audit-20260923T060659Z/ui-build-result.json)通过；正式工作树复验及最终比对见[交付验证](../state/publishing-integration-20260923/validation.json)。后续仅同步四份文档，未再改生产实现。
+
+本节集成日志、审计快照和 §1.32–§1.33 已收集的证据，按[SHA-256 保全清单](../state/publishing-integration-20260923/preservation.json)复制到主检出，原件保留。同名异字节的月历浏览器报告与截图保存在本次专用目录，主检出已有文件保留。四个发布子工作树仍保留各自独有证据，未清理。全部验证使用隔离归档、状态与浏览器夹具，没有新增真实服务结论。服务机切换须先核对 `config.toml` 中的数字 `asset_id` / `business_id`，单篇提交与人工撤销核验均需要它们；普通日历刷新仍走原录证入口。前后端按 §13 同步更新，旧受管版本不得混用 `truth_contract=2` 的记录，具体操作见 [MANUAL_STEPS §16.1](MANUAL_STEPS.md#161-检查现有发布能力)。G8 远端图片适配仍为 **代码未完成**。
+
 ### 1.32 品牌账号的来源冻结与合作者放行（2026-09-22）
 
 分支 `codex/brand-account-roles`，基点 `28066f8`。用户确认品牌自有账号只有 FB `neakasaofficial`、`Neakasa Deutschland` 与 IG `neakasa.global`、`neakasa.tech`、`neakasa.de`。`.tech` 不是监测目标；它和 `.de`、`Neakasa Deutschland` 出现在两个目标账号帖子的 owner/coauthor 上时，监测与付费处理照常走，不因它们停住。
@@ -766,7 +770,7 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 **验证状态：离线通过。** 原分支[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过，[月份读取](../state/offline-validation-20260923T033459Z/results.json)通过；同次 Story 脚本因 300 秒上限中止，[复跑](../state/offline-validation-20260923T034141Z/results.json)用 343.77 秒通过。该分支合入 main 后的[五脚本复验](../state/offline-validation-20260923T035236Z/results.json)也通过。这四份原分支日志的 18 个文件已按 SHA-256 复制到本树，见 `state/calendar-evidence-copy-20260923.json`。
 
-本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过。[Story 修前](../state/offline-validation-20260923T040538Z/results.json)复现旧“正文未知即空匹配”断言错误；保留拒绝把未知目标当空档的实现，改断言后 [Story 复跑](../state/offline-validation-20260923T040929Z/results.json)通过。回读成功标识改为“目标范围”，[回读红测](../state/offline-validation-20260923T040900Z/results.json)及[修后四脚本](../state/offline-validation-20260923T040916Z/results.json)保留。[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/ui-regression/browser-stage-f.json)通过。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。全部写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
+本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过。[Story 修前](../state/offline-validation-20260923T040538Z/results.json)复现旧“正文未知即空匹配”断言错误；保留拒绝把未知目标当空档的实现，改断言后 [Story 复跑](../state/offline-validation-20260923T040929Z/results.json)通过。回读成功标识改为“目标范围”，[回读红测](../state/offline-validation-20260923T040900Z/results.json)及[修后四脚本](../state/offline-validation-20260923T040916Z/results.json)保留。[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/publishing-integration-20260923/ui-regression/browser-stage-f.json)通过。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。全部写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
 
 ## 2. 红线
 

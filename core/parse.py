@@ -223,11 +223,81 @@ def _fb_slug(url: str | None, *, message_action: bool = False) -> str | None:
 
 
 def _fb_actor(node: dict) -> dict:
-    """只取主作者；其它 actors 不自动当作已接受的合作方。"""
+    """只取主作者。⚠️ 其它 actors 不是已接受合作者，不能改回从这里取 coauthors。"""
     actors = node.get("actors")
     if not (isinstance(actors, list) and actors and isinstance(actors[0], dict)):
         return {}
     return actors[0]
+
+
+def _actor_dicts(value) -> list[dict]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict) and isinstance(value.get('nodes'), list):
+        return [item for item in value['nodes'] if isinstance(item, dict)]
+    return []
+
+
+def fb_collaborator_evidence(node: dict) -> list[dict[str, str]]:
+    """已接受的 Facebook 合作者，只留 ID 与主页 URL。
+
+    直接的 `collaborators`，以及 Comet 标题路径
+    `comet_sections.context_layout.story.comet_sections.title.story.collaborators`。
+    显示名、其它 actors、提及和邀请都不算。
+    """
+    if not isinstance(node, dict):
+        return []
+    raw = _actor_dicts(node.get('collaborators'))
+    titled = node.get('comet_sections')
+    for key in ('context_layout', 'story', 'comet_sections', 'title', 'story', 'collaborators'):
+        titled = titled.get(key) if isinstance(titled, dict) else None
+    for item in _actor_dicts(titled):
+        if item not in raw:
+            raw.append(item)
+    evidence: list[dict[str, str]] = []
+    for item in raw:
+        found = _fb_evidence(item)
+        if found and found not in evidence:
+            evidence.append(found)
+    return evidence
+
+
+def _fb_resolved_label(item: dict, index: dict[str, list[dict[str, str]]]) -> str | None:
+    """把一个合作者证据归一成账号名；多个名字或只有显示名时不猜。"""
+    roots = _fb_identity_tokens(item)
+    if not roots:
+        return None
+    pending = [min(roots)]
+    reached: set[str] = set()
+    while pending:
+        token = pending.pop()
+        if token in reached:
+            continue
+        reached.add(token)
+        for linked in index.get(token, []):
+            pending.extend(_fb_identity_tokens(linked) - reached)
+    if not roots.issubset(reached):
+        return None
+    ids = {token for token in reached if token.startswith('id:')}
+    names = reached - ids
+    if len(names) == 1:
+        return min(names)
+    if names or len(ids) != 1:
+        return None
+    return min(ids)
+
+
+def _resolve_fb_coauthors(post: Post, index=None) -> Post:
+    if not post.coauthor_evidence:
+        return post
+    index = _fb_identity_index(post.coauthor_evidence) if index is None else index
+    names: list[str] = []
+    for item in post.coauthor_evidence:
+        label = _fb_resolved_label(item, index)
+        if label and label != post.owner and label not in names:
+            names.append(label)
+    post.coauthors = names
+    return post
 
 
 def _fb_evidence(actor: dict) -> dict[str, str]:
@@ -361,7 +431,7 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
     actor = _fb_actor(node)
     evidence = _fb_evidence(actor)
     ts = node.get("creation_time") or node.get("created_time")
-    return _resolve_fb_owner(Post(
+    post = _resolve_fb_owner(Post(
         post_id=str(node["post_id"]), platform="facebook", account=account,
         text=text, created_at=iso(ts) if isinstance(ts, (int, float)) else (ts or ""),
         permalink=node.get("url") or node.get("permalink_url"),
@@ -370,7 +440,9 @@ def from_fb_story(node: dict, account: str, route: str) -> Post:
         media_complete=complete, source_media_complete=complete,
         source_media_count=len(media) if complete else None,
         owner_name=actor.get('name'), owner_evidence=[evidence] if evidence else [],
+        coauthor_evidence=fb_collaborator_evidence(node),
     ))
+    return _resolve_fb_coauthors(post)
 
 
 def merge_post(current: Post, candidate: Post) -> Post:
@@ -397,6 +469,11 @@ def merge_post(current: Post, candidate: Post) -> Post:
         winner.owner_evidence = winner.owner_evidence + [
             item for item in other.owner_evidence if item not in winner.owner_evidence]
         _resolve_fb_owner(winner)
+    if winner.platform == 'facebook' and other.coauthor_evidence:
+        winner.coauthor_evidence = list(winner.coauthor_evidence)
+        winner.coauthor_evidence.extend(
+            item for item in other.coauthor_evidence if item not in winner.coauthor_evidence)
+        _resolve_fb_coauthors(winner)
     if (winner.source_media_count is None and other.source_media_count is not None
             and (winner.platform != 'facebook' or other.source_media_count >= len(winner.media))):
         winner.source_media_count = other.source_media_count
@@ -427,7 +504,7 @@ def extract(payloads: list[dict], platform: str, account: str,
                 # 同一帖可能在多个响应里出现：保留媒体更全者，同时补齐正文等字段。
                 out[post.post_id] = post if prev is None else merge_post(prev, post)
     if platform == 'facebook':
-        evidence = [item for post in out.values() for item in post.owner_evidence]
+        evidence = [item for post in out.values() for item in [*post.owner_evidence, *post.coauthor_evidence]]
         # 主页对象/消息动作显式绑定账号 ID；不能从任意链接或帖子 permalink 猜作者。
         for payload in payloads:
             for actor in walk(payload, lambda node: node.get('__typename') in ('Page', 'User', 'ProfileActionMessage')):
@@ -442,6 +519,7 @@ def extract(payloads: list[dict], platform: str, account: str,
         index = _fb_identity_index(evidence)
         for post in out.values():
             _resolve_fb_owner(post, index)
+            _resolve_fb_coauthors(post, index)
     return list(out.values())
 
 

@@ -63,9 +63,12 @@ class Post:
     # Facebook 作者对象中的 ID/主页 URL；包含用于归一化的同身份响应证据。
     owner_evidence: list[dict[str, str]] = field(default_factory=list)
     owner_conflict: bool = False
+    # 解析期间的合作者 ID/URL。归档只保留解析后的 coauthors。
+    coauthor_evidence: list[dict[str, str]] = field(default_factory=list)
 
     def to_row(self) -> dict:
         d = asdict(self)
+        d.pop('coauthor_evidence', None)
         return d
 
 

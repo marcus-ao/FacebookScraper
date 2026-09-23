@@ -9,7 +9,7 @@ from pathlib import Path
 from core.store import Archive, Post
 from core import paid_model
 from core.media import image_facts
-from core.parse import walk, is_fb_story
+from core.parse import fb_collaborator_evidence, walk, is_fb_story
 
 # 只收这些接口的响应，其余（埋点、字体、图片本体）直接跳过
 INTEREST = ("/api/graphql", "/graphql/query", "/api/v1/feed",
@@ -57,6 +57,9 @@ class Collector:
                 if is_fb_story(node):
                     value = project({k: node[k] for k in ('post_id', 'message', 'creation_time', 'created_time',
                         'url', 'permalink_url', 'actors', 'attachments') if k in node})
+                    collaborators = fb_collaborator_evidence(node)
+                    if collaborators:
+                        value['collaborators'] = collaborators
                 else:
                     value = {k: node[k] for k in ('__typename', 'id', 'url') if k in node}
                     if node.get('__typename') == 'ProfileActionMessage':

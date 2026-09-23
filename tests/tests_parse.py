@@ -387,5 +387,63 @@ check(strs[0].coauthors == ["neakasa.tech"],
 check(on_timeline_of(strs[0], "NeakasaOfficial".replace("Official", ".Tech")),
       "on_timeline_of 自己归一化 target —— 调用方传了带大写的账号名也不会静默丢光")
 
+print("\n[真实结构 6] Facebook 只认 collaborators，不认其它 actors")
+
+
+def fb_collab(pid, collaborators, *, extra_actor=False):
+    actors = [{"__typename": "User", "id": "90000000000001", "name": "Partner Page",
+               "url": "https://www.facebook.com/partner.page"}]
+    if extra_actor:
+        actors.append({"__typename": "User", "id": "61591381265280", "name": "Neakasa Official",
+                       "url": "https://www.facebook.com/neakasaofficial"})
+    return {"post_id": pid, "creation_time": 1756400000, "message": {"text": "together"},
+            "actors": actors, "attachments": photo_att, "collaborators": collaborators,
+            "url": "https://www.facebook.com/partner.page/posts/%s" % pid}
+
+
+kept_fb, rejected_fb = partition_by_owner(extract([
+    fb_collab("fb-collab", [{"id": "61591381265280", "name": "Neakasa Official",
+                             "url": "https://www.facebook.com/neakasaofficial"}]),
+], "facebook", "neakasaofficial", route="backfill"), "neakasaofficial")
+check(len(kept_fb) == 1 and kept_fb[0].owner == "partner.page"
+      and kept_fb[0].coauthors == ["neakasaofficial"],
+      "别人主发、目标在 collaborators 里的帖留下，owner 仍是主作者")
+check("coauthor_evidence" not in kept_fb[0].to_row(), "归档不保存解析用的合作者证据")
+
+nodes = fb_collab("fb-nodes", {"nodes": [
+    {"id": "61591381265280", "url": "https://www.facebook.com/NeakasaOfficial/"}]})
+check(extract([nodes], "facebook", "neakasaofficial", route="backfill")[0].coauthors
+      == ["neakasaofficial"], "collaborators.nodes 与大小写 URL 同样归一")
+
+nested = fb_collab("fb-nested", [])
+nested["comet_sections"] = {"context_layout": {"story": {"comet_sections": {"title": {"story": {
+    "collaborators": [{"id": "61591381265280", "url": "https://www.facebook.com/neakasaofficial",
+                       "access_token": "not-an-identity"}]}}}}}}
+nested_post = extract([nested], "facebook", "neakasaofficial", route="backfill")[0]
+check(nested_post.coauthors == ["neakasaofficial"], "Comet 标题里的 collaborators 算已接受合作者")
+check(nested_post.coauthor_evidence == [{"id": "61591381265280",
+                                        "url": "https://www.facebook.com/neakasaofficial"}],
+      "合作者证据只留 ID 和主页 URL")
+
+only_name, rejected_name = partition_by_owner(extract([
+    fb_collab("fb-name", [{"name": "Neakasa Official"}]),
+], "facebook", "neakasaofficial", route="backfill"), "neakasaofficial")
+check(only_name == [] and rejected_name[0]["reason"] == "owner_mismatch",
+      "只有显示名的 collaborators 不能把帖子留在目标时间线")
+
+extra_actors, rejected_actors = partition_by_owner(extract([
+    fb_collab("fb-actors", [], extra_actor=True),
+], "facebook", "neakasaofficial", route="backfill"), "neakasaofficial")
+check(extra_actors == [] and rejected_actors[0]["coauthors"] == [],
+      "actors 里除主作者以外的对象不是合作者")
+
+linked = extract([
+    fb_collab("fb-id", [{"id": "61591381265280"}]),
+    {"__typename": "Page", "id": "61591381265280", "url": "https://www.facebook.com/neakasaofficial"},
+], "facebook", "neakasaofficial", route="backfill")
+check(partition_by_owner(linked, "neakasaofficial")[0]
+      and linked[0].coauthors == ["neakasaofficial"],
+      "合作者只有数字 ID 时，同批主页 URL 可以补上账号名")
+
 print("\n" + ("全部通过" if not fails else f"{len(fails)} 项失败"))
 sys.exit(1 if fails else 0)
