@@ -35,7 +35,7 @@ def stage_c(page, ui):
     expect(page.get_by_role("link", name="Instagram 待审", exact=True)).to_be_visible()
     choose(page,"筛选月份","2026-09")
     choose(page,"筛选分类","Riko")
-    page.get_by_role("button", name="硬闸 1", exact=True).click()
+    page.get_by_role("button", name="待处理 1", exact=True).click()
     assert ui.count_list_gets() == 1, ui.requests
     synthetic=copy.deepcopy(ui.fx.detail(ui.fx.fb_id));synthetic.update(id=data['tasks'][2]['id'],status='not_ready',read_only=False)
     ui.overrides[('GET',f"/api/tasks/{synthetic['id']}")]=(200,synthetic)
@@ -255,7 +255,7 @@ def stage_d4(page, ui):
     ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=(202,running)
     ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='failed',message='提交前时刻复核未通过'))
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    field=page.get_by_role('textbox',name='发布时间（北京时间）',exact=True)
+    field=page.get_by_role('textbox',name='发布时间',exact=True)
     field.fill('2026-09-15T10:30')
     page.get_by_role('button',name='确认发布时间并排期',exact=True).click()
     page.get_by_role('button',name='确认并创建排期',exact=True).click()
@@ -270,7 +270,7 @@ def stage_d4(page, ui):
     ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='failed',
         message='这个时刻暂不能排期',result={'suggestions':['2026-09-15T11:30:00+08:00']}))
     page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
-    page.get_by_role('button',name='2026-09-15 11:30 北京',exact=True).click(timeout=15000)
+    page.get_by_role('button',name='2026-09-15 11:30',exact=True).click(timeout=15000)
     expect(field).to_have_value('2026-09-15T11:30')
     ui.overrides[('GET','/api/publish-operations/regression-op')]=(200,dict(running,status='succeeded',step_index=7,message='自动提交并回读为 scheduled'))
     scheduled=copy.deepcopy(detail);scheduled['status']='scheduled';scheduled['schedule']={'at':'2026-09-15T11:30:00+08:00','channel':detail['platform']}
@@ -398,7 +398,7 @@ def stage_d(page, ui):
         raise AssertionError('Expected DST rejection')
     ui.overrides[('POST',f'/api/tasks/{task_id}/approve')]=dst
     for value in ['2026-03-29T02:30','2026-10-25T02:30']:
-        page.get_by_role('textbox',name='发布时间（北京时间）',exact=True).fill(value)
+        page.get_by_role('textbox',name='发布时间',exact=True).fill(value)
         page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
         expect(page.get_by_text('这个时刻在夏令时切换中不存在或出现两次，请选择其他时刻',exact=True)).to_be_visible()
     ui.overrides.pop(('GET',f'/api/tasks/{task_id}'))
@@ -426,18 +426,18 @@ def stage_f(page, ui):
     ui.overrides[('GET','/api/calendar')]=(200,data)
     ui.overrides[('POST','/api/calendar/refresh')]=(503,{**data,'stale':True,'error':'fixture failure','cards':[data['cards'][0]]})
     page.goto(ui.fx.base_url+'/calendar',wait_until='networkidle')
-    expect(page.get_by_text('已观测到公开发布',exact=True)).to_be_visible();expect(page.get_by_text('已创建定时任务',exact=True)).to_be_visible()
+    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('定时',exact=True)).to_be_visible()
     assert '公开发布正文' not in page.locator('main').inner_text()
-    page.get_by_role('button',name=re.compile('已观测到公开发布')).click();expect(page.get_by_text('公开发布正文',exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('已发布')).click();expect(page.get_by_text('公开发布正文',exact=True)).to_be_visible()
     page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name='刷新月历',exact=True).click()
     expect(page.get_by_text('本次月历未完整更新',exact=True)).to_be_visible()
     expect(page.get_by_text('fixture failure',exact=True)).to_be_visible()
-    expect(page.get_by_text('已观测到公开发布',exact=True)).to_be_visible();expect(page.get_by_text('已创建定时任务',exact=True)).to_have_count(0)
+    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('定时',exact=True)).to_have_count(0)
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
-    # 明细读不出来的条目照常进这个月：整月不再被标成过期，卡片自己说明它是什么。
+    # 明细读不出来的条目照常进这个月：整月不再被标成过期，卡片用警告短签标明。
     unread={**data,'status':'ready','refresh_status':'refreshed','stale':False,'error':None,
         'coverage':{**data['coverage'],'decision_complete':False,'unresolved_count':1},
         'cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
@@ -446,15 +446,13 @@ def stage_f(page, ui):
                   'card_sha256':'unread','channels':[],'read_status':'incomplete','delivery':'scheduled'}]}
     ui.overrides[('POST','/api/calendar/refresh')]=(200,unread)
     page.get_by_role('button',name='刷新月历',exact=True).click()
-    expect(page.get_by_text('后台定时任务',exact=True)).to_be_visible()
-    expect(page.get_by_text('明细未读取',exact=True)).to_be_visible()
-    expect(page.get_by_text('渠道未读取',exact=True)).to_be_visible()
-    expect(page.get_by_text('此条尚未核实',exact=True)).to_have_count(0)
+    expect(page.get_by_text('定时',exact=True)).to_be_visible()
+    expect(page.get_by_text('未读全',exact=True)).to_be_visible()
     expect(page.get_by_text('数据可能已过期',exact=True)).to_have_count(0)
-    page.get_by_role('button',name=re.compile('后台定时任务')).click()
-    expect(page.get_by_text('这条的明细没读出来。展示上的已发布或定时只说明格子里有没有链接，不能当作公开事实，也不能据此确认可排时段。',exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('定时')).click()
+    expect(page.get_by_text('这条的明细没读出来，不能据此确认可排时段。',exact=True)).to_be_visible()
     page.get_by_role('heading',name='发布月历',exact=True).click()
-    page.get_by_role('button',name=re.compile('Story')).click()
+    page.get_by_role('button',name=re.compile('已发布')).click()
     expect(page.get_by_text('此内容无独立正文',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
     page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
@@ -464,28 +462,18 @@ def stage_f(page, ui):
 
 
 def stage_g(page, ui):
-    base=ui.fx.client.get('/api/settings').json()
-    page.goto(ui.fx.base_url+'/review',wait_until='networkidle');page.locator('aside').get_by_role('link',name='运营设置',exact=True).click()
-    field=page.get_by_role('textbox',name='默认排期时间（北京）');field.fill('11:00, 18:30')
-    page.get_by_role('spinbutton',name='默认挂起期限').fill('5')
-    assert page.locator('main input:not([type="hidden"])').count()==2
+    # 未保存守卫的载体从已下线的设置页换成详情页草稿。
+    page.goto(ui.fx.base_url+'/review/facebook',wait_until='networkidle')
+    page.goto(ui.fx.base_url+'/review/'+ui.fx.fb_id,wait_until='networkidle')
+    page.get_by_role('button',name='编辑德语',exact=True).click()
+    field=page.get_by_role('textbox',name='德语正文');field.fill('Entwurf: ungespeichert')
     assert page.evaluate("()=>{const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented}")
     page.locator('aside').get_by_role('link',name='历史归档',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='留在本页').click()
     expect(page.get_by_role('dialog')).to_have_count(0)
     page.evaluate('history.back()');expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='留在本页').click()
     expect(page.get_by_role('dialog')).to_have_count(0)
-    ui.fx.client.put('/api/settings',json={'values':{'default_times':['09:00'],'snooze_default_days':4},'version':base['version']}).raise_for_status()
-    page.get_by_role('button',name='保存设置',exact=True).click()
-    page.get_by_role('button',name='载入最新设置并保留我的修改',exact=True).click()
-    expect(field).to_have_value('11:00, 18:30');expect(page.get_by_role('spinbutton',name='默认挂起期限')).to_have_value('5')
-    page.get_by_role('button',name='保存设置',exact=True).click()
-    expect(page.get_by_text('设置已保存，下次选期或挂起时生效。',exact=True)).to_be_visible()
-    bodies=[r['body'] for r in ui.requests if r['method']=='PUT' and r['path']=='/api/settings']
-    assert len(bodies)==2 and bodies[0]['version']!=bodies[1]['version']
-    assert bodies[1]['values']=={'default_times':['11:00','18:30'],'snooze_default_days':5}
-    assert set(bodies[1])=={'values','version'}
-    field.fill('11:00, 11:00');expect(page.get_by_role('button',name='保存设置',exact=True)).to_be_disabled()
-    return {'B20':'PASS','B4_settings_three_paths':'PASS','two_editable_fields':True,'CAS_keeps_draft':True,'duplicate_time_rejected':True,'exact_body_keys':True}
+    expect(field).to_have_value('Entwurf: ungespeichert')
+    return {'B20':'PASS','unsaved_guard_three_paths':True,'draft_kept':True}
 
 
 def stage_h(page, ui):
@@ -537,15 +525,15 @@ def stage_h(page, ui):
 
 def stage_i(page, ui):
     task_id=ui.fx.fb_id
-    # 旧入口落到 Facebook 待审：`/` 与 `?view=review` 都不带平台，取第一个入口。
-    for path,title in [('/','Facebook 待审'),('/?task='+task_id,'单篇审核'),('/?view=history','历史归档'),('/?view=calendar','发布月历'),('/?view=settings','运营设置'),('/?view=runtime','运行状态')]:
+    # 旧入口落到 Facebook 待审：`/` 与 `?view=review` 都不带平台，取第一个入口；已下线的设置页同样回落。
+    for path,title in [('/','Facebook 待审'),('/?task='+task_id,'单篇审核'),('/?view=history','历史归档'),('/?view=calendar','发布月历'),('/?view=settings','Facebook 待审'),('/?view=runtime','运行状态')]:
         page.goto(ui.fx.base_url+path,wait_until='networkidle');expect(page.get_by_role('heading',level=1,name=title,exact=True)).to_be_visible()
     page.goto(ui.fx.base_url+'/review',wait_until='networkidle')
-    for view in ['历史归档','发布月历','运营设置']:
+    for view in ['历史归档','发布月历']:
         page.locator('aside').get_by_role('link',name=view,exact=True).click();expect(page.get_by_role('heading',level=1,name=view,exact=True)).to_be_visible()
-    page.evaluate('history.back()');expect(page.get_by_role('heading',level=1,name='发布月历',exact=True)).to_be_visible()
     page.evaluate('history.back()');expect(page.get_by_role('heading',level=1,name='历史归档',exact=True)).to_be_visible()
-    page.evaluate('history.forward()');expect(page.get_by_role('heading',level=1,name='发布月历',exact=True)).to_be_visible()
+    page.evaluate('history.back()');expect(page.get_by_role('heading',level=1,name='Facebook 待审',exact=True)).to_be_visible()
+    page.evaluate('history.forward()');expect(page.get_by_role('heading',level=1,name='历史归档',exact=True)).to_be_visible()
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
     task_id=row['id']; detail=ui.fx.detail(task_id)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')

@@ -13,12 +13,8 @@ describe('确认文案', () => {
     expect(UNSAVED_MESSAGES.detail).toBe('修改尚未保存，确定离开并放弃当前草稿？')
   })
 
-  it('设置', () => {
-    expect(UNSAVED_MESSAGES.settings).toBe('设置尚未保存，离开会放弃这次修改。继续离开？')
-  })
-
-  it('只有这两句，没有自己发明的第三句', () => {
-    expect(Object.keys(UNSAVED_MESSAGES).sort()).toEqual(['detail', 'settings'])
+  it('只有这一句，没有自己发明的第二句', () => {
+    expect(Object.keys(UNSAVED_MESSAGES)).toEqual(['detail'])
   })
 })
 
@@ -73,18 +69,18 @@ describe('shouldBlockNavigation', () => {
     ).toBe(true)
   })
 
-  it('设置页同一套判断', () => {
+  it('历史详情同一套判断', () => {
     expect(
       shouldBlockNavigation({
         dirty: true,
-        currentLocation: at('/settings'),
+        currentLocation: at('/history/fa_x/1'),
         nextLocation: at('/review'),
       }),
     ).toBe(true)
     expect(
       shouldBlockNavigation({
         dirty: false,
-        currentLocation: at('/settings'),
+        currentLocation: at('/history/fa_x/1'),
         nextLocation: at('/review'),
       }),
     ).toBe(false)

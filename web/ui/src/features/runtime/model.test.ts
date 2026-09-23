@@ -14,7 +14,7 @@ describe('五阶段状态的保守表达', () => {
     expect(stageSummary(wrong).tone).toBe('default')
     expect(stageSummary({ ...wrong, status: 'completed' }).tone).toBe('success')
   })
-  it('没有快照显示未确认', () => { expect(runtimeSummary(undefined)).toEqual({ tone: 'default', label: '未确认' }) })
+  it('没有快照显示未知', () => { expect(runtimeSummary(undefined)).toEqual({ tone: 'default', label: '未知' }) })
 })
 
 describe('云盘状态的保守说明', () => {

@@ -2,21 +2,19 @@ import { describe, expect, it } from 'vitest'
 
 import { NAV_ITEMS, navKeyForPath, selectedNavKeys } from './nav-model'
 
-describe('主导航只有五项业务界面', () => {
-  it('就是这五项，顺序也是这个', () => {
+describe('主导航只有四项业务界面', () => {
+  it('就是这四项，顺序也是这个', () => {
     expect(NAV_ITEMS.map((item) => item.key)).toEqual([
       'review-facebook',
       'review-instagram',
       'history',
       'calendar',
-      'settings',
     ])
     expect(NAV_ITEMS.map((item) => item.label)).toEqual([
       'Facebook 待审',
       'Instagram 待审',
       '历史归档',
       '发布月历',
-      '运营设置',
     ])
   })
 
@@ -39,7 +37,6 @@ describe('navKeyForPath：选中项由路由算，不另存 state', () => {
     ['/review/instagram', 'review-instagram'],
     ['/history', 'history'],
     ['/calendar', 'calendar'],
-    ['/settings', 'settings'],
   ])('%s → %s', (path, expected) => {
     expect(navKeyForPath(path)).toBe(expected)
   })

@@ -36,7 +36,6 @@ npm.cmd --prefix web/ui run dev
 | `/history` | 历史归档 |
 | `/history/<account>/<post_id>` | 历史详情，冻结账号只读 |
 | `/calendar` | 发布月历 |
-| `/settings` | 运营设置 |
 | `/runtime` | 运行状态 |
 
 `/?task=...` 和 `/?view=...` 链接继续可用。详情直接访问、刷新和返回列表须保留来源与筛选上下文。

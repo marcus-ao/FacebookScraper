@@ -156,7 +156,7 @@ function StorageFacts({ storage }: { storage: TaskStorage }) {
   return <section className={styles.storage} aria-label="归档存储情况">
     <span>归档位置：{storage.account_dir}{storage.folder ? ` / ${storage.folder}` : ''}</span>
     <span>{({ auto: '自动分类', manual: '人工分类', legacy: '历史记录，分类来源未知' } as const)[storage.classified_by]}</span>
-    {storage.first_archived_at && <span>首次归档：{formatTrailTime(storage.first_archived_at)} 上海</span>}
+    {storage.first_archived_at && <span>首次归档：{formatTrailTime(storage.first_archived_at)}</span>}
     <span>{localStorageCopy(storage)}</span><span>{databaseCopy(storage)}</span><span>{feishuCopy(storage.feishu)}</span>
   </section>
 }
@@ -169,18 +169,18 @@ function localStorageCopy(storage: TaskStorage): string {
   if (storage.local.status === 'complete') return `本地媒体：${count}，文件完整`
   if (storage.local.status === 'partial') return `本地媒体：${count}，仍有待补齐内容`
   if (storage.local.status === 'corrupt') return `本地媒体：${count}，发现损坏文件，请人工核对`
-  return `本地媒体：${count}，状态尚未确认`
+  return `本地媒体：${count}，状态待核对`
 }
 
 function databaseCopy(storage: TaskStorage): string {
   if (storage.database.status === 'unbuilt') return '展示索引：尚未建立'
   if (storage.database.status === 'stale') return '展示索引：需要刷新后核对'
-  if (storage.database.status === 'verified') return `展示索引：已于 ${formatTrailTime(storage.database.verified_at)} 上海核对`
-  return '展示索引：状态尚未确认'
+  if (storage.database.status === 'verified') return `展示索引：已于 ${formatTrailTime(storage.database.verified_at)} 核对`
+  return '展示索引：状态待核对'
 }
 
 function feishuCopy(feishu: MirrorStatus): string {
-  let message = '飞书云盘：状态尚未确认'
+  let message = '飞书云盘：状态待核对'
   if (feishu.status === 'disabled') message = '飞书云盘：未启用'
   else if (feishu.status === 'pending') message = `飞书云盘：有 ${feishu.counts.pending} 项等待同步`
   else if (feishu.status === 'uncertain') message = `飞书云盘：有 ${feishu.counts.uncertain} 项结果待人工核对`

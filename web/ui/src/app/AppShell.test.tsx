@@ -43,7 +43,7 @@ function selectedMenuLabel(html: string): string | null {
 }
 
 describe('导航选中项来自路由', () => {
-  it('平台入口的总数和硬闸由该平台的完整 summary 提供', () => {
+  it('平台入口的总数和待处理数由该平台的完整 summary 提供', () => {
     const states = { not_ready: 0, pending_review: 0, edited: 0, snoozed: 0,
       content_locked: 0, approved: 0, scheduled: 0, skipped: 0, handed_off: 0 }
     const list: ReviewListResponse = { ...(listFixture as unknown as ReviewListResponse), tasks: [],
@@ -55,9 +55,9 @@ describe('导航选中项来自路由', () => {
     const facebook = render('/review/facebook', list).replace(/<[^>]+>/g, '')
     const instagram = render('/review/instagram', list).replace(/<[^>]+>/g, '')
     expect(facebook).toContain('· 2 篇')
-    expect(facebook).not.toContain('硬闸')
+    expect(facebook).not.toContain('待处理')
     expect(instagram).toContain('· 7 篇')
-    expect(instagram).toContain('硬闸 7')
+    expect(instagram).toContain('待处理 7')
     expect(facebook).toContain('Facebook 当前筛选下没有帖子')
     expect(instagram).toContain('Instagram 当前筛选下没有帖子')
   })
@@ -66,7 +66,6 @@ describe('导航选中项来自路由', () => {
     ['/review/instagram', 'Instagram 待审'],
     ['/history', '历史归档'],
     ['/calendar', '发布月历'],
-    ['/settings', '运营设置'],
   ])('%s 选中「%s」', (path, label) => {
     expect(selectedMenuLabel(render(path))).toBe(label)
   })
@@ -92,7 +91,7 @@ describe('导航选中项来自路由', () => {
     expect(menu).toContain('Instagram 待审')
     expect(menu).toContain('历史归档')
     expect(menu).toContain('发布月历')
-    expect(menu).toContain('运营设置')
+    expect(menu).not.toContain('运营设置')
     expect(menu).not.toContain('运行状态')
   })
 
@@ -120,7 +119,6 @@ describe('顶栏', () => {
       ['/review/instagram', 'Instagram 待审'],
       ['/history', '历史归档'],
       ['/calendar', '发布月历'],
-      ['/settings', '运营设置'],
       ['/runtime', '运行状态'],
       ['/review/fa_x/1', '单篇审核'],
       ['/nope', '找不到页面'],

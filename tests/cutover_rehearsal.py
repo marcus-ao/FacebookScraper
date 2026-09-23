@@ -24,8 +24,8 @@ from core import config  # noqa: E402
 from core.store import Archive, Post  # noqa: E402
 from tests.http_fixture import run_http_server  # noqa: E402
 
-REACT_PATHS = ["/", "/review", "/history", "/calendar", "/settings", "/runtime"]
-LEGACY = ["/?view=history", "/?view=calendar", "/?view=settings", "/?view=runtime"]
+REACT_PATHS = ["/", "/review", "/history", "/calendar", "/runtime"]
+LEGACY = ["/?view=history", "/?view=calendar", "/?view=runtime"]
 
 
 def isolated_config(root: Path, dist_rel: str):

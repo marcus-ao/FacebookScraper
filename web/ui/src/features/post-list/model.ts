@@ -64,13 +64,15 @@ export function patchReviewList(data: ReviewListResponse, detail: TaskDetail): R
 
 export function monthGroups(months: readonly string[]) {
   const years = new Map<string, string[]>()
-  for (const month of [...new Set(months)].filter(Boolean).sort().reverse()) {
+  // undated 不是年份分组：切片会算出「unda 年」这种破碎标签。
+  for (const month of [...new Set(months)].filter(value => value && value !== 'undated').sort().reverse()) {
     const year = month.slice(0, 4)
     years.set(year, [...(years.get(year) ?? []), month])
   }
-  return [...years].map(([year, values]) => ({ label: `${year} 年`,
-    options: values.map(value => ({ value, label: value })),
-  }))
+  const groups = [...years].map(([year, values]) => ({ label: `${year} 年`,
+    options: values.map(value => ({ value, label: value })) }))
+  if (months.includes('undated')) groups.push({ label: '其他', options: [{ value: 'undated', label: '无日期' }] })
+  return groups
 }
 
 export function isRowNavigationTarget(target: EventTarget | null): boolean {

@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { App } from 'antd'
-import { useBlocker, useLocation } from 'react-router'
+import { useBlocker } from 'react-router'
 
 import {
   UNSAVED_MESSAGES,
@@ -12,9 +12,6 @@ import { deploymentStore } from '@/app/deployment-store'
 export function useUnsavedChangesGuard(): void {
   const { modal } = App.useApp()
   const { dirty } = useSyncExternalStore(deploymentStore.subscribe, deploymentStore.getSnapshot, deploymentStore.getSnapshot)
-  const location = useLocation()
-  const message = location.pathname === '/settings' ? 'settings' : 'detail'
-
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
       shouldBlockNavigation({ dirty, currentLocation, nextLocation }),
@@ -24,13 +21,13 @@ export function useUnsavedChangesGuard(): void {
     if (blocker.state !== 'blocked') return
     modal.confirm({
       rootClassName: 'deployment-unsaved-dialog',
-      title: UNSAVED_MESSAGES[message],
+      title: UNSAVED_MESSAGES.detail,
       okText: '离开',
       cancelText: '留在本页',
       okButtonProps: { danger: true },
       onOk: () => blocker.proceed?.(),
       onCancel: () => blocker.reset?.(),
     })
-  }, [blocker, message, modal])
+  }, [blocker, modal])
 
 }

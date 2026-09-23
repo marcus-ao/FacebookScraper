@@ -16,7 +16,7 @@ HTML = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0
 INDEX_MARKER = "<!doctype html><title>SPA fixture</title><div id=root></div>"
 
 # 账号名可含点，扩展名判断只看路径末段。
-SPA_ROUTES = ["/", "/review", "/history", "/calendar", "/settings", "/runtime",
+SPA_ROUTES = ["/", "/review", "/history", "/calendar", "/runtime",
               "/review/fa_account/123", "/history/fa_account/123",
               "/review/in_neakasa.tech/9000000030", "/history/in_neakasa.tech/9000000030"]
 

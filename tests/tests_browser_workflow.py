@@ -327,38 +327,24 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(self.writes, [])
 
     def test_04_settings_preserve_comments_and_reject_stale_version(self):
-        """Real temporary TOML only: comments survive; stale save keeps form values."""
-        self.page.goto(self.fixtures.base_url + "/settings")
-        time_input = self.page.get_by_label(re.compile("^默认排期时间（北京）"))
-        time_input.fill("11:00, 18:00")
-        self.page.get_by_label(re.compile("^默认挂起期限")).fill("4")
-        self.page.get_by_role("button", name="保存设置", exact=True).click()
-        expect(self.page.get_by_text("设置已保存，下次选期或挂起时生效。", exact=True)).to_be_visible()
+        """Real temporary TOML only: comments survive; stale save is rejected."""
+        first = self.fixtures.client.get("/api/settings").json()
+        saved = self.fixtures.client.put("/api/settings", json={
+            "version": first["version"],
+            "values": {"default_times": ["11:00", "18:00"], "snooze_default_days": 4}})
+        self.assertEqual(saved.status_code, 200, saved.text)
         self.assertIn(SETTINGS_NOTE, self.fixtures.config_path.read_text("utf-8"))
         current = self.fixtures.client.get("/api/settings").json()
         self.assertEqual(current["editable"], {"default_times": ["11:00", "18:00"], "snooze_default_days": 4})
-        controlled_key, field = next((key, field) for key, fields in current["controlled_fields"].items()
-                                     for field in fields if field["help"])
-        controlled_names = {"targets": "监测来源账号", "publish_identity": "发布账号核验名",
-                            "price_map": "价格映射", "trusted_owners": "信任名单",
-                            "brand_accounts": "品牌自有账号", "frozen_sources": "冻结来源",
-                            "pipeline": "处理方式与预算", "delta": "抓取控制"}
-        self.page.get_by_role("button", name=controlled_names[controlled_key], exact=True).click()
-        expect(self.page.get_by_text(field["help"], exact=True)).to_be_visible()
-        time_input.fill("12:00, 19:00")
-        other = self.fixtures.client.put("/api/settings", json={"version": current["version"], "values": {"default_times": ["09:00"], "snooze_default_days": 5}})
-        self.assertEqual(other.status_code, 200, other.text)
-        with self.page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith("/api/settings")) as conflict:
-            self.page.get_by_role("button", name="保存设置", exact=True).click()
-        self.assertEqual(conflict.value.status, 409)
-        expect(self.page.get_by_role("alert")).to_contain_text("设置在别处被改过了")
-        expect(time_input).to_have_value("12:00, 19:00")
-        self.page.get_by_role("button", name="载入最新设置并保留我的修改", exact=True).click()
-        expect(time_input).to_have_value("12:00, 19:00")
-        expect(self.page.get_by_label(re.compile("^默认挂起期限"))).to_have_value("4")
-        with self.page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith("/api/settings")) as saved:
-            self.page.get_by_role("button", name="保存设置", exact=True).click()
-        self.assertEqual(saved.value.status, 200, saved.value.text())
+        self.assertTrue(any(field["help"] for fields in current["controlled_fields"].values() for field in fields))
+        stale = self.fixtures.client.put("/api/settings", json={
+            "version": first["version"],
+            "values": {"default_times": ["09:00"], "snooze_default_days": 5}})
+        self.assertEqual(stale.status_code, 409, stale.text)
+        latest = self.fixtures.client.put("/api/settings", json={
+            "version": current["version"],
+            "values": {"default_times": ["12:00", "19:00"], "snooze_default_days": 4}})
+        self.assertEqual(latest.status_code, 200, latest.text)
         final = self.fixtures.client.get("/api/settings").json()
         self.assertEqual(final["editable"], {"default_times": ["12:00", "19:00"], "snooze_default_days": 4})
         self.assertIn(SETTINGS_NOTE, self.fixtures.config_path.read_text("utf-8"))
@@ -410,7 +396,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             "body": detail["publish_operation"]}
         self.responses[("GET", "/api/calendar")] = {"body": calendar_payload()}
         self.open_task(self.fixtures.fb_id)
-        self.page.get_by_label("发布时间（北京时间）").fill("2026-09-13T16:00")
+        self.page.get_by_label("发布时间").fill("2026-09-13T16:00")
         self.page.get_by_role("button", name="确认发布时间并排期", exact=True).click()
         self.page.get_by_role("button", name="确认并创建排期", exact=True).click()
         expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
@@ -425,11 +411,11 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.assertEqual(posted[0]["scheduled_at"], "2026-09-13T16:00")
         self.assertEqual(posted[0]["content_fingerprint"], "offline-fingerprint")
         self.page.get_by_role("link", name="发布月历", exact=True).click()
-        scheduled = self.page.get_by_role("button").filter(has_text="已创建定时任务")
-        published = self.page.get_by_role("button").filter(has_text="已观测到公开发布")
-        expect(scheduled).to_contain_text("已创建定时任务")
-        expect(scheduled).not_to_contain_text("已观测到公开发布")
-        expect(published).to_contain_text("已观测到公开发布")
+        scheduled = self.page.get_by_role("button").filter(has_text="定时")
+        published = self.page.get_by_role("button").filter(has_text="已发布")
+        expect(scheduled).to_contain_text("定时")
+        expect(scheduled).not_to_contain_text("已发布")
+        expect(published).to_contain_text("已发布")
         scheduled.click()
         expect(self.page.get_by_text("Offline scheduled fixture", exact=True)).to_be_visible()
         published.click()
@@ -463,7 +449,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_role('textbox', name='德语正文')).to_have_value('Details: 〔链接 1〕 bitte lesen.')
         self.page.get_by_role('button', name='放弃修改').click()
 
-    def test_08_schedule_date_clear_and_default_time_keep_approval_safe(self):
+    def test_08_schedule_date_clear_keeps_approval_safe(self):
         """UI-only gate: empty or invalid wall dates cannot reach the approve dialog."""
         detail = self.fixtures.detail(self.fixtures.fb_id)
         detail["status"] = "content_locked"
@@ -473,13 +459,11 @@ class BrowserWorkflowTests(unittest.TestCase):
             fingerprint="offline-date-gate", earliest="2026-09-13T08:00:00+08:00",
             latest="2026-10-01T20:00:00+08:00", default_times=["09:00", "17:00"])}
         self.open_task(self.fixtures.fb_id)
-        field = self.page.get_by_role("textbox", name="发布时间（北京时间）", exact=True)
+        field = self.page.get_by_role("textbox", name="发布时间", exact=True)
         approve = self.page.get_by_role("button", name="确认发布时间并排期", exact=True)
 
         field.fill("")
         expect(field).to_have_value("")
-        expect(self.page.get_by_role("button", name="09:00 北京", exact=True)).to_be_disabled()
-        expect(self.page.get_by_role("button", name="17:00 北京", exact=True)).to_be_disabled()
         expect(approve).to_be_disabled()
         approve.click(force=True)
         expect(self.page.get_by_role("dialog")).to_have_count(0)
@@ -489,19 +473,14 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(field).to_have_value("2026-09-15T10:30:15")
         expect(self.page.get_by_text("请填写完整有效的日期和时间", exact=True)).to_be_visible()
         expect(approve).to_be_disabled()
-        expect(self.page.get_by_role("button", name="09:00 北京", exact=True)).to_be_disabled()
         approve.click(force=True)
         expect(self.page.get_by_role("dialog")).to_have_count(0)
 
-        field.fill("2026-09-15T10:30")
-        self.page.get_by_role("button", name="09:00 北京", exact=True).click()
-        expect(field).to_have_value("2026-09-15T09:00")
-        # 北京 09:00 是柏林凌晨 3 点：提示要出现，但不能挡住她。
-        expect(self.page.get_by_text("这个时刻德国还在凌晨，粉丝多半看不到")).to_be_visible()
+        field.fill("2026-09-15T09:00")
         approve.click()
         dialog = self.page.get_by_role("dialog")
-        expect(dialog).to_contain_text("Facebook · Neakasa Deutschland · 2026-09-15 09:00 北京")
-        expect(dialog).to_contain_text("德国 9/15 03:00 柏林")
+        expect(dialog).to_contain_text("Facebook · Neakasa Deutschland · 2026-09-15 09:00")
+        expect(dialog).not_to_contain_text("柏林")
         dialog.get_by_role("button", name="继续核对", exact=True).click()
         expect(dialog).to_have_count(0)
         self.assertNotIn(("POST", endpoint + "/approve"), self.writes)
@@ -527,7 +506,7 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.responses[("DELETE", endpoint + "/content-lock")] = unlock
         self.open_task(self.fixtures.fb_id)
         # 录证缺失让排期不可用，但不该挡住人确认文案和图片。
-        field = self.page.get_by_role("textbox", name="发布时间（北京时间）", exact=True)
+        field = self.page.get_by_role("textbox", name="发布时间", exact=True)
         expect(field).to_have_count(0)
         self.page.get_by_role("button", name="编辑确认无误", exact=True).click()
         expect(self.page.get_by_text("正文与图片已按当前版本锁定")).to_be_visible()

@@ -180,8 +180,6 @@ function viewToPath(view: string | null): string {
   switch (view) {
     case 'calendar':
       return '/calendar'
-    case 'settings':
-      return '/settings'
     case 'runtime':
       return '/runtime'
     case 'history':

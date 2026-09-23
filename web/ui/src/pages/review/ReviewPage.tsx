@@ -45,7 +45,7 @@ export function ReviewPage({ platform }: { platform: Platform }) {
     summaryNote: row => row.hard_alerts.some(alert => alert.code === 'unknown_collaborator')
       ? <span className={styles.thirdParty}>第三方作者 · 需授权初翻</span> : null,
     problem: row => row,
-    time: { title: '排期时刻 · 北京', zone: 'business', at: row => row.schedule?.at ?? null },
+    time: { title: '排期时刻', zone: 'business', at: row => row.schedule?.at ?? null },
     actions: { render: row => <ReviewActions detail={row} compact /> },
   })
   function change(key: string, value: string | undefined) {
@@ -56,11 +56,11 @@ export function ReviewPage({ platform }: { platform: Platform }) {
   return <section className={styles.page}>
     <div className={styles.head}>
       <div className={styles.heading}><PageTitle /><span className={styles.meta}>
-        {hardAlerts > 0 && <Tag closable={filters.alerts}
+        {hardAlerts > 0 && <Tag {...(filters.alerts ? { color: 'error' as const } : {})} closable={filters.alerts}
           onClose={event => { event.preventDefault(); change('alerts', undefined) }}
           onClick={() => change('alerts', filters.alerts ? undefined : '1')} role="button" tabIndex={0}
           onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); change('alerts', filters.alerts ? undefined : '1') } }}>
-          {filters.alerts ? '只看硬闸' : '硬闸'} {hardAlerts}
+          {filters.alerts ? '只看待处理' : '待处理'} {hardAlerts}
         </Tag>}
         近 {query.data?.range.days ?? 90} 天 · {total} 篇
       </span></div>

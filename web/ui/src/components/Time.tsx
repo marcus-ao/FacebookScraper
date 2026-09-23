@@ -21,19 +21,14 @@ export function BusinessTime({ at, fallback = '—' }: TimeProps) {
   )
 }
 
-export interface ShanghaiTimeProps extends TimeProps {
-  /** 默认附“上海”；仅有明确时区上下文时可省略。 */
-  readonly showZone?: boolean
-}
-
-export function ShanghaiTime({ at, fallback = '—', showZone = true }: ShanghaiTimeProps) {
+export function ShanghaiTime({ at, fallback = '—' }: TimeProps) {
   const text = formatTrailTime(at)
   if (text === '') {
     return <span className={cx(styles.empty)}>{fallback}</span>
   }
   return (
     <time className={cx(styles.time)} dateTime={at ?? undefined} data-zone="shanghai">
-      {showZone ? `${text} 上海` : text}
+      {text}
     </time>
   )
 }

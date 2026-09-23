@@ -10,28 +10,28 @@ const text = (node: React.ReactElement) =>
 
 describe('BusinessTime：排期时刻不被本地时区改写', () => {
   it('夏令时 +02:00 的 17:00 就显示 17:00', () => {
-    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).toBe('9/13 周日 17:00 北京')
+    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).toBe('9/13 周日 17:00')
   })
 
   it('冬令时 +01:00 的 10:00 就显示 10:00', () => {
-    expect(text(<BusinessTime at="2026-01-05T10:00:00+01:00" />)).toBe('1/5 周一 10:00 北京')
+    expect(text(<BusinessTime at="2026-01-05T10:00:00+01:00" />)).toBe('1/5 周一 10:00')
   })
 
   it('同一天里 +02:00 与 +01:00 都只看墙上时刻（DST 切换日 10/25）', () => {
-    expect(text(<BusinessTime at="2026-10-25T02:30:00+02:00" />)).toBe('10/25 周日 02:30 北京')
-    expect(text(<BusinessTime at="2026-10-25T02:30:00+01:00" />)).toBe('10/25 周日 02:30 北京')
+    expect(text(<BusinessTime at="2026-10-25T02:30:00+02:00" />)).toBe('10/25 周日 02:30')
+    expect(text(<BusinessTime at="2026-10-25T02:30:00+01:00" />)).toBe('10/25 周日 02:30')
   })
 
   it('春季切换日 3/29 同理', () => {
-    expect(text(<BusinessTime at="2026-03-29T03:30:00+02:00" />)).toBe('3/29 周日 03:30 北京')
+    expect(text(<BusinessTime at="2026-03-29T03:30:00+02:00" />)).toBe('3/29 周日 03:30')
   })
 
   it('UTC 字符串也按字面读，不换算', () => {
-    expect(text(<BusinessTime at="2026-09-13T17:00:00Z" />)).toBe('9/13 周日 17:00 北京')
+    expect(text(<BusinessTime at="2026-09-13T17:00:00Z" />)).toBe('9/13 周日 17:00')
   })
 
-  it('时区词是格式的一部分', () => {
-    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).toContain('北京')
+  it('全站统一业务墙上时刻，不再附时区词', () => {
+    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).not.toContain('北京')
   })
 
   it('没有排期显示占位，不是空白', () => {
@@ -56,22 +56,20 @@ describe('BusinessTime：排期时刻不被本地时区改写', () => {
 
 describe('ShanghaiTime：明确按 Asia/Shanghai', () => {
   it('UTC 07:51 是上海 15:51，不是纽约的 03:51', () => {
-    expect(text(<ShanghaiTime at="2026-09-13T07:51:04Z" />)).toBe('2026/09/13 15:51 上海')
+    expect(text(<ShanghaiTime at="2026-09-13T07:51:04Z" />)).toBe('2026/09/13 15:51')
   })
 
   it('跨日：UTC 20:00 在上海已经是第二天 04:00', () => {
-    expect(text(<ShanghaiTime at="2026-09-13T20:00:00Z" />)).toBe('2026/09/14 04:00 上海')
+    expect(text(<ShanghaiTime at="2026-09-13T20:00:00Z" />)).toBe('2026/09/14 04:00')
   })
 
   it('上海没有夏令时，冬夏两个日期都是 UTC+8', () => {
-    expect(text(<ShanghaiTime at="2026-01-15T00:00:00Z" />)).toBe('2026/01/15 08:00 上海')
-    expect(text(<ShanghaiTime at="2026-07-15T00:00:00Z" />)).toBe('2026/07/15 08:00 上海')
+    expect(text(<ShanghaiTime at="2026-01-15T00:00:00Z" />)).toBe('2026/01/15 08:00')
+    expect(text(<ShanghaiTime at="2026-07-15T00:00:00Z" />)).toBe('2026/07/15 08:00')
   })
 
-  it('showZone={false} 只显示本地化日期和时间', () => {
-    expect(text(<ShanghaiTime at="2026-09-13T07:51:04Z" showZone={false} />)).toBe(
-      '2026/09/13 15:51',
-    )
+  it('不再附时区词', () => {
+    expect(text(<ShanghaiTime at="2026-09-13T07:51:04Z" />)).not.toContain('上海')
   })
 
   it('没有值显示占位', () => {

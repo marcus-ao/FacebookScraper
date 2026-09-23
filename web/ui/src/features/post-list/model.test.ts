@@ -4,7 +4,7 @@ import { createQueryClient } from '@/app/queryClient'
 import { parseReviewListQuery } from '@/app/search-params'
 import { reviewListOptions } from '@/hooks/useTasks'
 import { decisionBody } from '@/services/review'
-import { filterReviewRows, patchReviewList, queueCounts } from './model'
+import { filterReviewRows, monthGroups, patchReviewList, queueCounts } from './model'
 import type { DisplayStatus, ReviewListResponse, TaskDetail } from '@/types/domain'
 import listFixture from '@/types/__fixtures__/review-list.json'
 import detailFixture from '@/types/__fixtures__/task-detail-active.json'
@@ -20,6 +20,13 @@ describe('review query 与行补丁', () => {
       expect(filterReviewRows(rows, parseReviewListQuery({ queue: bucket })).map(row => row.status)).toEqual(expected)
     }
     expect(filterReviewRows(rows.filter(row => row.status === 'not_ready'), parseReviewListQuery({}))).toEqual([])
+  })
+  it('月份分组把 undated 归入「无日期」，不进年份分组', () => {
+    const groups = monthGroups(['2026-09', '2026-08', 'undated'])
+    expect(groups.map(group => group.label)).toEqual(['2026 年', '其他'])
+    expect(groups[0]?.options.map(option => option.value)).toEqual(['2026-09', '2026-08'])
+    expect(groups[1]?.options).toEqual([{ value: 'undated', label: '无日期' }])
+    expect(monthGroups(['2026-09']).map(group => group.label)).toEqual(['2026 年'])
   })
   it('平台/月/分类/硬闸是同一全量响应的前端过滤', () => {
     const row = { ...data.tasks[0]!, status: 'pending_review' as const, platform:'facebook' as const, month:'2026-09', tags:['Riko'], hard_alerts:[{code:'unknown_collaborator',label:'第三方作者'}] }

@@ -189,9 +189,13 @@ def history_page(*, platform=None, month=None, tag=None, status=None, page=1, li
             metadata = dict(metadata, stale=True, error=type(exc).__name__)
     rows = index_db._display_rows(archive, state, include_frozen=True)
     tags = sorted({tag for row in rows for tag in row['tags']})
-    months = sorted({row['month'] for row in rows}, reverse=True)
+    # 与 query_page 同一条规则：月份按行内日期，不按归档目录月份。
+    month_set = {index_db.created_month(row) for row in rows}
+    months = sorted((value for value in month_set if value != 'undated'), reverse=True)
+    if 'undated' in month_set:
+        months.append('undated')
     rows = [row for row in rows if (not platform or row['platform'] == platform)
-            and (not month or row['month'] == month) and (not status or row['status'] == status)
+            and (not month or index_db.created_month(row) == month) and (not status or row['status'] == status)
             and (not tag or (not row['tags'] if tag == '__untagged__' else tag in row['tags']))]
     rows.sort(key=lambda row: row['id'])
     rows.sort(key=lambda row: row['created_at'], reverse=True)

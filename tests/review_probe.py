@@ -67,7 +67,7 @@ def probe_density(page, ui, out):
     result = {}
     for name, url in [("review", "/review"), ("history", "/history"),
                       ("detail", f"/review/{ui.fx.fb_id}"), ("calendar", "/calendar"),
-                      ("settings", "/settings"), ("runtime", "/runtime")]:
+                      ("runtime", "/runtime")]:
         for label, size in [("1366x768", SMALL), ("1920x1080", LARGE)]:
             page.set_viewport_size(size)
             page.goto(ui.fx.base_url + url, wait_until="networkidle")

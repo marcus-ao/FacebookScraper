@@ -6,12 +6,10 @@ import {
   PLATFORM_LABEL,
   RISK_KIND_LABEL,
   STATUS_LABEL,
-  audienceHint,
   formatDate,
   formatSchedule,
   businessToday,
   formatTrailTime,
-  formatWakeAt,
   wallMinutesApart,
 } from './format'
 
@@ -19,7 +17,7 @@ import {
 
 describe('formatSchedule：业务时刻必须按字符串里带的偏移显示，不经本地时区', () => {
   it('夏令时期间（+02:00）显示字符串里的墙上时刻', () => {
-    expect(formatSchedule('2026-07-01T10:00:00+02:00')).toBe('7/1 周三 10:00 北京')
+    expect(formatSchedule('2026-07-01T10:00:00+02:00')).toBe('7/1 周三 10:00')
   })
 
   it('本地时区换算会给出别的小时 —— 证明上面那条不是巧合', () => {
@@ -29,37 +27,37 @@ describe('formatSchedule：业务时刻必须按字符串里带的偏移显示�
   })
 
   it('冬令时期间（+01:00）同样按字符串显示', () => {
-    expect(formatSchedule('2026-12-02T17:30:00+01:00')).toBe('12/2 周三 17:30 北京')
+    expect(formatSchedule('2026-12-02T17:30:00+01:00')).toBe('12/2 周三 17:30')
   })
 
   it('UTC 后缀的字符串也按字面时分显示（不做偏移换算）', () => {
-    expect(formatSchedule('2026-07-01T10:00:00Z')).toBe('7/1 周三 10:00 北京')
+    expect(formatSchedule('2026-07-01T10:00:00Z')).toBe('7/1 周三 10:00')
   })
 
   describe('夏令时边界', () => {
     it('切换日当天（3/29，+02:00）', () => {
-      expect(formatSchedule('2026-03-29T03:00:00+02:00')).toBe('3/29 周日 03:00 北京')
+      expect(formatSchedule('2026-03-29T03:00:00+02:00')).toBe('3/29 周日 03:00')
     })
 
     it('切换日当天（10/25，+01:00）', () => {
-      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30 北京')
+      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30')
     })
 
     it('同一天里 +02:00 与 +01:00 都只看墙上时刻 —— 这正是不能换算的原因', () => {
       // 柏林重复时刻由后端消歧，前端显示返回的偏移。
-      expect(formatSchedule('2026-10-25T02:30:00+02:00')).toBe('10/25 周日 02:30 北京')
-      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30 北京')
+      expect(formatSchedule('2026-10-25T02:30:00+02:00')).toBe('10/25 周日 02:30')
+      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30')
     })
   })
 
   it('星期用 UTC 算，不受本地时区影响', () => {
-    expect(formatSchedule('2026-09-13T17:00:00+02:00')).toBe('9/13 周日 17:00 北京')
+    expect(formatSchedule('2026-09-13T17:00:00+02:00')).toBe('9/13 周日 17:00')
     expect(formatSchedule('2026-09-13T00:05:00+02:00')).toContain('周日')
     expect(formatSchedule('2026-09-13T23:55:00+02:00')).toContain('周日')
   })
 
   it('月与日不补零（9/1 不是 09/01）', () => {
-    expect(formatSchedule('2026-09-01T08:00:00+02:00')).toBe('9/1 周二 08:00 北京')
+    expect(formatSchedule('2026-09-01T08:00:00+02:00')).toBe('9/1 周二 08:00')
   })
 
   it('时与分补零', () => {
@@ -75,7 +73,7 @@ describe('formatSchedule：业务时刻必须按字符串里带的偏移显示�
   })
 })
 
-describe('formatTrailTime / formatWakeAt：操作记录是上海时刻', () => {
+describe('formatTrailTime：操作记录时刻', () => {
   it('UTC 02:00 在上海是同日 10:00', () => {
     const shown = formatTrailTime('2026-07-01T02:00:00Z')
     expect(shown).toContain('2026')
@@ -100,16 +98,10 @@ describe('formatTrailTime / formatWakeAt：操作记录是上海时刻', () => {
     expect(shown).not.toMatch(/[AP]M/i)
   })
 
-  it('formatWakeAt 在后面补「上海」', () => {
-    expect(formatWakeAt('2026-07-01T02:00:00Z')).toMatch(/ 上海$/)
-  })
-
   it('空值与非法值返回空串（不是 "Invalid Date"）', () => {
     expect(formatTrailTime(null)).toBe('')
     expect(formatTrailTime('')).toBe('')
     expect(formatTrailTime('nonsense')).toBe('')
-    expect(formatWakeAt(null)).toBe('')
-    expect(formatWakeAt('')).toBe('')
   })
 })
 
@@ -155,7 +147,7 @@ describe('文案表', () => {
     expect(PLATFORM_LABEL).toEqual({ facebook: 'Facebook', instagram: 'Instagram' })
     expect(Object.keys(AUTHOR_KIND_LABEL)).toHaveLength(3)
     expect(Object.keys(RISK_KIND_LABEL)).toHaveLength(3)
-    expect(Object.keys(ACTION_LABEL)).toHaveLength(12)
+    expect(Object.keys(ACTION_LABEL)).toHaveLength(13)
     expect(ACTION_LABEL.text_edited).toBe('修改了德语译文')
   })
 })
@@ -177,29 +169,6 @@ describe('businessToday：月历的「今天」按业务时区算，不按浏览
   it('换成有夏令时的业务时区仍然按当时的真实偏移算', () => {
     expect(businessToday('Europe/Berlin', new Date('2026-01-13T23:30:00Z'))).toBe('2026-01-14')
     expect(businessToday('Europe/Berlin', new Date('2026-07-13T22:30:00Z'))).toBe('2026-07-14')
-  })
-})
-
-describe('audienceHint：选时刻的人在北京，看帖子的人在德国', () => {
-  it('北京 16:00 是柏林 10:00，正常时段', () => {
-    expect(audienceHint('2026-09-12T16:00')).toEqual({ text: '9/12 10:00 柏林', quiet: false })
-  })
-
-  it('看起来最正常的北京 10:00，在德国是凌晨 4 点', () => {
-    expect(audienceHint('2026-09-12T10:00')).toEqual({ text: '9/12 04:00 柏林', quiet: true })
-  })
-
-  it('冬令时差 7 小时，不是固定的 6 小时', () => {
-    expect(audienceHint('2026-01-12T16:00')).toEqual({ text: '1/12 09:00 柏林', quiet: false })
-  })
-
-  it('跨日：北京次日凌晨仍是德国前一天的傍晚', () => {
-    expect(audienceHint('2026-09-13T01:00')).toEqual({ text: '9/12 19:00 柏林', quiet: false })
-  })
-
-  it('填了一半的时刻不给提示', () => {
-    expect(audienceHint('2026-09-12')).toBeNull()
-    expect(audienceHint('')).toBeNull()
   })
 })
 

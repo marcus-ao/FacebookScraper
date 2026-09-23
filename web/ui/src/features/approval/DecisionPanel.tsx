@@ -7,9 +7,8 @@ import { BusinessTime, ShanghaiTime } from '@/components/Time'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { DisabledReason } from '@/components/DisabledReason'
 import { nearbyOccupancy } from './occupancy'
-import { audienceHint, zonedInput, AUTHOR_KIND_LABEL, formatDate } from '@/lib/format'
+import { zonedInput, AUTHOR_KIND_LABEL, formatDate } from '@/lib/format'
 import { isConflict } from '@/services/http'
-import { isCompleteScheduleTime } from '@/lib/action-reasons'
 import styles from './DecisionPanel.module.css'
 
 export function ApprovalAction({ controller: c }: { controller: ApprovalController }) {
@@ -47,7 +46,6 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
   const zone = data?.business_timezone
   const min = zonedInput(data?.earliest, zone), max = zonedInput(data?.latest, zone)
   const { cards: occupied, tooClose: near } = nearbyOccupancy(calendar.data?.cards, detail.platform, c.when, calendar.data?.gap_minutes ?? 0)
-  const audience = audienceHint(c.when, zone)
   return <section className={styles.panel} aria-label="审核与排期">
     <div className={styles.heading}><h2>审核与排期</h2><Button type="text" size="small" disabled={c.busy} onClick={() => void c.refresh()}>重新核对排期条件</Button></div>
     {(detail.status === 'scheduled' || c.confirmed) && <p role="status">排期已确认。<BusinessTime at={detail.schedule?.at} /> · 公开发布结果仍以远端观测为准。</p>}
@@ -57,27 +55,24 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
       <Button type="link" size="small" disabled={c.busy} onClick={() => void c.unlock()}>解除冻结</Button>
     </p>}
     <div className={styles.row}>
-      {c.eligible && <label>发布时间（北京时间）<Input aria-label="发布时间（北京时间）" type="datetime-local" value={c.when} min={min} max={max} disabled={editing || c.busy || !data?.available} onChange={event => c.setWhen(event.target.value)} /></label>}
+      {c.eligible && <label>发布时间<Input aria-label="发布时间" type="datetime-local" value={c.when} min={min} max={max} disabled={editing || c.busy || !data?.available} onChange={event => c.setWhen(event.target.value)} /></label>}
       <div className={styles.facts}><span>作者：{AUTHOR_KIND_LABEL[detail.meta.author_kind]} {detail.meta.owner ? '@' + detail.meta.owner : ''}</span><span>原帖发布：{formatDate(detail.meta.created_at)}</span>{detail.meta.coauthors.length > 0 && <span>合作方：{detail.meta.coauthors.join('、')}</span>}{detail.meta.permalink && <a href={detail.meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}</div>
     </div>
-    {/* 选时刻的人在北京，看帖子的人在德国；这一行不显示出来就只能靠记时差。 */}
-    {c.eligible && audience && <p className={styles.help} role="note">德国受众那边是 <strong>{audience.text}</strong>
-      {audience.quiet && <Alert type="warning" title="这个时刻德国还在凌晨，粉丝多半看不到" description="可以继续排期；如果不是有意选的，换一个白天的时刻。" />}</p>}
     {c.reason && <p className={styles.help}>{!data?.available && data?.reason ? data.reason : c.reason}</p>}
-    {min && max && <div className={styles.help}>可选 {min.replace('T', ' ')} 至 {max.replace('T', ' ')}（北京） <Space wrap>{c.eligible && data?.default_times.map(time => <Button size="small" key={time} disabled={editing || c.busy || !data.available || !isCompleteScheduleTime(c.when)} onClick={() => c.setWhen(c.when.slice(0, 10) + 'T' + time)}>{time} 北京</Button>)}</Space></div>}
+    {min && max && <div className={styles.help}>可选 {min.replace('T', ' ')} 至 {max.replace('T', ' ')}</div>}
     {c.eligible && <Collapse ghost items={[{ key: 'occupancy', label: `${near ? '附近已有同渠道排期 · ' : ''}查看所选时刻前后一天的同渠道占用（间隔 ${calendar.data?.gap_minutes ?? '—'} 分钟）`, children: <>
       <p>依据缓存：<BusinessTime at={calendar.data?.cached_at ? zonedInput(calendar.data.cached_at, zone) : null} />{calendar.data?.stale ? ' · 可能已过期' : ''}；正式排期前会再次核对后台。</p>
       {occupied.length ? occupied.map((card, i) => <p key={i}><BusinessTime at={card.at_business} /> · {card.delivery === 'published' ? '已观测到公开发布' : card.delivery === 'scheduled' ? '已创建定时任务' : '发布状态待核验'}</p>) : <p>当前缓存未发现所选时刻附近的同渠道记录，不能据此保证空闲。</p>}
     </> }]} />}
     {!!c.error && <Alert type="warning" title={c.errorMessage} />}
-    {c.suggestions.length > 0 && <Space wrap><span>可以改选：</span>{c.suggestions.map(value => <Button key={value} onClick={() => c.setWhen(zonedInput(value, zone))}>{zonedInput(value, zone).replace('T', ' ')} 北京</Button>)}</Space>}
+    {c.suggestions.length > 0 && <Space wrap><span>可以改选：</span>{c.suggestions.map(value => <Button key={value} onClick={() => c.setWhen(zonedInput(value, zone))}>{zonedInput(value, zone).replace('T', ' ')}</Button>)}</Space>}
     {isConflict(c.error) && <ConflictRecovery kind="schedule" onRecover={() => void c.refresh()} recovering={c.options.isFetching} />}
     {(detail.publication || detail.status === 'approved') && <p><Button disabled={c.busy || editing} onClick={() => void c.recover()}>核对并补齐本地回执</Button> <Typography.Text type="secondary">只核对已有发布尝试，恢复结果需再次确认。</Typography.Text></p>}
     {detail.status === 'scheduled' && <p><Button danger disabled={c.busy} onClick={() => setUndoOpen(true)}>我已在后台删除这条排期</Button> <Typography.Text type="secondary">系统不会替你删远端卡片；删完回来登记，它会重读月历核实。</Typography.Text></p>}
     {detail.review.wake_at && <p>恢复审校：<ShanghaiTime at={detail.review.wake_at} /></p>}{detail.review.reason && <p>处理理由：{detail.review.reason}</p>}{detail.review.handoff_url && <a href={detail.review.handoff_url} target="_blank" rel="noopener noreferrer">查看手工发布的帖子</a>}
     {data?.reason && !data.available && <Collapse ghost items={[{ key: 'reason', label: '查看核验信息', children: <pre className={styles.diagnostic}>{data.reason}</pre> }]} />}
     <Modal title="确认本篇发布内容与时刻" open={!!c.snapshot} onCancel={() => { if (!c.busy) c.setSnapshot(null) }} okText="确认并创建排期" cancelText="继续核对" confirmLoading={c.busy} onOk={() => void c.submit()}>
-      {c.snapshot && data?.preview && <><p>{data.preview.target.channel === 'facebook' ? 'Facebook' : 'Instagram'} · {data.preview.target.account} · {c.snapshot.body.scheduled_at.replace('T', ' ')} 北京{audience && <> · 德国 {audience.text}</>}</p>
+      {c.snapshot && data?.preview && <><p>{data.preview.target.channel === 'facebook' ? 'Facebook' : 'Instagram'} · {data.preview.target.account} · {c.snapshot.body.scheduled_at.replace('T', ' ')}</p>
         <div className={styles.preview}>{data.preview.text}</div>
         <div>{data.preview.images.map(image => <img key={image.index} src={image.url} alt={`冻结图片 ${image.index + 1}`} />)}</div>
         <p>确认后将使用已冻结的这一份内容创建排期。排期详情里的图片要等回读适配，这次不会把它标成已核验。</p></>}

@@ -11,8 +11,6 @@ const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '�
 
 /** 业务时区由后端 `business_timezone` 给出；这里只在它缺失时兜底，不另做决定。 */
 export const BUSINESS_TIMEZONE = 'Asia/Shanghai'
-/** 德国受众所在时区。业务时刻换算过去才是粉丝看到帖子的钟点。 */
-export const AUDIENCE_TIMEZONE = 'Europe/Berlin'
 
 /** 仅把后端有偏移的时刻转换成某个时区的输入值；用户输入保持原字符串，由服务端判定 DST。 */
 export function zonedInput(iso: string | null | undefined, zone: string = BUSINESS_TIMEZONE): string {
@@ -30,24 +28,7 @@ export const wallMinutesApart = (a: string, b: string) => Math.abs(Date.parse(a.
 export const businessToday = (zone: string = BUSINESS_TIMEZONE, now: Date = new Date()) =>
   zonedInput(now.toISOString(), zone).slice(0, 10)
 
-/**
- * 业务时刻在德国是几点。北京 16:00 是柏林 10:00，北京 10:00 却是柏林凌晨 4 点——
- * 选时刻的人看的是北京，看帖子的人在德国，这一行不显示出来就只能靠记时差。
- */
-export function audienceHint(wallClock: string, businessZone: string = BUSINESS_TIMEZONE): { text: string; quiet: boolean } | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(wallClock)) return null
-  // 用两个时区在同一瞬间的偏移差把墙上时刻搬过去，避免依赖宿主时区。
-  const probe = new Date(wallClock + ':00Z')
-  if (Number.isNaN(probe.getTime())) return null
-  const offset = (zone: string) => Date.parse(zonedInput(probe.toISOString(), zone) + ':00Z') - probe.getTime()
-  const shifted = new Date(probe.getTime() - offset(businessZone) + offset(AUDIENCE_TIMEZONE))
-  const local = zonedInput(shifted.toISOString(), 'UTC')
-  if (!local) return null
-  const hour = Number(local.slice(11, 13))
-  return { text: `${+local.slice(5, 7)}/${+local.slice(8, 10)} ${local.slice(11, 16)} 柏林`, quiet: hour < 6 }
-}
-
-/** 月历只迭代日期标签；跨月边界和每张卡的柏林日期均来自后端。 */
+/** 月历只迭代日期标签；跨月边界来自后端。 */
 export function calendarDays(start: string, end: string): (string | null)[] {
   const first = new Date(start.slice(0, 10) + 'T00:00:00Z'), last = new Date(end.slice(0, 10) + 'T00:00:00Z')
   if (!Number.isFinite(first.getTime()) || !Number.isFinite(last.getTime())) return []
@@ -66,7 +47,7 @@ export function formatSchedule(iso: string | null | undefined): string | null {
     return null
   }
   const weekday = WEEKDAYS[new Date(Date.UTC(+y, +mo - 1, +d)).getUTCDay()] ?? ''
-  return `${+mo}/${+d} ${weekday} ${h}:${mi} 北京`
+  return `${+mo}/${+d} ${weekday} ${h}:${mi}`
 }
 
 export function formatDate(iso: string | null | undefined): string {
@@ -87,10 +68,6 @@ export function formatTrailTime(iso: string | null | undefined): string {
     minute: '2-digit',
     hourCycle: 'h23',
   }).format(value)
-}
-
-export function formatWakeAt(iso: string | null | undefined): string {
-  return iso ? `${formatTrailTime(iso)} 上海` : ''
 }
 
 export const PLATFORM_LABEL: Record<Platform, string> = {

@@ -44,10 +44,7 @@ def save(page, name, suffix, status=200):
         page.get_by_role('button', name=name, exact=True).click()
     assert result.value.status == status, result.value.text()
     if status == 200:
-        if suffix == '/api/settings':
-            expect(page.get_by_text('设置已保存，下次选期或挂起时生效。', exact=True)).to_be_visible()
-        else:
-            expect(page.get_by_role('button', name='编辑德语', exact=True)).to_be_visible()
+        expect(page.get_by_role('button', name='编辑德语', exact=True)).to_be_visible()
     return result.value.json()
 
 
@@ -59,7 +56,7 @@ def main():
     evidence.mkdir(parents=True, exist_ok=True)
     report = {'status': 'failed', 'scenarios': [], 'browser_contexts': 5,
               'runtime_id': runtime, 'real_external_actions': False,
-              'scope': 'Insecure HTTP Chromium; temporary real settings/localization/session/defer APIs. '
+              'scope': 'Insecure HTTP Chromium; temporary real localization/session/defer APIs. '
                        'Release identity, delayed transport and offline state are controlled fixtures. '
                        'Loopback hostname mapping does not prove physical LAN reachability or remote CIDR admission.'}
     errors, external, reports, documents, held = [], [], [[] for _ in range(5)], [0] * 5, []
@@ -104,7 +101,7 @@ def main():
                             mode['restore_runtime_on_reload'] = False
                     if parsed.path == '/api/deployment/session':
                         reports[index].append(request.post_data_json)
-                    if index == 2 and mode['hold_save'] and request.method == 'PUT' and parsed.path == '/api/settings':
+                    if index == 2 and mode['hold_save'] and request.method == 'PUT' and parsed.path.endswith('/localization'):
                         held.append(route)
                         return
                     route.continue_()
@@ -118,8 +115,8 @@ def main():
                 page = context.new_page()
                 pages.append(page)
                 page.on('pageerror', lambda error: errors.append(str(error)))
-                page.goto(origin + '/settings', wait_until='domcontentloaded')
-                expect(page.get_by_role('textbox', name='默认排期时间（北京）')).to_be_visible()
+                page.goto(origin + '/review/facebook', wait_until='domcontentloaded')
+                expect(page.locator('aside').get_by_role('link', name='历史归档', exact=True)).to_be_visible()
                 editable(page)
                 capability = page.evaluate('({secure: window.isSecureContext, uuid: typeof crypto.randomUUID, '
                                            'random: typeof crypto.getRandomValues, clipboard: typeof navigator.clipboard})')
@@ -134,22 +131,6 @@ def main():
             report['scenarios'].append('Five independent clients initialize on insecure HTTP without randomUUID; sessions are distinct')
 
             first, second, busy, disconnected, closing = pages
-            times = lambda page: page.get_by_role('textbox', name='默认排期时间（北京）')
-            times(first).fill('09:30, 18:30')
-            times(second).fill('11:15, 19:15')
-            saved = save(first, '保存设置', '/api/settings')
-            save(second, '保存设置', '/api/settings', 409)
-            expect(second.get_by_role('alert')).to_contain_text('设置在别处被改过了')
-            expect(times(second)).to_have_value('11:15, 19:15')
-            assert fixture.client.get('/api/settings').json()['editable'] == saved['editable']
-            second.get_by_role('button', name='载入最新设置并保留我的修改', exact=True).click()
-            expect(second.get_by_role('alert')).to_have_count(0)
-            expect(times(second)).to_have_value('11:15, 19:15')
-            save(second, '保存设置', '/api/settings')
-            wait_for(first, lambda: all(not row['dirty'] and not row['busy'] for row in gate.status()['sessions']),
-                     'Saved settings clients were not clean before navigating')
-            report['scenarios'].append('Real settings CAS rejects the second client with 409, preserves its draft, and supports explicit recovery')
-
             for page in (first, second):
                 page.goto(origin + '/review/' + fixture.fb_id, wait_until='domcontentloaded')
                 editable(page)
@@ -176,7 +157,7 @@ def main():
 
             # Each navigation owns a new in-memory session, including a second tab in one context.
             extra = contexts[4].new_page()
-            extra.goto(origin + '/settings', wait_until='domcontentloaded')
+            extra.goto(origin + '/review/facebook', wait_until='domcontentloaded')
             editable(extra)
             wait_for(first, lambda: len({row['session_id'] for row in reports[4]}) == 2, 'Same-context tabs reused a session')
             extra_id = reports[4][-1]['session_id']
@@ -185,14 +166,18 @@ def main():
             wait_for(first, lambda: any(row['session_id'] == extra_id and row['closed'] for row in gate.status()['sessions']),
                      'Clean tab close beacon did not reach the real API')
 
-            busy.get_by_role('button', name='重新读取', exact=True).click()
-            expect(times(busy)).to_have_value('11:15, 19:15')
-            times(busy).fill('12:00, 20:00')
+            busy.goto(origin + '/review/' + fixture.fb_id, wait_until='domcontentloaded')
+            editable(busy)
+            busy.get_by_role('button', name='编辑德语', exact=True).click()
+            busy.get_by_role('textbox', name='德语正文').fill('LAN beschaeftigter Entwurf.')
             mode['hold_save'] = True
-            busy.get_by_role('button', name='保存设置', exact=True).click()
+            busy.get_by_role('button', name='保存', exact=True).click()
             wait_for(first, lambda: bool(held) and any(row['busy'] for row in gate.status()['sessions']),
                      'In-flight UI write was not reported as busy')
-            times(disconnected).fill('13:30, 21:30')
+            disconnected.goto(origin + '/review/' + fixture.fb_id, wait_until='domcontentloaded')
+            editable(disconnected)
+            disconnected.get_by_role('button', name='编辑德语', exact=True).click()
+            disconnected.get_by_role('textbox', name='德语正文').fill('LAN getrennter Entwurf.')
             wait_for(first, lambda: any(row['session_id'] == session_ids[3] and row['dirty']
                                         for row in gate.status()['sessions']), 'Dirty client was not registered')
             epoch = gate.announce(delay=0)
@@ -207,7 +192,7 @@ def main():
             contexts[3].set_offline(True)
             disconnected.evaluate('window.dispatchEvent(new Event("offline"))')
             expect(disconnected.get_by_role('status').filter(has_text='重新确认')).to_be_visible()
-            expect(times(disconnected)).to_have_value('13:30, 21:30')
+            expect(disconnected.get_by_role('textbox', name='德语正文')).to_have_value('LAN getrennter Entwurf.')
             expired = gate.status(now=time.time() + SESSION_SECONDS + 1)
             assert any(row['session_id'] == session_ids[3] and row['reason'] == 'unsaved'
                        for row in expired['blockers']), expired
@@ -219,7 +204,7 @@ def main():
             assert deferred.value.status == 200
             assert gate.status()['phase'] == 'open' and gate.status()['deferred_until'] > time.time() + 1700
             mode['hold_save'] = False
-            with busy.expect_response(lambda response: response.request.method == 'PUT' and response.url.endswith('/api/settings')) as released:
+            with busy.expect_response(lambda response: response.request.method == 'PUT' and response.url.endswith('/localization')) as released:
                 held.pop().continue_()
             assert released.value.status == 200, released.value.text()
             refresh_status(second)

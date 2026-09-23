@@ -1,6 +1,6 @@
 import type { Platform } from '@/types/domain'
 
-export const NAV_KEYS = ['review-facebook', 'review-instagram', 'history', 'calendar', 'settings'] as const
+export const NAV_KEYS = ['review-facebook', 'review-instagram', 'history', 'calendar'] as const
 
 export type NavKey = (typeof NAV_KEYS)[number]
 
@@ -22,7 +22,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: 'review-instagram', label: 'Instagram 待审', path: reviewPath('instagram') },
   { key: 'history', label: '历史归档', path: '/history' },
   { key: 'calendar', label: '发布月历', path: '/calendar' },
-  { key: 'settings', label: '运营设置', path: '/settings' },
 ]
 
 const isPlatform = (value: string | null): value is Platform =>

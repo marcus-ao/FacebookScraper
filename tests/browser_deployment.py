@@ -1,4 +1,4 @@
-"""Isolated built-UI deployment coordination; deployment transport is simulated, settings writes are local."""
+"""Isolated built-UI deployment coordination; deployment transport is simulated, localization writes are local."""
 from __future__ import annotations
 
 import json
@@ -56,7 +56,7 @@ def main():
                     status['maintenance']['phase'] = 'open'
                     status['deployment']['phase'] = 'waiting'
                     route.fulfill(json={'deferred_minutes': 30})
-                elif request.method == 'PUT' and parsed.path == '/api/settings':
+                elif request.method == 'PUT' and parsed.path.endswith('/localization'):
                     writes.append(request.headers)
                     if mode['reject_save']:
                         route.fulfill(status=409, json={'code': 'runtime_changed', 'detail': '保留草稿'})
@@ -70,8 +70,9 @@ def main():
                     raise AssertionError(f'Unexpected mutation {request.method} {parsed.path}')
 
             page.route('**/*', route_request)
-            page.goto(fixture.base_url + '/settings', wait_until='domcontentloaded')
-            field = page.get_by_role('textbox', name='默认排期时间（北京）')
+            page.goto(fixture.base_url + '/review/' + fixture.fb_id, wait_until='domcontentloaded')
+            page.get_by_role('button', name='编辑德语', exact=True).click()
+            field = page.get_by_role('textbox', name='德语正文')
             expect(field).to_be_visible()
             expect(page.locator('[data-deployment-content]')).to_have_attribute('inert', '')
             page.wait_for_function('document.querySelector("[data-deployment-controls]") !== null')
@@ -82,15 +83,15 @@ def main():
             expect(page.locator('[data-deployment-content]')).not_to_have_attribute('inert', '')
             observations.append('initial managed registration precedes editable content')
 
-            field.fill('09:30, 18:30')
+            field.fill('Erster ungespeicherter Entwurf.')
             page.wait_for_timeout(100)
             status['maintenance']['phase'] = 'announcing'
             page.evaluate('window.dispatchEvent(new Event("focus"))')
             expect(page.get_by_role('status').filter(has_text='准备更新')).to_be_visible()
-            expect(field).to_have_value('09:30, 18:30')
+            expect(field).to_have_value('Erster ungespeicherter Entwurf.')
             assert reports[-1]['dirty'] and reports[-1]['ack_epoch'] is None
-            page.get_by_role('button', name='保存设置', exact=True).click()
-            expect(page.get_by_text('设置已保存，下次选期或挂起时生效。')).to_be_visible()
+            page.get_by_role('button', name='保存', exact=True).click()
+            expect(page.get_by_role('button', name='编辑德语', exact=True)).to_be_visible()
             expect(page.locator('[data-deployment-content]')).to_have_attribute('inert', '')
             page.wait_for_timeout(100)
             assert reports[-1]['ack_epoch'] == 'epoch-one' and not reports[-1]['dirty'] and not reports[-1]['busy']
@@ -106,23 +107,25 @@ def main():
             assert mode['defers'] == 1
             observations.append('body portal freeze and accessible defer control restore safely')
 
-            field.fill('11:15, 19:15')
+            page.get_by_role('button', name='编辑德语', exact=True).click()
+            field = page.get_by_role('textbox', name='德语正文')
+            field.fill('Zweiter Entwurf nach dem Speichern.')
             mode['offline'] = True
             page.evaluate('window.dispatchEvent(new Event("focus"))')
             expect(page.get_by_role('status').filter(has_text='重新')).to_be_visible()
             # Even programmatic clicks cannot escape the capture barrier.
             before = len(writes)
-            page.get_by_role('button', name='保存设置', exact=True).evaluate('(button) => button.click()')
+            page.get_by_role('button', name='保存', exact=True).evaluate('(button) => button.click()')
             page.wait_for_timeout(100)
             assert len(writes) == before
-            expect(field).to_have_value('11:15, 19:15')
+            expect(field).to_have_value('Zweiter Entwurf nach dem Speichern.')
             mode['offline'] = False
             page.evaluate('window.dispatchEvent(new Event("online"))')
             expect(page.get_by_role('status').filter(has_text='暂缓时间')).to_be_visible()
             mode['reject_save'] = True
-            page.get_by_role('button', name='保存设置', exact=True).click()
+            page.get_by_role('button', name='保存', exact=True).click()
             expect(page.get_by_role('status').filter(has_text='草稿保留')).to_be_visible()
-            expect(field).to_have_value('11:15, 19:15')
+            expect(field).to_have_value('Zweiter Entwurf nach dem Speichern.')
             status['runtime_id'] = 'b' * 64 if runtime != 'b' * 64 else 'c' * 64
             page.evaluate('window.dispatchEvent(new Event("focus"))')
             expect(page.get_by_role('status').filter(has_text='不会自动刷新')).to_be_visible()
@@ -134,8 +137,8 @@ def main():
             expect(stay).to_be_visible()
             stay.click()
             expect(stay).not_to_be_visible()
-            expect(field).to_have_value('11:15, 19:15')
-            observations.append('navigation confirmation remains usable while frozen and preserves settings on stay')
+            expect(field).to_have_value('Zweiter Entwurf nach dem Speichern.')
+            observations.append('navigation confirmation remains usable while frozen and preserves draft on stay')
 
             page.close()
             status.update(runtime_id=runtime, deployment={'phase': 'idle'})

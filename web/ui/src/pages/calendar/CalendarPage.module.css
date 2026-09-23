@@ -1,19 +1,20 @@
-.heading { display: flex; align-items: center; justify-content: space-between; }
+.heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--rc-space-2); }
 .help { font-size: var(--rc-font-secondary); color: var(--rc-fg-muted); }
 .grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); margin-top: var(--rc-space-3); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); overflow: hidden; background: var(--rc-surface); }
 .weekday { padding: var(--rc-space-2); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); background: var(--rc-surface-sunken); }
 .day { min-height: var(--rc-calendar-day-h); padding: var(--rc-space-2); border-top: 1px solid var(--rc-border); border-right: 1px solid var(--rc-border); }
 .day:nth-child(7n) { border-right: 0; }
-/* outline 标识今天，不改变格子尺寸。 */
-.today { outline: 1px solid var(--rc-primary); outline-offset: -1px; }
-.todayMark { color: var(--rc-primary); font-weight: var(--rc-weight-strong); }
+/* 今天用浅主色底，跨月格子沉底弱化，都不改变格子尺寸。 */
+.today { background: var(--rc-primary-soft); }
+.todayMark { color: var(--rc-primary-on-soft); font-weight: var(--rc-weight-strong); }
+.outside { background: var(--rc-bg); }
+.outside .date { opacity: 0.6; }
 .date { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
-.card { width: 100%; border: 0; background: var(--rc-surface-sunken); border-radius: var(--rc-radius); color: var(--rc-fg); text-align: left; cursor: pointer; padding: var(--rc-space-2); display: flex; flex-wrap: wrap; gap: var(--rc-space-1); margin-top: var(--rc-space-2); font: inherit; font-size: var(--rc-font-meta); }
+.card { width: 100%; border: 0; background: var(--rc-surface-sunken); border-radius: var(--rc-radius); color: var(--rc-fg); text-align: left; cursor: pointer; padding: var(--rc-space-2); display: flex; flex-wrap: wrap; align-items: center; gap: var(--rc-space-1); margin-top: var(--rc-space-2); font: inherit; font-size: var(--rc-font-meta); transition: background var(--rc-motion-duration) var(--rc-motion-easing); }
+.card:hover { background: var(--rc-bg); }
 .card :global(.ant-tag) { white-space: normal; margin: 0; }
 .caption { max-width: var(--rc-calendar-popover-w); max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
+.note { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); }
 
 /* 本地图层画成虚线，一眼能和后台读回来的实线卡分开。 */
 .localCard { border: 1px dashed var(--rc-border); background: transparent; text-decoration: none; }
-.audience { color: var(--rc-fg-muted); }
-.legend { display: flex; flex-wrap: wrap; gap: var(--rc-space-2); margin-bottom: var(--rc-space-2); align-items: center; }

@@ -1,7 +1,6 @@
 
 export const UNSAVED_MESSAGES = {
   detail: '修改尚未保存，确定离开并放弃当前草稿？',
-  settings: '设置尚未保存，离开会放弃这次修改。继续离开？',
 } as const
 
 export type UnsavedMessageKey = keyof typeof UNSAVED_MESSAGES

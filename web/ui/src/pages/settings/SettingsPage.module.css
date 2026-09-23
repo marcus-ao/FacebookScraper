@@ -1,6 +1,0 @@
-.page { max-width: var(--rc-settings-w); margin: 0 auto; }
-.help { font-size: var(--rc-font-secondary); color: var(--rc-fg-muted); }
-.form { max-width: var(--rc-settings-form-w); }
-.controlled { margin-top: var(--rc-space-5); }
-.controlled dl, .controlled pre { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.controlled dd { margin: var(--rc-space-1) 0 var(--rc-space-3); }

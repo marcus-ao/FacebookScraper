@@ -1,6 +1,6 @@
 # FB / IG 内容本地化
 
-归档美国站 Facebook / Instagram 图文，生成德语文案和图片，供运营审校并按北京时间选择发布时刻，通过 Meta Business Suite 创建单渠道排期。审校台会在每个时刻旁并排显示德国受众的柏林当地时刻。
+归档美国站 Facebook / Instagram 图文，生成德语文案和图片，供运营审校并按北京时间选择发布时刻，通过 Meta Business Suite 创建单渠道排期。
 
 ## 安装与启动
 

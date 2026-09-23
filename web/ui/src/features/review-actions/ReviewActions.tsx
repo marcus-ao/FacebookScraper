@@ -60,8 +60,8 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
       cancelButtonProps={{ disabled: mutation.isPending }} keyboard={!mutation.isPending} closable={!mutation.isPending}>
       {form && <Form layout="vertical" disabled={mutation.isPending}>
         {form.action === 'snoozed' && <>
-          <p>默认在 {context.review.snooze_default_days || 3} 个工作日后回到待审列表。工作日按上海时间周一至周五计算。</p>
-          <Form.Item label="指定回来时间（上海时间）"><Input type="datetime-local" aria-label="指定回来时间（上海时间）"
+          <p>默认在 {context.review.snooze_default_days || 3} 个工作日后回到待审列表。工作日按周一至周五计算。</p>
+          <Form.Item label="指定回来时间"><Input type="datetime-local" aria-label="指定回来时间"
             value={form.wakeAt} onChange={event => setForm({ ...form, wakeAt: event.target.value })} /></Form.Item>
         </>}
         {form.action === 'skipped' && <p>这篇会移到“已处理”，系统将停止后续处理。请留下不发的理由。</p>}

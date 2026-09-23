@@ -152,13 +152,13 @@ describe('时刻列按各自的时区语义', () => {
   it('队列用业务时刻', () => {
     const markup = cell(reviewColumns(), 'time', reviewRow)
     expect(markup).toContain('data-zone="business"')
-    expect(markup).toContain('17:00 北京')
+    expect(markup).toContain('17:00')
   })
 
-  it('历史用上海时刻', () => {
+  it('历史用操作记录时刻', () => {
     const markup = cell(historyColumns(), 'time', historyRow)
     expect(markup).toContain('data-zone="shanghai"')
-    expect(markup).toContain('上海')
+    expect(markup).not.toContain('上海')
   })
 
   it('没有时刻时显示占位', () => {

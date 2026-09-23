@@ -83,8 +83,6 @@ const layout = {
   initialSpace: 0,
   calendarDayHeight: 64,
   calendarPopoverWidth: 420,
-  settingsWidth: 880,
-  settingsFormWidth: 520,
 } as const
 
 /** 仅浮层使用阴影，页面内容用边框分层。 */
@@ -276,8 +274,6 @@ export const cssVariables: Readonly<Record<string, string>> = {
   '--rc-initial-space': `${layout.initialSpace}px`,
   '--rc-calendar-day-h': `${layout.calendarDayHeight}px`,
   '--rc-calendar-popover-w': `${layout.calendarPopoverWidth}px`,
-  '--rc-settings-w': `${layout.settingsWidth}px`,
-  '--rc-settings-form-w': `${layout.settingsFormWidth}px`,
 
   '--rc-shadow-overlay': elevation.overlay,
   '--rc-motion-duration': motion.duration,

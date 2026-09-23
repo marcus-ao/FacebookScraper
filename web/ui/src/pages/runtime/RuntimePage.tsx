@@ -58,7 +58,7 @@ function RuntimeView({ initial, current }: { initial: RuntimeSnapshot; current: 
       {!!unconfirmed && <p>{unconfirmed} 次提交结果需要核对。当前记录只有计数，暂时无法直接定位帖子。 <Button type="link" onClick={() => setMaintenance(true)}>查看维护说明</Button></p>}
       {mirrorNeedsAttention && <p>云盘镜像：{mirrorSummary(mirror).conclusion}</p>}
     </section>
-    <div className={styles.facts}><span>调度进程：{data.process.alive === true ? '活跃' : data.process.alive === false ? '已退出' : '尚未确认'}</span><span>最近完整业务处理成功：<ShanghaiTime at={data.business.last_successful_run} fallback="尚无记录" /></span></div>
+    <div className={styles.facts}><span>调度进程：{data.process.alive === true ? '活跃' : data.process.alive === false ? '已退出' : '未知'}</span><span>最近完整业务处理成功：<ShanghaiTime at={data.business.last_successful_run} fallback="尚无记录" /></span></div>
     <section aria-label="五阶段概览">{data.stages.map(stage => { const summary = stageSummary(stage); return <article key={stage.number} className={styles.stage}>
       <div className={styles.stageHeading}><h2>{stage.number}. {stage.name}</h2><Badge status={summary.tone} text={summary.label} /></div><p>{summary.conclusion}</p>
       {stage.number === 3 && <p className={styles.help}>本轮开始 <ShanghaiTime at={batch.started_at} /> · 完成 <ShanghaiTime at={batch.finished_at} />{stage.trends_export?.status === 'blocked' && ' · 趋势采样已暂停，仍可使用语义候选。'}</p>}

@@ -10,7 +10,6 @@ import { ReviewPage } from '@/pages/review/ReviewPage'
 import { HistoryPage } from '@/pages/history/HistoryPage'
 import { ReviewDetailPage } from '@/pages/review-detail/ReviewDetailPage'
 import { CalendarPage } from '@/pages/calendar/CalendarPage'
-import { SettingsPage } from '@/pages/settings/SettingsPage'
 import { RuntimePage } from '@/pages/runtime/RuntimePage'
 
 /** 兼容飞书等外部系统已有的 ?task=、?view= 链接。 */
@@ -76,11 +75,6 @@ export const routes: RouteObject[] = [
         path: 'calendar',
         element: <CalendarPage />,
         handle: meta({ title: '发布月历' }),
-      },
-      {
-        path: 'settings',
-        element: <SettingsPage />,
-        handle: meta({ title: '运营设置' }),
       },
       {
         path: 'runtime',

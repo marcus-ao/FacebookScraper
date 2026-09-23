@@ -11,7 +11,7 @@ from ui_fixture import EVIDENCE, BrowserFixture, UIFixture
 
 WORKFLOWS = [
     "save", "snooze", "wake", "skip", "handoff", "handoff_link", "tags", "export",
-    "approve", "calendar_failure", "settings", "initial", "refine_text", "refine_image",
+    "approve", "calendar_failure", "initial", "refine_text", "refine_image",
     "recover_job", "hashtags",
 ]
 
@@ -24,7 +24,7 @@ def versions(detail):
     }
 
 
-def expected_contract(workflow, detail, path, capability, job, settings):
+def expected_contract(workflow, detail, path, capability, job):
     base_decision = {
         "source_text_sha256": detail["text"]["source_text_sha256"],
         "review_revision": detail["review"]["revision"],
@@ -77,11 +77,6 @@ def expected_contract(workflow, detail, path, capability, job, settings):
         }
     if workflow == "calendar_failure":
         return "POST", "/api/calendar/refresh", {}
-    if workflow == "settings":
-        return "PUT", "/api/settings", {
-            "values": {"default_times": ["11:00", "18:30"], "snooze_default_days": 5},
-            "version": settings["version"],
-        }
     if workflow == "initial":
         return "POST", f"/api/initial-translation/task/{detail['id']}", {
             "consent": True, "source_fingerprint": capability["source_fingerprint"], **versions(detail),
@@ -122,7 +117,6 @@ def run(page, ui, workflow, original):
     options = ui.fx.client.get(path + "/approval-options").json()
     options.update(available=True, reason="", fingerprint="same-fingerprint",
                    earliest="2026-09-14T08:00:00+02:00", latest="2026-10-01T20:00:00+02:00")
-    settings = ui.fx.client.get("/api/settings").json()
     calendar = ui.fx.client.get("/api/calendar").json()
     calendar["refresh_available"] = True
     ui.overrides = {
@@ -142,18 +136,16 @@ def run(page, ui, workflow, original):
         ("PUT", path + "/tags"): (200, {**detail, "tags": ["Riko", "促销"]}),
         ("GET", "/api/calendar"): (200, calendar),
         ("POST", "/api/calendar/refresh"): (503, {**calendar, "error": "fixture failure"}),
-        ("GET", "/api/settings"): (200, settings),
-        ("PUT", "/api/settings"): (200, {**settings, "editable": {"default_times": ["11:00", "18:30"], "snooze_default_days": 5}}),
         ("POST", f"/api/hashtags/task/{task_id}"): (200, {
             "source_text_sha256": detail["text"]["source_text_sha256"],
             "generated_at": "2026-09-13T00:00:00Z", "notice": "未采样", "selected": ["#Katzen"],
             "groups": [], "sampling": {"status": "unavailable", "reason": "fixture offline"},
         }),
     }
-    expected = expected_contract(workflow, detail, path, capability, job, settings)
+    expected = expected_contract(workflow, detail, path, capability, job)
     start = len(ui.requests)
-    if workflow in ["calendar_failure", "settings"]:
-        page.goto(ui.fx.base_url + ("/calendar" if workflow == "calendar_failure" else "/settings"), wait_until="networkidle")
+    if workflow == "calendar_failure":
+        page.goto(ui.fx.base_url + "/calendar", wait_until="networkidle")
     else:
         page.goto(ui.fx.base_url + "/review/" + task_id, wait_until="networkidle")
         expect(page.get_by_role("button", name="编辑德语", exact=True)).to_have_count(0 if workflow == "handoff_link" else 1)
@@ -170,7 +162,7 @@ def run(page, ui, workflow, original):
         page.get_by_role("menuitem", name=labels[workflow], exact=True).click()
         modal = page.get_by_role("dialog")
         if workflow == "snooze":
-            modal.get_by_role("textbox", name="指定回来时间（上海时间）").fill("2026-09-16T09:00")
+            modal.get_by_role("textbox", name="指定回来时间").fill("2026-09-16T09:00")
         if workflow in ["snooze", "skip"]:
             modal.get_by_role("textbox", name="理由").fill("同一份运营理由")
         if workflow in ["handoff", "handoff_link", "export"]:
@@ -186,15 +178,11 @@ def run(page, ui, workflow, original):
         page.get_by_role("textbox", name="产品分类", exact=True).fill("Riko，促销")
         page.get_by_role("button", name="保存分类", exact=True).click()
     elif workflow == "approve":
-        page.get_by_role("textbox", name="发布时间（柏林当地时间）", exact=True).fill("2026-09-15T10:30")
-        page.get_by_role("button", name="通过并创建排期", exact=True).click()
-        page.get_by_role("button", name="确认通过并创建排期", exact=True).click()
+        page.get_by_role("textbox", name="发布时间", exact=True).fill("2026-09-15T10:30")
+        page.get_by_role("button", name="确认发布时间并排期", exact=True).click()
+        page.get_by_role("button", name="确认并创建排期", exact=True).click()
     elif workflow == "calendar_failure":
         page.get_by_role("button", name="刷新月历", exact=True).click()
-    elif workflow == "settings":
-        page.get_by_role("textbox", name="默认排期时间（柏林）").fill("11:00, 18:30")
-        page.get_by_role("spinbutton", name="默认挂起期限").fill("5")
-        page.get_by_role("button", name="保存设置", exact=True).click()
     elif workflow == "initial":
         page.get_by_role("checkbox", name="我已确认可以处理这篇内容，开始本篇模型处理。").check()
         page.locator('[data-paid-action="翻译这篇"]').click()

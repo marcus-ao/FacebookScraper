@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import tempfile
 from collections import Counter, defaultdict
@@ -364,15 +365,27 @@ def check_consistency(archive_root: Path, db_path: Path, *, state_dir: Path | No
                 "details": ["database unreadable: %s" % type(exc).__name__]}
 
 
+def created_month(row: dict) -> str:
+    """历史页月份跟着行内日期（created_at）走；归档目录月份按北京换算，与行内日期可能差一天跨月。"""
+    created = row.get('created_at') or ''
+    return created[:7] if re.match(r'^\d{4}-\d{2}-\d{2}', created) else 'undated'
+
+
 def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=None,
                page: int = 1, limit: int = 50) -> dict:
     if not 1 <= limit <= 100 or page < 1:
         raise ValueError('历史查询每页 1–100 篇，页数从 1 开始')
     filters, values = [], []
-    for column, value in [('platform', platform), ('month', month), ('status', status)]:
+    for column, value in [('platform', platform), ('status', status)]:
         if value:
             filters.append(column + ' = ?')
             values.append(value)
+    # month 按行内日期过滤，与 created_month 同一条规则；'undated' 兜住无日期帖子。
+    if month == 'undated':
+        filters.append("created_at NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*'")
+    elif month:
+        filters.append('substr(created_at, 1, 7) = ?')
+        values.append(month)
     if tag == '__untagged__':
         filters.append('NOT EXISTS (SELECT 1 FROM post_tags t WHERE t.task_id = posts.task_id)')
     elif tag:
@@ -385,7 +398,12 @@ def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=Non
             'SELECT row_json FROM posts' + where + ' ORDER BY created_at DESC, task_id LIMIT ? OFFSET ?',
             [*values, limit, (page - 1) * limit])]
         tags = [row[0] for row in connection.execute('SELECT DISTINCT tag FROM post_tags ORDER BY tag')]
-        months = [row[0] for row in connection.execute('SELECT DISTINCT month FROM posts ORDER BY month DESC')]
+        months = [row[0] for row in connection.execute(
+            "SELECT DISTINCT substr(created_at, 1, 7) FROM posts"
+            " WHERE created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*' ORDER BY 1 DESC")]
+        if connection.execute("SELECT 1 FROM posts WHERE created_at NOT GLOB"
+                              " '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*' LIMIT 1").fetchone():
+            months.append('undated')
     return {'rows': rows, 'total': total, 'tags': tags, 'months': months}
 
 

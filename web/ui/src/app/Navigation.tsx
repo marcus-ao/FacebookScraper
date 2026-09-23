@@ -1,5 +1,5 @@
 import { Menu } from 'antd'
-import { CalendarOutlined, FacebookOutlined, InboxOutlined, InstagramOutlined, SettingOutlined } from '@ant-design/icons'
+import { CalendarOutlined, FacebookOutlined, InboxOutlined, InstagramOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { Link, useLocation } from 'react-router'
 
@@ -14,7 +14,6 @@ const ICONS: Readonly<Record<NavKey, React.ReactNode>> = {
   'review-instagram': <InstagramOutlined />,
   history: <InboxOutlined />,
   calendar: <CalendarOutlined />,
-  settings: <SettingOutlined />,
 }
 
 export function Navigation() {

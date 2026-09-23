@@ -225,11 +225,11 @@ describe('旧 URL 永久兼容（DECISION_LOG）', () => {
     )
   })
 
-  it('四个 view 各自映射', () => {
+  it('三个 view 各自映射；已下线的设置页回落审校队列', () => {
     expect(legacyRedirect('?view=history')).toBe('/history')
     expect(legacyRedirect('?view=calendar')).toBe('/calendar')
-    expect(legacyRedirect('?view=settings')).toBe('/settings')
     expect(legacyRedirect('?view=runtime')).toBe('/runtime')
+    expect(legacyRedirect('?view=settings')).toBe('/review')
   })
 
   it('未知 view 回落审校队列', () => {

@@ -74,6 +74,23 @@ class QueryIndexTests(unittest.TestCase):
         self.assertEqual((self.arc.post_dir(self.first) / 'post.json').read_bytes(), before)
         self.assertEqual(query_index.candidates(tag='__untagged__', now=self.now)['task_ids'], ['in_neakasa.global/2'])
 
+    def test_history_month_follows_displayed_date_not_archive_folder(self):
+        """历史月份筛选与行内日期一致：归档目录按北京时刻换算，可能与原帖日期跨月。"""
+        late = store.Post('late', 'instagram', 'neakasa.global', 'Late', '2026-08-31T22:30:00Z', tags=[])
+        nodate = store.Post('nodate', 'instagram', 'neakasa.global', 'NoDate', '', tags=[])
+        self.arc.append(late)
+        self.arc.append(nodate)
+        # 北京时刻已是 9 月 1 日清晨，归档目录落进 2026-09；行内日期仍是 8 月 31 日。
+        self.assertTrue(self.arc.post_dir(late).name.startswith('2026-09'))
+        august = query_index.history_page(month='2026-08', now=self.now)
+        self.assertEqual([row['id'] for row in august['rows']],
+                         ['in_neakasa.global/late', 'in_neakasa.global/2'])
+        september = query_index.history_page(month='2026-09', now=self.now)
+        self.assertEqual([row['id'] for row in september['rows']], ['in_neakasa.global/1'])
+        undated = query_index.history_page(month='undated', now=self.now)
+        self.assertEqual([row['id'] for row in undated['rows']], ['in_neakasa.global/nodate'])
+        self.assertEqual(query_index.history_page(now=self.now)['months'], ['2026-09', '2026-08', 'undated'])
+
     def test_empty_non_post_directory_does_not_make_the_index_unavailable(self):
         """The source signature must skip the same non-truth directories as the rebuilder."""
         (self.arc.posts_dir / 'empty-recovery-dir').mkdir()
