@@ -44,8 +44,8 @@ class SchedulerEntryTests(unittest.TestCase):
         runtime.mirror_settings = Mock(enabled=False)
         timeline = []
         runtime.client = Mock()
-        runtime.client.send.side_effect = lambda _role, card, _id: (
-            timeline.append(card['header']['title']['content']) or 'bot-accepted:fixture')
+        runtime.client.send.side_effect = lambda role, _card, delivery_id: (
+            timeline.append(('sent', role, delivery_id)) or 'bot-accepted:fixture')
         runtime.client.close.side_effect = lambda: timeline.append('closed')
         early_delivery = Event()
         deliver = runtime._deliver
@@ -82,10 +82,14 @@ class SchedulerEntryTests(unittest.TestCase):
             self.assertEqual(scheduler.main(['--run', '--process', '--once']), 0)
             # 失败版本已先 close；仍等假处理线程退出，避免清理临时目录时产生竞态。
             runtime.processing_future.result(timeout=5)
-        ready = [item for item in timeline if '新的待审内容' in item]
+        ready = [(delivery_id, row) for delivery_id, row in
+                 runtime.outbox._load()['deliveries'].items()
+                 if row['kind'] == 'ready' and row['status'] == 'sent']
         self.assertEqual(len(ready), 1, timeline)
-        self.assertLess(timeline.index('content-ready'), timeline.index(ready[0]))
-        self.assertLess(timeline.index(ready[0]), timeline.index('closed'))
+        sent_ready = ('sent', 'publish', ready[0][0])
+        self.assertEqual(timeline.count(sent_ready), 1, timeline)
+        self.assertLess(timeline.index('content-ready'), timeline.index(sent_ready))
+        self.assertLess(timeline.index(sent_ready), timeline.index('closed'))
         runner.tick.assert_called_once()
         process.assert_called_once()
         runtime.refresh_hashtags.assert_called_once()
