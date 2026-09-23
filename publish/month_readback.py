@@ -6,6 +6,8 @@ from publish import business_suite as bs, month_inventory
 
 
 def matching(inventory, when, final_text, target_channels):
+    # 目标卡片回读要求整月 decision_complete。occupancy_complete 只说明网格对齐，
+    # 不能代替完整正文、单一渠道和远端 ID。
     if not inventory.decision_complete or not inventory.covers((when,)):
         raise bs.PublishStepError('月历范围或渠道未读完整，不能核验本次排期')
     expected = bs._card_text(final_text)

@@ -160,8 +160,15 @@ class StoryInsightsTests(MonthDetailCase):
         self.assertTrue(result.diagnostics)
         self.assertFalse(result.decision_complete)
         self.assertFalse(any('1068553422207259' in dict(c.remote_ids).values() for c in result.cards))
-        with self.assertRaises(ProbeRequired):
-            result.occupied_for_channel('instagram')
+        # 已核实的 IG 变体仍列出自己的渠道时刻。没解出来的 FB 占位没有独立时刻，
+        # 不能借这一刻证明它在目标范围外，也不能把这一刻当成空档。
+        unread = [item for item in result.cards if item.read_status != 'complete']
+        self.assertEqual(result.occupied_for_channel('instagram'), (card.at,))
+        self.assertEqual(result.occupied_for_channel('facebook'), ())
+        self.assertEqual(result.unverified_moments(), (card.at,))
+        self.assertTrue(card.time_verified)
+        self.assertEqual(len(unread), 1)
+        self.assertFalse(unread[0].time_verified)
         self.assertEqual(len(self.context.pages), 1)
 
     async def test_another_media_or_permalink_owner_cannot_supply_instagram_identity(self):

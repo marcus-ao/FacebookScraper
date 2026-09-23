@@ -117,6 +117,18 @@ class RecoveryTests(unittest.TestCase):
         attempt['remote_id'] = 'instagram=87654321'
         self.assertEqual(observations.status(self.state, attempt)['status'], 'published')
 
+    def test_an_unread_card_calling_itself_published_is_not_a_publication_fact(self):
+        """月历现在会按格子上有没有 insights 链接把未读条目标成 published。
+
+        那是展示用的推断，不是详情页核实过的公开事实；真相源只收 read_status=complete。
+        """
+        attempt = {'status': 'scheduled', 'scheduled_at': '2020-01-01T10:00:00Z',
+                   'target_channels': ['instagram'], 'remote_id': 'instagram=87654321'}
+        card = RemotePlannerCard(NOW, ('instagram',), (('instagram', '87654321'),), '', 'hash',
+                                 'published', read_status='incomplete')
+        observations.record(self.state, RemoteSlotInventory((), 'UTC', NOW.date(), NOW.date(), (card,), True), NOW)
+        self.assertEqual(observations.status(self.state, attempt)['status'], 'unknown')
+
     def test_cancelled_part_of_merged_message_does_not_hide_valid_post_for_other_recipient(self):
         outbox = Outbox(self.state / 'outbox.json', FeishuSettings(True, 'http://localhost', publish_recipients=('ops1', 'ops2'), alert_recipients=('alert',)))
         night = NOW - timedelta(hours=4)

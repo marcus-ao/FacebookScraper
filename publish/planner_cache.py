@@ -61,7 +61,7 @@ def _guard(path: Path, _role: str = "target") -> Path:
 def _empty() -> dict:
     return {"version": 1, "observed_at": None, "last_attempt_at": None,
             "refresh_status": "idle", "refresh_error": None, "refresh_diagnostic": None,
-            "inventory": None, "partial_inventory": None, "partial_observed_at": None}
+            "inventory": None}
 
 
 def _serialize(inventory: RemoteSlotInventory) -> dict:
@@ -77,6 +77,7 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
                        'placement': card.placement, 'media_kind': card.media_kind,
                        'caption_status': card.caption_status, 'accounts': dict(card.accounts),
                        'relationships': list(card.relationships), 'read_status': card.read_status,
+                       'time_verified': card.time_verified, 'diagnostic_index': card.diagnostic_index,
                        'source_content_id': card.source_content_id} for card in inventory.cards]}
 
 
@@ -103,6 +104,12 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
         metadata = {key: row.get(key, default) for key, default in (
             ('placement','unknown'), ('media_kind','unknown'), ('caption_status','unknown'),
             ('read_status','legacy'), ('source_content_id',''))}
+        metadata.update(time_verified=row.get('time_verified', False), diagnostic_index=row.get('diagnostic_index'))
+        diagnostic_index = metadata['diagnostic_index']
+        if (type(metadata['time_verified']) is not bool or
+                (diagnostic_index is not None and (type(diagnostic_index) is not int or
+                 not 0 <= diagnostic_index < len(data.get('diagnostics', []))))):
+            raise ValueError('月历时刻证据或诊断关联无效')
         if (metadata['placement'] not in PLACEMENTS or metadata['media_kind'] not in MEDIA_KINDS
                 or metadata['caption_status'] not in CAPTION_STATUSES or metadata['read_status'] not in READ_STATUSES
                 or not isinstance(metadata['source_content_id'], str)
@@ -134,9 +141,10 @@ def _load(path: Path) -> dict:
         if value.get(key) is not None:
             _moment(value[key])
     inventory = inventory_from_cache(value)
-    if value.get('partial_inventory') is not None:
-        inventory_from_cache({'inventory':value['partial_inventory']})
-        _moment(value['partial_observed_at'])
+    # 旧缓存里的「部分结果」第二层已经取消：整月网格读全就是一次真实读取，
+    # 逐条明细的缺口记在卡片和 diagnostics 上。读到旧字段直接丢掉，下次刷新落盘时消失。
+    for legacy in ('partial_inventory', 'partial_observed_at'):
+        value.pop(legacy, None)
     if (inventory is None) != (value.get("observed_at") is None):
         raise ValueError("月历数据与成功观测时间必须同时存在")
     return value
@@ -144,7 +152,12 @@ def _load(path: Path) -> dict:
 
 def read_cache(path: Path, *, now: datetime | None = None,
                stale_after_seconds: float = 3600) -> dict:
-    """无文件写入。status 区分缺失、部分数据、过期和时钟倒退。"""
+    """无文件写入。status 区分缺失、过期和时钟倒退。
+
+    ⚠️ status 讲的是「这份同步有多新」，不讲「每条明细都核实过了」。
+    后者看卡片自己的 read_status 和 diagnostics；混在一起会让两条读不出明细的
+    卡片把整月染成不可用，而那个月的占用其实是完整的。
+    """
     now = _moment(now or datetime.now(timezone.utc))
     try:
         record = _load(Path(path))
@@ -153,16 +166,12 @@ def read_cache(path: Path, *, now: datetime | None = None,
                 "age_seconds": None, "refresh_error": "cache_unavailable"}
     age = ((now - _moment(record["observed_at"])).total_seconds()
            if record.get("observed_at") else None)
-    if record.get('partial_inventory') is not None:
-        status = 'partial'
-    elif age is None:
+    if age is None:
         status = "unavailable" if record.get("refresh_error") else "missing"
     elif age < 0:
         status = "clock_skew"
     elif age >= stale_after_seconds:
         status = "stale"
-    elif not inventory_from_cache(record).decision_complete:
-        status = "partial"
     else:
         status = "ready"
     return {**record, "status": status, "advisory_only": True, "age_seconds": age}
@@ -195,27 +204,20 @@ async def refresh_cache(path: Path, reader, *, state_dir: Path,
         record["last_attempt_at"] = attempted.isoformat()
         try:
             inventory = await reader()
+            # 能不能存下这个月，看的是网格：日期格读全、范围成立、每张卡都落在
+            # 一个观测时刻上。逐条明细读没读出来不影响这三件事，也就不该让整月作废。
             if (not isinstance(inventory, RemoteSlotInventory) or not inventory.cards_loaded
                     or inventory.visible_start is None or inventory.visible_end is None
-                    or inventory.visible_start > inventory.visible_end):
+                    or inventory.visible_start > inventory.visible_end
+                    or not inventory.occupancy_complete):
                 raise ProbeRequired("coverage_unavailable")
             # 再做一次序列化往返，防止坏数据让此前成功缓存无法读取。
             data = _serialize(inventory)
             inventory_from_cache({"inventory": data})
             observed = _moment(now or clock())
-            if not inventory.decision_complete:
-                diagnostic = next(iter(inventory.diagnostics), None)
-                record.update(partial_inventory=data, partial_observed_at=observed.isoformat(),
-                              refresh_status='failed', refresh_error='items_incomplete',
-                              refresh_diagnostic=diagnostic)
-                if not corrupt:
-                    atomic_write_json(path, record, guard=_guard)
-                return {**read_cache(path, now=now or clock()), **{
-                    key:record[key] for key in ('partial_inventory','partial_observed_at',
-                        'refresh_status','refresh_error','refresh_diagnostic')}, 'status':'partial'}
             record.update(inventory=data, observed_at=observed.isoformat(),
-                          refresh_status="refreshed", refresh_error=None, refresh_diagnostic=None,
-                          partial_inventory=None, partial_observed_at=None)
+                          refresh_status="refreshed", refresh_error=None,
+                          refresh_diagnostic=next(iter(inventory.diagnostics), None))
         except Exception as exc:
             code = ("timeout" if isinstance(exc, TimeoutError) else
                     "coverage_unavailable" if isinstance(exc, ProbeRequired) else "read_failed")

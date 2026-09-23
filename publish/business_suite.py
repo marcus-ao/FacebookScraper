@@ -149,6 +149,9 @@ class RemotePlannerCard:
     relationships: tuple[str, ...] = ()
     read_status: str = 'complete'
     source_content_id: str = ''
+    # 缺省为假：旧缓存没有该字段时不能把外层时刻当成已核实。成功读取的变体显式记真。
+    time_verified: bool = False
+    diagnostic_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -180,18 +183,65 @@ class RemoteSlotInventory:
         return (self.cards_loaded
                 and all(card.channels and set(card.channels) <= {"facebook", "instagram"}
                         for card in self.cards)
+                and self.occupancy_complete)
+
+    @property
+    def occupancy_complete(self) -> bool:
+        """每张卡的时刻都能在占用集合里找到，占用集合里的时刻也都有卡。
+
+        这只说明网格和卡片对齐，够用来展示这次同步。它不证明渠道、正文已读，
+        也不证明聚合卡的每个变体都已读取——多个变体可以共用一个时间戳。
+        """
+        return (self.cards_loaded
+                and all(set(card.channels) <= {"facebook", "instagram"} for card in self.cards)
                 and {card.at.timestamp() for card in self.cards}
                 == {item.timestamp() for item in self.occupied})
 
     def occupied_for_channel(self, channel: str) -> tuple[datetime, ...]:
+        """已带该渠道标记的时刻。列出它们不是空档许可，空档确认走 cards_in_range。"""
         if channel not in {"facebook", "instagram"}:
             raise ValueError("未知目标渠道：%s" % channel)
-        if not self.decision_complete:
-            raise ProbeRequired("Planner 渠道信息不完整，不能把未识别卡片当作空档")
+        if not self.occupancy_complete:
+            raise ProbeRequired("Planner 槽位与卡片对不上，不能把未读取的时刻当作空档")
         # UTC 时间戳去重，避免同一 ZoneInfo 的 fold 比较吞掉回拨时刻。
         selected = {card.at.timestamp(): card.at for card in self.cards
                     if channel in card.channels}
         return tuple(selected[key] for key in sorted(selected))
+
+    def unverified_moments(self) -> tuple[datetime, ...]:
+        """渠道字段为空的卡片时刻。只描述格子上有这些时刻，不授权相邻分钟排期。"""
+        if not self.occupancy_complete:
+            raise ProbeRequired("Planner 槽位与卡片对不上，不能把未读取的时刻当作空档")
+        selected = {card.at.timestamp(): card.at for card in self.cards if not card.channels}
+        return tuple(selected[key] for key in sorted(selected))
+
+    def cards_in_range(self, channel: str, start: datetime, end: datetime, *,
+                       include_bounds: bool = True) -> tuple[RemotePlannerCard, ...]:
+        """目标时段内、已核实属于该渠道的卡片。
+
+        时刻未独立核实的卡片不能靠外层时间证明自己在范围外。
+        范围内渠道未知则拒绝，不能当成空档。
+        """
+        if channel not in {'facebook', 'instagram'} or start.timestamp() > end.timestamp():
+            raise ValueError('无效的月历渠道或时间范围')
+        if (not self.cards_loaded or not self.covers((start, end))
+                or {card.at.timestamp() for card in self.cards} != {at.timestamp() for at in self.occupied}
+                or not set(range(len(self.diagnostics))).issubset(
+                    {card.diagnostic_index for card in self.cards})):
+            raise ProbeRequired('月历覆盖或条目证据不完整，不能确认这个时段空闲')
+        selected = []
+        for card in self.cards:
+            if not card.time_verified:
+                raise ProbeRequired('月历条目的独立时刻未核验，不能用外层卡片时间排除占用')
+            if not start.timestamp() <= card.at.timestamp() <= end.timestamp():
+                continue
+            if not include_bounds and card.at.timestamp() in {start.timestamp(), end.timestamp()}:
+                continue
+            if not card.channels or not set(card.channels) <= {'facebook', 'instagram'}:
+                raise ProbeRequired('相关时段的条目渠道未知，不能当作空档')
+            if channel in card.channels:
+                selected.append(card)
+        return tuple(selected)
 
     def covers(self, slots: tuple[datetime, ...] | list[datetime]) -> bool:
         if any(slot.tzinfo is None or slot.utcoffset() is None for slot in slots):
@@ -1551,7 +1601,9 @@ async def read_remote_slot_inventory(
                     remote_cards.append(RemotePlannerCard(
                         at=at, channels=tuple(sorted(remote_ids)),
                         remote_ids=tuple(sorted(remote_ids.items())), rendered=raw,
-                        card_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(), placement='feed'))
+                        card_sha256=hashlib.sha256(raw.encode("utf-8")).hexdigest(), placement='feed',
+                        # 这一时刻来自该卡片自己的日期文本，不是聚合变体借来的外层时间。
+                        time_verified=True))
     return RemoteSlotInventory(
         occupied=tuple(occupied[key] for key in sorted(occupied)), ui_timezone=ui_timezone,
         visible_start=(visible[0] if visible else None),

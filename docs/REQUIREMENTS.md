@@ -342,7 +342,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F4-3 多收件人记录兼容 | 真实通过* | 当前每类消息只投递一个阶段机器人；保留旧多收件人记录的恢复与归档，不提供新增多目标配置入口 | 历史记录存在时另作人工核对 | `tests_feishu_routes`、`tests_review_notifications`：多旧角色结转同一阶段去重、部分失效仅补漏收者 |
 | F4-3 按帖聚合/离队剔除 | 真实通过* | 同帖多问题只计一篇，挂起/终结剔除；多收件人部分失效漏发修复已复审 | 当前真实审校场景另验 | `tests_review_notifications`：有效 B 仅补给漏收者、已收者不重发、失效 A 不复活 |
 | F4-3 晨间摘要/静默代码 | 真实通过* | 08:00 合并、14:00/18:00 有积压提醒；补抓/分类/延迟/失败/最早等待，无事不发 | 实际飞书晨报另验 | notifications/service：按帖计数、扫描处理事实与晨间就绪率，空轮次静默 |
-| F4-4 统一卡片与离线预览 | 离线通过 | 统一双列、150 字摘要、业务时间、真实风险状态及底部导航；晨报计数和恢复建议独立显示 | 客户端排版另验 | 2026-09-22：44 项飞书测试、30 个子场景、10 个相关脚本和四类 dry-run JSON；[验证清单](../state/feishu-card-redesign/validation-summary.json)，证据在主检出与功能工作树各保留一份 |
+| F4-4 统一卡片与离线预览 | 离线通过 | 统一双列、150 字摘要、业务时间、真实风险状态及底部导航；晨报计数和恢复建议独立显示 | 客户端排版另验 | 2026-09-22：44 项飞书测试、30 个子场景、10 个相关脚本和四类 dry-run JSON；[验证清单](../state/feishu-card-redesign/validation-summary.json)，工作树清理后证据保留在主检出，去向见 [HANDOFF §1.3](HANDOFF.md#13-证据边界) |
 | F4-4 新版客户端排版 | 待真实联调 | 服务机测试群核对四类卡及合并卡布局、发送角色和按钮可达性 | 测试群、服务机、桌面/手机飞书 | 不以 JSON 或模拟 HTTP 代替客户端证据 |
 | F4-4 当前内容卡片代码 | 真实通过* | 人工优先摘要/检查/首图状态写成文字；重读当前稿失败标 `preview_error` 并明说可能不是最新 | 真实链接/群另验 | `tests_review_notifications`：排队后改文/换图、首图状态注明未随卡片投递、已排期源变仅提醒 |
 | F4-3 冻结尝试/人工 resolve | 真实通过* | 当前角色有效原卡补送保持 ID/内容；旧角色确认未送达后关联新投递，部分失效旧卡保留 cancelled，仅补有效漏收内容 | 实际远端核对另验 | `tests_feishu_routes`、`tests_runtime_recovery`：未知不重放、原卡冻结、版本 CAS、旧角色结转不漏/不重 |
@@ -373,7 +373,8 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F5-5 FB 单渠道 Story 读取 | 离线通过 | 该页无渠道页签也无 IG 根；身份取 `tofu_object_insights.entity.entity_id`=content_id，页名取同响应里 `id` 等于 `entity_info.lwi_info.page_id` 的页节点 | ⚠️ `supported_actions[*]…owner.entity_id` 是 profile 标识不是发布页；`tofu_business_content` 不带 content_id 无法绑定，时刻仍按表头与日期格比对；`relationships` 记空 | `tests_story_facebook_only` 4 项：完整读取、六种未绑定拒绝、IG 徽标仍等自己的页签、迟挂载页签报 `channel_tabs` |
 | F5-5 渠道页签按表头徽标等待 | 离线通过 | 页签晚于表头挂载，只数一次会把双平台详情读成单渠道；表头两个徽标即等待其页签，单徽标维持原路径并保留事后页签核对 | 聚合详情逐渠道的响应结构尚未取证，IG 侧在聚合视图下仍无身份适配器 | `tests_published_media::test_a_two_platform_header_waits_for_its_own_channel_tabs`（旧代码复现服务机的 `['channel']`） |
 | F5-5 聚合 Post 逐渠道读取 | 离线通过 | 该类详情无 tabpanel，选中渠道就地改写同一表头；成员表取 `tofu_entity` 根实体的 `cross_posted_entities`，名字按成员自己的 entity/owner 两个 ID 回接 | ⚠️ 各渠道分钟与正文不同（7:17/7:18），时刻只要求至少一个变体匹配日期格；`viewer_actor` 是登录账号；该版 FB 预览 permalink 不带 `story_fbid`，ID 只从响应取 | `tests_aggregate_post` 3 项：双渠道各自身份与分钟、六种未绑定拒绝、表头未跟随选中渠道时拒绝 |
-| F5-5 月历展示/公开观察代码 | 离线通过 | 截至时间/范围/完整性/stale/busy，公开以 remote ID 和明确观察为准，不按时钟推算 | 真实新 scheduled 形态另验 | runtime recovery/浏览器 UI：未知不报公开，建议不计帖子 |
+| F5-5 月历展示/公开观察代码 | 离线通过 | 新鲜度与明细缺口分开；未读卡片可展示。格子上的已发布/定时只是有没有 insights 链接，不写入公开观测；公开仍以 remote ID 和完整详情为准 | 真实新 scheduled 形态另验 | `tests_runtime_recovery`、`tests_calendar_api`、`CalendarPage.test.tsx` |
+| F5-5 占用与明细分层 | 离线通过 | 网格对齐即可更新缓存。`cards_in_range` 在目标前后 90 分钟内拒绝未知渠道；`time_verified` 为假或旧缓存缺该字段时，不能把外层时刻当成范围外。回读和远端删除仍要求 `decision_complete` | 服务机整月、全部类型和新排期未因此验收。`state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本行证据 | 离线证据见 [HANDOFF §1.31](HANDOFF.md#131-月历同步与占用分层2026-09-23) |
 | F5-6 提交前实时复核 | 离线通过 | 缓存仅提示，持发布锁重读；未读完不能判空档 | 完整月历真实输入另验 | 缓存后新增人工项造成冲突，busy/不完整即拒绝 |
 | F5-7 人工/机器修改循环 | 离线通过 | 单篇文案/tag/link/优化，人工真相独立，机器候选另存 | 具体内容 | 人工文案/图、源变更、旧候选回归 |
 | F5-8 ZIP/人工结转 | 离线通过 | 包完整后 `handed_off`；缺德语图标原图；同一冻结投影 | 公开链接可选 | 导出中断不转态、重下稳定、人工回填不伪造自动回读 |

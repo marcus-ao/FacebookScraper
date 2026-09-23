@@ -612,7 +612,7 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
    ```powershell
    Invoke-RestMethod 'http://127.0.0.1:8765/api/calendar' |
-       Select-Object status, refresh_status, cached_at, partial_cached_at, error, coverage, attempt_coverage, refresh_diagnostic |
+       Select-Object status, refresh_status, cached_at, error, coverage, refresh_diagnostic |
        ConvertTo-Json -Depth 6
    ```
 
@@ -621,13 +621,15 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 
 **单条完整通过后的整月复验。** 保持发布 Chrome 登录，
 页面点一次「刷新月历」，完成后用第 6 步 GET 查询，不重复触发刷新。
-成功要求 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
-`coverage.matches_current_month/grid_complete/entries_complete/classification_complete/channels_complete/decision_complete` 均为 true，
-`unresolved_count=0`，`cached_at` 更新为此次完成时间且 `partial_cached_at=null`。
+整月通过要求 `status=ready`、`refresh_status=refreshed`、`error=null`、`refresh_diagnostic=null`，
+`coverage.matches_current_month/grid_complete/entries_complete/classification_complete/channels_complete/occupancy_complete/decision_complete` 均为 true，
+`unresolved_count=0`，且 `cached_at` 更新为此次完成时间。
+`status=ready` 同时 `unresolved_count>0` 只说明网格已经同步、未读卡片仍显示在月历上；这不能确认空档，也不是整月通过。
+旧缓存若没有 `time_verified`，按时刻未核实，不能用来排除占用。
 仍在 2026 年 9 月时，日期格范围应为 `2026-08-30` 至 `2026-10-03`；核对 9 月 4 日 Story、
 9 月 30 日 17:30 手工帖子和其它实际类型，逐渠道对照账号、时间与 ID，不预设两渠道相同。
-同渠道 Story/Reel 继续遵循既有 90 分钟规则。`partial_cards/attempt_coverage` 是部分结果，
-`cards/cached_at/coverage` 是最后完整缓存，不能互换；`partial` 或保留旧数据均不算本次完整读取通过。
+同渠道且时刻已核实的内容继续遵循 90 分钟规则。渠道未知落在目标前后 90 分钟内，或时刻没有独立证据时，不能判为空档。
+保留旧数据或 `decision_complete=false` 均不算本次完整读取通过。
 全程不得新增、修改、删除或重新提交真实内容；开发机隔离测试不能代替服务机结果。
 
 ## 9. 真实发布前的最终确认

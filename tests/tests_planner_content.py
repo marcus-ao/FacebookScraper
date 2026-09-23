@@ -91,7 +91,8 @@ class ContentTests(unittest.TestCase):
     def test_known_story_keeps_same_channel_gap_and_unknown_read_cannot_authorize_slots(self):
         at = datetime(2026,9,4,10,39,tzinfo=timezone.utc)
         card = RemotePlannerCard(at, ('instagram',), (('instagram','1804155825688886'),),
-                                 '', '', 'published', placement='story', caption_status='empty')
+                                 '', '', 'published', placement='story', caption_status='empty',
+                                 time_verified=True)
         inventory = RemoteSlotInventory((at,), 'Asia/Shanghai', date(2026,8,30),date(2026,10,3),(card,),True)
         self.assertEqual(inventory.occupied_for_channel('instagram'), (at,))
         self.assertTrue(inventory.decision_complete)
@@ -100,8 +101,11 @@ class ContentTests(unittest.TestCase):
         self.assertTrue(partial.cards_loaded)
         self.assertFalse(partial.classification_complete)
         self.assertFalse(partial.decision_complete)
-        with self.assertRaises(ProbeRequired):
-            partial.occupied_for_channel('instagram')
+        # 读不出明细的卡片授权不了任何渠道的槽位，也不是空档；缺省时刻未核实。
+        self.assertEqual(partial.occupied_for_channel('instagram'), ())
+        self.assertEqual(partial.occupied_for_channel('facebook'), ())
+        self.assertEqual(partial.unverified_moments(), (at,))
+        self.assertFalse(unknown.time_verified)
 
 
 if __name__ == '__main__':

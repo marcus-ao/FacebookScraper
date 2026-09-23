@@ -83,7 +83,11 @@
 
 2026-09-19 核对：本文原先引用的 147 条 `state/` 证据里，**4 条在任何工作树中都已找不到**（`stage1-hygiene.log`、`stage1-ui-build.log`、`stage1-ui-tests.log`、`offline-browser-20260915T121321Z-33388/report.json`，都属于原阶段一实施现场）。2026-09-20 清理已合并工作树前，已把其中独有的日志、截图和报告按 SHA-256 拷到主检出 `state/`（可重建的轮子、CI zip、release 包未拷）；清单在 `state/worktree-cleanup-20260920/preservation.json`。要重新引用，先确认主检出 `state/` 同名目录存在并按 SHA-256 核对。
 
-2026-09-22 清理了余下 11 个已并入 main 的工作树。本文引用但当时只存在于其中的证据已拷到主检出同名路径，**本文的相对链接因此无需改写**；清单在 `state/worktree-cleanup-20260922/preservation.json`，拷贝脚本 `state/preserve_worktree_cleanup_evidence.py`（`.jsonl`/`.sqlite`/`.lock` 一律不跨实例搬运，可重建的测试轮次未拷）。`calendar-data-sync-fix-646a9e`、`social-media-image-verification-fix-938aa1`、`story-insights-ci-timeout`、`manual-schedule-readiness` 四个工作树仍在，未纳入这次清理——⚠️ **本文引用的 `state/calendar-data-sync-fix/`、`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 仍只存在于那几个工作树里**，从主检出解析不到，清理它们之前照上面一条先保全。
+2026-09-22 前次清理了 11 个已并入 main 的工作树。本文引用但当时只存在于其中的证据已拷到主检出同名路径，**本文的相对链接因此无需改写**；清单在 `state/worktree-cleanup-20260922/preservation.json`，拷贝脚本 `state/preserve_worktree_cleanup_evidence.py`（`.jsonl`/`.sqlite`/`.lock` 一律不跨实例搬运，可重建的测试轮次未拷）。
+
+同日按用户确认清理 `social-media-image-verification-fix-938aa1`、`story-insights-ci-timeout`、`feishu-card-redesign` 三个工作树及本地、远端同名分支。三个分支头 `cf1ed29`、`bd8b475`、`56b80d8` 均已包含在本地与远端 `main` 的 `28066f8` 中。其全部 2,722 份 `state/` 文件已按 SHA-256 核对：1,846 份补到主检出同名路径，853 份已有相同副本，23 份同名异字节文件保存在 `state/branch-cleanup-20260922/collisions/`，没有覆盖原文件。[保全清单](../state/branch-cleanup-20260922/preservation.json)记录每份来源、去向与摘要；三树未发现业务账本、原图或凭据。
+
+`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 现已能从主检出解析。`state/calendar-data-sync-fix/` 仍只在保留的 `.claude/worktrees/calendar-data-sync-fix-646a9e` 中；该树还有未提交的月历改动，清理前须保全。其余未合入功能分支的验证仍以各自工作树为准，不能把主检出的旧同名结果当作新分支的验证。
 
 ### 1.19 待审核列表按原帖时间降序（2026-09-19）
 
@@ -445,7 +449,7 @@ Story 读取 7 条、取证 12 条、分类 8 条、月份 23 条、回读 5 条
 证据已按 SHA-256 保全到主检出同名目录，清单见 [证据保全](../state/story-insights-timeout/preservation.json)。
 不涉及真实账号、模型、发布或业务账本，REQUIREMENTS §10 的验收判据及状态不变。
 
-**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 工作树 `.claude/worktrees/story-insights-ci-timeout`，分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `769d8f0`。
+**2026-09-22 续：300 秒是脚本级预算，这一个文件已经装不下四类详情。** 分支 `claude/story-insights-ci-timeout`，基点 `5a3152c`，已并回 `769d8f0`；分支与工作树现已清理，证据去向见 §1.3。
 Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没产出，只剩 `fbscraper-test-evidence`——
 打包与上传两步都排在离线全量之后，全量一失败就跳过。最近三次（`67daab4`、`5a3152c`、`1d75df6`）
 `tests_story_insights` 与 `tests_service_address` 同时失败，两个都修好才会有制品。直接原因是
@@ -486,7 +490,7 @@ Windows release 在 main 上连续八次失败，`fbscraper-windows` 一直没�
 并回 `b7e235c`（带监测分页修复与其浏览器用例）后重建前端并
 [定向复跑](../state/offline-validation-20260922T055248Z/results.json)：四个脚本加 hygiene、服务地址、
 `tests_browser_workflow` 共 7/7 通过，前端 589 项单测通过。本节及 §1.26 引用的证据已按 SHA-256 保全到主检出同名目录，
-清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；工作树可清理。
+清单见 [证据保全](../state/story-insights-ci-timeout/preservation.json)；后续新增证据也已按 §1.3 保全。
 同一条发布闸上的 `tests_service_address` 间歇失败另见
 [§1.26](#126-服务地址引用与飞书历史链接核查2026-09-21)，不修它照样产不出制品。
 
@@ -551,7 +555,7 @@ CI 日志里只看到三条断言，是因为 `tools/test_offline` 失败时只�
 
 ### 1.27 原图不可用按原因分类、过期地址恢复与陈旧人工项退役（2026-09-21）
 
-分支 `claude/social-media-image-verification-fix-938aa1`，工作树同名，基点 `ad8c5de`。
+分支 `claude/social-media-image-verification-fix-938aa1`，基点 `ad8c5de`，已合入 main；分支与工作树已清理，证据去向见 §1.3。
 用户反馈"绝大部分帖子都进了待人工核验"。服务机 `--status`（2026-09-21T04:46Z）显示这其实是
 **两个互不相干的问题**，而那句刺眼的原因只对应其中一篇。
 
@@ -692,7 +696,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 ### 1.30 飞书四机器人统一卡片（2026-09-22）
 
-功能工作树 `.worktrees/feishu-card-redesign`，分支 `codex/feishu-card-redesign`。卡片入口仍为 `core/feishu.py`；纯渲染集中在 `core/feishu_cards.py`，采集/审校/排期/部署调用链提供原始业务时间和结构化状态。配置 `[feishu].site_name/timezone` 默认 `Neakasa 德国` / `Asia/Shanghai`；卡片不带时区字样。双列属性、150 字引用摘要、底部导航、批次计数与逐帖状态遵循 [FUNCTIONALITY 的 F4-4](FUNCTIONALITY.md)。
+分支 `codex/feishu-card-redesign` 已合入 main，分支与工作树已清理，证据去向见 §1.3。卡片入口仍为 `core/feishu.py`；纯渲染集中在 `core/feishu_cards.py`，采集/审校/排期/部署调用链提供原始业务时间和结构化状态。配置 `[feishu].site_name/timezone` 默认 `Neakasa 德国` / `Asia/Shanghai`；卡片不带时区字样。双列属性、150 字引用摘要、底部导航、批次计数与逐帖状态遵循 [FUNCTIONALITY 的 F4-4](FUNCTIONALITY.md)。
 
 已冻结卡片和未知投递保持原样；旧未分配检测事件缺少分类时使用“监测到帖子变化”，不从旧自由文本猜“新发布”。风险未扫、失效、失败或素材检查有问题时不显示绿色通过。晨报计数与核账恢复建议独立呈现，避免正文摘要限长吃掉关键提示；部署通知保留具体原因。Windows 本地告警和真实群投递边界不变。
 
@@ -702,7 +706,32 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 [四类卡片 JSON](../state/feishu-card-redesign/cards-preview.json)由 `notifications --self-test --dry-run` 生成；只验证 payload，不证明飞书客户端实际排版。测试使用临时数据、模拟 HTTP 及固定示例，没有真实群消息、业务 Chrome、付费模型或发布操作。新版服务机测试群/手机/桌面排版为 **待真实联调**，步骤见 [MANUAL_STEPS §2.1](MANUAL_STEPS.md#21-配置同群四个机器人)。
 
-证据已按 SHA-256 校验复制到主检出同名 `state/` 路径，[保全清单](../state/feishu-card-redesign/preservation.json)记录来源与摘要；本功能工作树保留独立测试环境和原证据。未接入真实业务数据或复制凭据。证据不随 Git 提交；清理工作树前仍按 §1.3 核对。
+证据已按 SHA-256 校验复制到主检出同名 `state/` 路径，[保全清单](../state/feishu-card-redesign/preservation.json)记录原交付的来源与摘要；清理时又按 §1.3 核对全部证据。未接入真实业务数据或复制凭据。证据不随 Git 提交。
+
+### 1.31 月历同步与占用分层（2026-09-23）
+
+工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，分支 `claude/calendar-data-sync-fix-646a9e`。
+网格与卡片时刻对齐即可更新主缓存。`status` 只表示新鲜度。未读明细留在卡片、`diagnostics` 和 `unresolved_count`。
+不再保存 `partial_inventory`；[§1.23](#123-月历内容类型兼容与无正文-story2026-09-20) 当时单独保存的那一层，读到旧缓存时丢弃。
+
+空档确认使用 `cards_in_range`。同渠道且 `time_verified` 的卡片，严格小于 90 分钟才冲突。
+目标前后 90 分钟内渠道未知则拒绝确认，不给出把未知渠道当成某一渠道的建议。
+`time_verified` 为假，或旧缓存没有该字段，不能用外层时刻证明条目在范围外。
+格子时钟按 `%I:%M %p` 解析，秒和微秒为 0；比较用绝对时间差；夏令时回拨小时保留两个绝对时刻。
+`occupancy_complete` 只说明时刻集合对齐，不证明每个聚合变体都已读取。
+
+`has_href` 只影响未读卡片的展示措辞。公开观测仍要求 `read_status=complete` 和已绑定远端 ID。
+`month_readback.matching` 与远端删除核实仍要求整月 `decision_complete`。
+
+**验证状态：离线通过。** 这不是整月或全类型真实通过。
+`state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。
+[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过。
+[月份读取](../state/offline-validation-20260923T033459Z/results.json) 通过；同一次 Story 脚本因 300 秒上限被中止，不是断言失败。
+[Story 读取复跑](../state/offline-validation-20260923T034141Z/results.json) 用 343.77 秒通过。
+合入 main 并把 Story 读取拆开之后，[规划与四组详情读取](../state/offline-validation-20260923T035236Z/results.json) 5 个脚本通过。
+写入都在隔离临时目录，解释器复用主检出 `.venv`，本树没有 `config.local.toml`。没有登录、滚历史、真实发布或付费调用。
+前端 `CalendarPage` 单测和构建没有跑成：共用 `web/ui/node_modules/antd` 缺少 `package.json`。界面文案已改，浏览器场景未复跑。
+服务机完整月份、全部内容类型和本轮新排期仍是 **待真实联调**。
 
 ### 1.31 品牌账号的来源冻结与合作者放行（2026-09-22）
 
