@@ -20,6 +20,13 @@ class ContentTests(unittest.TestCase):
         return content.classify_published(observation, date(2026, 9, 4),
             {'facebook': 'Neakasa Deutschland', 'instagram': 'neakasa.de'})
 
+    def test_only_a_checked_public_permalink_is_kept(self):
+        link = 'https://www.instagram.com/stories/neakasa.de/3978703119637304396'
+        kept = self.parse(self.observation(permalink=link))
+        self.assertEqual(kept['permalinks'], {'instagram': link})
+        dropped = self.parse(self.observation(permalink='https://evil.example/p/1'))
+        self.assertEqual(dropped['permalinks'], {})
+
     def test_textless_story_is_empty_content_not_a_loading_failure_or_placeholder_caption(self):
         value = self.parse(self.observation())
         self.assertEqual(value['placement'], 'story')

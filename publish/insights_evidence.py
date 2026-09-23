@@ -183,6 +183,7 @@ class InsightsEvidence:
                 facebook = [entry for entry in related
                             if entry.get('entity_info', {}).get('__typename') == 'TofuFBStoryEntityInfo']
                 value = {'remote_id': self.source_id, 'owner': match[1], 'title': info['title'],
+                         'permalink': media.get('permalink'),
                          'related_kinds': kinds,
                          'facebook_ids': tuple(sorted({str(entry.get('entity_id', '')) for entry in facebook})),
                          'instagram_ids': tuple(sorted({str((entry.get('entity_info', {}).get('ig_media') or {}).get('id', ''))

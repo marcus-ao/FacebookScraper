@@ -585,6 +585,8 @@ export interface CalendarCard {
   readonly media_kind?: 'text' | 'link' | 'image' | 'carousel' | 'mixed' | 'video' | 'unknown'
   readonly caption_status?: 'present' | 'empty' | 'unknown'
   readonly accounts?: Readonly<Partial<Record<Platform, string>>>
+  /** 读取时已经核对过的公开地址；没有就不显示「查看原帖」。 */
+  readonly permalinks?: Readonly<Partial<Record<Platform, string>>>
   readonly relationships?: readonly string[]
   readonly read_status?: 'complete' | 'unsupported' | 'unavailable' | 'incomplete' | 'legacy'
   /** 为假时不能用这张卡的时刻证明它落在目标范围外。旧缓存缺这个字段时按未核实。 */

@@ -1,5 +1,6 @@
 """Planner content semantics; API taxonomies do not establish Business Suite DOM selectors."""
 from datetime import datetime
+from urllib.parse import urlsplit
 import re
 
 PLACEMENTS = {'feed', 'story', 'reel', 'live', 'ad', 'task', 'unknown'}
@@ -9,6 +10,19 @@ READ_STATUSES = {'complete', 'unsupported', 'unavailable', 'incomplete', 'legacy
 CAPTION_STATUSES = {'present', 'empty', 'unknown'}
 NO_TEXT = 'This content has no text'
 LABELS = {'Post': 'feed', 'Story': 'story', 'Reel': 'reel', 'Video': 'feed', 'Live': 'live'}
+# 只留读取时已经核对过的公开地址，不根据编号拼链接。
+_PUBLIC_HOSTS = frozenset({'facebook.com', 'www.facebook.com', 'instagram.com', 'www.instagram.com'})
+
+
+def public_permalink(url) -> str:
+    """https 且主机名是 Facebook 或 Instagram 时原样留下，否则空串。"""
+    if not isinstance(url, str) or not url:
+        return ''
+    parsed = urlsplit(url)
+    if (parsed.scheme != 'https' or (parsed.hostname or '') not in _PUBLIC_HOSTS
+            or parsed.username or parsed.password or not parsed.path or parsed.path == '/'):
+        return ''
+    return url
 
 
 class DetailReadError(ValueError):
@@ -69,9 +83,11 @@ def classify_published(observation, day, expected_accounts):
     media_kind = observation.get('media_kind', 'unknown')
     if media_kind not in MEDIA_KINDS:
         media_kind = 'unknown'
+    permalink = public_permalink(observation.get('permalink'))
     return {'placement': placement, 'media_kind': media_kind, 'text': caption,
             'caption_status': caption_status, 'delivery': 'published',
             'channels': (channel,), 'remote_ids': {channel: remote}, 'accounts': {channel: owner},
+            'permalinks': {channel: permalink} if permalink else {},
             'ui_at': observed, 'read_status': 'incomplete' if missing else 'complete',
             'missing_fields': tuple(missing),
             'relationships': tuple(value for value in observation.get('relationships', ())

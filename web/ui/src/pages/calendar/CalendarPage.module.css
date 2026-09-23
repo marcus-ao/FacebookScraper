@@ -14,7 +14,7 @@
 .card:hover { background: var(--rc-bg); }
 .card :global(.ant-tag) { white-space: normal; margin: 0; }
 .caption { max-width: var(--rc-calendar-popover-w); max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.note { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); }
+.facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--rc-space-3); }
 
 /* 本地图层画成虚线，一眼能和后台读回来的实线卡分开。 */
 .localCard { border: 1px dashed var(--rc-border); background: transparent; text-decoration: none; }

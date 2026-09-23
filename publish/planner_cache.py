@@ -17,7 +17,8 @@ from publish.journal import PublishOperationLock
 from publish.planning import aware_utc
 from publish import business_suite as bs
 from publish import month_inventory
-from publish.planner_content import PLACEMENTS, MEDIA_KINDS, DELIVERIES, READ_STATUSES, CAPTION_STATUSES
+from publish.planner_content import (PLACEMENTS, MEDIA_KINDS, DELIVERIES, READ_STATUSES,
+                                    CAPTION_STATUSES, public_permalink)
 
 
 @maintenance.guarded('planner_read')
@@ -86,7 +87,8 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
                        'caption_status': card.caption_status, 'accounts': dict(card.accounts),
                        'relationships': list(card.relationships), 'read_status': card.read_status,
                        'time_verified': card.time_verified, 'diagnostic_index': card.diagnostic_index,
-                       'source_content_id': card.source_content_id} for card in inventory.cards]}
+                       'source_content_id': card.source_content_id,
+                       'permalinks': dict(card.permalinks)} for card in inventory.cards]}
 
 
 def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
@@ -126,11 +128,17 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
                 or not isinstance(row.get('relationships',[]), list)
                 or any(value not in {'collaboration','shared','cross_platform'} for value in row.get('relationships',[]))):
             raise ValueError('月历内容分类或身份格式无效')
+        # 旧缓存没有 permalinks。坏主机名拒绝这一份缓存，不把未知地址当成原帖。
+        raw_links = row.get('permalinks', {})
+        if (not isinstance(raw_links, dict) or any(key not in channels or public_permalink(value) != value
+                                                   for key, value in raw_links.items())):
+            raise ValueError('月历原帖链接格式无效')
         cards.append(RemotePlannerCard(_moment(row["at"]), tuple(channels),
                                       tuple(sorted(row["remote_ids"].items())),
                                       row["rendered"], row["card_sha256"], row.get('delivery', 'unknown'),
                                       **metadata, accounts=tuple(sorted(row.get('accounts',{}).items())),
-                                      relationships=tuple(row.get('relationships',[]))))
+                                      relationships=tuple(row.get('relationships',[])),
+                                      permalinks=tuple(sorted(raw_links.items()))))
     return RemoteSlotInventory(
         tuple(_moment(at) for at in data["occupied"]), data["ui_timezone"],
         date.fromisoformat(data["visible_start"]) if data.get("visible_start") else None,

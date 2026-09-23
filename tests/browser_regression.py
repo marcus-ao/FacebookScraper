@@ -437,7 +437,7 @@ def stage_f(page, ui):
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
-    # 明细读不出来的条目照常进这个月：整月不再被标成过期，卡片用警告短签标明。
+    # 明细读不出来的条目照常进这个月：整月不再被标成过期，说明放进点击后的详情。
     unread={**data,'status':'ready','refresh_status':'refreshed','stale':False,'error':None,
         'coverage':{**data['coverage'],'decision_complete':False,'unresolved_count':1},
         'cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
@@ -447,13 +447,13 @@ def stage_f(page, ui):
     ui.overrides[('POST','/api/calendar/refresh')]=(200,unread)
     page.get_by_role('button',name='刷新月历',exact=True).click()
     expect(page.get_by_text('定时',exact=True)).to_be_visible()
-    expect(page.get_by_text('未读全',exact=True)).to_be_visible()
+    expect(page.get_by_text('未读全',exact=True)).to_have_count(0)
     expect(page.get_by_text('数据可能已过期',exact=True)).to_have_count(0)
     page.get_by_role('button',name=re.compile('定时')).click()
-    expect(page.get_by_text('这条的明细没读出来，不能据此确认可排时段。',exact=True)).to_be_visible()
+    expect(page.get_by_text('该篇帖子的具体信息尚未成功获取，请前往Meta后台任务日历进行人工复核确认',exact=True)).to_be_visible()
     page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name=re.compile('已发布')).click()
-    expect(page.get_by_text('此内容无独立正文',exact=True)).to_be_visible()
+    expect(page.get_by_text('该篇帖子不含文本部分,请跳转原帖进行复核确认',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
     page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
     return {'F':'PASS','published_scheduled_distinct':True,'refresh_payload_cards_retained':True,
