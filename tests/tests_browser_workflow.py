@@ -341,6 +341,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                                      for field in fields if field["help"])
         controlled_names = {"targets": "监测来源账号", "publish_identity": "发布账号核验名",
                             "price_map": "价格映射", "trusted_owners": "信任名单",
+                            "brand_accounts": "品牌自有账号", "frozen_sources": "冻结来源",
                             "pipeline": "处理方式与预算", "delta": "抓取控制"}
         self.page.get_by_role("button", name=controlled_names[controlled_key], exact=True).click()
         expect(self.page.get_by_text(field["help"], exact=True)).to_be_visible()

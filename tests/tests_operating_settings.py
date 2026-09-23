@@ -84,7 +84,10 @@ class OperatingSettingsTests(unittest.TestCase):
 
     def test_controlled_settings_and_bad_values_are_rejected(self):
         version = operating_settings.read()['version']
-        for values in ({'daily_budget_usd': 100}, {'snooze_default_days': True},
+        for values in ({'daily_budget_usd': 100},
+                       {'brand_accounts': {'instagram': ['neakasa_fans']}},
+                       {'frozen_sources': {'instagram': ['neakasa.tech']}},
+                       {'snooze_default_days': True},
                        {'snooze_default_days': 0}, {'default_times': ['25:00']},
                        {'default_times': ['10:00', '10:00']}, {'default_times': []}):
             with self.subTest(values=values), self.assertRaises(ValueError):

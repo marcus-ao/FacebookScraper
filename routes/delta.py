@@ -21,6 +21,7 @@ from core.capture import (Collector, atomic_write_json, download_media,
                           prune_captures_days, MediaRateLimited, reuse_image)
 from core.capture_state import CaptureState, verified_images
 from core.chrome import attach, cdp_ready, launch
+from core import account_roles
 from core.config import MonitorSchedule, cfg, per_platform
 from core import integrity
 from core.integrity import parse_ts
@@ -1006,6 +1007,10 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
     # 由 Python 写 UTF-8 运行分隔线，避免 cmd 向日志混入 GBK。
     print("\n===== %s · %s =====" % (iso(utcnow()), " ".join(argv or sys.argv[1:])
                                      or "(无参数)"))
+    blocked = account_roles.frozen_target_message(cfg())
+    if blocked:
+        print("[!] " + blocked)
+        return 1
     dcfg = config or DeltaConfig.load()
     if args.preview:
         c = cfg()

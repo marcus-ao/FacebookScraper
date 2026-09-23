@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
-from core import maintenance
+from core import account_roles, maintenance
 from core.config import cfg
 from core.store import Archive, post_directory
 from publish import journal
@@ -71,6 +71,8 @@ class PublishRules:
     price_map: Mapping[str, str]
     trusted_owners: Mapping[str, frozenset[str]]
     source_accounts: Mapping[str, str]
+    brand_accounts: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    frozen_sources: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -277,10 +279,14 @@ def publish_rules(raw: Mapping[str, Any] | None = None) -> PublishRules:
     }
     if any(not value for value in source_accounts.values()):
         raise PipelineRunError("[targets] 必须明确配置 facebook 与 instagram 来源账号")
+    try:
+        brand, frozen = account_roles.validate_roles(raw, targets)
+    except account_roles.AccountRoleError as exc:
+        raise PipelineRunError(str(exc)) from exc
     return PublishRules(
         timezone=timezone_name, ui_timezone=ui_timezone,
         slots=tuple(slots), price_map=dict(price_map), trusted_owners=trusted,
-        source_accounts=source_accounts)
+        source_accounts=source_accounts, brand_accounts=brand, frozen_sources=frozen)
 
 
 def _post_dir(source: SourcePost) -> Path:
@@ -710,9 +716,9 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
                     "归属证据不完整。" % provenance.ref,
                     {"source_ref": provenance.ref, "owner": owner})
             external.add(owner)
-        untrusted = sorted(
-            value for value in external
-            if value not in rules.trusted_owners[provenance.platform])
+        trusted = account_roles.collaborator_trust(
+            rules.trusted_owners, rules.brand_accounts, provenance.platform)
+        untrusted = sorted(value for value in external if value not in trusted)
         if untrusted:
             if paid_consent.is_current(provenance.account_dir, dict(source_row)):
                 continue
@@ -720,7 +726,7 @@ def _prepaid_issue(candidate: Candidate, rules: PublishRules) -> HumanItem | Non
                 _item_id("unknown_collaborator", candidate.sources,
                          provenance.ref + ":" + "|".join(untrusted)),
                 "unknown_collaborator", candidate.source_refs,
-                "%s 含未列入 trusted_owners 的合作方：%s；未调用付费服务。"
+                "%s 含未列入 trusted_owners 或 brand_accounts 的合作方：%s；未调用付费服务。"
                 % (provenance.ref, "、".join("@" + item for item in untrusted)),
                 {"source_ref": provenance.ref, "collaborators": untrusted})
     mapped = {

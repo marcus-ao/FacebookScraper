@@ -62,7 +62,9 @@ CONFIG_KEY_EXEMPT = {
 CONFIG_DATA_TABLES = {
     "translate.glossary",       # 英→德术语表，render_glossary 整表渲染
     "publish.price_map",        # 美元→欧元定价表，apply_money_mapping 整表查
-    "publish.trusted_owners",   # 合作方白名单
+    "publish.trusted_owners",   # 第三方逐个授权
+    "publish.brand_accounts",   # 品牌自有账号
+    "publish.frozen_sources",   # 显式冻结的来源账号
     "image.keep_verbatim",      # 图内不翻译的型号名
     "storage.product_aliases", # 首次归档按完整别名整表分类
 }
