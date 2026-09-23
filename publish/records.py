@@ -6,13 +6,14 @@ import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from core import notify, review, store, translated, paid_consent
+from core import maintenance, notify, review, store, translated
+from core.chrome import attach
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings, MirrorService
 from core.paid_model import atomic_write_json
 from core.process_identity import worker_alive
-from publish import business_suite as bs, journal, planner_cache, snapshots
+from publish import business_suite as bs, journal, month_readback, planner_cache, snapshots
 from publish.manual_run import load as load_manual_run
 
 
@@ -63,14 +64,7 @@ def project(attempt, *, now=None) -> dict:
             raise review.ReviewConflict('发布账本尚未确认这个回执版本')
         # Project the durable row, never fields supplied by a stale caller.
         row = latest
-        metadata, source, files, directory = snapshots.load(row['snapshot_id'])
-        if (metadata['fingerprint'] != row['final_text_sha256'] + ':' + ','.join(row['image_sha256'])
-                or metadata['post_id'] != row['post_id'] or metadata['platform'] != row['platform']
-                or metadata['account'] != source['platform'][:2] + '_' + source['account']
-                or metadata['source_fingerprint'] != row.get('source_fingerprint')
-                or paid_consent.fingerprint_version(metadata) != paid_consent.fingerprint_version(row)
-                or snapshots.require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
-            raise review.ReviewConflict('发布回执与批准快照不一致')
+        metadata, source, files, directory = snapshots.load_for_attempt(row)
         account = cfg().archive_dir / metadata['account']
         progress_path = directory / 'projection.json'
         progress = json.loads(progress_path.read_text(encoding='utf-8')) if progress_path.exists() else {}
@@ -155,6 +149,77 @@ async def unschedule(account, indexed, *, reason: str, inventory_reader=None, no
             reason=reason.strip(), now=moment)
         return {'status': 'pending_review', 'attempt_id': row['attempt_id'],
                 'remote_ids': sorted(wanted)}
+
+
+@maintenance.guarded('planner_read')
+async def reverify_media(attempt_id: str, *, timeout=30) -> dict:
+    """Revisit an exact scheduled attempt without uploading, submitting or deleting."""
+    c = cfg()
+    with journal.PublishOperationLock(c.state_dir / 'publish.lock', allow_reentrant=True):
+        row = {item['attempt_id']: item for item in journal.load(c.state_dir)}.get(attempt_id)
+        if row is None or row['status'] != journal.STATUS_SCHEDULED:
+            raise review.ReviewConflict('只读图片复验仅接受当前仍为 scheduled 的原 attempt')
+        channel = row['platform']
+        if (row.get('target_channels') != [channel] or row.get('channels_verified') != [channel]
+                or not row.get('readback_signal') or not row.get('ui_readback')
+                or not re.fullmatch(re.escape(channel) + r'=\d{6,}', row.get('remote_id') or '')):
+            raise review.ReviewConflict('原排期缺少确切的单渠道回读或 remote ID 绑定')
+        metadata, _, files, _ = snapshots.load_for_attempt(row)
+        run = load_manual_run(channel)
+        if metadata.get('publish_target') != run.target() or row['ui_timezone'] != run.ui_timezone:
+            raise review.ReviewConflict('冻结时的发布目标或 UI 时区缺失或已变化，不能推断原账号绑定')
+        when = snapshots.require_bound(metadata)
+        pw = page = None
+        cleanup_errors = {}
+        try:
+            pw, _browser, context = await attach(port=c.publish_debug_port, profile=c.publish_profile_dir,
+                start_script=r'scripts\start_chrome_publish.bat', login_hint='DE 发布账号')
+            page = await context.new_page()
+            # This is a revisit of a known object, never a fabricated empty submission baseline.
+            readback = await month_readback.verify(page, when, files['text_de.txt'].decode('utf-8'),
+                ui_timezone=run.ui_timezone, target_channels=(channel,), expected_remote_id=row['remote_id'],
+                timeout=timeout, run=run, frozen_attempt=row)
+        except (Exception, SystemExit) as exc:
+            readback = bs.ScheduledReadback(False, datetime.now(timezone.utc).isoformat(),
+                when.isoformat(), row['ui_scheduled_at'], row['final_text_sha256'],
+                error='原排期读取失败：' + type(exc).__name__,
+                diagnostics={'remote_images_verified': False, 'failure_stage': 'media_recheck_read'})
+        finally:
+            try:
+                if page is not None:
+                    await page.close()
+            except Exception as exc:
+                cleanup_errors['page'] = type(exc).__name__
+            try:
+                if pw is not None:
+                    await pw.stop()
+            except Exception as exc:
+                cleanup_errors['connection'] = type(exc).__name__
+        diagnostics = dict(row.get('readback_diagnostics') or {})
+        diagnostics.update(readback.diagnostics)
+        diagnostics.pop('browser_cleanup_errors', None)
+        if cleanup_errors:
+            diagnostics['browser_cleanup_errors'] = cleanup_errors
+        diagnostics['full_caption_equal'] = readback.found and readback.diagnostics.get('full_caption_equal') is True
+        diagnostics['remote_images_verified'] = readback.found and readback.diagnostics.get('remote_images_verified') is True
+        diagnostics['media_recheck'] = {'observed_at': readback.observed_at,
+                                      'target_found': readback.found, 'error': readback.error}
+        updated = journal.transition(journal.attempt_from_row(row), journal.STATUS_SCHEDULED,
+            recorded_at=datetime.now(timezone.utc).isoformat(),
+            step='原排期只读图片复验', readback_diagnostics=diagnostics,
+            screenshot=readback.screenshot or row.get('screenshot', ''),
+            verification=month_readback.verification_text(readback),
+            note='原 attempt 只读复验；没有上传、提交或远端修改')
+        journal.append(c.state_dir, updated)
+        result = {'status': updated.status, 'attempt_id': attempt_id,
+                  'remote_images_verified': diagnostics['remote_images_verified'],
+                  'target_found': readback.found, 'readback_diagnostics': diagnostics,
+                  'verification': updated.verification}
+        try:
+            result['projection'] = project(updated)
+        except Exception:
+            result['projection_error'] = '发布账本已追加；本地投影待 recover 补齐，勿重新提交'
+        return result
 
 
 def recover(account, indexed) -> dict:

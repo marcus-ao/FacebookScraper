@@ -287,7 +287,7 @@ def require_same_item(item, fresh):
 
 
 async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None,
-                           card_spec=None):
+                           card_spec=None, observe_scheduled=None):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -339,7 +339,8 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     if parsed is None or parsed != expected:
         raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
-    remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout)
+    dialog_options = {'observe_detail': observe_scheduled} if observe_scheduled is not None else {}
+    remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, **dialog_options)
     if len(remote_ids) != 1:
         raise content.DetailReadError('identity_unverified', placement='feed',
                                       missing_fields=('channel_identity',))
@@ -348,6 +349,64 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
     return {'channels': tuple(sorted(remote_ids)), 'remote_ids': remote_ids,
             'text': caption, 'delivery': 'scheduled', 'placement': 'feed',
             'caption_status': 'present', 'accounts': {key:accounts()[key] for key in remote_ids}}
+
+
+async def read_scheduled_target(page, card, *, ui_timezone, observe_detail, timeout=30, card_spec=None):
+    """Reacquire one scheduled object; ordinary month reads never fetch its media."""
+    if (len(card.channels) != 1 or card.delivery != 'scheduled' or card.placement != 'feed'
+            or card.read_status != 'complete' or card.caption_status != 'present'):
+        raise bs.PublishStepError('图片复验只接受已核实的单渠道 Feed 排期')
+    spec = card_spec or bs.require_readback_evidence()
+    channel = card.channels[0]
+    if (dict(card.accounts) != {channel: accounts()[channel]}
+            or spec.attributes.get(channel + '_account_token') != accounts()[channel]):
+        raise bs.PublishStepError('取图目标账号与当前发布账号不一致')
+    local = card.at.astimezone(bs.resolve_ui_timezone(ui_timezone)).replace(tzinfo=None)
+    rows = await read_grid(page, timeout=timeout)
+    matches = []
+    for row in rows:
+        if row['date'] != local.date():
+            continue
+        for item in row['items']:
+            if item['href'] or datetime.strptime(item['time'], '%I:%M %p').time() != local.time():
+                continue
+            ready = await ready_item(page, row, item, timeout=timeout, card_spec=spec)
+            if ready is None:
+                continue
+            node, raw = ready
+            match = re.search(spec.attributes['datetime_regex'], raw)
+            if (match and bs._entry_naive(raw, spec) == local
+                    and bs._card_text(raw[:match.start()]) == bs._card_text(card.rendered)):
+                matches.append((row, item))
+    if len(matches) != 1:
+        raise bs.PublishStepError('取图时未能重新定位唯一的原排期卡片')
+    row, item = matches[0]
+    ready = await ready_item(page, row, item, timeout=timeout, card_spec=spec)
+    if ready is None:
+        raise bs.PublishStepError('原排期卡片已变化')
+    node, raw = ready
+    captured = []
+
+    async def observe(dialog, ids):
+        if ids != dict(card.remote_ids) or set(ids) != {channel}:
+            raise bs.PublishStepError('重新打开的排期详情不是原 remote ID')
+        if bs._card_text(card.rendered) not in await bs._node_text(dialog):
+            raise bs.PublishStepError('重新打开的排期详情没有完整冻结正文')
+        captured.append(await observe_detail(dialog))
+
+    try:
+        detail = await read_item_detail(page, row, item, node, raw, timeout=timeout,
+            card_spec=spec, ui_timezone=ui_timezone, observe_scheduled=observe)
+    except content.DetailReadError as exc:
+        raise bs.PublishStepError('重新打开的排期详情身份未核实') from exc
+    finally:
+        await page.mouse.move(0, 0)
+    if (len(captured) != 1 or detail['remote_ids'] != dict(card.remote_ids)
+            or detail['accounts'] != dict(card.accounts)
+            or bs._card_text(detail['text']) != bs._card_text(card.rendered)
+            or rows != await read_grid(page, timeout=timeout)):
+        raise bs.PublishStepError('取图期间原排期对象或月历发生变化')
+    return captured[0]
 
 
 async def open_calendar(page, asset_context, *, timeout=30):

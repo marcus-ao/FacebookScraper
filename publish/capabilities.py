@@ -3,7 +3,7 @@ from datetime import datetime
 
 from core.config import ROOT, cfg
 from core import paid_consent
-from publish import business_suite as bs, channels, evidence, journal, planning, snapshots, month_inventory
+from publish import business_suite as bs, channels, evidence, journal, planning, snapshots, month_inventory, scheduled_media
 
 
 @evidence.validation_scope()
@@ -73,6 +73,9 @@ def acceptance(state_dir):
                 # Editor thumbnails cannot certify media in a later scheduled post.
                 continue
             try:
+                if ('evidence_version' in media
+                        and not scheduled_media.evidence_intact(media, scheduled_media.binding_for(row))):
+                    continue
                 metadata, source, _, _ = snapshots.load(row['snapshot_id'])
                 fingerprint = row['final_text_sha256'] + ':' + ','.join(row['image_sha256'])
                 if (metadata['fingerprint'] != fingerprint

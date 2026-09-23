@@ -778,6 +778,22 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过。[Story 修前](../state/offline-validation-20260923T040538Z/results.json)复现旧“正文未知即空匹配”断言错误；保留拒绝把未知目标当空档的实现，改断言后 [Story 复跑](../state/offline-validation-20260923T040929Z/results.json)通过。回读成功标识改为“目标范围”，[回读红测](../state/offline-validation-20260923T040900Z/results.json)及[修后四脚本](../state/offline-validation-20260923T040916Z/results.json)保留。[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/publishing-integration-20260923/ui-regression/browser-stage-f.json)通过。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。全部写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
 
+### 1.34 G8 远端图片与原排期补验（2026-09-23）
+
+工作树 `.worktrees/g8-remote-images`，分支 `codex/g8-remote-images`，起点 `320f5cd`。接手时本树、主检出干净；只读查询远端 main 同为该提交。开发机没有 `config.local.toml`、归档内容、`published.jsonl`、冻结快照或渠道资产记录，9223 未监听；不能据此推断服务机状态。G1 原文件、379 张截图及 §1.31 的历史验证仍保留，原录制没有完整媒体清单、加载状态与有序远端字节。
+
+**已实现的取证基础与补验：离线通过。** 工作流向回读传入原 attempt，由 `snapshots.load_for_attempt` 核实冻结正文、图片字节、来源指纹版本及绑定时刻。目标详情重开前后核对全文、账号、唯一渠道、时刻、remote ID 和网格稳定性；普通月份读取不下载图片。`media.compare_ordered` 共用原有 dHash ≤ 8、RGB 平均误差 ≤ 12、比例误差 ≤ 1% 的判据，保留相同字节的每个位置；坏图、缺图、多图、调序、意外重复及相似图歧义拒绝。
+
+`scheduled_media` 在 `state/publish_attempts/remote_media/<观察 ID>/` 先耐久保全候选图片、详情截图和 `media.json`，再允许回执引用。清单绑定 attempt、快照、正文/图片/来源 SHA、版本、时刻、账号及远端 ID；记录实际字节摘要、尺寸、比较方法和定位方式，不保存签名 URL、Cookie 或请求头。新格式证据缺失或被改后，G8 不再接受该证明，历史 `scheduled` 仍防重。
+
+`tools.reverify_scheduled_media --attempt-id ...` 持现有发布锁只读重访原 scheduled 对象，沿用既有渠道资产记录；要求原快照有与当前账号、资产和发布浏览器一致的 `publish_target` 绑定。旧快照缺这个绑定时拒绝推断，不回填历史身份。通过或失败均沿同一 attempt 追加诊断，身份、来源指纹版本和原时刻保留；不调用填写、上传、提交或删除，不伪造提交前空基线。本地投影复用原幂等位，已发送通知不会重复发送。浏览器清理失败单独记诊断，不丢失已完成回读。`recover` 仍只补本地投影。
+
+**FB 与 IG 的完整有序媒体适配：代码未完成。** 当前 `collect` 只在已核实的目标 dialog 采集有界图片候选、加载状态、层级及导航标签；头像、隐藏图和缩略图均保留为候选，最多 64 项、下载总量 25 MiB，仅从既有 fbcdn 来源读取并释放响应。缺少真实媒体容器、独立总数/末项、顺序及轮播/缩略图关系，所以始终 `complete=false`、观测总数未知，不点击翻页控件，不按期望 N 张反推完整性。未知布局、未加载、下载/解码失败、列表变化及超限均保存具体诊断。
+
+隔离浏览器测试覆盖 FB/IG 身份重定位和诊断采集失败；完整成功链在取图边界注入合成的完整清单与 JPEG 字节，后续实际执行比较、保全、工作流、journal 和验收闸，**不证明任何真实 FB/IG 完整媒体布局**。定向结果及逐脚本最近日志见 [验证汇总](../state/g8-remote-images-20260923/verification.json)。未连接真实业务 Chrome、模型或远端账号，没有新排期、G1 重录或 G8 真实通过结论。
+
+服务机待提供每渠道一个原 scheduled attempt、绑定快照与有效渠道资产记录，以及同一 remote ID 的详情结构、独立总数/末项、各位置实际字节与轮播加载关系；优先补验已有多图对象。没有合格对象才按 [MANUAL_STEPS §16.3–§16.4](MANUAL_STEPS.md#163-走一遍完整的人工流程) 展示具体冻结内容并取得确认，不能为补证重复排期。主干复查到 `3bb04f3`，其 UI/历史筛选改动与本轮发布实现分离；集成与证据保全以本节最终记录为准。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。
@@ -818,7 +834,7 @@ manifest / SQLite / HTML / Planner cache / 飞书云盘
 
 逐项状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)。这里只列真正还缺的东西，不复述已经做完的部分。
 
-**发布侧是最长的一段，而且两头互相咬住。** `publish/` 的远端 scheduled 详情图片读取适配器**尚未实现**，G8 媒体闸因此不会通过——它要求全文相等、`remote_images_verified`、正整数媒体数以及有序 source SHA 与冻结清单一致，只有 `scheduled`、remote ID 或编辑器缩略图都不够。G1 已绑定现有录制并通过（§1.21），不再要求从零录制或补测 UI 边界。⛔ **必须先真实排出一张卡片，才能录到那张详情页的图片控件证据，再补适配器**；顺序见 [MANUAL_STEPS §16](MANUAL_STEPS.md#16-阶段三真实验收冻结排期与自动发布)。
+**G8 尚缺两渠道完整媒体布局。** §1.34 已接通冻结图片比较、目标诊断采集、证据保全和原 attempt 只读补验；FB/IG 的完整列表、顺序及轮播适配仍为 **代码未完成**。G8 要求全文相等、完整图片证明及有序 source SHA 与冻结清单一致，只有 `scheduled`、remote ID 或编辑器图都不够。G1 已通过（§1.21），无需重录。先核对服务机已有 scheduled 对象并只读取证；只有无合格样本时才具体确认后创建新样本，见 [MANUAL_STEPS §16.4](MANUAL_STEPS.md#164-排期详情的图片控件证据)。
 
 **没有一次成功的真实付费产出。** 真实翻译和真实出图各失败过一次（§1.1），修复后尚未复验。连带两条阈值也标不了：`[image].dhash_max_distance` 与 `change_ratio_warn` 都是 `-1`，必须用首批真实产出分组标定，见 [MANUAL_STEPS §5.2](MANUAL_STEPS.md#52-标定图内文字到底改没改的告警线)。
 

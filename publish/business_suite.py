@@ -1166,7 +1166,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 
 
 async def _open_channel_dialogs(
-        page, entry, spec: EvidenceSignal, *, timeout: float
+        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None
         ) -> dict[str, str]:
     """只读详情的渠道与 remote ID；仅用 Escape 关闭，不操作 Publish now 或 Boost。"""
     attrs = spec.attributes
@@ -1180,9 +1180,10 @@ async def _open_channel_dialogs(
     except Exception as exc:                          # noqa: BLE001
         raise PublishStepError("点不开日历条目的详情弹窗：%s" % exc) from exc
     try:
-        dialog = page.get_by_role(
+        dialogs = page.get_by_role(
             str(attrs.get("dialog_role") or "dialog"),
-            name=str(attrs.get("dialog_name") or ""), exact=False).first
+            name=str(attrs.get("dialog_name") or ""), exact=False)
+        dialog = dialogs.first
         # 无详情弹窗时保留渠道未知，由调用方决定是否完整。
         await dialog.wait_for(state="visible", timeout=_ms(timeout))
         deadline = time.monotonic() + timeout
@@ -1210,11 +1211,20 @@ async def _open_channel_dialogs(
                 previous, stable_since = ready, time.monotonic()
             if ready and time.monotonic() - stable_since >= .4:
                 found = ready
+                if observe_detail is not None:
+                    if await dialogs.count() != 1:
+                        raise PublishStepError('目标排期详情不唯一，不能读取图片')
+                    await observe_detail(dialog, dict(found))
+                    if (await dialogs.count() != 1 or not await dialog.is_visible()
+                            or await _node_text(dialog) != rendered):
+                        raise PublishStepError('取图期间排期详情身份或正文发生变化')
                 break
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
     except Exception:                                 # noqa: BLE001
+        if observe_detail is not None:
+            raise
         pass
     finally:
         try:

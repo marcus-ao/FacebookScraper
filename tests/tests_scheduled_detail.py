@@ -1,0 +1,100 @@
+"""Known G1 identity semantics plus synthetic mutations; media layout is unknown."""
+import calendar
+import html
+import sys
+import unittest
+from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
+
+from playwright.async_api import async_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.config import Config
+from publish import business_suite as bs, month_inventory as month
+from tests_month_inventory import SPEC, CAPTION, ENTRY
+
+
+class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.pw = await async_playwright().start()
+        self.browser = await self.pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
+        self.page = await self.browser.new_page()
+        self.when = datetime(2026, 9, 30, 17, 30, tzinfo=ZoneInfo('Asia/Shanghai'))
+        self.card = bs.RemotePlannerCard(self.when, ('facebook',), (('facebook', '123456789'),),
+            CAPTION, 'hash', 'scheduled', placement='feed', caption_status='present',
+            accounts=(('facebook', 'Neakasa Deutschland'),), time_verified=True)
+        await self.mount()
+
+    async def asyncTearDown(self):
+        await self.browser.close()
+        await self.pw.stop()
+
+    async def mount(self, *, copies=1, remote='123456789', caption=CAPTION, account='Neakasa Deutschland',
+                    marker="Facebook's Feed"):
+        item = '<a role="link" onclick="document.querySelector(\'[role=dialog]\').hidden=false">' + html.escape(ENTRY) + '</a>'
+        cells = ''.join(f'<div role="link" draggable="false"><span>{day.day}</span>'
+            + (item * copies if day == self.when.date() else '') + '</div>'
+            for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9))
+        await self.page.set_content('<h1>September</h1><h1>2026</h1>' + cells
+            + f'<div role="dialog" aria-label="Post details" hidden>ID: {remote} '
+              f"{marker} <span id=account>{account}</span> <span id=caption>{html.escape(caption)}</span></div>"
+            + '<script>document.onkeydown=e=>{if(e.key==="Escape")document.querySelector("[role=dialog]").hidden=true}</script>')
+
+    async def read(self, observer, card=None):
+        with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')):
+            return await month.read_scheduled_target(self.page, card or self.card,
+                ui_timezone='Asia/Shanghai', card_spec=SPEC, timeout=1.5, observe_detail=observer)
+
+    async def test_only_exact_target_is_observed_and_dialog_is_closed(self):
+        async def observe(dialog):
+            self.assertIn('123456789', await dialog.inner_text())
+            return 'captured'
+        self.assertEqual(await self.read(observe), 'captured')
+        self.assertFalse(await self.page.get_by_role('dialog').is_visible())
+
+    async def test_instagram_identity_uses_its_own_channel_and_account(self):
+        await self.mount(account='neakasa.de', marker='Instagram feed')
+        card = replace(self.card, channels=('instagram',), remote_ids=(('instagram', '123456789'),),
+                       accounts=(('instagram', 'neakasa.de'),))
+        async def observe(dialog):
+            return 'instagram capture'
+        self.assertEqual(await self.read(observe, card), 'instagram capture')
+        with self.assertRaises(bs.PublishStepError):
+            await self.read(observe, self.card)
+
+    async def test_wrong_id_account_duplicate_target_or_truncated_caption_never_reaches_media(self):
+        for changed in ({'remote': '987654321'}, {'account': 'Wrong account'},
+                        {'copies': 2}, {'caption': CAPTION[:10]}):
+            with self.subTest(changed=changed):
+                await self.mount(**changed)
+                observed = []
+                async def observe(dialog):
+                    observed.append(True)
+                with self.assertRaises(bs.PublishStepError):
+                    await self.read(observe)
+                self.assertEqual(observed, [])
+
+    async def test_identity_or_grid_changes_during_media_capture_invalidate_result(self):
+        for selector, changed in (('#account', 'Changed account'), ('#caption', 'Changed caption'),
+                                  ('[draggable=false] a', 'Changed September 30, 2026, 5:30 PM')):
+            with self.subTest(selector=selector):
+                await self.mount()
+                async def observe(dialog):
+                    await self.page.locator(selector).evaluate('(el, value)=>el.textContent=value', changed)
+                    return 'must not survive'
+                with self.assertRaises(bs.PublishStepError):
+                    await self.read(observe)
+
+    async def test_observer_exception_is_not_swallowed_as_an_empty_identity(self):
+        async def observe(dialog):
+            raise bs.PublishStepError('fixture capture error')
+        with self.assertRaisesRegex(bs.PublishStepError, 'fixture capture error'):
+            await self.read(observe)
+        self.assertFalse(await self.page.get_by_role('dialog').is_visible())
+
+
+if __name__ == '__main__':
+    unittest.main()

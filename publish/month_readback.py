@@ -1,8 +1,10 @@
 """Submission causality from a live month inventory scoped to the target time."""
 import hashlib
+from dataclasses import replace
 from datetime import datetime
 
-from publish import business_suite as bs, month_inventory
+from core.config import cfg
+from publish import business_suite as bs, month_inventory, scheduled_media, snapshots
 from publish.channel_evidence import accounts
 
 
@@ -54,7 +56,7 @@ async def baseline(page, when, final_text, *, ui_timezone, target_channels, time
 
 async def verify(page, when, final_text, *, ui_timezone, target_channels,
                  expected_image_count=None, pre_submit_baseline=None, expected_remote_id='',
-                 timeout=30, screenshot_path=None, run=None):
+                 timeout=30, screenshot_path=None, run=None, frozen_attempt=None):
     stamp = datetime.now().astimezone().isoformat()
     base = dict(observed_at=stamp, target_at=when.isoformat(),
                 ui_at=when.astimezone(bs.resolve_ui_timezone(ui_timezone)).isoformat(),
@@ -97,12 +99,60 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
             raise bs.PublishStepError('提交成功信号与月历排期的远端 ID 不一致')
         if pre_submit_baseline is not None and identity in pre_submit_baseline.remote_ids:
             raise bs.PublishStepError('月历命中的是提交前已存在的远端 ID')
+        diagnostics['remote_media'] = {'image_count': None, 'order_verified': False,
+                                       'error': 'frozen_context_missing'}
+        if frozen_attempt is not None:
+            try:
+                metadata, _, files, directory = snapshots.load_for_attempt(frozen_attempt)
+                if (files['text_de.txt'].decode('utf-8') != final_text
+                        or snapshots.require_bound(metadata) != when
+                        or tuple(frozen_attempt['target_channels']) != target_channels):
+                    raise bs.PublishStepError('取图参数与冻结 attempt 不一致')
+                paths = [directory / name for name in metadata['images']]
+                if expected_image_count is not None and expected_image_count != len(paths):
+                    raise bs.PublishStepError('期望图数与冻结图片不一致')
+                base['expected_image_count'] = len(paths)
+            except Exception:
+                diagnostics['remote_media']['error'] = 'frozen_snapshot_invalid'
+            else:
+                async def observe(dialog):
+                    # Pure image failure must not erase the independently verified scheduled fact.
+                    try:
+                        return await scheduled_media.collect(dialog, timeout=timeout)
+                    except Exception:
+                        return scheduled_media.MediaCapture((), {}, error='media_read_failed')
+                diagnostics['failure_stage'] = 'media_target_identity'
+                capture = await month_inventory.read_scheduled_target(page, card, ui_timezone=ui_timezone,
+                    timeout=timeout, card_spec=run.planner_card if run is not None else None,
+                    observe_detail=observe)
+                binding = scheduled_media.binding_for(dict(frozen_attempt, remote_id=identity))
+                try:
+                    capture = replace(capture, structure={**capture.structure, 'target': {
+                        'accounts': dict(card.accounts), 'remote_ids': dict(card.remote_ids),
+                        'scheduled_at': card.at.isoformat(), 'ui_at': base['ui_at'],
+                        'final_text_sha256': base['final_text_sha256'],
+                        'card_sha256': card.card_sha256, 'method': 'reacquired_scheduled_dialog'}})
+                    diagnostics.update(scheduled_media.verify_capture(capture, paths,
+                        cfg().state_dir / 'publish_attempts' / 'remote_media', binding))
+                except Exception:
+                    diagnostics['remote_media']['error'] = 'media_verification_failed'
         shot = await bs._readback_screenshot(page, screenshot_path, timeout)
         diagnostics.update(failure_stage=None, full_caption_equal=True)
         return bs.ScheduledReadback(found=True, **base, channels=card.channels,
             remote_id=identity, card_sha256=card.card_sha256, screenshot=shot,
+            image_count=diagnostics['remote_media'].get('image_count'),
             success_signal='planner_target_range_and_scheduled_detail',
             diagnostics=diagnostics)
     except Exception as exc:
         shot = await bs._readback_screenshot(page, screenshot_path, timeout)
         return bs.ScheduledReadback(found=False, **base, screenshot=shot, error=str(exc), diagnostics=diagnostics)
+
+
+def verification_text(readback):
+    if not readback.found:
+        return '本次未能重新核实原排期对象；保留历史排期事实和防重，请人工核对。'
+    prefix = '目标时刻、完整最终正文、账号和唯一渠道已从内容日历回读；'
+    if readback.diagnostics.get('remote_images_verified') is True:
+        return prefix + '已核验排期详情 %d 张图片的数量、顺序及视觉对应，证据已保全。' % readback.image_count
+    reason = (readback.diagnostics.get('remote_media') or {}).get('error') or 'media_unverified'
+    return prefix + '排期详情图片未核验（%s），G8 尚未通过。' % reason

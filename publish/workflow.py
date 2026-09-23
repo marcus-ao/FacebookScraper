@@ -1,7 +1,7 @@
 r"""浏览器发布状态机；每次转换追加到 journal。"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -173,7 +173,7 @@ async def _execute_unlocked(
         upload_notes = await bs.upload_images(page, list(post.image_paths), timeout=timeout)
         media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
         notes.extend(upload_notes[:1])
-        notes.append('已核对编辑器图片数量、顺序和视觉相似度；排期详情图片仍需人工核对。')
+        notes.append('已核对编辑器图片数量、顺序和视觉相似度。')
         for note in notes[-2:]:
             print("    " + note)
 
@@ -261,6 +261,7 @@ async def _execute_unlocked(
             planner_page or page, when, post.text_de, ui_timezone=ui_timezone,
             target_channels=target_channels, timeout=timeout,
             expected_image_count=len(post.image_paths),
+            frozen_attempt=asdict(unverified),
             pre_submit_baseline=pre_submit_baseline,
             expected_remote_id=result.remote_id,
             screenshot_path=readback_path, run=run)
@@ -293,8 +294,7 @@ async def _execute_unlocked(
             remote_ids=tuple(
                 part for part in str(readback.remote_id or "").split(";")
                 if part),
-            verification=("目标时刻、完整最终正文与目标渠道已从内容日历回读；"
-                          "已核对编辑器 %d 张图的数量与视觉顺序，排期详情的图片仍需人工核对" % len(post.image_paths)),
+            verification=month_readback.verification_text(readback),
             channels_verified=readback.channels,
             note="自动回读确认已排期")
         journal.append(c.state_dir, scheduled)

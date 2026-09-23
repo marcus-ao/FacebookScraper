@@ -134,6 +134,18 @@ def load(snapshot_id: str):
     return metadata, source, files, directory
 
 
+def load_for_attempt(row):
+    """Validate a durable receipt against its original frozen bytes and binding."""
+    metadata, source, files, directory = load(row['snapshot_id'])
+    if (metadata['fingerprint'] != row['final_text_sha256'] + ':' + ','.join(row['image_sha256'])
+            or metadata['post_id'] != row['post_id'] or metadata['platform'] != row['platform']
+            or metadata['source_fingerprint'] != row.get('source_fingerprint')
+            or paid_consent.fingerprint_version(metadata) != paid_consent.fingerprint_version(row)
+            or require_bound(metadata) != datetime.fromisoformat(row['scheduled_at'])):
+        raise review.ReviewConflict('发布回执与批准快照不一致')
+    return metadata, source, files, directory
+
+
 def ensure(post, *, bind: bool = False, target=None):
     """核对 post 与其冻结快照一致。`bind=True` 在核对通过后才绑定时刻——顺序反过来会
     在内容不符时留下一个已绑错时刻、只能解冻才能脱身的快照。"""
