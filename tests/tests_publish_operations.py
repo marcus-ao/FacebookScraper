@@ -224,7 +224,13 @@ class UnscheduleTests(unittest.TestCase):
                                   snapshot_id=frozen['snapshot_id'], scheduled_at=fixtures.TARGET)
         operations.finish(record['operation_id'], status=operations.SUCCEEDED, message='fixture')
         self.assertIsNotNone(self.f.fixture.client.get(self.f.fixture.url).json()['publish_operation'])
-        result = self.unschedule(self.inventory())
+        reader = AsyncMock(return_value=self.inventory())
+        with patch.object(records.planner_cache, 'read_live_inventory', reader):
+            result = asyncio.run(records.unschedule(
+                self.f.account, self.f.source, reason='已在后台删除', now=fixtures.NOW))
+        reader.assert_awaited_once()
+        self.assertEqual(reader.call_args.kwargs['run'].asset_context,
+                         {'asset_id': '1001', 'business_id': '2002'})
         self.assertEqual(result['status'], 'pending_review')
         self.assertEqual(result['remote_ids'], ['987654'])
         ref = journal.source_ref('facebook', self.f.source['post_id'])

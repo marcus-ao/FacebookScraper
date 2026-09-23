@@ -1,5 +1,6 @@
 """Web批准使用真实归档/审核/发布账本；浏览器与平台回执以注入替身验证。"""
 import asyncio
+import json
 import sys
 import unittest
 from contextlib import ExitStack
@@ -14,7 +15,7 @@ import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, review, translated
 from pipeline import approval, engine
-from publish import manual_run
+from publish import channel_evidence, manual_run
 from publish import business_suite as bs, compose, journal, snapshots, workflow
 from web.api.approval import business_time
 
@@ -30,9 +31,13 @@ class ApprovalTests(unittest.TestCase):
         self.account, self.source = self.fixture.account, self.fixture.source
         self.fixture.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         c = verified_probe_config(config.cfg(), self.fixture.root / 'state')
-        c._d['publish']['asset_id'] = '1001'
-        c._d['publish']['business_id'] = '2002'
         patch.object(config, '_cfg', c).start()
+        record = {'schema_version': 1, 'capture_origin': 'playwright_live', 'channels': {
+            channel: {'channel': channel, 'accounts': channel_evidence.accounts(),
+                      'port': c.publish_debug_port, 'profile': str(c.publish_profile_dir.resolve()),
+                      'context_ids': {'asset_id': '1001', 'business_id': '2002'}}
+            for channel in ('facebook', 'instagram')}}
+        (c.state_dir / channel_evidence.FILENAME).write_text(json.dumps(record), encoding='utf-8')
         fixture_activate(engine, c.state_dir, g8_verified=True, now=NOW - timedelta(days=2))
         self.post = compose.compose_post(self.source['post_id'], TARGET, archive_root=config.cfg().archive_dir,
             account=self.account.name, now=NOW, require_verified_ui_constraints=True, warning_sink=None)
@@ -60,12 +65,12 @@ class ApprovalTests(unittest.TestCase):
         params.update(kwargs.pop('params', {}))
         return asyncio.run(approval.approve(self.account, self.source, **params, **kwargs))
 
-    def test_missing_asset_config_means_zero_remote_reads(self):
-        config.cfg()._d['publish']['asset_id'] = ''
+    def test_missing_asset_record_means_zero_remote_reads(self):
+        (config.cfg().state_dir / channel_evidence.FILENAME).unlink()
         reader, execute = AsyncMock(), AsyncMock()
         with self.assertRaises(approval.ApprovalConflict) as error:
             self.approve(inventory_reader=reader, executor=execute)
-        self.assertIn('asset_id', str(error.exception))
+        self.assertIn('发布资产记录缺失', str(error.exception))
         reader.assert_not_called()
         execute.assert_not_called()
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
@@ -73,6 +78,32 @@ class ApprovalTests(unittest.TestCase):
         self.assertTrue(options['lockable'])
         self.assertTrue(options['available'])
         self.assertGreater(options['earliest'], NOW.isoformat())
+        self.assertEqual(options['preview']['target']['account'], self.params['publish_target']['account'])
+        self.assertEqual(options['preview']['target']['asset_id'], '')
+
+    def test_changed_asset_since_confirmation_means_zero_remote_reads(self):
+        locked = self.lock_content()
+        confirmed = approval.options(self.account, self.source, now=NOW)['preview']['target']
+        path = config.cfg().state_dir / channel_evidence.FILENAME
+        record = json.loads(path.read_text(encoding='utf-8'))
+        record['channels']['facebook']['context_ids']['asset_id'] = '1002'
+        path.write_text(json.dumps(record), encoding='utf-8')
+        reader, execute = AsyncMock(), AsyncMock()
+        params = dict(self.params, review_revision=locked['revision'], publish_target=confirmed)
+        with self.assertRaisesRegex(approval.ApprovalConflict, '发布目标已变化'):
+            asyncio.run(approval.approve(self.account, self.source, **params,
+                                       inventory_reader=reader, executor=execute))
+        reader.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
+
+    def test_changed_account_cannot_reuse_the_old_asset_record(self):
+        config.cfg()._d['publish']['facebook_page_name'] = 'Another page'
+        reader, execute = AsyncMock(), AsyncMock()
+        with self.assertRaisesRegex(approval.ApprovalConflict, '与当前发布账号不一致'):
+            self.approve(inventory_reader=reader, executor=execute)
+        reader.assert_not_called()
+        execute.assert_not_called()
 
     def test_content_can_be_frozen_before_the_publish_gate_is_open(self):
         """内容合格就可以选时刻；历史录证不参与这个判断。"""

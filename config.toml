@@ -133,8 +133,6 @@ ui_timezone = "Asia/Shanghai"  # 发布服务器及 Business Suite 设备时区�
 ui_timeout_seconds = 30
 require_confirmation = true  # 提交前确认最终内容。
 require_all_media_de = true  # 每张须有有效德语图或审校人对当前原图的明确确认。
-asset_id = ""  # 月历与编辑器共用的 asset_id，从目标页 URL 取得。缺值时可以冻结和选时刻，不能提交。
-business_id = ""  # 与 asset_id 同一组业务资产。缺值时可以冻结和选时刻，不能提交。
 
 # ⚠️ 以下三个子表必须留在 [publish] 末尾。[publish] 的新标量键加在这一行之前，写到子表头之后会静默归给子表。
 [publish.link_map]

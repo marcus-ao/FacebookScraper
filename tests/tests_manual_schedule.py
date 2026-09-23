@@ -1,4 +1,4 @@
-"""审校台单篇排期必须穿过真实审批和工作流，且不能再调用历史录证检查。"""
+"""审校台单篇排期复用既有资产绑定，不以历史控件验收代替当次核对。"""
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from core import config, review  # noqa: E402
 from pipeline import approval, engine  # noqa: E402
-from publish import business_suite as bs, capabilities, journal, manual_run, month_inventory  # noqa: E402
+from publish import business_suite as bs, capabilities, channel_evidence, journal, manual_run, month_inventory  # noqa: E402
 from publish import workflow  # noqa: E402
 from tests_approval import NOW, TARGET  # noqa: E402
 
@@ -36,7 +36,32 @@ class ManualScheduleChainTests(unittest.TestCase):
         payload["activated_at"] = None
         state.write_text(json.dumps(payload), encoding="utf-8")
 
-    def test_both_channels_open_the_calendar_without_historical_files(self):
+    def test_existing_channel_assets_need_no_new_configuration(self):
+        self.assertNotIn('asset_id', config.cfg()._d['publish'])
+        self.assertNotIn('business_id', config.cfg()._d['publish'])
+        for channel in ('facebook', 'instagram'):
+            with self.subTest(channel=channel):
+                run = manual_run.load(channel)
+                self.assertEqual(run.asset_context, {'asset_id': '1001', 'business_id': '2002'})
+        self.host.lock_content()
+        preview = approval.options(self.host.account, self.host.source, now=NOW)['preview']
+        self.assertEqual(preview['target'], manual_run.load('facebook').target())
+        # 资产绑定不等于控件验收：同一份最小记录不能通过严格渠道闸。
+        with self.assertRaises(bs.ProbeRequired):
+            channel_evidence.require('facebook')
+
+    def test_assets_from_another_publish_browser_are_rejected(self):
+        path = config.cfg().state_dir / channel_evidence.FILENAME
+        original = path.read_text(encoding='utf-8')
+        for changed in ({'port': 9222}, {'profile': str(path.parent / 'another-profile')}):
+            with self.subTest(changed=changed):
+                record = json.loads(original)
+                record['channels']['facebook'].update(changed)
+                path.write_text(json.dumps(record), encoding='utf-8')
+                with self.assertRaisesRegex(manual_run.ManualRunError, '与当前发布浏览器不符'):
+                    manual_run.load('facebook')
+
+    def test_both_channels_open_the_calendar_without_historical_capability_checks(self):
         async def scenario(channel):
             run = manual_run.load(channel)
             seen = {}

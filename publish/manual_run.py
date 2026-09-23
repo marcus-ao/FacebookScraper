@@ -1,11 +1,10 @@
-"""审校台单篇提交的本次运行条件。不读取历史录证文件。"""
+"""审校台单篇提交的本次运行条件；资产沿用既有渠道记录。"""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, replace
 
 from core.config import cfg
-from publish import business_suite as bs
+from publish import business_suite as bs, channel_evidence
 from publish.selectors import COMPOSER, SIGNALS
 
 _CARD_ATTRS = (
@@ -20,7 +19,7 @@ class ManualRunError(bs.PublishStepError):
 
 @dataclass(frozen=True)
 class ManualRun:
-    """一次确认过的目标。共享函数收到它就按它执行，不退回录证文件。"""
+    """一次确认过的目标；共享函数使用同一份资产绑定。"""
 
     channel: str
     account: str
@@ -48,22 +47,28 @@ def _account(channel: str) -> str:
     return value
 
 
-def load(channel: str) -> ManualRun:
-    """用当前配置和已实现的控件组装本次运行条件。"""
+def target_for(channel: str) -> dict:
+    """账号按当前配置，资产复用既有记录；不把历史控件验收当许可。"""
     if channel not in {"facebook", "instagram"}:
         raise ManualRunError("每篇仅接受一个来源对应的发布渠道")
+    account = _account(channel)
+    try:
+        record = channel_evidence.read_record(channel)
+    except bs.ProbeRequired as exc:
+        raise ManualRunError(str(exc)) from exc
+    if (record.get('accounts') or {}).get(channel) != account:
+        raise ManualRunError("既有资产记录与当前发布账号不一致，请核对发布账号")
+    return {'channel': channel, 'account': account,
+            **{key: str(record['context_ids'][key]) for key in ('asset_id', 'business_id')}}
+
+
+def load(channel: str) -> ManualRun:
+    """复用既有资产，按当前账号、浏览器和已实现控件组装运行条件。"""
+    target = target_for(channel)
     try:
         cfg().assert_publish_chrome_isolated()
     except SystemExit as exc:
         raise ManualRunError("发布浏览器身份未隔离：" + str(exc)) from exc
-    account = _account(channel)
-    asset_id = str(cfg().get("publish", "asset_id", "") or "").strip()
-    business_id = str(cfg().get("publish", "business_id", "") or "").strip()
-    missing = [name for name, value in (("asset_id", asset_id), ("business_id", business_id))
-               if not re.fullmatch(r"\d+", value)]
-    if missing:
-        raise ManualRunError("提交前缺少业务资产配置：" + "、".join(
-            "[publish].%s" % name for name in missing))
     ui_timezone = str(cfg().get("publish", "ui_timezone", "") or "").strip()
     if not ui_timezone:
         raise ManualRunError("[publish].ui_timezone 为空；无法核对排期时刻")
@@ -84,12 +89,12 @@ def load(channel: str) -> ManualRun:
     attributes = dict(card.attributes)
     attributes["facebook_account_token"] = str(cfg().get("publish", "facebook_page_name", "") or "").strip()
     attributes["instagram_account_token"] = str(cfg().get("publish", "instagram_account", "") or "").strip()
-    return ManualRun(channel, account, asset_id, business_id, ui_timezone, button, success,
-                     replace(card, attributes=attributes))
+    return ManualRun(channel, target['account'], target['asset_id'], target['business_id'],
+                     ui_timezone, button, success, replace(card, attributes=attributes))
 
 
 def confirm_target(confirmed, run: ManualRun) -> None:
-    """弹窗确认的目标必须和提交时重新读取的配置一致。"""
+    """弹窗目标必须和提交时重读的账号、资产绑定一致。"""
     expected = run.target()
     if not isinstance(confirmed, dict) or any(str(confirmed.get(key) or "") != value
                                               for key, value in expected.items()):

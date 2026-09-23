@@ -110,7 +110,8 @@ def validate_record(row, channel):
         raise bs.ProbeRequired('单渠道附加发布开关缺少关闭回读证据')
 
 
-def require(channel):
+def read_record(channel):
+    """读取既有资产绑定；控件是否可用由严格验收或当次页面另行核对。"""
     directory = cfg().state_dir
     path = assert_physical_direct_path(directory, directory / FILENAME, kind='file', label='渠道证据')
     try:
@@ -118,12 +119,21 @@ def require(channel):
         if data.get('schema_version') != 1 or data.get('capture_origin') != 'playwright_live':
             raise ValueError('capture format')
         row = data['channels'][channel]
-        if (row.get('port') != cfg().publish_debug_port
+        if (row.get('channel') != channel or row.get('port') != cfg().publish_debug_port
                 or row.get('profile') != str(cfg().publish_profile_dir.resolve())):
             raise ValueError('capture browser attribution')
         if not all(re.fullmatch(r'\d+', str(row.get('context_ids', {}).get(key, '')))
                    for key in ('asset_id', 'business_id')):
             raise ValueError('capture asset attribution')
+        return row
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise bs.ProbeRequired('发布资产记录缺失或与当前发布浏览器不符，请核对已有渠道记录：' + channel) from exc
+
+
+def require(channel):
+    directory = cfg().state_dir
+    try:
+        row = read_record(channel)
         validate_record(row, channel)
         stamp = datetime.fromisoformat(row['observed_at'])
         if stamp.tzinfo is None:

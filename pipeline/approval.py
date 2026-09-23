@@ -44,7 +44,7 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
               'audience_timezone': planning.AUDIENCE_TIMEZONE,
               'audience_quiet_hours': [planning.AUDIENCE_QUIET_HOURS.start, planning.AUDIENCE_QUIET_HOURS.stop],
               'default_times': cfg().get('publish', 'schedule_rule', {}).get('times', ['10:00', '17:00'])}
-    # 冻结和选时刻只认内容与时间窗口，不读录证、不看激活、不打开浏览器。
+    # 冻结和选时刻只认内容与时间窗口，不以历史验收或激活放行，不打开浏览器。
     try:
         result['fingerprint'] = engine._publish_fingerprint(
             composed_post(account_dir, source, now=moment))
@@ -131,14 +131,18 @@ def _preview(account_dir: Path, source: dict, state: dict) -> dict:
     task = '%s/%s' % (account_dir.name, source['post_id'])
     channel = source['platform']
     account = str(cfg().get('publish', 'facebook_page_name' if channel == 'facebook' else 'instagram_account', '') or '').strip()
+    target = {'channel': channel, 'account': account, 'asset_id': '', 'business_id': ''}
+    try:
+        target = manual_run.target_for(channel)
+    except manual_run.ManualRunError:
+        # 缺资产绑定仍可看冻结内容和选时刻；提交入口会给出具体原因。
+        pass
     return {
         'snapshot_id': metadata['snapshot_id'],
         'text': files['text_de.txt'].decode('utf-8'),
         'images': [{'index': index, 'url': '/api/tasks/%s/image/%d?snapshot=%s' % (
             task, index, metadata['snapshot_id'])} for index, _name in enumerate(metadata['images'])],
-        'target': {'channel': channel, 'account': account,
-                   'asset_id': str(cfg().get('publish', 'asset_id', '') or '').strip(),
-                   'business_id': str(cfg().get('publish', 'business_id', '') or '').strip()},
+        'target': target,
     }
 
 

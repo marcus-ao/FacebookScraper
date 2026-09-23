@@ -14,7 +14,7 @@
 
 **审校台。** 只有 `web/ui/` 一套 React + TypeScript 应用，`config.toml` 的 `[paths].web_dist` 指向 `web/ui/dist/`；构建产物不入版本库。⛔ **源码检出重启 Web 必须走 `scripts/run_web.bat`（局域网用复用它的 `scripts/run_web_lan.bat`）**——它每次按锁文件装依赖再构建。直接跑 Uvicorn 会继续提供旧产物，这个坑真实发生过：服务机 `git pull` 后重启，页面仍是修复前的 CSS。带 `release.json` 的运行包用包内前端，不需要 Node。
 
-**单篇排期。** 审校台冻结后选时刻、再由发布 Chrome 创建定时任务，用的是本次确认的渠道、账号和 `[publish].asset_id` / `business_id`。历史录证和流水线激活不再作为这次提交的许可证；批量批准和 CLI `--submit` 仍走原来的严格条件。`scheduled` 仍可以在远端图片未核验时写下，这条记录不能激活流水线，也不能当作 G8。本段只说明闸的位置，没有新的真实排期证据。
+**单篇排期。** 审校台冻结后选时刻、再由发布 Chrome 创建定时任务，用的是本次确认的渠道、当前配置的账号和已有 `state/channel_controls.json` 中的资产绑定，无需新增资产 ID 配置。记录须对应当前账号和发布浏览器，提交时重读并与确认目标比较；当次页面核对账号和唯一渠道。历史控件验收和流水线激活不再作为这次提交的许可证；批量批准和 CLI `--submit` 仍走原来的严格条件。`scheduled` 仍可以在远端图片未核验时写下，这条记录不能激活流水线，也不能当作 G8。本段只说明闸的位置，没有新的真实排期证据。
 
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
@@ -712,7 +712,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 ### 1.31 实现精简与核验优化（2026-09-22）
 
-工作树 `.worktrees/publishing-simplification`，分支 `codex/publishing-simplification`。基于 `56b80d8`，接入已提交的单篇排期实现 `ef85dab`，复用审批内容单次组装与 `baseline_from_inventory()`。主检出及原排期工作树保持原样。
+工作树 `.worktrees/publishing-simplification`，分支 `codex/publishing-simplification`。基于 `56b80d8`，接入已提交的单篇排期实现 `ef85dab`，复用审批内容单次组装与 `baseline_from_inventory()`；整合结果已通过 `3c15895` 进入 main，原排期工作树保留。
 
 **旧 Planner 清理、单渠道静态检查与操作提示：离线通过。** 生产读取只保留 `month_inventory` / `month_readback`；迁移的测试覆盖完整长文、重复卡、旧 ID、缺 ID、覆盖不足、DST 两次占用与不存在时刻。预检和激活仍核验双渠道，锁内防重、提交意图先落盘与未决禁止重提保留。同步证据复用会检查文件版本及截图存在性，配置每次重查，不增加持久缓存文件。
 
@@ -746,9 +746,13 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 2026-09-23 已合入本地 `main` 的 `af80b0c`，其证据清理事实保留在 §1.3。`tests_scheduler` 现按 publish 角色与发件箱里 `ready/sent` 的持久记录核对“内容就绪后投递、投递后关闭”，不再依赖飞书卡片标题；[修前复现](../state/offline-validation-20260923T033236Z/results.json)与[修后验证](../state/offline-validation-20260923T034105Z/results.json)保留。[最新定向复验](../state/offline-validation-20260923T041115Z/results.json) 的 scheduler、品牌、初翻和旧许可 4/4 通过。品牌与日历整合见 §1.32–§1.33。
 
-**当前主干整合：离线通过。** 发布精简线吸收 main `7a436f2`，完整保留 `2377290` 的 Facebook 已接受合作者归属修复及原有监测目标。十个冲突文件按 §1.32–§1.33 的共同规则整合；正式结果的 459 个受版本管理文件与[审计快照](../state/merge-audit-20260923T060659Z/candidate-manifest.json)逐字节一致，见[比对记录](../state/publishing-integration-20260923/resolved-tree-check.json)。快照的 [31 个定向脚本](../state/merge-audit-20260923T060659Z/validation-summary.json)、[两项抓取到许可交互](../state/merge-audit-20260923T060659Z/capture-consent-bridge.log)、[59 项前端检查](../state/merge-audit-20260923T060659Z/ui-calendar-shape.log)及[构建](../state/merge-audit-20260923T060659Z/ui-build-result.json)通过；正式工作树复验及最终比对见[交付验证](../state/publishing-integration-20260923/validation.json)。后续仅同步四份文档，未再改生产实现。
+**主干整合快照 `3c15895`：离线通过。** 发布精简线吸收 main `7a436f2`，完整保留 `2377290` 的 Facebook 已接受合作者归属修复及原有监测目标。十个冲突文件按 §1.32–§1.33 的共同规则整合；该次结果的 459 个受版本管理文件与[审计快照](../state/merge-audit-20260923T060659Z/candidate-manifest.json)逐字节一致，见[比对记录](../state/publishing-integration-20260923/resolved-tree-check.json)。快照的 [31 个定向脚本](../state/merge-audit-20260923T060659Z/validation-summary.json)、[两项抓取到许可交互](../state/merge-audit-20260923T060659Z/capture-consent-bridge.log)、[59 项前端检查](../state/merge-audit-20260923T060659Z/ui-calendar-shape.log)及[构建](../state/merge-audit-20260923T060659Z/ui-build-result.json)通过；该次工作树复验及最终比对见[交付验证](../state/publishing-integration-20260923/validation.json)。资产配置修正及新验证见下段。
 
-本节集成日志、审计快照和 §1.32–§1.33 已收集的证据，按[SHA-256 保全清单](../state/publishing-integration-20260923/preservation.json)复制到主检出，原件保留。同名异字节的月历浏览器报告与截图保存在本次专用目录，主检出已有文件保留。四个发布子工作树仍保留各自独有证据，未清理。全部验证使用隔离归档、状态与浏览器夹具，没有新增真实服务结论。服务机切换须先核对 `config.toml` 中的数字 `asset_id` / `business_id`，单篇提交与人工撤销核验均需要它们；普通日历刷新仍走原录证入口。前后端按 §13 同步更新，旧受管版本不得混用 `truth_contract=2` 的记录，具体操作见 [MANUAL_STEPS §16.1](MANUAL_STEPS.md#161-检查现有发布能力)。G8 远端图片适配仍为 **代码未完成**。
+本节集成日志、审计快照和 §1.32–§1.33 已收集的证据，按[SHA-256 保全清单](../state/publishing-integration-20260923/preservation.json)复制到主检出，原件保留。同名异字节的月历浏览器报告与截图保存在本次专用目录，主检出已有文件保留。四个发布子工作树仍保留各自独有证据，未清理。全部验证使用隔离归档、状态与浏览器夹具，没有新增真实服务结论。单篇提交与人工撤销核验复用已有渠道资产绑定；普通日历刷新仍走原录证入口。前后端按 §13 同步更新，旧受管版本不得混用 `truth_contract=2` 的记录，具体操作见 [MANUAL_STEPS §16.1](MANUAL_STEPS.md#161-检查现有发布能力)。G8 远端图片适配仍为 **代码未完成**。
+
+**资产信息复用修正：离线通过。** 先前把内部资产标识改为 `[publish].asset_id` / `business_id` 必填配置，造成已有渠道记录仍无法提交；测试夹具同时补上新键，遗漏了旧配置兼容场景。[修前复现](../state/offline-validation-20260923T065638Z/results.json)确认问题。[修后定向验证](../state/offline-validation-20260923T070307Z/results.json)的批准、单篇排期和发布操作三个脚本通过。现删除两个配置键，预览、提交和撤销共用原渠道记录中的绑定，不迁移或新增状态文件。缺绑定可冻结和选时刻；绑定变化、账号不符在远端读取前拒绝。严格预检仍校验控件和截图，单篇路径只复用资产信息并核对当次页面。
+
+[共享入口和组合验证](../state/offline-validation-20260923T070634Z/results.json) 11/11 通过：渠道核验、单篇排期、月历 API/缓存、发布状态机、hygiene，以及最终表单、图片选择、范围占用、发布恢复和指纹五项。覆盖了错误浏览器归属拒绝，且资产绑定本身不能通过严格渠道验收。[核对与保全记录](../state/publishing-assets-reuse-20260923/verification.json)记录配置与 main `7a436f2` 的键和值相同、换行与文档检查、日志摘要。外部操作均为隔离替身；接口和前端结构未变，服务机按 §16 另验，G8 仍为代码未完成。
 
 ### 1.32 品牌账号的来源冻结与合作者放行（2026-09-22）
 
