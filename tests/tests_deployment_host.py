@@ -295,6 +295,23 @@ class HostTests(unittest.TestCase):
             self.assertEqual(bot.calls, 1)
             self.assertTrue((control / 'deployment_outbox.json').exists())
 
+    def test_deployment_card_uses_event_time_and_distinguishes_success_from_alert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = []
+            class Bot:
+                def send(self, role, card, delivery_id):
+                    cards.append(card)
+                    return 'fixture'
+            for kind in ('success', 'failure', 'rollback', 'blocked'):
+                deliver(Path(tmp), {'event_id': kind, 'kind': kind, 'sha': 'a' * 40, 'at': 0,
+                                    'error_code': 'worker_exit_unconfirmed' if kind == 'failure' else None},
+                        settings=FeishuSettings(True, 'http://localhost:8765'), bot=Bot())
+            self.assertEqual([c['header']['template'] for c in cards], ['blue', 'red', 'orange', 'orange'])
+            self.assertTrue(all('1970-01-01 08:00:00' in json.dumps(c) for c in cards))
+            self.assertNotIn('异常原因', json.dumps(cards[0], ensure_ascii=False))
+            self.assertIn('aaaaaaaaaaaa', json.dumps(cards[0]))
+            self.assertIn('退出状态尚未确认', json.dumps(cards[1], ensure_ascii=False))
+
     def test_controller_upgrade_is_refused_before_environment_or_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

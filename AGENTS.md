@@ -49,14 +49,24 @@
 
 ## 四、按影响选测试，默认不跑全量
 
+- **交付以本次改动及其定向验证为准。** GitHub Actions 不再作为开发、合并或源码部署的交付条件。除非用户明确要求，不恢复工作流、不重跑或追修历史 Actions 失败、不等待云端制品。服务机沿用源码更新，见 [MANUAL_STEPS §13](docs/MANUAL_STEPS.md#13-更新并启动审校台)。
+- **先选范围，再验证。** 根据改动影响选择下列检查；与本次改动无关的既有失败，在现有文档中记录复现入口和影响，不自动扩展为 CI 整治。当前改动导致的失败、阻塞本轮主流程的问题仍须解决，结果如实报告。
 - **小改动，快验证。** 单点修复、简单功能只跑直接相关的测试；纯文案或文档改动检查内容、引用和 diff 即可。
 - **复杂改动，按需扩大。** 跨模块改造、共享契约变更、主流程重构或影响范围不清时，按实际影响选择子系统或全量回归。跑全量前简述必要性，不把全量测试当作每次改动的固定流程。
 - **验证通过就收尾。** 只有新增改动、测试失败或明确的覆盖缺口，才扩大或重复测试。
 
 以下命令按需选用：
 
+| 改动 | 默认验证 |
+|---|---|
+| 文档、工作流删除、协作规则 | 内容、链接、换行、`git diff --check` |
+| 单个 Python 模块 | 直接相关测试，可用 `tools.test_offline --only` 隔离运行 |
+| 前端交互或样式 | 相关前端测试与构建；浏览器行为选对应场景 |
+| 配置键、启动入口、模块依赖 | 相关测试及必要的 hygiene 检查 |
+| 跨模块契约、主流程重构 | 说明影响后选择子系统或全量回归 |
+
 ```powershell
-scripts\run_python.bat tests\tests_parse.py      # 定向示例，按改动选择相关脚本
+scripts\run_python.bat -m tools.test_offline --only tests_parse  # 定向隔离示例
 scripts\run_python.bat -m tools.test_offline      # 全量离线，确认必要时再运行
 scripts\run_python.bat tests\tests_hygiene.py     # 配置键、零引用、重复实现、模块图
 npm.cmd --prefix web/ui test                      # 前端单测
@@ -65,8 +75,11 @@ npm.cmd --prefix web/ui run build                 # 浏览器回归需要 dist
 
 `tests_hygiene` 会当场拦住三类常犯错误：加了配置键却没人读、加了函数却没人调、同一段逻辑写在两个文件里。改动涉及写入的测试一律用隔离数据，不要对绑定真实数据的目录跑会写盘的脚本。
 
-## 五、Windows 上的两个坑
+日常更新不重新运行 `setup.bat` 代替验证；它是安装入口，当前会执行全量测试。
 
+## 五、Windows 上的三个坑
+
+- ⛔ **别用 `rm -rf` 删工作树目录。** MSYS 的 `rm -rf` 对符号链接只删链接本身，对 Windows 目录联接（`mklink /J`）却会进去删**目标内容**——而工作树里的 `.venv`、`node_modules`、`archive/`、`state/` 都可能是指回主检出的联接。2026-09-22 清理残壳时，一条 `rm -rf .worktrees/story-insights-timeout` 顺着 `.venv` 联接把主检出的环境删得只剩 3 个当时被占用的 `.exe`，所有并行会话一起失去环境。那次删掉的只是可重装的依赖，同一条命令指向 `archive/` 或 `state/` 就是删真相源，**不可重建**。查联接用 `cmd //c dir //AL //S //B "<目录>"`，删用不穿联接的 `cmd //c rmdir //S //Q "<目录>"`。**开关必须写双斜杠**：Git Bash 会把 `/S` 当成路径改写掉，`dir /AL` 于是报 `Invalid switch`、`rmdir /S /Q` 报 `Parameter format not correct`——而 `dir` 那条失败时只是没有输出，看起来和"没有联接"一模一样。
 - **`scripts/*.bat` 必须是 CRLF**，裸 LF 会让 cmd 误解析整行，表现为 "'xxx' 不是内部或外部命令"。`.gitattributes` 已规定，`tests_hygiene` 检查 [5] 会验。
 - **`*.py` / `*.md` / `*.toml` 必须是 LF。** 用 Python 批量改文件时记得 `newline=""`——默认换行翻译会把读进来的 `\n` 写成 `\r\n`，把 LF 文件变成 CRLF。这个坑刚让 `config.toml` 变成 CRLF，再经夹具二次翻译成 `\r\r\n`，浏览器回归里报出一个完全看不出是换行问题的 TOML 解析错误。
 
@@ -99,3 +112,5 @@ web/        审校台：FastAPI + React，只调上面的入口，反向不依�
 - 同一功能的后续配置、修复和交付复用其既有工作树与分支；不同功能分别隔离，确保文件改动和提交可追踪。
 - 分支和工作树名称必须概括具体功能或实现目的，例如 `codex/windows-lan-access`、`codex/publication-freeze`；禁止使用 `stage-1`、`phase-3`、`phrase-3` 等只有阶段编号的模糊命名。
 - 清理工作树前按现有证据与数据规则保全其独有文件；创建隔离工作树不代表允许复制凭据、接入真实业务数据或删除其他工作。
+- **`git worktree remove` 失败时不回滚。** 它先注销、后删目录：删不掉时工作树已经从 `git worktree list` 消失，磁盘上却留着完整的树，之后 `prune` 也不再提醒。删完直接 `ls .worktrees/ .claude/worktrees/` 对一遍，别只信 `git worktree list`。补删残壳按[第五节](#五windows-上的三个坑)的第一条做，别顺手 `rm -rf`。
+- **别人的工作树不由你判断该不该删。** 未提交改动、仍在跑的会话、只存在于那棵树里的证据，三者任一存在就先问。工作区是共用的，`main` 和别的分支可能在你这轮里被别的会话推进，动手前现查，不要凭会话开头的快照下结论。

@@ -209,6 +209,8 @@ web_dist = "web/ui/dist"  # 相对于项目根目录。
 snooze_default_days = 3  # 上海工作日，按周一至周五计。
 
 [feishu]
+site_name = "Neakasa 德国"
+timezone = "Asia/Shanghai"  # 仅控制卡片时间格式化；卡片不附带时区文案。
 # 同一业务群按 detect/capture/publish/alert 四个阶段角色投递。
 # 四个机器人地址与各自签名密钥只在本机 .env（见 MANUAL_STEPS 第 2 节）。
 # FEISHU_APP_ID / FEISHU_APP_SECRET 现在只给 [mirror] 的云盘用，不参与发消息。

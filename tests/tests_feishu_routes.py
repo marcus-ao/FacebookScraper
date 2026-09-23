@@ -1,5 +1,7 @@
 """四机器人路由、旧发件箱与未知投递结果；全部使用隔离文件和假 HTTP。"""
 import json
+import io
+from contextlib import redirect_stdout
 import sys
 import tempfile
 import unittest
@@ -196,6 +198,21 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual([role for role, _ in cards], ['detect', 'capture', 'publish', 'alert'])
         titles = {card['header']['title']['content'] for _, card in cards}
         self.assertEqual(len(titles), 4)
+        self.assertFalse(self.path.exists())
+
+    def test_dry_run_outputs_four_real_templates_without_credentials_or_outbox(self):
+        from pipeline import cli
+        output = io.StringIO()
+        with patch('core.feishu.FeishuSettings.load', return_value=self.settings), \
+                patch('core.feishu.WebhookBot.from_environment', side_effect=AssertionError('credentials read')), \
+                patch('core.feishu.Outbox', side_effect=AssertionError('outbox created')), redirect_stdout(output):
+            self.assertEqual(cli.main(['notifications', '--self-test', '--dry-run']), 0)
+        cards = json.loads(output.getvalue())
+        self.assertEqual([row['role'] for row in cards], ['detect', 'capture', 'publish', 'alert'])
+        self.assertEqual([row['card']['header']['template'] for row in cards],
+                         ['turquoise', 'turquoise', 'orange', 'red'])
+        self.assertTrue(all('通道自检' in row['card']['header']['title']['content'] for row in cards))
+        self.assertTrue(all(row['card']['elements'][0]['fields'] for row in cards))
         self.assertFalse(self.path.exists())
 
 

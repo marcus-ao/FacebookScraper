@@ -101,7 +101,8 @@ class Runtime:
                                  exit_code=int(code), discovered=0,
                                  skipped=dict.fromkeys(SKIP_REASONS, 0))
             self._system(f'capture:{platform}:{now.date()}:{code}',
-                         f'{platform} 监测未完成（退出码 {code}），请检查抓取日志和手动登录状态。', now)
+                         f'监测未完成（退出码 {code}）。', now, platform=platform, module_name='采集',
+                         recommendation='请检查抓取日志和手动登录状态。')
             return code
         if observation['discovered']:
             self.processing.fact('content_discovered', now, kind=kind, platform=platform,
@@ -179,6 +180,7 @@ class Runtime:
                 if manual:
                     self.outbox.enqueue('capture-manual:' + scan, 'system', {
                         'text': f"{source['platform']} 本轮 {len(manual)} 篇需要人工处理，已有内容仍保留。",
+                        'platform': source['platform'], 'module_name': '采集', 'occurred_at': now.isoformat(),
                         'run_id': scan, 'next_step': '打开运行详情核对逐帖原因，再授权一次恢复。'}, now)
                 ledger.acknowledge([row['event_id'] for row in scan_rows])
         except (CaptureStateError, OSError, ValueError, RuntimeError) as exc:
@@ -241,7 +243,8 @@ class Runtime:
             self.processing_future = maintenance.submit(self.processing_executor, 'processing', self._process_batch, batch)
         except Exception:
             self.processing.finish(batch, self.clock(), code=1)
-            self._system('processing-executor:' + batch['batch_id'], '内容执行线程未启动，本次未调用模型。', now)
+            self._system('processing-executor:' + batch['batch_id'], '内容执行线程未启动，本次未调用模型。', now,
+                         module_name='内容处理')
         return self.processing_future
 
     def _process_batch(self, batch: dict):
@@ -270,18 +273,22 @@ class Runtime:
             if code:
                 self._system(f'processing:{started.date()}:{code}',
                              f'本轮内容处理未完成（退出码 {code}），请检查流水线日志与付费请求记录。',
-                             self.clock())
+                             self.clock(), module_name='内容处理', recommendation='请检查流水线日志与付费请求记录。')
             return result
         except BaseException as exc:
             self.processing.finish(batch, self.clock(), code=None, error=type(exc).__name__)
             self._system(f'processing-uncertain:{batch["batch_id"]}',
-                         '内容处理进程意外中断；可能已有付费请求，恢复前请先核账。', self.clock())
+                         '内容处理进程意外中断；可能已有付费请求，恢复前请先核账。', self.clock(),
+                         module_name='内容处理', recommendation='请先核账，再决定恢复方式，勿直接重放。')
             return self.processing_status()
 
-    def _system(self, event_id, text, now):
+    def _system(self, event_id, text, now, *, platform=None, module_name='系统运行',
+                recommendation='请打开运行状态核对记录，再按提示处理。', scheduled_at=None):
         if self.settings.enabled:
             try:
-                self.outbox.enqueue(event_id, 'system', {'text': text}, now)
+                self.outbox.enqueue(event_id, 'system', {'text': text, 'error_reason': text,
+                    'platform': platform, 'module_name': module_name, 'occurred_at': now.isoformat(),
+                    'action_recommendation': recommendation, 'scheduled_at': scheduled_at}, now)
             except Exception:
                 notify.notify('系统告警暂未投递', '请检查飞书发件箱；抓取退出状态保持原样。', popup=False)
 
@@ -295,7 +302,7 @@ class Runtime:
                 reason=result['skipped'], deadline_at=result.get('deadline_at'), business_date=result.get('business_date'))
             self._system('scan-skipped:%s:%s' % (result.get('business_date'), result['platform']),
                 '%s 兜底未执行：%s。普通探测按计划继续，请核对早班素材是否完整。'
-                % (result['platform'], result['skipped']), now)
+                % (result['platform'], result['skipped']), now, platform=result['platform'], module_name='兜底采集')
         self.c = cfg()
         if self.process:
             self.refresh_hashtags(now)
@@ -332,7 +339,8 @@ class Runtime:
                 self.mirror_sources(now)
             except Exception:
                 self._system(f'mirror:{now.date()}',
-                             '归档云盘镜像尚未完成，请由维护人员核对运行状态；本地内容仍保留。', now)
+                             '归档云盘镜像尚未完成，请由维护人员核对运行状态；本地内容仍保留。', now,
+                             module_name='归档镜像')
         if not self.settings.enabled:
             return
         try:
@@ -392,11 +400,13 @@ class Runtime:
             result = asyncio.run(planner_cache.refresh_cache(path, planner_cache.read_live_inventory,
                                                             state_dir=self.c.state_dir))
             if result.get('refresh_status') == 'failed':
-                self._system(f'calendar:{now.date()}', '发布月历刷新失败，页面保留上次成功的数据，请检查发布浏览器。', now)
+                self._system(f'calendar:{now.date()}', '发布月历刷新失败，页面保留上次成功的数据，请检查发布浏览器。', now,
+                             module_name='发布月历')
             elif result.get('refresh_status') == 'refreshed':
                 self.check_published(now)
         except Exception:
-            self._system(f'calendar:{now.date()}', '发布月历暂未刷新，请检查本地日志和发布浏览器。', now)
+            self._system(f'calendar:{now.date()}', '发布月历暂未刷新，请检查本地日志和发布浏览器。', now,
+                         module_name='发布月历')
 
     def check_published(self, now: datetime):
         """刚读完月历，顺带核一次到点的排期有没有真的公开。
@@ -408,9 +418,9 @@ class Runtime:
         for item in observations.overdue(self.c.state_dir, now=now, grace_minutes=grace):
             self._system(
                 'unpublished:' + item['attempt_id'],
-                '这条排期的时刻已过，但月历上还没观测到它公开：%s %s（%s）。'
-                '请到 Business Suite 核对，不要直接重新提交。'
-                % (item['platform'], item['scheduled_at'], item['post_id']), now)
+                '这条排期的时刻已过，但月历上还没观测到它公开（%s）。' % item['post_id'], now,
+                platform=item['platform'], module_name='发布核验', scheduled_at=item['scheduled_at'],
+                recommendation='请到 Business Suite 核对，不要直接重新提交。')
 
     def mirror_sources(self, now: datetime):
         for directory in engine.active_account_dirs(account_dirs(self.c.archive_dir)):
@@ -419,17 +429,20 @@ class Runtime:
                     self.mirror.queue_source(directory, source, now=now)
                 except (OSError, ValueError, RuntimeError) as exc:
                     self._system(f'mirror-source:{directory.name}:{source.get("post_id")}:{now.date()}',
-                                 f'有一篇源帖尚未镜像（{type(exc).__name__}），请检查本地素材。', now)
+                                 f'有一篇源帖尚未镜像（{type(exc).__name__}），请检查本地素材。', now,
+                                 platform=source['platform'], module_name='归档镜像')
         try:
             self.mirror.queue_state(self.c.state_dir, now=now, config_path=self.c.path)
         except (OSError, ValueError, RuntimeError) as exc:
             self._system(f'mirror-state:{now.date()}',
-                         f'状态备份等待稳定文件（{type(exc).__name__}）；已冻结的镜像继续投递。', now)
+                         f'状态备份等待稳定文件（{type(exc).__name__}）；已冻结的镜像继续投递。', now,
+                         module_name='归档镜像')
         if self.drive is None:
             self.drive = DriveClient.from_environment()
         result = self.mirror.dispatch(self.drive, now=now)
         if result['pending']:
-            self._system(f'mirror-pending:{now.date()}', '云盘镜像还有未完成条目，系统会重试；本地留档不受影响。', now)
+            self._system(f'mirror-pending:{now.date()}', '云盘镜像还有未完成条目，系统会重试；本地留档不受影响。', now,
+                         module_name='归档镜像')
 
     def collect(self, directories, now: datetime):
         started_at = self.outbox.started_at(now)
@@ -440,7 +453,8 @@ class Runtime:
                     source, _ = read_post_truth(directory, indexed)
                 except (OSError, ValueError) as exc:
                     self._system(f'archive:{directory.name}:{indexed.get("post_id")}:{now.date()}',
-                                 f'有一篇本地源帖无法读取（{type(exc).__name__}），请检查归档。', now)
+                                 f'有一篇本地源帖无法读取（{type(exc).__name__}），请检查归档。', now,
+                                 platform=indexed.get('platform'), module_name='归档读取')
                     continue
                 ref = journal.source_ref(source['platform'], source['post_id'])
                 sources[ref] = (directory, source)
@@ -453,7 +467,9 @@ class Runtime:
             if event.get('status') != 'open':
                 continue
             if event.get('kind') in {'budget_stopped', 'paid_request_unresolved'}:
-                self._system(event['item_id'], str(event.get('summary') or ''), now)
+                self._system(event['item_id'], str(event.get('summary') or ''),
+                             parse_ts(event.get('recorded_at')) or now, module_name='付费请求',
+                             recommendation='请核对预算及付费请求记录，结果不明确时先核账。')
             if event.get('kind') not in {'ready_to_publish', 'human_translation_stale',
                                          'unknown_owner', 'unknown_collaborator', 'unmapped_price', 'offline_gate'}:
                 continue
@@ -471,6 +487,8 @@ class Runtime:
             entry = pending.setdefault(refs[0], {'source': source, 'directory': directory,
                 'state': state, 'recorded_at': event['recorded_at'], 'notes': []})
             entry['recorded_at'] = min(entry['recorded_at'], event['recorded_at'])
+            if event['kind'] == 'ready_to_publish':
+                entry['ready_at'] = max(entry.get('ready_at') or event['recorded_at'], event['recorded_at'])
             if event['kind'] != 'ready_to_publish' and event.get('summary'):
                 entry['notes'].append(event['summary'])
 
@@ -481,15 +499,18 @@ class Runtime:
             except (OSError, ValueError) as exc:
                 # 一篇读不出的稿子只丢它自己的卡片，不能连累本轮其余提醒；失败要留痕。
                 self._system(f'review-material:{ref}:{now.date()}',
-                             f'{ref} 的审校素材读不出（{type(exc).__name__}），请检查归档与译文。', now)
+                             f'{ref} 的审校素材读不出（{type(exc).__name__}），请检查归档与译文。', now,
+                             platform=source['platform'], module_name='素材审校')
                 continue
             if current['image_variant'] == 'unreadable':
                 # 卡片已降级为纯文字，运营那边看得见；归档原图不可重建，维护方也要知道。
                 self._system(f'lead-image:{ref}:{now.date()}',
-                             f'{ref} 的首图读不出，卡片已降级为纯文字，请检查归档原图。', now)
+                             f'{ref} 的首图读不出，卡片已降级为纯文字，请检查归档原图。', now,
+                             platform=source['platform'], module_name='素材审校')
             payload = {'task_id': directory.name + '/' + source['post_id'],
                        'platform': source['platform'], 'account': source['account'],
-                       'created_at': source['created_at'], 'permalink': source.get('permalink'),
+                       'published_at': source['created_at'], 'permalink': source.get('permalink'),
+                       'ready_at': item.get('ready_at'), 'occurred_at': item['recorded_at'],
                        'processing_notes': item['notes'], **current}
             payload['risk'] = '\n'.join(dict.fromkeys([*item['notes'], current['risk']])).strip()
             event_id = 'ready:' + ref + ':' + payload['source_text_sha256'] + ':' + (state.get('revision') or '')
@@ -508,7 +529,7 @@ class Runtime:
                 backlog_id = f'backlog:{platform}:{local.date()}:{local.hour}'
                 valid_ready.add(backlog_id)
                 self.outbox.enqueue(backlog_id, 'backlog',
-                    {'platform': platform,
+                    {'platform': platform, 'occurred_at': now.isoformat(),
                      'text': f'当前 {len(lane)} 篇待审，最早一篇已等待 {hours} 小时。'}, now)
 
         if local.hour == 8 and self.outbox.schedule.is_on_duty(now):
@@ -516,14 +537,15 @@ class Runtime:
             processing = self.processing_status()
             abnormal = processing.get('status') in {'failed', 'interrupted', 'uncertain'}
             if activity or pending or abnormal:
-                text = []
+                text, summary_lines = [], []
                 if activity:
                     text.append(f"发现 {activity['discovered']} 篇，晨间补抓 {activity['reconcile_discovered']} 篇。")
                     if activity.get('reconcile_skipped'):
-                        text.append('未执行兜底 %s 次（%s），请核对覆盖。' % (activity['reconcile_skipped'],
+                        summary_lines.append('未执行兜底 %s 次（%s），请核对覆盖。' % (activity['reconcile_skipped'],
                                     '、'.join(activity.get('reconcile_skipped_platforms', []))))
-                    text.extend(f"分类跳过 {SKIP_LABELS.get(key, key)}：{count}"
+                    summary_lines.extend(f"分类跳过 {SKIP_LABELS.get(key, key)}：{count}"
                                 for key, count in activity['skipped'].items() if count)
+                text.extend(summary_lines)
                 if pending:
                     text.append(f'当前 {len(pending)} 篇待审。')
                 duration = processing.get('last_success_duration_minutes')
@@ -531,7 +553,12 @@ class Runtime:
                     text.append(f'最近整批处理用时 {duration:.1f} 分钟。')
                 if abnormal:
                     text.append('内容处理需要核对：' + str(processing.get('recovery_reason') or processing['status']))
-                self.outbox.enqueue(f'morning:{local.date()}', 'morning', {'text': '\n'.join(text)}, now)
+                self.outbox.enqueue(f'morning:{local.date()}', 'morning',
+                    {'text': '\n'.join(text), 'occurred_at': now.isoformat(), 'summary_lines': summary_lines,
+                     'morning_stats': {'discovered': (activity or {}).get('discovered', 0),
+                                       'reconcile_discovered': (activity or {}).get('reconcile_discovered', 0),
+                                       'pending': len(pending), 'duration': duration},
+                     'next_step': str(processing.get('recovery_reason') or '内容处理出现异常，请核对运行记录及付费请求。') if abnormal else None}, now)
 
         self.outbox.retain_ready(valid_ready, now)
 
@@ -543,10 +570,12 @@ class Runtime:
                 continue
             directory, source = origin
             payload = {'task_id': directory.name + '/' + source['post_id'],
-                       'platform': source['platform'], 'account': source['account']}
+                       'platform': source['platform'], 'account': source['account'],
+                       'published_at': source.get('created_at'), 'module_name': '发布排期',
+                       'scheduled_at': attempt.get('scheduled_at'), 'occurred_at': attempt.get('recorded_at')}
             status = attempt['status']
             if status == journal.STATUS_SCHEDULED:
-                payload['text'] = '排期已确认：' + str(attempt.get('scheduled_at') or '')
+                payload['text'] = '远端已确认排期，尚不代表已经公开。'
                 payload['next_step'] = '请核对排期时刻；详细回执可在审校台查看。'
                 kind = 'scheduled'
             elif status in {journal.STATUS_FAILED_PRE_SUBMIT, journal.STATUS_SUBMITTED_UNVERIFIED,
@@ -569,4 +598,5 @@ class Runtime:
                 if changed:
                     self.outbox.enqueue(f'source-changed:{attempt["attempt_id"]}:{digest}', 'schedule_failed',
                         dict(payload, text='已排期帖的源文或图片内容、数量、顺序发生变化，远端排期保持原样。',
+                             occurred_at=now.isoformat(),
                              next_step='请比较新源内容与批准快照，人工决定是否调整。'), now)

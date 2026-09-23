@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
 from core.config import MonitorSchedule, cfg
+from core.feishu_cards import TITLES, build_card
 from core.web_access import load_web_access
 from core.paid_model import FileLock, atomic_write_json, ModelCredentials
 
@@ -33,9 +35,6 @@ ALWAYS_DELIVERED = {'system', *MONITOR_KINDS}
 PREVIEWED = {'ready'}
 # selftest 故意只在 TITLES 里、不在 KINDS 里：它能渲染成卡片，但 enqueue 会拒绝它，
 # 所以人工自检不会在发件箱里留下假事件。
-TITLES = {'ready': '新的待审内容', 'backlog': '待审情况', 'scheduled': '排期已确认',
-          'schedule_failed': '排期未完成，请核对', 'system': '系统需要处理', 'morning': '晨间处理情况',
-          'monitor_found': '监测到新帖', 'monitor_saved': '原帖抓取结果', 'selftest': '通道自检'}
 
 
 class FeishuError(RuntimeError):
@@ -61,10 +60,18 @@ class FeishuSettings:
     keep_delivered_days: int = 30
     detect_recipients: tuple[str, ...] = ('detect',)
     capture_recipients: tuple[str, ...] = ('capture',)
+    site_name: str = 'Neakasa 德国'
+    timezone: str = 'Asia/Shanghai'
 
     def __post_init__(self):
         if type(self.keep_delivered_days) is not int or self.keep_delivered_days < 1:
             raise ValueError('[feishu].keep_delivered_days 必须是正整数')
+        if not isinstance(self.site_name, str) or not self.site_name.strip() or '\n' in self.site_name or '\r' in self.site_name:
+            raise ValueError('[feishu].site_name 必须是非空单行文本')
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, TypeError, ValueError) as exc:
+            raise ValueError('[feishu].timezone 必须是有效的 IANA 时区') from exc
 
     @classmethod
     def load(cls):
@@ -77,7 +84,9 @@ class FeishuSettings:
                               or os.environ.get('FBSCRAPER_NETWORK_CONFIG', '').strip())
         base_url = load_web_access().public_base_url if network_configured else c.get('feishu', 'base_url', '')
         result = cls(enabled, base_url,
-                     keep_delivered_days=c.get('feishu', 'keep_delivered_days', 30))
+                     keep_delivered_days=c.get('feishu', 'keep_delivered_days', 30),
+                     site_name=c.get('feishu', 'site_name', 'Neakasa 德国'),
+                     timezone=c.get('feishu', 'timezone', 'Asia/Shanghai'))
         if enabled:
             result.validate()
         return result
@@ -248,64 +257,8 @@ class WebhookBot:
 
 
 def notification_card(kind: str, payloads: list[dict], settings: FeishuSettings, *, role: str | None = None) -> dict:
-    """源文案以纯文本渲染；按钮只导航审校台，不在卡片里直接批准发布。"""
-    elements = []
-    for payload in payloads:
-        if payload.get('image_key'):
-            elements.append({'tag': 'img', 'img_key': payload['image_key'],
-                             'alt': {'tag': 'plain_text', 'content': payload.get('image_note', '帖子首图')}, 'mode': 'fit_horizontal'})
-        if payload.get('fields'):
-            for field in payload['fields']:
-                elements.append({'tag': 'div', 'text': {'tag': 'plain_text',
-                    'content': str(field['label']) + '：' + str(field['value'])}})
-        else:
-            for key in ('platform', 'account', 'created_at', 'meta', 'text', 'image_note', 'risk', 'next_step'):
-                if payload.get(key):
-                    elements.append({'tag': 'div', 'text': {'tag': 'plain_text', 'content': str(payload[key])[:1600]}})
-        actions = []
-        if payload.get('capture_key'):
-            if payload.get('archived'):
-                suffix = '/history/' + quote(payload['account_dir'], safe='') + '/' + quote(payload['post_id'], safe='')
-                label = '查看已存原帖'
-            else:
-                suffix = '/runtime?capture=' + quote(payload['capture_key'], safe='')
-                label = '查看该项采集异常'
-            actions.append({'tag': 'button', 'type': 'primary',
-                'text': {'tag': 'plain_text', 'content': label}, 'url': settings.base_url.rstrip('/') + suffix})
-        elif payload.get('run_id'):
-            actions.append({'tag': 'button', 'type': 'primary',
-                'text': {'tag': 'plain_text', 'content': '查看运行详情'},
-                'url': settings.base_url.rstrip('/') + '/runtime?scan=' + quote(payload['run_id'], safe='')})
-        if payload.get('task_id'):
-            url = settings.base_url.rstrip('/') + '/?task=' + quote(str(payload['task_id']), safe='')
-            actions.append({'tag': 'button', 'type': 'primary',
-                            'text': {'tag': 'plain_text', 'content': '去审校'}, 'url': url})
-        elif kind == 'backlog' and payload.get('platform') in {'facebook', 'instagram'}:
-            actions.append({'tag': 'button', 'type': 'primary',
-                'text': {'tag': 'plain_text', 'content': '查看待审列表'},
-                'url': settings.base_url.rstrip('/') + '/review/' + payload['platform']})
-        # 原帖按钮不依赖 task_id：监测与抓取卡片发生在有审校任务之前。
-        original = urlsplit(str(payload.get('permalink') or ''))
-        if original.scheme == 'https' and original.hostname and not original.username and not original.password:
-            actions.append({'tag': 'button', 'text': {'tag': 'plain_text', 'content': '查看源帖' if payload.get('capture_key') else '查看原帖'},
-                            'url': payload['permalink']})
-        if actions:
-            elements.append({'tag': 'action', 'actions': actions})
-    title = TITLES[kind] + (f' · {len(payloads)} 篇' if len(payloads) > 1 else '')
-    # 两个平台是独立的审校入口，标题里说清是哪一边，运营才知道该开哪个队列。
-    channels = {str(p['platform']) for p in payloads if p.get('platform')}
-    if kind in {'ready', 'backlog'} and channels:
-        title += ' · ' + ' / '.join(sorted(channels))
-    if kind == 'monitor_saved' and len(payloads) == 1 and payloads[0].get('capture_status'):
-        title += '：' + payloads[0]['capture_status']
-    bot_name = BOT_LABELS.get(role or KIND_ROLES.get(kind))
-    if bot_name:
-        title += ' · ' + bot_name
-    return {'config': {'wide_screen_mode': True},
-            'header': {'title': {'tag': 'plain_text', 'content': 'Neakasa 德国站 · ' + title},
-                       'template': 'red' if kind in {'system', 'schedule_failed'}
-                       else 'turquoise' if kind in MONITOR_KINDS else 'blue'},
-            'elements': elements}
+    """构造导航卡片；渲染不改变投递事实或业务状态。"""
+    return build_card(kind, payloads, settings, role=role)
 
 
 def _iso(now: datetime) -> str:

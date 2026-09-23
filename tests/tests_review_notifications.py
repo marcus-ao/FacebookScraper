@@ -77,7 +77,7 @@ class NotificationTests(unittest.TestCase):
         self.assertIn('1 篇待审，最早一篇已等待 5 小时', by_platform['instagram']['text'])
         for platform, payload in by_platform.items():
             card = notification_card('backlog', [payload], self.runtime.settings)
-            self.assertIn(platform, card['header']['title']['content'])
+            self.assertIn(platform.capitalize(), card['elements'][0]['fields'][0]['text']['content'])
             buttons = [button for part in card['elements'] if part['tag'] == 'action'
                        for button in part['actions']]
             self.assertEqual(buttons[0]['url'], 'http://review.internal/review/' + platform)
@@ -103,6 +103,54 @@ class NotificationTests(unittest.TestCase):
         self.runtime.prepare_preview(payload)
         self.assertEqual(payload['image_variant'], 'original')
         self.assertIn('原图', payload['image_note'])
+
+    def test_ready_and_waiting_timestamps_come_from_matching_business_events(self):
+        self.event('waiting', 'unmapped_price')
+        self.runtime.collect([self.f.account], self.now + timedelta(hours=1))
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
+        self.assertIsNone(payload.get('ready_at'))
+        self.assertEqual(datetime.fromisoformat(payload['occurred_at']), self.now)
+        self.assertEqual(payload.get('risk_status'), 'not_scanned')
+        self.now += timedelta(minutes=15)
+        self.event('ready')
+        self.runtime.collect([self.f.account], self.now + timedelta(hours=2))
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
+        self.assertEqual(datetime.fromisoformat(payload['ready_at']), self.now)
+
+    def test_batch_uses_latest_source_and_actual_discovery_instead_of_delivery_time(self):
+        rows = [dict(event_id='old', scan_id='scan', key='old', classification='historical',
+                     eligible=False, first_seen_at='2026-09-22T01:01:00Z',
+                     source={'post_id': 'old', 'created_at': '2026-09-01T00:00:00Z', 'text': 'Old'}),
+                dict(event_id='new', scan_id='scan', key='new', classification='new',
+                     eligible=False, first_seen_at='2026-09-22T02:01:00Z',
+                     source={'post_id': 'new', 'created_at': '2026-09-22T02:00:00Z', 'text': 'Newest'})]
+        found, saved = notifications.scan_cards('delta', 'facebook', 'example', rows, {}, self.now)
+        self.assertEqual(found['published_at'], '2026-09-22T02:00:00Z')
+        self.assertEqual(found['discovered_at'], '2026-09-22T02:01:00Z')
+        self.assertEqual(found['counts'], {'historical': 1, 'new': 1})
+        self.assertEqual(found['text'], 'Newest')
+        self.assertEqual(saved, [])
+
+    def test_long_morning_report_preserves_counts_and_paid_recovery_advice(self):
+        now = self.now.replace(hour=0)
+        reason = '原处理进程已退出；可能已经产生付费请求，未自动重放'
+        activity = {'discovered': 120, 'reconcile_discovered': 15, 'reconcile_skipped': 2,
+                    'reconcile_skipped_platforms': ['facebook', 'instagram'],
+                    'skipped': {'video': 12, 'mixed_media': 12, 'no_media': 12, 'no_text': 12}}
+        processing = {'status': 'interrupted', 'last_success_duration_minutes': 123.4,
+                      'recovery_reason': reason}
+        with patch.object(self.runtime, 'activity_summary', return_value=activity), \
+                patch.object(self.runtime, 'processing_status', return_value=processing):
+            self.runtime.collect([self.f.account], now)
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'morning')
+        card = notification_card('morning', [payload], self.runtime.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn(reason, rendered)
+        self.assertIn('123.4', rendered)
+        self.assertIn('120', rendered)
+        self.assertIn('15', rendered)
+        self.assertIn('未执行兜底 2 次', rendered)
+        self.assertEqual(card['header']['template'], 'orange')
 
     def test_unreadable_lead_image_degrades_its_card_instead_of_the_round(self):
         # 首图读不出只降级这一张图；德语正文已经完成，丢掉整张卡等于白等一轮审校。
@@ -167,7 +215,7 @@ class NotificationTests(unittest.TestCase):
             'post_id': self.f.post_id, 'created_at': self.f.source['created_at'],
             'head': 'Gemeinsam', 'images': 2, 'known': False,
             'account': 'neakasaofficial', 'owner': 'partner_us', 'coauthors': ['neakasaofficial']})])
-        text = next(c['payload']['text'] for c in cards if c['kind'] == 'monitor_found')
+        text = next(c['payload']['origin_note'] for c in cards if c['kind'] == 'monitor_found')
         self.assertIn('合作帖，原作者 partner_us', text)
         self.assertIn('合作方 neakasaofficial', text)
 
@@ -210,9 +258,23 @@ class NotificationTests(unittest.TestCase):
         by_group = {}
         for recipient, card, _delivery in sent:
             by_group.setdefault(recipient, []).append(card['header']['title']['content'])
-        self.assertEqual(by_group['detect'], ['Neakasa 德国站 · 监测到新帖 · 新帖检测推送机器人'])
-        self.assertEqual(by_group['capture'], ['Neakasa 德国站 · 原帖抓取结果：完整 · 新帖爬取推送机器人'])
-        self.assertEqual(by_group['alert'], ['Neakasa 德国站 · 系统需要处理 · 状态告警推送机器人'])
+        self.assertEqual(by_group['detect'], ['[Neakasa 德国] 监测到新发帖'])
+        self.assertEqual(by_group['capture'], ['[Neakasa 德国] 原帖抓取完成'])
+        self.assertEqual(by_group['alert'], ['[Neakasa 德国] 任务异常告警'])
+
+    def test_publication_projection_preserves_requested_time_and_remote_uncertainty(self):
+        from publish.records import queue_notification
+        attempt = {'status': journal.STATUS_SUBMIT_AMBIGUOUS, 'attempt_id': 'uncertain-example',
+                   'scheduled_at': '2026-09-23T04:30:00Z', 'recorded_at': '2026-09-22T01:02:03Z'}
+        with patch('publish.records.FeishuSettings.load', return_value=self.runtime.settings):
+            queue_notification(self.f.account, self.f.source, attempt, self.now)
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'schedule_failed')
+        card = notification_card('schedule_failed', [payload], self.runtime.settings)
+        rendered = json.dumps(card, ensure_ascii=False)
+        self.assertIn('2026-09-23 12:30:00', rendered)
+        self.assertIn('2026-09-22 09:02:03', rendered)
+        self.assertIn('避免重复提交', rendered)
+        self.assertNotIn('远端已确认排期', rendered)
 
     def test_a_broken_card_costs_the_broadcast_not_the_scan_exit_code(self):
         # 播报是旁路。它抛异常不能改抓取的退出码，否则会被当成"抓取失败"去查浏览器。
@@ -284,9 +346,8 @@ class NotificationTests(unittest.TestCase):
             self.assertIn(payload['post_id'], buttons[1]['url'])
             self.assertFalse(any(part['tag'] == 'img' for part in card['elements']))
             if payload['post_id'] == 'one':
-                self.assertIn('A' * 300, rendered)
-                self.assertNotIn('A' * 301, rendered)
-                self.assertIn('已截断', rendered)
+                self.assertIn('A' * 150 + '...', rendered)
+                self.assertNotIn('A' * 151, rendered)
 
     def test_interleaved_delivery_waits_for_final_finish(self):
         self._assert_interleaved_summary(interrupted=False)
@@ -322,7 +383,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(sum(e['kind'] == 'monitor_saved' for e in events), 2)
         found = [e for e in events if e['kind'] == 'monitor_found']
         self.assertEqual(len(found), 1)
-        self.assertIn('新发布 2 篇', found[0]['payload']['text'])
+        self.assertEqual(found[0]['payload']['counts'], {'new': 2})
         manual = [e for e in events if e['kind'] == 'system']
         self.assertEqual(len(manual), 1)
         self.assertIn('2 篇需要人工', manual[0]['payload']['text'])
