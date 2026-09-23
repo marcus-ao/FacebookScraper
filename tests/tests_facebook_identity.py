@@ -104,6 +104,23 @@ class FacebookIdentityTests(unittest.TestCase):
         posts = parse([story(author=actor()), {'id': ACTOR_ID, 'url': PROFILE}])
         self.assertEqual(partition_by_owner(posts, ACCOUNT)[0], [])
 
+    def test_embedded_collaborators_survive_projection_without_secrets(self):
+        raw = story(author=actor('https://www.facebook.com/partner.page', '90000000000001'))
+        raw['collaborators'] = [{'id': ACTOR_ID, 'name': 'Neakasa Official',
+                                 'url': PROFILE, 'access_token': 'fixture-secret'}]
+        raw['comet_sections'] = {'context_layout': {'story': {'token': 'fixture-secret',
+            'comet_sections': {'title': {'story': {'collaborators': [
+                {'id': ACTOR_ID, 'url': PROFILE}]}}}}}}
+        collector = Collector()
+        collector.add_document_json([json.dumps({'data': {'bootstrap': {
+            'DTSGInitialData': {'token': 'fixture-secret'}}, 'node': raw}})])
+        posts = extract(collector.payloads, 'facebook', ACCOUNT, 'delta')
+        kept, rejected = partition_by_owner(posts, ACCOUNT)
+        self.assertEqual(rejected, [])
+        self.assertEqual(kept[0].owner, 'partner.page')
+        self.assertEqual(kept[0].coauthors, [ACCOUNT])
+        self.assertNotIn('fixture-secret', json.dumps(collector.payloads))
+
     def test_external_actor_is_not_overridden_by_target_post_link(self):
         posts = parse([story(author=actor('https://www.facebook.com/external', '999')),
                        story('target', actor(PROFILE))])

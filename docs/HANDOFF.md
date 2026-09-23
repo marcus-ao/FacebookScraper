@@ -45,7 +45,7 @@
 
 按主题记，不按分支和日期记——**这些是踩过的坑，退回去就会重犯**。逐项验收状态在 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态)。
 
-**Facebook 响应结构。** Comet 的图片 URL 不在附件外层：`attachments[].media` 可能只有类型和 ID，单图实际在 `styles.attachment.media.photo_image`，相册在 `styles.attachment.all_subattachments.nodes`。相册按内部节点顺序逐项取，外层封面不另算一张。⚠️ 只有宽高、没有 `uri` 的 `viewer_image` **不是可下载地址**。缺 `attachments` 字段表示"数量未知"，只有明确的空数组才表示没有附件；已知图片不能被空片段覆盖。作者身份只接受同批响应里的明确关联——同一作者或主页对象的 ID↔URL，或 `ProfileActionMessage.profile_owner.id` 与 `/messages/t/<用户名>/` 的绑定；不从显示名、目标配置或帖子 permalink 推断，未关联的数字 ID 仍然拒绝。
+**Facebook 响应结构。** Comet 的图片 URL 不在附件外层：`attachments[].media` 可能只有类型和 ID，单图实际在 `styles.attachment.media.photo_image`，相册在 `styles.attachment.all_subattachments.nodes`。相册按内部节点顺序逐项取，外层封面不另算一张。⚠️ 只有宽高、没有 `uri` 的 `viewer_image` **不是可下载地址**。缺 `attachments` 字段表示"数量未知"，只有明确的空数组才表示没有附件；已知图片不能被空片段覆盖。作者身份只接受同批响应里的明确关联——同一作者或主页对象的 ID↔URL，或 `ProfileActionMessage.profile_owner.id` 与 `/messages/t/<用户名>/` 的绑定；不从显示名、目标配置或帖子 permalink 推断，未关联的数字 ID 仍然拒绝。已接受合作者只取该帖 `collaborators`（含 Comet 标题上的同名列表）里的 ID 与主页 URL。⚠️ 不要把 `actors` 里除主作者以外的对象改成合作者。
 
 **Instagram 响应结构。** `media_type=1` 的单图允许 `carousel_media` 为 `null` 或空数组，**字段存在本身不是轮播证据**。`media_type=8` 缺子项、未知类型或类型与轮播字段矛盾仍算不完整。视频 `kind=video` 且 `local_path=null` 是设计行为，不是下载失败。
 

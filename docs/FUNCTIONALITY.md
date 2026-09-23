@@ -172,7 +172,7 @@
 
 阶段一只监测并保存 FB `neakasaofficial` 与 IG `neakasa.global`。两个平台各自计数、调度、限额和停机，不配对帖子；目标账号实际参与的合作帖照常保留，记录真实 owner 与 coauthors。视频、图文混合、无媒体、无正文仍归档和计数，但不生成抓取卡片，也不进入付费处理。
 
-Facebook 作者按响应中的主 actor 判定。同一批响应中，同一个作者对象（主 actor 或明确为 Page/User 的主页对象）的数字 ID 与主页 URL 可建立身份关联；`ProfileActionMessage` 中 `profile_owner.id` 与 `/messages/t/<用户名>/` 的显式绑定也可作为依据。有一致证据时将 `owner` 规范为用户名。原始 ID/URL、证据来源及关联记录保存在 `owner_evidence`，不以显示名、目标配置或帖子 permalink 推断作者。不同响应的媒体与作者证据分别合并；作者冲突保留证据并以 `owner_conflict` 拒绝，无关联证据的数字 ID 仍按原有归属规则拒绝。身份关联仅限本批响应及同帖已保存的证据，不跨会话猜测或缓存。人工滚动进度使用当前全批身份结果；详情补图先合并同帖身份再过滤，冲突详情不下载。
+Facebook 作者按响应中的主 actor 判定。同一批响应中，同一个作者对象（主 actor 或明确为 Page/User 的主页对象）的数字 ID 与主页 URL 可建立身份关联；`ProfileActionMessage` 中 `profile_owner.id` 与 `/messages/t/<用户名>/` 的显式绑定也可作为依据。有一致证据时将 `owner` 规范为用户名。原始 ID/URL、证据来源及关联记录保存在 `owner_evidence`，不以显示名、目标配置或帖子 permalink 推断作者。已接受合作者只取该帖的 `collaborators`，包括 `comet_sections.context_layout.story.comet_sections.title.story.collaborators`；名单可以是数组或带 `nodes` 的对象。合作者同样只认 ID 与主页 URL，显示名、其它 actors、提及和未接受邀请都不算。目标账号出现在这些合作者中时，帖子留在该主页时间线，`owner` 仍是主作者。不同响应的媒体与作者证据分别合并；作者冲突保留证据并以 `owner_conflict` 拒绝，无关联证据的数字 ID 仍按原有归属规则拒绝。身份关联仅限本批响应及同帖已保存的证据，不跨会话猜测或缓存。人工滚动进度使用当前全批身份结果；详情补图先合并同帖身份再过滤，冲突详情不下载。
 
 拒绝日志按帖子与身份判据去重。同帖后来出现不同作者、身份冲突或新身份依据时追加记录，保留旧拒绝；相同判据不重复追加。
 
@@ -1887,8 +1887,8 @@ IG 19 篇纯图文里 **6 篇（32%）与 FB 某篇是同一条内容**（4 篇�
 | 冻结账号 | `in_neakasa.tech` 作为来源冻结：只读历史，不再抓取、加工或发布；作为目标帖的合作者照常处理。判据见 [REQUIREMENTS 目标表](REQUIREMENTS.md#1-目标与边界) |
 | account | 被抓取的目标时间线，不等于真实作者 |
 | owner | 来源节点声明的真实作者 |
-| coauthors | Instagram 合作方列表 |
-| 合作帖全部抓取 | 帖子在 `.global` 时间线上就归档，不限合作方；是否付费/发布由后续人机边界决定 |
+| coauthors | 已接受的合作方。Instagram 来自 `coauthor_producers`；Facebook 来自帖上的 `collaborators` |
+| 合作帖全部抓取 | 帖子出现在当前目标主页时间线上，且目标账号是 owner 或已接受合作者，就归档。不打开其它账号主页。是否付费由后续许可决定 |
 | 独立车道 | 一篇 FB 来源只产生 FB 候选，一篇 IG 来源只产生 IG 候选；两平台不配对、不合并 |
 | 当前内容 | 发送、展示或提交那一刻，从本地真相源重新解析出的人工优先文案、图片、状态和来源版本 |
 | 冻结内容 | 某次批准、镜像或补送已固定的内容快照；后续文件变化不能改变它 |
