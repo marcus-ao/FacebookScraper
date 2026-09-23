@@ -740,9 +740,11 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变。没有连接真实业务账号、模型或服务机。
 
-四批结果已汇入 `codex/publishing-simplification`：`f507671`（Planner/静态检查/提示）、`eefdf72`（图片选择）、`69eb781`（范围占用/最终表单）、`bf486b8`（指纹兼容）。相对接入前序排期后的基线，生产代码与配置增加 537 行、删除 800 行，净减少 263 行；不包含测试和文档，不据此推导运行性能。主检出干净，未推送或部署。
+四批结果已汇入 `codex/publishing-simplification`：`f507671`（Planner/静态检查/提示）、`eefdf72`（图片选择）、`69eb781`（范围占用/最终表单）、`bf486b8`（指纹兼容）。相对接入前序排期后的基线，生产代码与配置增加 537 行、删除 800 行，净减少 263 行；不包含测试和文档，不据此推导运行性能。该次快照中主检出干净，未推送或部署。
 
-最终集成工作树的 [组合验证](../state/offline-validation-20260922T131016Z/results.json) 5/5 通过：原图选择与冻结、范围占用、最终表单、指纹兼容、发布恢复。[最终前端构建](../state/final-ui-build.log)通过，保留既有大 chunk 提示。各工作包的其它定向证据保留在上述独立工作树；没有运行全量或追修无关 Actions。
+该次集成工作树的 [组合验证](../state/offline-validation-20260922T131016Z/results.json) 5/5 通过：原图选择与冻结、范围占用、最终表单、指纹兼容、发布恢复。[前端构建](../state/final-ui-build.log)通过，保留既有大 chunk 提示。本节四个发布子工作树目前仍保留，独有证据仍由各树保管；§1.3 中另外三棵已退役工作树已经清理，证据按清单保全。没有运行全量或追修无关 Actions。
+
+2026-09-23 已合入本地 `main` 的 `af80b0c`，其证据清理事实保留在 §1.3。`tests_scheduler` 现按 publish 角色与发件箱里 `ready/sent` 的持久记录核对“内容就绪后投递、投递后关闭”，不再依赖飞书卡片标题；[修前复现](../state/offline-validation-20260923T033236Z/results.json)与[修后验证](../state/offline-validation-20260923T034105Z/results.json)保留。[最新定向复验](../state/offline-validation-20260923T041115Z/results.json) 的 scheduler、品牌、初翻和旧许可 4/4 通过。品牌与日历整合见 §1.32–§1.33。
 
 ### 1.32 品牌账号的来源冻结与合作者放行（2026-09-22）
 
@@ -762,7 +764,9 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 `has_href` 只影响未读卡片的展示状态。公开观测仍要求 `delivery=published`、`read_status=complete` 和已绑定远端 ID。提交基线及结果回读按目标时刻核完整正文、账号、唯一渠道、ID 和前后因果；已证明在目标范围外的异常不阻断，相关未知项继续拒绝。远端删除核实仍要求整月 `decision_complete`。提交前的编辑器最终复核也保留，不能用页面图片代替 G8 远端详情。
 
-**验证状态：离线通过。** 原分支[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过，[月份读取](../state/offline-validation-20260923T033459Z/results.json)通过；同次 Story 脚本因 300 秒上限中止，[复跑](../state/offline-validation-20260923T034141Z/results.json)用 343.77 秒通过。三份原分支日志的 12 个文件已按 SHA-256 复制到本树，见 `state/calendar-evidence-copy-20260923.json`。本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过；[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/ui-regression/browser-stage-f.json)通过，均未连接真实账号。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
+**验证状态：离线通过。** 原分支[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过，[月份读取](../state/offline-validation-20260923T033459Z/results.json)通过；同次 Story 脚本因 300 秒上限中止，[复跑](../state/offline-validation-20260923T034141Z/results.json)用 343.77 秒通过。该分支合入 main 后的[五脚本复验](../state/offline-validation-20260923T035236Z/results.json)也通过。这四份原分支日志的 18 个文件已按 SHA-256 复制到本树，见 `state/calendar-evidence-copy-20260923.json`。
+
+本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过。[Story 修前](../state/offline-validation-20260923T040538Z/results.json)复现旧“正文未知即空匹配”断言错误；保留拒绝把未知目标当空档的实现，改断言后 [Story 复跑](../state/offline-validation-20260923T040929Z/results.json)通过。回读成功标识改为“目标范围”，[回读红测](../state/offline-validation-20260923T040900Z/results.json)及[修后四脚本](../state/offline-validation-20260923T040916Z/results.json)保留。[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/ui-regression/browser-stage-f.json)通过。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。全部写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
 
 ## 2. 红线
 

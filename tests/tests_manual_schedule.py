@@ -92,7 +92,7 @@ class ManualScheduleChainTests(unittest.TestCase):
                 found=True, observed_at=NOW.isoformat(), target_at=TARGET.isoformat(),
                 ui_at=TARGET.isoformat(), final_text_sha256="unused",
                 channels=("facebook",), remote_id="facebook=123456789",
-                success_signal="planner_complete_month_and_scheduled_detail",
+                success_signal="planner_target_range_and_scheduled_detail",
                 diagnostics={"remote_images_verified": False, "full_caption_equal": True})
 
         guards = [

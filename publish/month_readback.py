@@ -1,4 +1,4 @@
-"""Submission causality from the same complete month inventory as conflict checks."""
+"""Submission causality from a live month inventory scoped to the target time."""
 import hashlib
 from datetime import datetime
 
@@ -89,7 +89,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         cards = matching(inventory, when, final_text, target_channels)
         diagnostics['matched_entries'] = len(cards)
         if len(cards) != 1:
-            raise bs.PublishStepError('完整月历中未找到唯一的同渠道、同时间、完整正文排期详情')
+            raise bs.PublishStepError('目标时刻未找到唯一的同渠道、同时间、完整正文排期详情')
         card = cards[0]
         diagnostics['failure_stage'] = 'remote_identity'
         identity = remote_id(card)
@@ -101,7 +101,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         diagnostics.update(failure_stage=None, full_caption_equal=True)
         return bs.ScheduledReadback(found=True, **base, channels=card.channels,
             remote_id=identity, card_sha256=card.card_sha256, screenshot=shot,
-            success_signal='planner_complete_month_and_scheduled_detail',
+            success_signal='planner_target_range_and_scheduled_detail',
             diagnostics=diagnostics)
     except Exception as exc:
         shot = await bs._readback_screenshot(page, screenshot_path, timeout)

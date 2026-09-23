@@ -458,7 +458,7 @@ def stage_f(page, ui):
     expect(page.get_by_text('此内容无独立正文',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
     page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
-    return {'F':'PASS','published_scheduled_distinct':True,'failure_payload_cards_retained':True,
+    return {'F':'PASS','published_scheduled_distinct':True,'refresh_payload_cards_retained':True,
             'unread_item_still_occupies':True,'empty_caption_not_placeholder':True,
             'refresh_body':{},'empty_day_min_height':min(heights)}
 

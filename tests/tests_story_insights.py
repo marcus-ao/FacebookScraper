@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from month_detail_fixtures import ACCOUNTS, MonthDetailCase
 from publish import month_inventory as month
-from publish.business_suite import ProbeRequired
+from publish.business_suite import ProbeRequired, PublishStepError
 from publish.month_readback import matching
 from tools import probe_calendar_detail as probe
 
@@ -99,7 +99,8 @@ class StoryInsightsTests(MonthDetailCase):
         self.assertEqual((ig.caption_status, ig.rendered), ('empty', ''))
         self.assertEqual(result.occupied_for_channel('facebook'), (fb.at,))
         self.assertEqual(result.occupied_for_channel('instagram'), (ig.at,))
-        self.assertEqual(matching(result, fb.at, 'Your Story', ('facebook',)), [])
+        with self.assertRaises(PublishStepError):
+            matching(result, fb.at, 'Your Story', ('facebook',))
         self.assertEqual(len(self.context.pages), 1)
 
     async def test_facebook_has_its_own_publication_minute(self):

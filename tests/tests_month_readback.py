@@ -46,6 +46,14 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
                      self.card(channel='instagram'), self.card(delivery='published')):
             self.assertFalse((await self.readback(self.inventory([card]))).found)
 
+    async def test_success_signal_describes_target_range_when_other_details_are_incomplete(self):
+        outside = replace(self.card(channel='instagram'), at=WHEN.replace(hour=20),
+                          read_status='incomplete')
+        result = await self.readback(self.inventory([self.card(), outside]))
+        self.assertTrue(result.found)
+        self.assertFalse(result.diagnostics['complete_month'])
+        self.assertEqual(result.success_signal, 'planner_target_range_and_scheduled_detail')
+
     async def test_preexisting_remote_id_or_duplicate_cards_cannot_prove_new_submission(self):
         baseline = bs.ScheduledBaseline('observed', 0, ('facebook=123456789',))
         self.assertFalse((await self.readback(self.inventory([self.card()]), pre_submit_baseline=baseline)).found)
