@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from core import maintenance
+from core import account_roles, maintenance
 from core.capture import INTEREST, Collector  # noqa: F401  （INTEREST 供外部引用）
 from core.capture import atomic_write_json, download_media as _download
 from core.chrome import attach
@@ -99,6 +99,10 @@ def _stdin_waiter(readline=None) -> tuple[threading.Event, threading.Thread]:
 @maintenance.guarded('backfill')
 async def run(platform: str, days: int | None = None) -> int:
     c = cfg()
+    blocked = account_roles.frozen_target_message(c)
+    if blocked:
+        print("[!] " + blocked)
+        return 1
     account = c["targets"][platform]
     url = ({"instagram": f"https://www.instagram.com/{account}/",
             "facebook": f"https://www.facebook.com/{account}/"})[platform]

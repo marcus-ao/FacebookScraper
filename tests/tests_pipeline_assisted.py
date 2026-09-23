@@ -26,6 +26,7 @@ TEST_RULES = replace(
     A.publish_rules(),
     trusted_owners={"facebook": frozenset({"acme"}),
                     "instagram": frozenset({"acme"})},
+    brand_accounts={"facebook": frozenset(), "instagram": frozenset()},
     source_accounts={"facebook": "acme", "instagram": "acme"})
 
 

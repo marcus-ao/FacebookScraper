@@ -28,7 +28,7 @@
 |---|---|---|
 | Facebook | `neakasaofficial` | 独立抓取、独立审校、只发 Facebook |
 | Instagram | `neakasa.global` | 时间线合作帖全部抓取；独立审校、只发 Instagram |
-| Instagram 历史 | `in_neakasa.tech` | 冻结，只读；不得继续抓取、加工或发布 |
+| Instagram 历史 | `in_neakasa.tech` | 作为来源冻结，只读；不得继续抓取、加工或发布。作为 `neakasa.global` 或 `neakasaofficial` 帖子的合作者照常监测和处理 |
 
 Facebook 与 Instagram 不配对、不合并、不共用发布候选。相同文案或素材也不能改变来源渠道。
 
@@ -258,7 +258,8 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F2-2 过期签名地址换址 | 离线通过 | 人显式恢复且该帖缺图、地址按 `oe` 判定**已过期**时才开一次详情换新地址；只接受逐位对齐的同一张，忽略边缘主机与 `oh`/`oe`/`_nc_*` 但不忽略 `stp=`；失效时刻未知不开详情；自动轮次仍不因下载失败触发详情 | ⚠️ 需要一篇 `oe` 确已过期的缺图帖。2026-09-22 那次恢复时地址尚未过期（`oe` 为 2026-09-24T06:51:32Z），换址分支没有被走到 | `tests_capture_lifecycle`：过期地址经详情换新后落盘完整、未知失效时刻不开详情仍按原地址重放 |
 | F2-2 陈旧人工项退役 | 真实通过 | `--retire-stale-manual` 带 CAS 与 reason，只退役无尝试开始时刻且非恢复授权的人工项到 `deferred`；已开始失败项与事件账本不动；退役后可重新进候选但不产生新平台请求 | — | 服务机 2026-09-22 退役 33 条、保留 4 条真实失败、无误伤；退役后首轮自然扫描（05:58Z）那 33 条零请求、`archive_incomplete` 为 0、人工项只剩 3 条 FB 项，[记录](../state/image-verification-classification/service-machine-20260922.json)；`tests_capture_lifecycle`：按旧写法伪造的未开始项被退役而真实失败项保留、版本冲突与空 reason 拒绝、事件数不变、退役后重新采集成功 |
 | F2-2 视频地址轮换不算来源变化 | 真实通过 | 视频只按 `source_media_id` 判身份，主机/路径/签名参数轮换不重采；图片仍按内容定位核验，`stp=` 这类派生参数不可忽略；`reconcile_local` 用同一判据，混合帖可靠本地证据零请求收尾 | — | 服务机 2026-09-22 前后两轮对照：05:58Z 视线内 3 篇视频帖全被算作"处理已有帖"、8 篇图片帖一篇没有；修复后 11:22Z 同样看到 12 篇、同样 3 篇视频在发布范围外，「处理已有帖」回到 **0 篇**，[记录](../state/image-verification-classification/service-machine-20260922.json)；`tests_storage_contract`：轮换地址不算变化、换成另一条视频仍算变化、图片派生尺寸仍须核验；`tests_capture_lifecycle`：整轮扫描"处理已有帖"回到 0、deferred 混合帖零请求收尾 |
-| F2-2 丢弃哨兵区分自家账号 | 真实通过 | 疑似误丢的节点按 `[publish.trusted_owners]` 分成「已授权来源」与「已知合作方」两类分别报；判定逻辑与丢弃行为不变，归属未知仍不进哨兵；监测告警、中止原因与三个离线工具口径一致 | — | 服务机 2026-09-22 11:22Z 实跑确认告警已改口径（`来自**已授权来源**（neakasa.tech）`）；同日 `_rejected.jsonl` 实证：`neakasa.tech` 的 `3991518443455200172` 与 `.global` 的 `3991125889886213694`、FB 的 `122128375707379375` 是同文案的三条独立帖，非漏判，[HANDOFF §1.29](HANDOFF.md#129-归属哨兵把自家账号当成合作方2026-09-22)；`tests_integrity`：两类划分、按平台各读名单、归属未知不算已授权、作者名去重排序与超限写"等" |
+| F2-2 丢弃哨兵区分自家账号 | 真实通过 | 疑似误丢的节点按 `[publish.brand_accounts]` 与 `[publish.trusted_owners]` 的并集分成「已授权来源」与「已知合作方」两类分别报；判定逻辑与丢弃行为不变，归属未知仍不进哨兵；监测告警、中止原因与三个离线工具口径一致 | — | 服务机 2026-09-22 11:22Z 实跑确认告警已改口径（`来自**已授权来源**（neakasa.tech）`）；同日 `_rejected.jsonl` 实证：`neakasa.tech` 的 `3991518443455200172` 与 `.global` 的 `3991125889886213694`、FB 的 `122128375707379375` 是同文案的三条独立帖，非漏判，[HANDOFF §1.29](HANDOFF.md#129-归属哨兵把自家账号当成合作方2026-09-22)；`tests_integrity`：两类划分、按平台各读名单、归属未知不算已授权、作者名去重排序与超限写"等"。并集扩大后的 `.de` 与坏配置降级见下一行 |
+| F3-6 品牌账号来源与合作者分开 | 离线通过 | 来源只认 `[targets]`。`[publish.frozen_sources]` 中的账号被配成监测目标时，付费入口报错，监测和回填在打开浏览器前返回，不静默恢复抓取。品牌自有账号作为合作者与 `trusted_owners` 取并集，不进 `unknown_collaborator`；第三方仍逐个授权，不按 `neakasa.*` 前缀放行。`in_neakasa.tech` 历史仍可 `include_frozen` 只读 | 服务机拉取含这两张表的配置后另验 | `tests_brand_accounts`：`.tech` / `.de` / `Neakasa Deutschland` 合作者通过，`neakasa_fans` 仍拦截，空白与大小写归一，冻结目录拒绝加工，只读索引仍在，targets 指回 `.tech` 报错，缺表不扩大信任，坏表不中止抓取入口，设置保存拒绝改写；[本轮结果](../state/offline-validation-20260923T033817Z/results.json)，[HANDOFF §1.31](HANDOFF.md#131-品牌账号的来源冻结与合作者放行2026-09-22) |
 | F2-5 源图片变化 | 真实通过* | 指纹含每张实际字节、数量、顺序；人工劳动保留 | 可控来源样本 | `tests_content_recovery`：同名等长换字节、增删、换序；旧候选失效，已排期只提醒 |
 | F2-5 来源文字摘要统一 | 真实通过* | `source_text_sha256` 全链路统一 + AST 守卫；风险另存 raw `scan_text_sha256`，最终提交字节摘要不改 | 无 | `tests_hygiene`/`tests_risk_scan`/`tests_publication_recovery`：字段算法与高亮偏移、来源空白兼容 |
 | F2-4/F5 快照与补投影 | 真实通过* | Web/CLI/人工结转共享冻结，receipt 绑指纹，幂等补状态/镜像/通知 | 真实回执另验 | `tests_publication_recovery`：中断、重复恢复、当前文件变不改旧版 |

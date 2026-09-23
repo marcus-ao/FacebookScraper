@@ -37,12 +37,16 @@ def read():
                                                   if key.startswith('expected_') or key in
                                                   {'facebook_page_name', 'instagram_account'}},
                              'price_map': pub.get('price_map', {}),
-                             'trusted_owners': pub.get('trusted_owners', {})}}
+                             'trusted_owners': pub.get('trusted_owners', {}),
+                             'brand_accounts': pub.get('brand_accounts', {}),
+                             'frozen_sources': pub.get('frozen_sources', {})}}
     notes = _comments(data.decode('utf-8'))
     result['controlled_fields'] = {}
     for group, values in result['controlled'].items():
         prefix = {'publish_identity': 'publish', 'price_map': 'publish.price_map',
-                  'trusted_owners': 'publish.trusted_owners'}.get(group, group)
+                  'trusted_owners': 'publish.trusted_owners',
+                  'brand_accounts': 'publish.brand_accounts',
+                  'frozen_sources': 'publish.frozen_sources'}.get(group, group)
         result['controlled_fields'][group] = _fields(values, prefix, notes)
     result['editable_help'] = {name: notes.get(section + '.' + key, '')
                                for name, (section, key) in FIELDS.items()}

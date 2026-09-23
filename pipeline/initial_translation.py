@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from localize import images as image_de
 from localize import text as translation
-from core import paid_consent, paid_model, paid_requests, review
+from core import account_roles, paid_consent, paid_model, paid_requests, review
 from core import maintenance
 from core.config import cfg
 from core.store import read_post_truth
@@ -46,8 +46,11 @@ def capabilities(account_dir: Path, indexed: dict) -> dict:
     try:
         source, _ = read_post_truth(account_dir, indexed)
         rules = engine.publish_rules()
-        owners = {str(value).strip().lower() for value in [source.get('owner'), *(source.get('coauthors') or [])] if value}
-        result['third_party'] = bool(owners - rules.trusted_owners[source['platform']])
+        owners = {str(value).strip().lower()
+                  for value in [source.get('owner'), *(source.get('coauthors') or [])]
+                  if value and str(value).strip()}
+        result['third_party'] = bool(owners - account_roles.collaborator_trust(
+            rules.trusted_owners, rules.brand_accounts, source['platform']))
         jobs = [row for row in refinement.latest().values() if row['kind'] == 'initial'
                 and row['account'] == account_dir.name and row['post_id'] == source['post_id']]
         result['job'] = refinement.public_job(jobs[-1]) if jobs else None

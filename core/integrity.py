@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from core import account_roles
 from core.config import cfg, per_platform
 
 
@@ -74,15 +75,16 @@ def check_dropped_partners(rejected: list[dict],
 
 
 def authorized_sources(platform: str) -> set[str]:
-    """`[publish.trusted_owners]` 里该平台的来源，即业务已确认可处理的账号。
+    """品牌自有账号与 `[publish.trusted_owners]` 的并集，即业务已确认可处理的账号。
 
     配置写坏时当作空名单：这只是告警口径，不该把一轮监测带崩；
     真正的结构校验在 `pipeline.engine` 那边，付费处理之前就会拦下。
     """
-    table = cfg().get('publish', 'trusted_owners', {})
-    owners = table.get(platform) if isinstance(table, dict) else None
-    return {name.strip().lower() for name in owners or []
-            if isinstance(name, str) and name.strip()}
+    publish = cfg()._d.get('publish') if isinstance(getattr(cfg(), '_d', None), dict) else {}
+    if not isinstance(publish, dict):
+        publish = {}
+    return (account_roles.lenient_names(publish.get('trusted_owners'), platform)
+            | account_roles.lenient_names(publish.get('brand_accounts'), platform))
 
 
 def split_suspect_sources(suspect: list[dict], platform: str) -> tuple[list[dict], list[dict]]:
@@ -92,6 +94,7 @@ def split_suspect_sources(suspect: list[dict], platform: str) -> tuple[list[dict
     和真正的第三方。IG 的 `.tech` 与 `.global` 常把同一批文案各发一次（post_id、
     permalink、发布时刻都不同，不是同一条合作帖），每次重发都会按"合作帖可能漏判"
     报一次。⛔ 这条是归属红线的哨兵，被训练成噪音之后就没人看了；两类分开说，才保得住它。
+    已授权来源是品牌自有账号与 `[publish.trusted_owners]` 的并集。
     """
     trusted = authorized_sources(platform)
     authorized, third_party = [], []

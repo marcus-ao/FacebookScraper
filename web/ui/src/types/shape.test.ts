@@ -278,8 +278,17 @@ describe('GET /api/settings', () => {
     expect(Object.keys(settings.editable).sort()).toEqual(['default_times', 'snooze_default_days'])
   })
 
-  it('六组受控配置只读', () => {
-    expect(Object.keys(settings.controlled)).toHaveLength(6)
+  it('受控配置只读，并包含品牌账号与冻结来源', () => {
+    expect(Object.keys(settings.controlled).sort()).toEqual([
+      'brand_accounts',
+      'delta',
+      'frozen_sources',
+      'pipeline',
+      'price_map',
+      'publish_identity',
+      'targets',
+      'trusted_owners',
+    ])
   })
 
   it('editable_help 里确实带着 config.toml 的注释 —— 所以不能常驻渲染', () => {

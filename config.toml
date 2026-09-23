@@ -187,9 +187,19 @@ require_all_media_de = true  # 缺德语图时拒绝发布。
 "5$" = "5$"
 
 [publish.trusted_owners]
-# 允许进入付费处理的来源；第三方作者须确认授权。
+# 第三方作者逐个授权后才进入付费处理。不按名称前缀放行。
 facebook = ["neakasaofficial"]
 instagram = ["neakasa.tech", "neakasa.global"]
+
+[publish.brand_accounts]
+# 品牌自有账号。作为合作者与 trusted_owners 取并集；来源仍只认 [targets]。
+facebook = ["neakasaofficial", "Neakasa Deutschland"]
+instagram = ["neakasa.global", "neakasa.tech", "neakasa.de"]
+
+[publish.frozen_sources]
+# 显式冻结的来源。必须同时列在 brand_accounts；[targets] 指到这里会在打开浏览器前报错。
+facebook = []
+instagram = ["neakasa.tech"]
 
 [publish.schedule_rule]
 times = ["16:00", "23:00"]  # 北京默认候选（≈柏林 10:00/17:00）；可选其它合法时刻。
