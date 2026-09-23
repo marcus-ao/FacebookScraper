@@ -75,7 +75,7 @@
 
 **CI 环境的三个坑。** job 级表达式取不到 `runner.temp`，要在 runner 启动后的步骤里写 `GITHUB_ENV`；runner 的账户临时目录是 `RUNNER~1` 短路径，要在 runner 下显式创建临时目录；生产运行标识不能在普通单测之前注入，否则单测会进维护状态。
 
-**品牌账号的两个角色。** `[publish.brand_accounts]` 是显式列出的品牌自有账号，不按 `neakasa.*` 前缀扩大。作为合作者时与 `[publish.trusted_owners]` 取并集，照常进入付费处理；`trusted_owners` 仍只表示第三方逐个授权。作为来源时只有 `[targets]` 会抓取、加工和发布。`[publish.frozen_sources]` 里的账号（现为 IG `neakasa.tech`）即使被写进 `[targets]`，监测和回填也会在打开浏览器前报错，不能靠改目标静默恢复抓取。`active_accounts()` 不返回品牌名单。详见 [§1.31](#131-品牌账号的来源冻结与合作者放行2026-09-22)。
+**品牌账号的两个角色。** `[publish.brand_accounts]` 是显式列出的品牌自有账号，不按 `neakasa.*` 前缀扩大。作为合作者时与 `[publish.trusted_owners]` 取并集，照常进入付费处理；`trusted_owners` 仍只表示第三方逐个授权。作为来源时只有 `[targets]` 会抓取、加工和发布。`[publish.frozen_sources]` 里的账号（现为 IG `neakasa.tech`）即使被写进 `[targets]`，监测和回填也会在打开浏览器前报错，不能靠改目标静默恢复抓取。`active_accounts()` 不返回品牌名单。详见 [§1.32](#132-品牌账号的来源冻结与合作者放行2026-09-22)。
 
 ### 1.3 证据边界
 
@@ -684,7 +684,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 `split_suspect_sources()` 把疑似节点分成「已授权来源」和「已知合作方」。已授权来源是
 `[publish.brand_accounts]` 与 `[publish.trusted_owners]` 的同平台并集；判定和丢弃行为不变。
-监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。`.de` 的划分见 [§1.31](#131-品牌账号的来源冻结与合作者放行2026-09-22)。
+监测告警、覆盖不足的中止原因、`backfill`、`replay`、`dryrun_delta` 五处口径一致。`.de` 的划分见 [§1.32](#132-品牌账号的来源冻结与合作者放行2026-09-22)。
 
 `.tech` 在 2026-09-22T03:01Z 仍有发帖。来源冻结表示系统不再抓取、加工或发布 `in_neakasa.tech` 自己的目录；该账号可以继续在平台发帖，也可以作为目标帖的合作者进入监测和付费。
 
@@ -733,7 +733,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 前端 `CalendarPage` 单测和构建没有跑成：共用 `web/ui/node_modules/antd` 缺少 `package.json`。界面文案已改，浏览器场景未复跑。
 服务机完整月份、全部内容类型和本轮新排期仍是 **待真实联调**。
 
-### 1.31 品牌账号的来源冻结与合作者放行（2026-09-22）
+### 1.32 品牌账号的来源冻结与合作者放行（2026-09-22）
 
 分支 `codex/brand-account-roles`，基点 `28066f8`。用户确认品牌自有账号只有 FB `neakasaofficial`、`Neakasa Deutschland` 与 IG `neakasa.global`、`neakasa.tech`、`neakasa.de`。`.tech` 不是监测目标；它和 `.de`、`Neakasa Deutschland` 出现在两个目标账号帖子的 owner/coauthor 上时，监测与付费处理照常走，不因它们停住。
 
