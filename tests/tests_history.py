@@ -89,16 +89,46 @@ class HistoryTests(unittest.TestCase):
         for task_id in ('in_neakasa.tech/10', 'in_neakasa.tech/11', 'in_neakasa.tech/12', 'in_neakasa.tech/14'):
             self.assertEqual(rows[task_id]['thumbnail_url'], '', task_id)
             self.assertEqual(rows[task_id]['image_count'], 0, task_id)
+            self.assertEqual(rows[task_id].get('preview_kind'),
+                             'video' if task_id.endswith('/14') else 'text', task_id)
         # 待补齐的那条数得出 1 张图，但不给取不到的地址。
         self.assertEqual(rows['in_neakasa.tech/15']['image_count'], 1)
         self.assertEqual(rows['in_neakasa.tech/15']['thumbnail_url'], '')
+        self.assertEqual(rows['in_neakasa.tech/15']['preview_kind'], 'image_pending')
         # 有图的那条照常给地址，并且该地址确实能取到字节。
         active = rows[self.f.account.name + '/' + self.f.source['post_id']]
         self.assertEqual(active['image_count'], 1)
+        self.assertEqual(active['preview_kind'], 'image')
         self.assertEqual(self.f.client.get(active['thumbnail_url']).status_code, 200)
         # 待审队列走另一条取数路径，同一条契约也要成立。
         queue = {row['id']: row for row in reader.list_tasks()['tasks']}
         self.assertEqual(queue[active['id']]['thumbnail_url'], active['thumbnail_url'])
+        self.assertEqual(queue[active['id']]['preview_kind'], 'image')
+
+    def test_review_and_history_share_media_placeholders(self):
+        active = store.Archive(self.f.root / 'archive', self.f.account.name)
+        cases = [
+            ('text', [], 'text'),
+            ('video', [store.Media('https://example.invalid/v.mp4', 'video')], 'video'),
+            ('pending', [store.Media('https://example.invalid/i.jpg', 'image')], 'image_pending'),
+            ('mixed', [store.Media('https://example.invalid/i.jpg', 'image'),
+                       store.Media('https://example.invalid/v.mp4', 'video')], 'video'),
+        ]
+        for post_id, media, _kind in cases:
+            active.append(store.Post(post_id, 'facebook', 'neakasaofficial', 'Media preview',
+                                     self.f.source['created_at'], media=media))
+        for scope in ('review', 'history'):
+            rows = {row['id']: row for row in reader.list_tasks(scope=scope)['tasks']}
+            for post_id, _media, kind in cases:
+                with self.subTest(scope=scope, post_id=post_id):
+                    task_id = self.f.account.name + '/' + post_id
+                    if scope == 'review' and kind != 'image_pending':
+                        # 非静态图文仍只在历史页展示，不扩大待审候选范围。
+                        self.assertNotIn(task_id, rows)
+                        continue
+                    row = rows[task_id]
+                    self.assertEqual(row['thumbnail_url'], '')
+                    self.assertEqual(row.get('preview_kind'), kind)
 
     def test_consistency_compares_database_values_with_local_files(self):
         database = self.f.root / 'state' / 'history.sqlite'

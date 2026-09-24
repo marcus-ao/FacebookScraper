@@ -1,4 +1,6 @@
 import { Tag, Tooltip } from 'antd'
+import { FileTextOutlined, PictureOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { useState } from 'react'
 import { Link } from 'react-router'
 import type { TableColumnsType } from 'antd'
 
@@ -9,7 +11,7 @@ import { StatusTag, isTerminalStatus } from '@/components/StatusTag'
 import { BusinessTime, ShanghaiTime } from '@/components/Time'
 import { tokens } from '@/app/theme'
 import { cx } from '@/lib/css'
-import type { DisplayStatus, Platform } from '@/types/domain'
+import type { DisplayStatus, Platform, PreviewKind } from '@/types/domain'
 import type { TaskId } from '@/types/brands'
 import styles from './columns.module.css'
 
@@ -19,6 +21,7 @@ export interface PostRowBase {
   readonly id: TaskId
   readonly platform: Platform
   readonly thumbnail_url: string
+  readonly preview_kind: PreviewKind
   readonly text_de_excerpt: string
   readonly image_count: number
   readonly tags: readonly string[]
@@ -63,6 +66,25 @@ export interface PostColumnOptions<T extends PostRowBase> {
 
 const { layout } = tokens
 
+const PLACEHOLDERS = {
+  video: { icon: PlayCircleOutlined, label: '视频帖' },
+  text: { icon: FileTextOutlined, label: '纯文字帖' },
+  image_pending: { icon: PictureOutlined, label: '图片待补齐' },
+} as const
+
+function Thumbnail({ row }: { row: PostRowBase }) {
+  const [failed, setFailed] = useState(false)
+  if (row.thumbnail_url && !failed) {
+    return <img className={cx(styles.thumb)} src={row.thumbnail_url} alt="" loading="lazy"
+      width={layout.thumbnailSize} height={layout.thumbnailSize} onError={() => setFailed(true)} />
+  }
+  const kind = failed || row.preview_kind === 'image' ? 'image_pending' : row.preview_kind
+  const { icon: Icon, label } = PLACEHOLDERS[kind]
+  return <span className={cx(styles.thumb, styles.placeholder)} role="img" aria-label={label} title={label}>
+    <Icon aria-hidden="true" />
+  </span>
+}
+
 export function createPostColumns<T extends PostRowBase>(
   options: PostColumnOptions<T>,
 ): TableColumnsType<T> {
@@ -77,20 +99,7 @@ export function createPostColumns<T extends PostRowBase>(
           width: layout.thumbnailColumnWidth,
           render: (_value: unknown, row: T) => (
             <span className={cx(styles.thumbWrap)}>
-              {row.thumbnail_url === '' ? (
-                // 无图时留空位，避免空 src 显示为加载失败。
-                <span className={cx(styles.thumb, styles.thumbEmpty)} aria-hidden="true" />
-              ) : (
-                <img
-                  className={cx(styles.thumb)}
-                  src={row.thumbnail_url}
-                  alt=""
-                  loading="lazy"
-                  // 预留图片尺寸，避免加载时行高跳动。
-                  width={layout.thumbnailSize}
-                  height={layout.thumbnailSize}
-                />
-              )}
+              <Thumbnail key={`${row.id}:${row.thumbnail_url}`} row={row} />
               {row.image_count > 1 ? (
                 <span className={cx(styles.count)} aria-label={`${row.image_count} 张图`}>
                   {row.image_count}

@@ -1,11 +1,7 @@
 """月历只读展示与显式刷新；浏览器访问复用业务读取器与发布锁。"""
 from __future__ import annotations
 
-import re
-import sqlite3
-from contextlib import closing
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -13,12 +9,16 @@ from fastapi.responses import JSONResponse
 from core.config import ROOT, cfg
 from publish import business_suite as bs
 from publish import local_schedule, planning
-from publish import journal
 from publish.planner_cache import inventory_from_cache, read_cache, read_live_inventory, refresh_cache
 from publish.planner_content import public_permalink
 from publish.planning import calendar_bounds, configured_window
+from web.api import reader
 
 router = APIRouter()
+
+# 跨发实测渠道分钟相差 1 分钟（REQUIREMENTS F5-5：7:17/7:18）；
+# 本系统同渠道受 publish.min_channel_gap_min（90 分钟）约束，5 分钟只容纳一篇。
+SOURCE_MATCH_TOLERANCE = timedelta(minutes=5)
 
 _ERRORS = {
     "timeout": "刷新超时，保留上次读取的数据。",
@@ -36,33 +36,46 @@ _DETAIL_ERRORS = {
 }
 
 
-def source_permalinks_by_remote() -> dict[tuple[str, str], str]:
-    """审核归档里的公开地址，按发布记录的远端编号对上月历卡片。对不上就不填。"""
-    state = Path(cfg().get("paths", "state", "state"))
-    archived: dict[tuple[str, str], str] = {}
-    database = state / "index.sqlite"
-    if database.is_file():
-        try:
-            with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
-                for platform, post_id, permalink in connection.execute(
-                        "SELECT platform, post_id, permalink FROM posts WHERE ifnull(permalink, '') != ''"):
-                    checked = public_permalink(permalink)
-                    if checked:
-                        archived[(platform, post_id)] = checked
-        except sqlite3.Error:
-            archived = {}
-    try:
-        attempts = journal.load(state)
-    except (OSError, ValueError):
-        return {}
-    found: dict[tuple[str, str], str] = {}
-    for row in attempts:
-        permalink = archived.get((row.get("platform"), row.get("post_id")))
-        if not permalink:
+def _source_for(card: dict, scheduled_entries: list[dict]) -> dict | None:
+    """排期与发布 ID 不同；逐渠道优先精确编号，再按时刻匹配，歧义不填。"""
+    if card.get('delivery') not in {'published', 'scheduled'} or not card.get('channels'):
+        return None
+    at = datetime.fromisoformat(card['at'])
+    matched = {}
+    for channel in card['channels']:
+        candidates = [entry for entry in scheduled_entries
+                      if entry['kind'] == local_schedule.SCHEDULED and channel in entry['channels']]
+        remote = (card.get('remote_ids') or {}).get(channel)
+        exact = [entry for entry in candidates
+                 if remote and f'{channel}={remote}' in entry['remote_id'].split(';')]
+        matches = exact or [entry for entry in candidates if entry['at']
+                           and abs(at - datetime.fromisoformat(entry['at'])) <= SOURCE_MATCH_TOLERANCE]
+        by_task = {entry['task_id']: entry for entry in matches}
+        if len(by_task) != 1:
+            return None
+        matched.update(by_task)
+    return next(iter(matched.values())) if len(matched) == 1 else None
+
+
+def _sources_for(cards: list[dict], scheduled_entries: list[dict]) -> list[dict | None]:
+    """同一任务/渠道只能由一张卡认领；远端卡间的竞争也不能靠时刻猜。"""
+    sources = [_source_for(card, scheduled_entries) for card in cards]
+    claims, exact = {}, {}
+    for index, (card, source) in enumerate(zip(cards, sources)):
+        if source is None:
             continue
-        for channel, remote in re.findall(r"(facebook|instagram)=(\d{6,})", str(row.get("remote_id") or "")):
-            found[(channel, remote)] = permalink
-    return found
+        for channel in card['channels']:
+            key = (source['task_id'], channel)
+            claims.setdefault(key, set()).add(index)
+            remote = (card.get('remote_ids') or {}).get(channel)
+            if remote and f'{channel}={remote}' in source['remote_id'].split(';'):
+                exact.setdefault(key, set()).add(index)
+    for index, (card, source) in enumerate(zip(cards, sources)):
+        if source is not None and any(
+                (exact.get((source['task_id'], channel)) or claims[(source['task_id'], channel)]) != {index}
+                for channel in card['channels']):
+            sources[index] = None
+    return sources
 
 
 def current_time() -> datetime:
@@ -106,17 +119,38 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
     matches = bool(start and end and data.get("ui_timezone") == ui_timezone
                    and start <= month_start.date().isoformat()
                    and end >= (month_end.date() - timedelta(days=1)).isoformat())
+    # 本地图层只作展示，不进 planning.evaluate_slot；来源匹配使用过滤月份前的全量条目。
+    entries, local_layer, local_error = [], [], None
+    try:
+        entries = local_schedule.entries()
+        for entry in entries:
+            at = datetime.fromisoformat(entry["at"]) if entry["at"] else None
+            if at is not None and at.astimezone(ui_zone).strftime("%Y-%m") != local.strftime("%Y-%m"):
+                continue
+            local_layer.append({
+                **entry, "audience": planning.audience_local(at) if at else None,
+                "at_business": at.astimezone(business_zone).isoformat() if at else None})
+    except Exception as exc:
+        # 坏账本必须显式失败，不能当成「本地没有排期」继续画（HANDOFF 红线 9）。
+        entries, local_layer = [], []
+        local_error = str(exc)
     cards = []
-    remote_links = source_permalinks_by_remote()
-    for card in data.get("cards", []):
+    remote_cards = data.get('cards', [])
+    for card, source in zip(remote_cards, _sources_for(remote_cards, entries)):
         at = datetime.fromisoformat(card["at"])
         if at.astimezone(ui_zone).strftime("%Y-%m") == local.strftime("%Y-%m"):
-            links = dict(card.get("permalinks") or {})
-            for channel, remote in (card.get("remote_ids") or {}).items():
-                found = remote_links.get((channel, str(remote)))
-                if found:
-                    links[channel] = found
-            cards.append({**card, "permalinks": links,
+            permalink = None
+            if source:
+                try:
+                    post = reader.source_post(source['task_id'])
+                    if post:
+                        permalink = public_permalink(post.row.get('permalink')) or None
+                except (OSError, ValueError):
+                    pass
+            cards.append({**card,
+                          "source_task_id": source['task_id'] if source else None,
+                          "source_platform": source['platform'] if source else None,
+                          "source_permalink": permalink,
                           "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
     cards.sort(key=lambda item: item["at"])
@@ -133,19 +167,6 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                 'visible_end': str(value.visible_end) if value and value.visible_end else None,
                 'matches_current_month': bool(value and value.ui_timezone==ui_timezone
                     and value.covers([month_start, month_end-timedelta(microseconds=1)]))}
-    # ⛔ 本地图层只画给人看，不进 planning.evaluate_slot 的占用判定。
-    local_layer, local_error = [], None
-    try:
-        for entry in local_schedule.entries():
-            at = datetime.fromisoformat(entry["at"]) if entry["at"] else None
-            if at is not None and at.astimezone(ui_zone).strftime("%Y-%m") != local.strftime("%Y-%m"):
-                continue
-            local_layer.append({
-                **entry, "audience": planning.audience_local(at) if at else None,
-                "at_business": at.astimezone(business_zone).isoformat() if at else None})
-    except Exception as exc:
-        # 坏账本必须显式失败，不能当成「本地没有排期」继续画（HANDOFF 红线 9）。
-        local_error = str(exc)
     unavailable = _readiness()
     diagnostic = snapshot.get('refresh_diagnostic')
     error = _ERRORS.get(snapshot.get('refresh_error'))

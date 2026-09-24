@@ -22,9 +22,21 @@
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
+**月历来源关联（离线通过）。** 账本保留的是排期时的详情 ID，发布后卡片可能变成 IG 媒体 ID、聚合 entity ID 或缺少编号，旧的远端编号等值连接因此漏链。现按 `local_schedule.entries()` 的已排期记录，以目标渠道及排期时刻 ±5 分钟唯一关联，精确远端编号优先；全渠道须指向同一审校任务。原帖地址来自 `reader.source_post()` 的 `post.json`，不依赖 SQLite、不覆盖已发布地址；账本读取失败仍显示 `local_error`。该关联只负责导航，不充当发布验收证据。服务机真实月历待联调。
+
+隔离验证：`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 594 项和构建通过；浏览器 stage F 验证三类地址和进入审校详情，使用临时归档与模拟月历，没有真实账号调用。证据保存在 `.worktrees/calendar-source-link/state/` 的 `offline-validation-20260924T034358Z/`（月历与 hygiene）、`offline-validation-20260924T033652Z/`（发布操作）、`frontend-tests.log`、`frontend-build.log`、`ui-regression/browser-stage-f.json` 与 `ui-regression/calendar-source-links.png`。服务机部署后须只读核对本系统已发布卡的原帖链接与审校详情一致，并检查未匹配本地排期的人工帖没有来源入口。
+
+**月历待办。** `publish/observations.status()` 仍假设账本排期 ID 与已发布卡 ID 相同；本轮不改公开观测判据，不能拿来源链接出现替它宣称已公开。
+
+**来源关联的歧义边界。** 同一任务/渠道附近有多张远端卡时，精确编号优先，其余时间近似匹配关闭；无精确编号时全部不挂链接。仅一张人工帖恰好落进本系统排期窗口、又没有其它远端证据时，时刻加渠道仍无法证明两者内容相同；这是该展示规则的限制，服务机需人工核对，不能升级成身份或公开状态证据。
+
+**列表与月历修复组合验证（离线通过）。** 合并提交 `dce0323` 同时包含类型占位与月历来源关联，合并无冲突。`tests_history` 7 项、`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 596 项及生产构建通过；隔离浏览器 stage E/F 验证 48px 行高、三类占位、图片 404 回退、三类月历链接与审校跳转。证据位于 `.worktrees/review-preview-integration/state/`：`offline-validation-20260924T040016Z/`、`integration-frontend.log`、`integration-build.log`、`ui-regression/browser-stage-e.json` 与 `ui-regression/browser-stage-f.json`。未使用真实账号或业务数据；服务机部署与联调仍待执行。
+
 **源码服务机改址。** 仓库网络入口以 `ops/service-machine.network.json` 为准，非受管飞书入口同步至 `[feishu].base_url`。`scripts/update_service_address.bat` 支持 IP/前缀或明确 CIDR，保留未指定端口；只输入 IP 时不猜新子网。局域网入口 `scripts/run_web_lan.bat` 从同一 JSON 读取监听和端口，再调用原前端构建流程。防火墙及客户端操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。受管 `control/host.json` 优先且不由此工具修改，历史文档中的地址不是新的现场确认。
 
 **业务前端精简（2026-09-23）。** 界面只显示业务时刻值，去掉「北京/上海」字眼与「硬闸」术语，未知态改为「未知/待核对」。历史三个筛选各有显式「全部」选项，月份按行内日期（`created_at`）而不是归档目录月份。发布月历只保留时刻、账号、状态短签；刷新、失败警报、`local_error` 与今天高亮仍在。运营设置页从界面移除，`GET/PUT /api/settings` 保留给维护者。受众柏林时刻与凌晨提示一并撤下（用户决定，护栏后果已知悉）。
+
+**列表无图预览（离线通过）。** 历史归档与待审列表共用 `preview_kind`：有图显示缩略图，无图按视频、纯文字、图片待补齐显示图标；混合媒体没有可用图片时显示视频。图片请求失败回退为图片待补齐，不重试取图。视频封面不抓取，非静态图文仍不进入待审候选。`tests_history`、hygiene、前端测试与构建通过；隔离浏览器 stage E 验证两种宽度行高均为 48px、三类图标及真实 HTTP 404 回退。证据保存在 `.worktrees/list-media-placeholder/state/` 的 `offline-validation-20260924T032954Z/`、`frontend-tests.log`、`frontend-build.log`、`ui-regression/` 与 `thumbnail-cost.json`；50 行首屏的 32 个有图行共发 32 次图片请求。服务机视觉效果待联调，未访问真实账号。
 
 ### 1.1 服务机现状与上线前的未完项
 
