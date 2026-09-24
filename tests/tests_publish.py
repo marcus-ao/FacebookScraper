@@ -1782,12 +1782,15 @@ async def upload(multiple, count):
         chooser = FakeChooser(multiple)
         page, _ = make_composer(chooser=chooser)
         notes = await upload_images(page, paths)
+        chooser.settle_count = page.settled
         return chooser, notes
 
 
 chooser, notes = asyncio.run(upload(True, 5))
 check(chooser.files is not None and len(chooser.files) == 5,
       "G3 走 file chooser 通道交 5 张图，全程没有写死 input[type=file] 选择器")
+check(chooser.settle_count == 0,
+      "G3 只交付冻结文件，不等待与上传完成无关的整页 networkidle")
 check(any("尚未核对缩略图数量" in note and "media.verify_upload" in note for note in notes),
       "G3 上传入口说明尚未核验：发布 workflow 另行核对缩略图，旧调用方仍需人工复核")
 check(raises(PublishStepError, lambda: asyncio.run(upload(False, 5)),

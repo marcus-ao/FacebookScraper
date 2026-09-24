@@ -22,7 +22,8 @@ HTML = '''<div role="combobox" contenteditable="true" aria-label="Write into the
 <input aria-label="Date picker" value="09/25/2026">
 <div role="application" aria-label="Time input"><input role="spinbutton" value="12"><input role="spinbutton" aria-label="minutes" value="30"><input role="spinbutton" aria-label="meridiem" value="PM"><span>12 : 30 PM</span></div>
 <ul><li role="listitem"><img src="https://fixture.fbcdn.net/1.png"><button>Remove photo</button></li>
-<li role="listitem"><img src="https://fixture.fbcdn.net/2.png"><button>Remove photo</button></li></ul>'''
+<li role="listitem"><img src="https://fixture.fbcdn.net/2.png"><button>Remove photo</button></li></ul>
+<button id="submit">Schedule</button>'''
 
 
 class FinalFormTests(unittest.IsolatedAsyncioTestCase):
@@ -73,6 +74,10 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 'time': "document.querySelector('[aria-label=minutes]').value='31'",
                 'date': "document.querySelector('[aria-label=\"Date picker\"]').value='09/26/2026'",
                 'switch': "document.querySelector('[role=switch]').checked=false",
+                'disabled': "document.querySelector('#submit').disabled=true",
+                'enable_later': "document.querySelector('#submit').disabled=true;setTimeout(()=>document.querySelector('#submit').disabled=false,120)",
+                'change_while_disabled': "document.querySelector('#submit').disabled=true;setTimeout(()=>{document.querySelector('[role=combobox]').textContent+=' changed';document.querySelector('#submit').disabled=false},120)",
+                'preview_url': "document.querySelectorAll('img').forEach((img,i)=>img.src='blob:local-preview-'+i)",
                 'none': '0',
             }
             await self.page.evaluate(mutations[change])
@@ -116,6 +121,28 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unchanged_form_arms_durably_and_submits_once(self):
         result, submit = await self.run_workflow('none')
+        self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
+        self.assertEqual(submit.await_count, 1)
+
+    async def test_disabled_submit_is_a_pre_click_failure_not_an_uncertain_attempt(self):
+        result, submit = await self.run_workflow('disabled')
+        self.assertEqual(result.attempt.status, journal.STATUS_FAILED_PRE_SUBMIT, result.message)
+        self.assertIn('按钮', result.message)
+        submit.assert_not_called()
+        self.assertFalse(any(row['status'] == journal.STATUS_SUBMIT_AMBIGUOUS
+                             for row in journal.load(self.directory/'state')))
+
+    async def test_button_wait_finishes_before_final_caption_verification(self):
+        result, submit = await self.run_workflow('enable_later')
+        self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
+        self.assertEqual(submit.await_count, 1)
+        result, submit = await self.run_workflow('change_while_disabled')
+        self.assertEqual(result.attempt.status, journal.STATUS_FAILED_PRE_SUBMIT, result.message)
+        self.assertIn('正文', result.message)
+        submit.assert_not_called()
+
+    async def test_preview_url_changes_do_not_block_the_frozen_upload(self):
+        result, submit = await self.run_workflow('preview_url')
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
         self.assertEqual(submit.await_count, 1)
 

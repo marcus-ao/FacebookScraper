@@ -56,11 +56,15 @@ class ReadbackMediaTests(unittest.IsolatedAsyncioTestCase):
                 raise target_error
             return await observe_detail(object())
         with patch.object(month_inventory, 'read', AsyncMock(return_value=inventory)), \
-                patch.object(month_inventory, 'read_scheduled_target', target), \
-                patch.object(scheduled_media, 'collect', AsyncMock(return_value=capture or self.capture)), \
+                patch.object(month_inventory, 'read_scheduled_target', AsyncMock(side_effect=target)) as reopen, \
+                patch.object(scheduled_media, 'collect', AsyncMock(return_value=capture or self.capture)) as collect, \
                 patch.object(bs, '_readback_screenshot', AsyncMock(return_value='')):
             if operation is not None:
-                return await operation()
+                result = await operation()
+                reopen.assert_not_called()
+                collect.assert_not_called()
+                return result
+            kwargs.setdefault('verify_images', True)
             return await month_readback.verify(None, self.frozen.scheduled_at, self.frozen.text_de,
                 ui_timezone='America/Los_Angeles', target_channels=('facebook',),
                 expected_image_count=2, frozen_attempt=asdict(self.attempt), **kwargs)
@@ -137,6 +141,7 @@ class ReadbackMediaTests(unittest.IsolatedAsyncioTestCase):
                     ('publish.channels.select', AsyncMock(return_value={'channel': 'facebook', 'account': run.account})),
                     ('publish.channels.verify_before_submit', AsyncMock()),
                     ('publish.media.verify_upload', AsyncMock(return_value={'image_count': 2})),
+                    ('publish.business_suite.wait_submit_ready', AsyncMock()),
                     ('publish.records.queue_mirror', lambda *args, **kwargs: True),
                     ('publish.records.queue_notification', lambda *args, **kwargs: True)):
                 stack.enter_context(patch(name, replacement))
@@ -150,22 +155,29 @@ class ReadbackMediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clicks, [True])
         return result
 
-    async def test_workflow_success_records_real_byte_comparison_and_prevents_second_submit(self):
+    async def test_workflow_confirms_schedule_without_image_revisit_and_prevents_second_submit(self):
         result = await self.run_workflow()
         self.assertEqual(result.attempt.status, 'scheduled')
-        self.assertTrue(result.attempt.readback_diagnostics['remote_images_verified'])
-        self.assertTrue(capabilities.acceptance(config.cfg().state_dir)['facebook']['verified'])
-        self.assertIn('2', result.attempt.verification)
+        self.assertFalse(result.attempt.readback_diagnostics['remote_images_verified'])
+        self.assertIsNone(result.attempt.readback_diagnostics['remote_media']['image_count'])
+        self.assertFalse(capabilities.acceptance(config.cfg().state_dir)['facebook']['verified'])
+        self.assertNotIn('G8', result.attempt.verification)
 
     async def test_workflow_image_failure_stays_scheduled_and_does_not_pass_g8(self):
         result = await self.run_workflow(replace(self.capture, complete=False, error='layout_unverified'))
         self.assertEqual(result.attempt.status, 'scheduled')
         self.assertFalse(result.attempt.readback_diagnostics['remote_images_verified'])
         self.assertFalse(capabilities.acceptance(config.cfg().state_dir)['facebook']['verified'])
-        self.assertIn('layout_unverified', result.attempt.verification)
+        self.assertEqual(result.attempt.readback_diagnostics['remote_media']['error'], 'not_requested')
 
-    async def test_workflow_changed_identity_stays_unverified_after_single_click(self):
+    async def test_workflow_does_not_depend_on_second_image_target_open(self):
         result = await self.run_workflow(target_error=bs.PublishStepError('target changed during capture'))
+        self.assertEqual(result.attempt.status, journal.STATUS_SCHEDULED)
+        self.assertFalse(capabilities.acceptance(config.cfg().state_dir)['facebook']['verified'])
+
+    async def test_workflow_changed_schedule_identity_stays_unverified_after_single_click(self):
+        self.card = replace(self.card, remote_ids=(('facebook', '987654321'),))
+        result = await self.run_workflow()
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMITTED_UNVERIFIED)
         self.assertFalse(capabilities.acceptance(config.cfg().state_dir)['facebook']['verified'])
 

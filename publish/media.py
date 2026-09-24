@@ -1,7 +1,8 @@
-"""共用有序图片比较；编辑器取图只证明编辑器，不证明远端排期。"""
+"""编辑器检查上传状态；远端图片比较单独记录，不阻断人工选图。"""
 import hashlib
 import io
-from urllib.parse import urlsplit
+import time
+from collections import Counter
 
 from PIL import Image, ImageChops, ImageOps, ImageStat
 from playwright.async_api import expect
@@ -58,30 +59,42 @@ def compare_ordered(expected_paths, rendered, *, surface='编辑器'):
             'maximum_rgb_mean_error': MAX_RGB_ERROR, 'images': rows}
 
 
-async def verify_upload(page, paths, *, timeout=30):
+async def verify_upload(page, paths, *, timeout=30, previous=None):
+    """按冻结清单交图后核对附件数量；缩略图地址和像素不代表上传是否成功。"""
+    paths = list(paths)
+    if not paths:
+        raise PublishStepError('没有选定上传图片；未提交')
     remove = page.get_by_role('button', name='Remove photo', exact=True)
+    deadline = time.monotonic() + timeout
+    remaining = lambda: max(1, (deadline - time.monotonic()) * 1000)
     try:
-        await expect(remove).to_have_count(len(paths), timeout=timeout * 1000)
-        await page.get_by_text('Uploading media', exact=True).wait_for(state='hidden', timeout=timeout * 1000)
-        rendered = []
-        for index in range(len(paths)):
-            # Anchor each image to its unique remove control's nearest listitem, avoiding nested duplicates.
-            card = remove.nth(index).locator('xpath=ancestor::*[@role="listitem"][1]')
-            img = card.locator('img')
-            await expect(img).to_have_count(1, timeout=timeout * 1000)
-            url = await img.evaluate('el => el.complete && el.naturalWidth > 0 ? el.currentSrc : null')
-            parsed = urlsplit(url or '')
-            if parsed.scheme != 'https' or not (parsed.hostname or '').endswith('.fbcdn.net'):
-                raise PublishStepError('编辑器缩略图尚未成为可核验的 Meta 图片')
-            response = await page.request.get(url, timeout=timeout * 1000, max_redirects=0)
-            try:
-                if response.status != 200:
-                    raise PublishStepError('编辑器图片读取失败：HTTP %s' % response.status)
-                rendered.append(await response.body())
-            finally:
-                await response.dispose()
-        return compare_ordered(list(paths), rendered)
-    except PublishStepError:
-        raise
+        await expect(remove).to_have_count(len(paths), timeout=remaining())
     except Exception as exc:
-        raise PublishStepError('编辑器图片数量或顺序未能核验；未提交') from exc
+        raise PublishStepError('编辑器图片数量与已选图片不一致（应为 %d 张）；未提交' % len(paths)) from exc
+    try:
+        await page.get_by_text('Uploading media', exact=True).wait_for(state='hidden', timeout=remaining())
+    except Exception as exc:
+        raise PublishStepError('Business Suite 图片上传仍未完成；请查看上传提示，未提交') from exc
+    try:
+        await expect(remove).to_have_count(len(paths), timeout=remaining())
+    except Exception as exc:
+        raise PublishStepError('上传结束后的图片数量与已选图片不一致；未提交') from exc
+
+    # 只识别同一组附件明确调序；blob/CDN 切换、缺缩略图和重新渲染不作为失败。
+    # 地址只在内存中取摘要，不下载、不持久化签名 URL。
+    urls = await remove.evaluate_all('''buttons => buttons.map(button => {
+        const images = button.closest('[role="listitem"]')?.querySelectorAll('img');
+        return images?.length === 1 ? images[0].currentSrc || images[0].getAttribute('src') : null;
+    })''')
+    keys = [hashlib.sha256(url.encode('utf-8')).hexdigest() if url else None for url in urls]
+    prior = (previous or {}).get('attachment_keys')
+    unchanged = None
+    if prior and all(prior) and all(keys) and Counter(prior) == Counter(keys):
+        unchanged = prior == keys
+        if not unchanged:
+            raise PublishStepError('编辑器中的图片顺序在准备后发生变化；未提交')
+    return {'image_count': len(paths), 'order_verified': False,
+            'method': 'file_chooser_attachment_count', 'attachment_keys': keys,
+            'attachment_order_unchanged': unchanged,
+            'images': [{'index': index, 'source_sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                       for index, path in enumerate(paths)]}

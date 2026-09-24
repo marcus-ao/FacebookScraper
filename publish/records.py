@@ -178,7 +178,7 @@ async def reverify_media(attempt_id: str, *, timeout=30) -> dict:
             # This is a revisit of a known object, never a fabricated empty submission baseline.
             readback = await month_readback.verify(page, when, files['text_de.txt'].decode('utf-8'),
                 ui_timezone=run.ui_timezone, target_channels=(channel,), expected_remote_id=row['remote_id'],
-                timeout=timeout, run=run, frozen_attempt=row)
+                timeout=timeout, run=run, frozen_attempt=row, verify_images=True)
         except (Exception, SystemExit) as exc:
             readback = bs.ScheduledReadback(False, datetime.now(timezone.utc).isoformat(),
                 when.isoformat(), row['ui_scheduled_at'], row['final_text_sha256'],

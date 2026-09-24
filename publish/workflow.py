@@ -173,7 +173,7 @@ async def _execute_unlocked(
         upload_notes = await bs.upload_images(page, list(post.image_paths), timeout=timeout)
         media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
         notes.extend(upload_notes[:1])
-        notes.append('已核对编辑器图片数量、顺序和视觉相似度。')
+        notes.append('已按冻结清单交图，编辑器附件数量一致，未见上传进行中提示。')
         for note in notes[-2:]:
             print("    " + note)
 
@@ -209,7 +209,8 @@ async def _execute_unlocked(
         await check_live_slot(planner_page, post, when,
                               ui_timezone=ui_timezone, timeout=timeout, run=run)
         step = '提交前最终表单复核'
-        media_check = await media.verify_upload(page, post.image_paths, timeout=timeout)
+        await bs.wait_submit_ready(page, timeout=timeout, button_spec=None if run is None else run.submit_button)
+        media_check = await media.verify_upload(page, post.image_paths, timeout=timeout, previous=media_check)
         await bs.verify_form(page, post.text_de, when, ui_timezone=ui_timezone, timeout=timeout)
         await channels.verify_before_submit(page, target_channels, run=run)
         step = "G6 单次提交"

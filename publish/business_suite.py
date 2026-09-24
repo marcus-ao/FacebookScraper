@@ -9,6 +9,8 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from playwright.async_api import expect
+
 from core.config import cfg
 from publish import evidence
 from publish import selectors
@@ -22,9 +24,6 @@ DEFAULT_UI_TIMEOUT = 30.0
 _SWITCH_ON_BUDGET = 8.0
 # 页面可用性自检要短，因为它就是用来快速判定"这一页是不是 那种坏页"的。
 PAGE_HEALTH_TIMEOUT = 8.0
-# 上传后给 UI 的沉淀窗口。**不是固定 sleep**：到点就走，不阻塞成功路径。
-UPLOAD_SETTLE_TIMEOUT = 15.0
-
 # 发布截图只遮凭据，保留正文供核查；probe 截图另须遮所有输入值。
 SENSITIVE_INPUT_SELECTOR = (
     'input[type="password"], input[type="email"], '
@@ -455,7 +454,7 @@ async def _text_present(page, needle: str) -> bool:
 
 async def upload_images(page, paths: list[Path], *,
                         timeout: float = DEFAULT_UI_TIMEOUT) -> tuple[str, ...]:
-    """通过 file chooser 上传并核验多选能力；缩略图数量与顺序由后续 media.verify_upload 验证。"""
+    """按冻结顺序交给 file chooser；上传状态和附件数量由 media.verify_upload 核对。"""
     files = [Path(item) for item in paths]
     if not files:
         raise ValueError("upload_images 至少要有一张图")
@@ -486,19 +485,10 @@ async def upload_images(page, paths: list[Path], *,
             "别默默只传一张——这一篇先停下。" % len(files))
     await chooser.set_files([str(item) for item in files])
 
-    # SPA 长连接可能始终不 idle；只等待有限窗口。
-    try:
-        await asyncio.wait_for(
-            page.wait_for_load_state("networkidle",
-                                     timeout=_ms(UPLOAD_SETTLE_TIMEOUT)),
-            UPLOAD_SETTLE_TIMEOUT + 2.0)
-    except Exception:                             # noqa: BLE001 - 预期会超时
-        pass
-
     return (
         "已把 %d 张图交给上传控件（%s）。" % (
             len(files), "、".join(item.name for item in files)),
-        "⚠️ 此上传入口尚未核对缩略图数量；调用方需完成 media.verify_upload 或人工核验。",
+        "此上传入口尚未核对缩略图数量和上传状态；调用方需完成 media.verify_upload 或人工核验。",
     )
 
 
@@ -772,6 +762,17 @@ async def _time_controls(group, where):
     minutes_input = spins[labels.index(COMPOSER["schedule_minutes"].name)]
     meridiem_input = spins[labels.index(COMPOSER["schedule_meridiem"].name)]
     return hours, minutes_input, meridiem_input
+
+
+async def wait_submit_ready(page, *, timeout=DEFAULT_UI_TIMEOUT, button_spec=None):
+    """在提交意图落盘前等待平台允许提交，禁用按钮不应产生未决提交。"""
+    target = _build(page, button_spec or COMPOSER['composer_submit_button']).first
+    deadline = time.monotonic() + timeout
+    try:
+        await target.wait_for(state='visible', timeout=_ms(timeout))
+        await expect(target).to_be_enabled(timeout=max(1, (deadline - time.monotonic()) * 1000))
+    except Exception as exc:
+        raise PublishStepError('排期按钮尚不可用；请核对 Business Suite 的上传或表单提示，未提交') from exc
 
 
 async def verify_form(page, text, when, *, ui_timezone, timeout=DEFAULT_UI_TIMEOUT):

@@ -56,7 +56,8 @@ async def baseline(page, when, final_text, *, ui_timezone, target_channels, time
 
 async def verify(page, when, final_text, *, ui_timezone, target_channels,
                  expected_image_count=None, pre_submit_baseline=None, expected_remote_id='',
-                 timeout=30, screenshot_path=None, run=None, frozen_attempt=None):
+                 timeout=30, screenshot_path=None, run=None, frozen_attempt=None, verify_images=False):
+    """Confirm the scheduled object; extra image evidence is an explicit read-only revisit."""
     stamp = datetime.now().astimezone().isoformat()
     base = dict(observed_at=stamp, target_at=when.isoformat(),
                 ui_at=when.astimezone(bs.resolve_ui_timezone(ui_timezone)).isoformat(),
@@ -100,8 +101,8 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         if pre_submit_baseline is not None and identity in pre_submit_baseline.remote_ids:
             raise bs.PublishStepError('月历命中的是提交前已存在的远端 ID')
         diagnostics['remote_media'] = {'image_count': None, 'order_verified': False,
-                                       'error': 'frozen_context_missing'}
-        if frozen_attempt is not None:
+                                       'error': 'frozen_context_missing' if verify_images else 'not_requested'}
+        if verify_images and frozen_attempt is not None:
             try:
                 metadata, _, files, directory = snapshots.load_for_attempt(frozen_attempt)
                 if (files['text_de.txt'].decode('utf-8') != final_text
@@ -155,4 +156,6 @@ def verification_text(readback):
     if readback.diagnostics.get('remote_images_verified') is True:
         return prefix + '已核验排期详情 %d 张图片的数量、顺序及视觉对应，证据已保全。' % readback.image_count
     reason = (readback.diagnostics.get('remote_media') or {}).get('error') or 'media_unverified'
+    if reason == 'not_requested':
+        return prefix + '图片未做额外远端核验，可另行只读复验。'
     return prefix + '排期详情图片未核验（%s），G8 尚未通过。' % reason

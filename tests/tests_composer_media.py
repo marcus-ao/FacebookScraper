@@ -1,8 +1,9 @@
-"""Prepared editor media must preserve count and order; no real browser or upload."""
+"""Frozen attachments use editor status; extra image comparisons use isolated fixtures."""
 import io
 import sys
 import tempfile
 import unittest
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -31,13 +32,24 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
             self.paths.append(path)
             self.bodies.append(stream.getvalue())
 
+    @asynccontextmanager
+    async def editor(self):
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
+            try:
+                page = await browser.new_page()
+                await page.route('**/*', lambda route: route.abort())
+                yield page
+            finally:
+                await browser.close()
+
     def test_compressed_ordered_images_match_with_recorded_source_and_rendered_hashes(self):
         result = compare_ordered(self.paths, self.bodies)
         self.assertTrue(result['order_verified'])
         self.assertEqual(result['image_count'], 2)
         self.assertNotEqual(result['images'][0]['source_sha256'], result['images'][0]['rendered_sha256'])
 
-    def test_missing_swapped_or_different_images_stop_before_submission(self):
+    def test_missing_swapped_or_different_images_fail_extra_image_comparison(self):
         for images in (self.bodies[:1], self.bodies[::-1], [self.bodies[1], self.bodies[1]]):
             with self.assertRaises(PublishStepError):
                 compare_ordered(self.paths, images)
@@ -67,10 +79,62 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
                                              dispose=AsyncMock()) for body in self.bodies]
                 with patch.object(APIRequestContext, 'get', AsyncMock(side_effect=responses)):
                     result = await verify_upload(page, self.paths, timeout=1)
-                self.assertTrue(result['order_verified'])
+                self.assertFalse(result['order_verified'])
                 self.assertEqual(result['image_count'], 2)
+                self.assertEqual(result['method'], 'file_chooser_attachment_count')
             finally:
                 await browser.close()
+
+    async def test_thumbnail_scheme_pixels_and_loading_artwork_do_not_gate_chosen_files(self):
+        async with self.editor() as page:
+            with patch.object(APIRequestContext, 'get', AsyncMock(side_effect=AssertionError('no redownload'))) as get:
+                for src in ('blob:https://business.facebook.com/local-preview',
+                            'data:image/gif;base64,R0lGODlhAQABAAAAACw=',
+                            'https://another-preview.test/cropped-small.jpg', ''):
+                    with self.subTest(src=src.split(':')[0]):
+                        await page.set_content(''.join(
+                            f'<div role="listitem"><img src="{src}" alt="Wird geladen.....">'
+                            '<button>Remove photo</button></div>' for _ in self.paths))
+                        result = await verify_upload(page, self.paths, timeout=.3)
+                        self.assertEqual(result['image_count'], len(self.paths))
+                        self.assertFalse(result['order_verified'])
+                        self.assertEqual(result['method'], 'file_chooser_attachment_count')
+                get.assert_not_called()
+
+    async def test_missing_or_extra_attachments_and_real_upload_progress_still_stop(self):
+        async with self.editor() as page:
+            for count in (1, 3):
+                await page.set_content('<button>Remove photo</button>' * count)
+                with self.assertRaisesRegex(PublishStepError, '图片数量'):
+                    await verify_upload(page, self.paths, timeout=.1)
+            await page.set_content('<button>Remove photo</button>' * 2 + '<p>Uploading media</p>')
+            with self.assertRaisesRegex(PublishStepError, '上传仍未完成'):
+                await verify_upload(page, self.paths, timeout=.1)
+
+    async def test_transient_upload_progress_settles_without_waiting_for_thumbnail_pixels(self):
+        async with self.editor() as page:
+            await page.set_content('<p id="busy">Uploading media</p><script>'
+                'setTimeout(()=>{document.querySelector("#busy").remove();'
+                'document.body.innerHTML="<button>Remove photo</button><button>Remove photo</button>"},150)'
+                '</script>')
+            result = await verify_upload(page, self.paths, timeout=1)
+            self.assertEqual(result['image_count'], 2)
+
+    async def test_known_reordering_stops_but_preview_url_replacement_does_not(self):
+        async with self.editor() as page:
+            await page.set_content('<ul>' + ''.join(
+                f'<li role="listitem"><img src="blob:preview-{i}"><button>Remove photo</button></li>'
+                for i in range(2)) + '</ul>')
+            first = await verify_upload(page, self.paths, timeout=.3)
+            await page.evaluate('document.querySelector("ul").append(document.querySelector("li"))')
+            with self.assertRaisesRegex(PublishStepError, '顺序'):
+                await verify_upload(page, self.paths, timeout=.3, previous=first)
+            await page.evaluate('document.querySelector("ul").append(document.querySelector("li"));'
+                'document.querySelectorAll("img").forEach((img,i)=>img.src="https://preview.test/"+i)')
+            result = await verify_upload(page, self.paths, timeout=.3, previous=first)
+            self.assertEqual(result['image_count'], 2)
+            self.assertIsNone(result['attachment_order_unchanged'])
+            self.assertFalse(result['order_verified'])
 
 
 if __name__ == '__main__':

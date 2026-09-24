@@ -351,7 +351,7 @@ with tempfile.TemporaryDirectory() as folder:
             patch.object(bs, "upload_images", AsyncMock(return_value=())), \
             patch.object(bs, "fill_caption", AsyncMock()), \
             patch.object(bs, "set_schedule", AsyncMock(return_value="fixture-time")), \
-            patch.object(bs, 'verify_form', AsyncMock()), \
+            patch.multiple(bs, verify_form=AsyncMock(), wait_submit_ready=AsyncMock()), \
             patch.object(bs, "submit", AsyncMock(side_effect=submit_with_durable_intent)), \
             patch.object(workflow.month_readback, "verify", AsyncMock(return_value=truncated_readback)), \
             patch.object(workflow.media, 'verify_upload', AsyncMock(return_value={'image_count': 1})), \
