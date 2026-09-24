@@ -216,6 +216,12 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         })''')
         with patch.object(bs, 'assert_page_usable', AsyncMock()):
             await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
+            for rendered in ('11:30 PM', 'Time: 11:30 PM', '12:30 PM / 11:30 PM'):
+                with self.subTest(rendered=rendered):
+                    await self.page.locator('[role="application"] span').evaluate('(el, text)=>el.textContent=text', rendered)
+                    with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
+                        await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
+            await self.page.locator('[role="application"] span').evaluate('el=>el.textContent="12:30 PM"')
             await self.page.get_by_role('spinbutton', name='meridiem').fill('AM')
             with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
                 await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)

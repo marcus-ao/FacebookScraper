@@ -811,10 +811,11 @@ async def _read_time(group, controls):
 
 
 def _time_matches(observed, rendered, hour12, minute, meridiem):
-    # A second displayed clock must agree, but a container of input elements may be empty.
+    # Every displayed clock must agree, including clocks alongside editable field text.
+    # Native input values need not be duplicated in the container's text.
     return (_same_time(observed, hour12, minute, meridiem)
-            and (not _RENDERED_TIME.fullmatch(rendered)
-                 or _same_time(rendered, hour12, minute, meridiem)))
+            and all(_same_time(match[0], hour12, minute, meridiem)
+                    for match in _RENDERED_TIME.finditer(rendered)))
 
 
 async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
