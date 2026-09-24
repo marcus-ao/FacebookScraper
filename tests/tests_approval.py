@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
-from core import config, review, translated
+from core import config, paid_consent, review, translated
 from pipeline import approval, engine
 from publish import channel_evidence, manual_run
 from publish import business_suite as bs, compose, journal, snapshots, workflow
@@ -179,6 +179,89 @@ class ApprovalTests(unittest.TestCase):
                 inventory_reader=AsyncMock(return_value=self.inventory), executor=execute)
         execute.assert_not_called()
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
+
+    def test_changed_source_is_reported_before_reading_the_remote_calendar(self):
+        locked = self.lock_content()
+        directory = snapshots.folder(locked['snapshot_id'])
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        path = self.fixture.post_dir / 'post.json'
+        source = json.loads(path.read_text('utf-8'))
+        source['media'][0]['url'] = 'https://fixture.test/changed.jpg'
+        path.write_text(json.dumps(source), encoding='utf-8', newline='')
+        reader = AsyncMock(return_value=self.inventory)
+        execute = AsyncMock()
+        with self.assertRaises(approval.ApprovalConflict) as error:
+            asyncio.run(approval.approve(self.account, self.source,
+                **dict(self.params, review_revision=locked['revision']),
+                inventory_reader=reader, executor=execute))
+        self.assertIn('来源指纹', str(error.exception))
+        reader.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, before)
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
+        self.assertFalse(journal.load(config.cfg().state_dir))
+
+    def test_source_is_rechecked_after_the_remote_calendar_read(self):
+        locked = self.lock_content()
+        directory = snapshots.folder(locked['snapshot_id'])
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        async def read_inventory(**kwargs):
+            path = self.fixture.post_dir / 'post.json'
+            source = json.loads(path.read_text('utf-8'))
+            source['media'][0]['url'] = 'https://fixture.test/changed.jpg'
+            path.write_text(json.dumps(source), encoding='utf-8', newline='')
+            return self.inventory
+        execute = AsyncMock()
+        with self.assertRaises(approval.ApprovalConflict) as error:
+            asyncio.run(approval.approve(self.account, self.source,
+                **dict(self.params, review_revision=locked['revision']),
+                inventory_reader=read_inventory, executor=execute))
+        self.assertIn('来源指纹', str(error.exception))
+        execute.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, before)
+        self.assertFalse(journal.load(config.cfg().state_dir))
+
+    def test_explicit_refreeze_replaces_a_legacy_signature_binding_without_reprocessing(self):
+        path = self.fixture.post_dir / 'post.json'
+        source = json.loads(path.read_text('utf-8'))
+        source['media'][0]['url'] = 'https://fixture.fbcdn.net/photo.jpg?stp=s1080&oh=old&oe=123'
+        path.write_text(json.dumps(source), encoding='utf-8', newline='')
+        locked = self.lock_content()
+        directory = snapshots.folder(locked['snapshot_id'])
+        metadata_path = directory / 'snapshot.json'
+        metadata = json.loads(metadata_path.read_text('utf-8'))
+        metadata.pop('source_fingerprint_version')
+        metadata['source_fingerprint'] = paid_consent.fingerprint(source, self.account, version=1)
+        metadata_path.write_text(json.dumps(metadata), encoding='utf-8', newline='')
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        source['media'][0]['url'] = 'https://fixture.fbcdn.net/photo.jpg?stp=s1080&oh=new&oe=456'
+        path.write_text(json.dumps(source), encoding='utf-8', newline='')
+        reader, execute = AsyncMock(return_value=self.inventory), AsyncMock()
+        with self.assertRaisesRegex(approval.ApprovalConflict, '来源指纹.*旧版.*重新冻结'):
+            asyncio.run(approval.approve(self.account, self.source,
+                **dict(self.params, review_revision=locked['revision']),
+                inventory_reader=reader, executor=execute))
+        reader.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, before)
+
+        unlocked = approval.unlock(self.account, self.source, now=NOW,
+            source_text_sha256=self.params['source_text_sha256'], review_revision=locked['revision'])
+        new_lock = approval.lock(self.account, self.source, now=NOW,
+            source_text_sha256=self.params['source_text_sha256'], review_revision=unlocked['revision'],
+            content_fingerprint=self.params['content_fingerprint'])
+        self.assertNotEqual(new_lock['snapshot_id'], locked['snapshot_id'])
+        bound = approval._bind(self.post, new_lock['snapshot_id'], source, self.account)
+        self.assertEqual(bound.source_fingerprint_version, 2)
+        self.assertEqual(bound.text_de, self.post.text_de)
+        self.assertEqual(bound.image_paths[0].read_bytes(), self.post.image_paths[0].read_bytes())
+        old_metadata, _, _, _ = snapshots.load(locked['snapshot_id'])
+        self.assertEqual(old_metadata['status'], 'discarded')
+        self.assertEqual(paid_consent.fingerprint_version(old_metadata), 1)
+        for name, data in before.items():
+            if name != 'snapshot.json':
+                self.assertEqual((directory / name).read_bytes(), data)
+        self.assertFalse(journal.load(config.cfg().state_dir))
 
     def test_browser_failure_restores_pending_review(self):
         self.allow_fixture_evidence()

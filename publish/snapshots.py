@@ -146,17 +146,33 @@ def load_for_attempt(row):
     return metadata, source, files, directory
 
 
+def validate_content(post):
+    """只读核对提交身份与冻结内容；不绑定时刻，也不改写旧版来源指纹。"""
+    metadata, _, files, directory = load(post.snapshot_id)
+    version = paid_consent.fingerprint_version(metadata)
+    checks = (
+        ('发布正文', files['text_de.txt'].decode('utf-8') == post.text_de),
+        ('帖子编号', metadata.get('post_id') == post.post_id),
+        ('渠道', metadata.get('platform') == post.platform),
+        ('来源账号', metadata.get('account') == post.platform[:2] + '_' + post.account),
+        ('来源指纹', metadata.get('source_fingerprint') == post.source_fingerprint),
+        ('来源指纹版本', version == getattr(post, 'source_fingerprint_version', 1)),
+    )
+    failed = [name for name, matches in checks if not matches]
+    if failed:
+        detail = '、'.join(failed)
+        if '来源指纹' in failed and version == 1:
+            detail += '（旧版快照还会校验图片链接）'
+        raise review.ReviewConflict('提交内容与冻结快照不一致：' + detail +
+            '；请核对来源和最终图文，解除冻结后重新冻结并确认。')
+    return metadata, files, directory
+
+
 def ensure(post, *, bind: bool = False, target=None):
     """核对 post 与其冻结快照一致。`bind=True` 在核对通过后才绑定时刻——顺序反过来会
     在内容不符时留下一个已绑错时刻、只能解冻才能脱身的快照。"""
     if getattr(post, 'snapshot_id', ''):
-        metadata, _, files, directory = load(post.snapshot_id)
-        if (files['text_de.txt'].decode('utf-8') != post.text_de
-                or metadata.get('post_id') != post.post_id or metadata.get('platform') != post.platform
-                or metadata.get('account') != post.platform[:2] + '_' + post.account
-                or metadata.get('source_fingerprint') != post.source_fingerprint
-                or paid_consent.fingerprint_version(metadata) != getattr(post, 'source_fingerprint_version', 1)):
-            raise review.ReviewConflict('提交身份或内容与冻结快照不一致，请重新审核')
+        metadata, _, directory = validate_content(post)
         if bind:
             metadata = bind_schedule(post.snapshot_id, post.scheduled_at, target=target)
         if require_bound(metadata) != post.scheduled_at:

@@ -114,7 +114,7 @@ class FingerprintTests(ConsentFixture):
         snapshots.ensure(bound)
         self.assertEqual(path.read_bytes(),old_bytes)
         self.refresh()
-        with self.assertRaises(review.ReviewConflict):
+        with self.assertRaisesRegex(review.ReviewConflict, '来源指纹.*旧版.*重新冻结'):
             approval._bind(post, frozen.snapshot_id, self.source,self.account)
 
     def test_legacy_uncertain_fee_still_blocks_after_signature_refresh(self):

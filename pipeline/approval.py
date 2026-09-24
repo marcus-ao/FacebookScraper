@@ -109,15 +109,18 @@ def unlock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
                               now=now or datetime.now(timezone.utc))
 
 
-def _bind(post, snapshot_id, source, account_dir, target=None):
-    """把已冻结内容接到本次提交上：先核内容，再绑时刻。"""
-    account = cfg().archive_dir / (post.platform[:2] + '_' + post.account)
+def _snapshot_post(post, snapshot_id, source, account_dir):
     metadata, _, _, _ = snapshots.load(snapshot_id)
     version = paid_consent.fingerprint_version(metadata)
-    candidate = replace(post, snapshot_id=snapshot_id,
-                        source_fingerprint=paid_consent.fingerprint(source, account, version=version),
-                        source_fingerprint_version=version)
+    return replace(post, snapshot_id=snapshot_id,
+                   source_fingerprint=paid_consent.fingerprint(source, account_dir, version=version),
+                   source_fingerprint_version=version)
+
+
+def _bind(post, snapshot_id, source, account_dir, target=None):
+    """把已冻结内容接到本次提交上：先核内容，再绑时刻。"""
     try:
+        candidate = _snapshot_post(post, snapshot_id, source, account_dir)
         return snapshots.ensure(candidate, bind=True, target=target)
     except review.ReviewConflict as exc:
         raise ApprovalConflict(str(exc)) from exc
@@ -179,6 +182,12 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             run = manual_run.load(source['platform'])
             manual_run.confirm_target(publish_target, run)
         except manual_run.ManualRunError as exc:
+            raise ApprovalConflict(str(exc)) from exc
+        # 已知内容失配应在月历访问前返回；读取月历后仍在审校锁内重新核对。
+        try:
+            snapshots.validate_content(_snapshot_post(
+                composed_post(account_dir, source, now=moment), snapshot_id, source, account_dir))
+        except review.ReviewConflict as exc:
             raise ApprovalConflict(str(exc)) from exc
         window = planning.config_window()
         if inventory_reader is not None:

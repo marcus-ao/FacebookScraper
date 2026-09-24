@@ -104,6 +104,25 @@ class PublicationRecoveryTests(unittest.TestCase):
         self.assertEqual(row.final_text_sha256, journal.text_sha256(post.text_de))
         self.assertNotEqual(row.final_text_sha256, journal.text_sha256(post.text_de.strip()))
 
+    def test_snapshot_mismatch_names_the_failed_checks_without_exposing_content(self):
+        from publish import snapshots
+        frozen, _, directory = snapshots.freeze(self.f.post, self.f.source,
+            scheduled_at=self.f.post.scheduled_at, expected_fingerprint=self.f.params['content_fingerprint'])
+        before = {p.name: p.read_bytes() for p in directory.iterdir()}
+        for changes, label in (
+            ({'text_de': 'private changed caption'}, '发布正文'),
+            ({'post_id': 'different'}, '帖子编号'),
+            ({'platform': 'instagram'}, '渠道'),
+            ({'account': 'different'}, '来源账号'),
+            ({'source_fingerprint': 'different'}, '来源指纹'),
+            ({'source_fingerprint_version': 1}, '来源指纹版本'),
+        ):
+            with self.subTest(changes=changes), self.assertRaises(review.ReviewConflict) as error:
+                snapshots.ensure(replace(frozen, **changes))
+            self.assertIn(label, str(error.exception))
+            self.assertNotIn('private changed caption', str(error.exception))
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, before)
+
     def test_snapshot_image_order_is_bound_to_approved_fingerprint(self):
         from publish import snapshots
         other = self.f.post.image_paths[0].with_name('02.jpg')
