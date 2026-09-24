@@ -1379,6 +1379,8 @@ scripts\run_pipeline.bat preflight
 
 查询 `scheduled_attempts` 为空时，先核对实际账本是否存在、每个 attempt 的最新状态，以及 Business Suite 是否有原排期。这个筛选结果不代表没有 `submit_ambiguous` / `submitted_unverified`，也不代表远端为空。没有合格原 attempt 时暂不运行下面的补验命令，不手填 ID 或改账本为 scheduled；先处理未决记录或核对历史对象。确实没有可用原样本后，才按 §16.3 准备具体冻结内容并确认新排期。
 
+若点击确认后提示“月历里的渠道无法识别”，先查该任务的 `publish_operation` 与月历的 `refresh_diagnostic/coverage`。这个提示也包含独立时刻未核验；此时换日期仍可能被拒绝，不能直接把旧日期格视作无关卡片。保留冻结内容，按 §8.1 对当前未核实项运行一次只读详情探针，先区分同格的 Post 与 Story；不要用反复提交代替诊断。刷新成功但 `unresolved_count>0` 仍需核对具体证据，见 [HANDOFF §1.34](HANDOFF.md#134-g8-远端图片与原排期补验2026-09-23) 的首次确认现场。
+
 1. 在服务机核对已有 `published.jsonl`，选当前最新行为 `scheduled` 的原 `attempt_id`。它必须有单一渠道、确切 `remote_id`、原 `snapshot_id`、最终正文/图片摘要、来源指纹版本、绑定时刻和 UI 时区。保留原冻结目录及已有 `channel_controls.json`，不新增资产 ID 配置，不把开发机空目录覆盖过去。
 2. 快照中的 `publish_target` 必须与当前配置账号、既有资产绑定和发布 Chrome 一致；缺失或变化时入口在访问浏览器前拒绝。旧 v1 来源指纹仍按 v1 校验，但缺历史目标绑定不能自动补造。没有合格原对象时，才按 §16.3 展示并确认具体冻结正文、逐张图片及 SHA、账号、唯一渠道、北京/柏林时刻、UI 时区与占用结果，再创建一次受控样本。
 3. 在对应服务机源码目录，用人已登录的发布 Chrome 9223 执行只读补验。将下面的 `ATTEMPT_ID` 替换为原记录的值；没有 `--submit` 参数。

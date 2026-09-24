@@ -792,7 +792,11 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 **服务机本次回报。** [首次输出](../state/g8-main-integration-20260924/operator-report.json)来自 `D:\Code\FacebookScraper` 的 `main` `696beac`；运行时 archive/state 均为该源码目录的同名子目录。用户随后确认已拉取更新，提供 `tests_scheduled_media`、`tests_scheduled_readback`、`tests_scheduled_media_recheck` 三项通过、退出码 0，服务机证据位置为 `state/offline-validation-20260924T030244Z`；这是用户提供的离线结果，不是远端布局验收。实际账本检查为 `ledger_exists=false`、`total_rows=0`、最新状态分布为空、无未决记录；用户确认没有可复用远端排期，转入冻结预览。没有原 attempt，暂不运行补验入口，不补造账本。真实 G8 仍为 **待真实联调**，完整布局仍为 **代码未完成**。
 
-**首次 Facebook 样本停在最终确认前。** 2026-09-24 只读访问服务机审校 API，稿件 `fa_neakasaofficial/122125865115379375` 为 `content_locked`，`publication`、`publish_operation` 和 `schedule` 均为空。冻结快照 `b2ee4ede288044c78037330d0447a899` 的目标为 Facebook / Neakasa Deutschland，`neakasaofficial` 是来源账号；沿用接口返回的既有资产绑定，不新增配置。拟定北京时间 `2026-09-30 17:30` 对应柏林 `2026-09-30 11:30 CEST`，尚未绑定提交时刻或取得本次最终确认。连续两次预览一致，实际读取的正文与单张 736 × 912 JPEG 字节均匹配快照指纹；[只读核对记录](../state/g8-frozen-preview-20260924-db6c0a43/receipt.json)及正文、图片、任务详情按 [SHA-256 清单](../state/g8-frozen-preview-20260924-db6c0a43/preservation.json)保全到主检出。只访问了审校接口，没有创建远端排期；旧月历缓存不能证明最新占用，提交入口仍须现场重读检查。该样本只覆盖 Facebook 单图，多图顺序和 Instagram 仍各缺真实结构证据。
+**首次 Facebook 样本的冻结证据。** 2026-09-24 03:25 UTC 只读访问服务机审校 API，稿件 `fa_neakasaofficial/122125865115379375` 为 `content_locked`，当时 `publication`、`publish_operation` 和 `schedule` 均为空。冻结快照 `b2ee4ede288044c78037330d0447a899` 的目标为 Facebook / Neakasa Deutschland，`neakasaofficial` 是来源账号；沿用接口返回的既有资产绑定，不新增配置。拟定北京时间 `2026-09-30 17:30` 对应柏林 `2026-09-30 11:30 CEST`，该次只读观测时尚未绑定提交时刻或取得最终确认。连续两次预览一致，实际读取的正文与单张 736 × 912 JPEG 字节均匹配快照指纹；[只读核对记录](../state/g8-frozen-preview-20260924-db6c0a43/receipt.json)及正文、图片、任务详情按 [SHA-256 清单](../state/g8-frozen-preview-20260924-db6c0a43/preservation.json)保全到主检出。该样本只覆盖 Facebook 单图，多图顺序和 Instagram 仍各缺真实结构证据。
+
+**首次确认止于月历占用预检。** 用户点击确认后，操作 `3eb6e86391a440688657b043236226ec` 于 03:32:59 UTC 以 `failed`、第 0/7 步结束，消息为“月历里的渠道无法识别”；稿件仍 `content_locked`，`publication/schedule` 为空。该消息来自 `approval.approve` 的 `evaluate_slot` 拒绝，发生在快照时刻绑定、`queue_approved` 和 `workflow.execute` 之前，不是上传或提交后图片回读失败。03:38:36 UTC 通过既有月历刷新入口只读复查远端，网格完整、7 条卡片，唯一未核实项为 09-15 19:17 已发布 Feed：`identity_unverified / channel`、`time_verified=false`；同刻的 Facebook Story 已完整读取，应区分两条。旧缓存的 09-30 17:30 未核实项不在本次结果里，不能再把它当作当前原因。原提交的实时清单未保存，因此这次刷新证明当前阻塞项，不能还原当时所有卡片。
+
+对[真实刷新结果](../state/g8-channel-refusal-20260924T033618Z-aa1145/calendar-refresh.json)做[离线规划回放](../state/g8-channel-refusal-20260924T033618Z-aa1145/planning-replay.json)，原时刻与另外两天均因独立时刻未核验而拒绝；`evaluate_slot` 将这些 `ProbeRequired` 统一映射为 `channels_unavailable`，末尾“请重新选择”不代表换时刻能解决。保留现有占用约束，不能借外层格子日期跳过未知变体。下一步在服务机 9223 打开 09-15 19:17 的 Post 详情，运行 `tools.probe_calendar_detail --date 2026-09-15 --time 19:17 --kind Post --verify-reader`，取得表头、平台页签与响应身份的只读证据；审校 API 不包含该结构，开发机未能直连服务机 CDP。原因可能涉及平台标识或页签就绪，尚未取得本次 DOM/响应前不确定具体适配修复。诊断与原始 API 返回按 [SHA-256 清单](../state/g8-channel-refusal-20260924T033618Z-aa1145/preservation.json)保全到主检出；没有重试提交或改变冻结内容。
 
 隔离浏览器测试覆盖 FB/IG 身份重定位和诊断采集失败；完整成功链在取图边界注入合成的完整清单与 JPEG 字节，后续实际执行比较、保全、工作流、journal 和验收闸，**不证明任何真实 FB/IG 完整媒体布局**。定向结果及逐脚本最近日志见 [验证汇总](../state/g8-remote-images-20260923/verification.json)。未连接真实业务 Chrome、模型或远端账号，没有新排期、G1 重录或 G8 真实通过结论。
 
@@ -808,7 +812,7 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 | 旧快照缺 `publish_target`；旧证明无 `evidence_version` | 前者拒绝补造身份；后者保持原结构契约，不批量迁移旧账本 |
 | 重复补验追加观察；失败保留历史 ID/回读字段 | 保留历史事实与防重，当前图片/全文标记按本次结果，投影通知幂等 |
 | 普通月历缓存、已公开详情、激活与重新提交 | 不扩展；目标取图不赋予发布或激活权限 |
-| 服务机部署、样本移交及新排期 | 用户已更新并回报定向离线通过；首次单图冻结内容已只读核对，新排期仍须确认具体快照 |
+| 服务机部署、样本移交及新排期 | 用户已更新并回报定向离线通过；首次单图确认被占用预检拒绝，先补当前未核实详情的证据 |
 
 **主干交付集成：离线通过。** 在原实现上接入 main `b6755ec` 的月历平台/公开链接改动，保留 `RemotePlannerCard.permalinks`、月份缓存兼容和按远端 ID 关联归档链接。[本次 14/14 定向脚本](../state/offline-validation-20260924T022323Z/results.json)覆盖新图片取证/比较/补验、月份读取/回读、缓存/API/内容分类、单篇排期、最终表单、发布恢复和 hygiene。相对该主干无配置、依赖、前端、抓取或加工模块改动；未运行全库、Actions 或真实服务测试。日志与服务机回报按 [SHA-256 清单](../state/g8-main-integration-20260924/preservation.json)保全到主检出，原工作树保留用于后续布局适配。用户选择主干源码交付，服务机按 §13 更新，不搬运开发机 archive/state；这项交付不升级 G8 状态，也不授权新的真实排期。
 
