@@ -16,6 +16,12 @@
 
 **单篇排期。** 审校台冻结后选时刻、再由发布 Chrome 创建定时任务，用的是本次确认的渠道、当前配置的账号和已有 `state/channel_controls.json` 中的资产绑定，无需新增资产 ID 配置。记录须对应当前账号和发布浏览器，提交时重读并与确认目标比较；当次页面核对账号和唯一渠道。历史控件验收和流水线激活不再作为这次提交的许可证；批量批准和 CLI `--submit` 仍走原来的严格条件。`scheduled` 仍可以在远端图片未核验时写下，这条记录不能激活流水线，也不能当作 G8。本段只说明闸的位置，没有新的真实排期证据。
 
+**单篇排期确认预览（离线通过）。** `SchedulePreviewDialog` 在当前审核页内展示账号、唯一渠道、所选业务时刻与冻结图文；桌面等高分栏，窄屏上下排列，图片完整等比适配，多图按顺序切换，标题与操作栏固定在视口内。已移除冻结/远端图片回读的技术说明；图片加载失败仍明示。`useApproval` 在打开时共同复制预览与提交参数，网络恢复刷新查询不替换确认内容；取消保留时刻，再次打开采用最新查询结果。弹层打开期间保留原触发按钮节点，已验证查询刷新完成后关闭的焦点恢复。
+
+证据位于 `.worktrees/schedule-confirmation-preview/state/`：`schedule-preview/` 保存原缺陷复现、前端 138 项定向测试、生产构建及浏览器日志；`ui-regression/browser-stage-schedule_preview.json`、`browser-stage-d4.json` 与 `schedule-preview-*.png` 记录四种窗口尺寸、单图/多图/长文案/缺图、键盘返回、查询刷新与重复点击提交行为。全部使用临时归档、合成图片和模拟排期回执，无真实账号访问或发布。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 构建并重启后核对真实素材的视觉效果；此单元不升级 G8、模型或真实排期状态。
+
+确认弹层的非阻塞键盘待办：若在重连刷新仍未完成时关闭，`DisabledReason` 恢复禁用包装可能重新挂载按钮，使组件库保存的原焦点节点失效；当前用例覆盖刷新完成后取消，未覆盖这一延迟响应边界。不影响内容冻结、所选时刻或提交校验。
+
 **浏览器会话。** 三个 Chrome profile 在 `~/.fbscraper-*`（家目录，不在仓库内）。进程启动不代表会话有效，要人在对应 profile 核对。
 
 **外部依赖。** `[feishu].enabled = true`，未设置显式网络策略的非受管进程读取 `[feishu].base_url`，由改址脚本与网络 JSON 同步；设置 `FBSCRAPER_NETWORK_CONFIG` 时读取该 JSON。服务机第一次加载这份配置之前先数积压（§1.1）。`[heartbeat].enabled = true`，真正发出 POST 还要服务机 `.env` 的 `HEARTBEAT_URL`。⛔ **云盘镜像明确延期**（[REQUIREMENTS §9](REQUIREMENTS.md#9-明确延期与固定边界)）：`[mirror].enabled = false` 是决定不是缺口，代码和恢复路径都已离线验过，不要去补实现。**它留下的敞口是本轮没有异地备份**，而 `state/published.jsonl` 不可重建——按 [MANUAL_STEPS §1](MANUAL_STEPS.md#1-接续运行数据前先备份和核验) 由人定期外拷，**没有任何代码会替你做这件事**。日历刷新、标签热度仍关闭；`ui_constraints_verified` 已按 G1 验收设为 true，绑定 2026-09-20 录制。

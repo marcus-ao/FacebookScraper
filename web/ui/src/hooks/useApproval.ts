@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { PublishOperation, TaskDetail } from '@/types/domain'
+import type { FrozenPreview, PublishOperation, TaskDetail } from '@/types/domain'
 import { approvalBody, approvalOptions, approve, lockContent, publishOperation, reconcilePublication, unlockContent, unschedulePublication } from '@/services/approval'
 import type { ApprovalBody } from '@/services/approval'
 import { isApiError, isConflict } from '@/services/http'
@@ -15,13 +15,13 @@ import { deploymentStore } from '@/app/deployment-store'
 export function useApproval(detail: TaskDetail, editing: boolean, refresh: () => Promise<TaskDetail>) {
   const options = useQuery({ queryKey: ['approval-options', detail.id, detail.text.source_text_sha256, detail.text.human_revision, detail.review.revision, detail.localization.revision], queryFn: () => approvalOptions(detail.id), enabled: !detail.read_only })
   const [when, setWhenState] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null), [confirmed, setConfirmed] = useState(false)
-  const [snapshot, setSnapshot] = useState<{ detail: TaskDetail; body: ApprovalBody } | null>(null)
+  const [snapshot, setSnapshot] = useState<{ detail: TaskDetail; body: ApprovalBody; preview: FrozenPreview } | null>(null)
   const [operation, setOperation] = useState<PublishOperation | null>(null)
   // 人工修改或清空后不再自动预填。
   const touched = useRef(false)
   useDeploymentDraft(snapshot !== null || (touched.current && !confirmed))
   const setWhen = (value: string) => { touched.current = true; setWhenState(value) }
-  useEffect(() => { touched.current = false; setWhenState(''); setOperation(null); setBusy(false); setConfirmed(false) }, [detail.id])
+  useEffect(() => { touched.current = false; setWhenState(''); setSnapshot(null); setOperation(null); setBusy(false); setConfirmed(false) }, [detail.id])
   useEffect(() => {
     const saved = detail.publish_operation ?? null
     setOperation(saved)
@@ -111,7 +111,8 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,
     snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover,
-    open: () => { if (deploymentStore.canStartEditing() && !reason && options.data?.preview) setSnapshot({ detail: structuredClone(detail), body: approvalBody(detail, when, options.data) }) },
+    // 确认期间查询可能刷新；展示内容与提交目标必须来自打开时的同一份选项。
+    open: () => { if (deploymentStore.canStartEditing() && !reason && options.data?.preview) setSnapshot(structuredClone({ detail, body: approvalBody(detail, when, options.data), preview: options.data.preview })) },
     refresh: async () => { await refresh(); await options.refetch(); setError(null); setOperation(null) } }
 }
 export type ApprovalController = ReturnType<typeof useApproval>

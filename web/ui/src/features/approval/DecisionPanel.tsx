@@ -7,6 +7,7 @@ import { BusinessTime, ShanghaiTime } from '@/components/Time'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { DisabledReason } from '@/components/DisabledReason'
 import { nearbyOccupancy } from './occupancy'
+import { SchedulePreviewDialog } from './SchedulePreviewDialog'
 import { zonedInput, AUTHOR_KIND_LABEL, formatDate } from '@/lib/format'
 import { isConflict } from '@/services/http'
 import styles from './DecisionPanel.module.css'
@@ -17,7 +18,8 @@ export function ApprovalAction({ controller: c }: { controller: ApprovalControll
       <Button aria-label="编辑确认无误" type="primary" disabled={!c.lockable || c.busy} loading={c.busy} onClick={() => void c.lock()}>编辑确认无误</Button>
     </DisabledReason>
   }
-  return <DisabledReason label="确认发布时间并排期" reason={c.reason}>
+  // 弹层打开时保留触发按钮节点，查询刷新不能让关闭后的焦点丢失。
+  return <DisabledReason label="确认发布时间并排期" reason={c.snapshot ? '' : c.reason}>
     <Button aria-label="确认发布时间并排期" type="primary" disabled={!!c.reason} loading={c.busy} onClick={c.open}>确认发布时间并排期</Button>
   </DisabledReason>
 }
@@ -71,12 +73,7 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     {detail.status === 'scheduled' && <p><Button danger disabled={c.busy} onClick={() => setUndoOpen(true)}>我已在后台删除这条排期</Button> <Typography.Text type="secondary">系统不会替你删远端卡片；删完回来登记，它会重读月历核实。</Typography.Text></p>}
     {detail.review.wake_at && <p>恢复审校：<ShanghaiTime at={detail.review.wake_at} /></p>}{detail.review.reason && <p>处理理由：{detail.review.reason}</p>}{detail.review.handoff_url && <a href={detail.review.handoff_url} target="_blank" rel="noopener noreferrer">查看手工发布的帖子</a>}
     {data?.reason && !data.available && <Collapse ghost items={[{ key: 'reason', label: '查看核验信息', children: <pre className={styles.diagnostic}>{data.reason}</pre> }]} />}
-    <Modal title="确认本篇发布内容与时刻" open={!!c.snapshot} onCancel={() => { if (!c.busy) c.setSnapshot(null) }} okText="确认并创建排期" cancelText="继续核对" confirmLoading={c.busy} onOk={() => void c.submit()}>
-      {c.snapshot && data?.preview && <><p>{data.preview.target.channel === 'facebook' ? 'Facebook' : 'Instagram'} · {data.preview.target.account} · {c.snapshot.body.scheduled_at.replace('T', ' ')}</p>
-        <div className={styles.preview}>{data.preview.text}</div>
-        <div>{data.preview.images.map(image => <img key={image.index} src={image.url} alt={`冻结图片 ${image.index + 1}`} />)}</div>
-        <p>确认后将使用已冻结的这一份内容创建排期。排期详情里的图片要等回读适配，这次不会把它标成已核验。</p></>}
-    </Modal>
+    <SchedulePreviewDialog snapshot={c.snapshot} busy={c.busy} onCancel={() => c.setSnapshot(null)} onConfirm={() => void c.submit()} />
     <Modal title="登记：已在 Business Suite 删除这条排期" open={undoOpen} okText="我已删除，去核实" cancelText="取消"
       okButtonProps={{ danger: true, disabled: !undoReason.trim() }} confirmLoading={c.busy}
       onCancel={() => { if (!c.busy) setUndoOpen(false) }}

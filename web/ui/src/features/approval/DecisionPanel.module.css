@@ -5,4 +5,3 @@
 .facts { display: flex; flex-wrap: wrap; gap: var(--rc-space-3); font-size: var(--rc-font-meta); color: var(--rc-fg-muted); }
 .help { color: var(--rc-fg-muted); font-size: var(--rc-font-meta); margin: var(--rc-space-2) 0; }
 .diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--rc-font-meta); }
-.preview { white-space: pre-wrap; max-height: 35vh; overflow: auto; padding: var(--rc-space-3); background: var(--rc-surface-sunken); }
