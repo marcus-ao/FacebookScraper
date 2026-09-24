@@ -790,7 +790,9 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 **FB 与 IG 的完整有序媒体适配：代码未完成。** 当前 `collect` 只在已核实的目标 dialog 采集有界图片候选、加载状态、层级及导航标签；头像、隐藏图和缩略图均保留为候选，最多 64 项、下载总量 25 MiB，仅从既有 fbcdn 来源读取并释放响应。缺少真实媒体容器、独立总数/末项、顺序及轮播/缩略图关系，所以始终 `complete=false`、观测总数未知，不点击翻页控件，不按期望 N 张反推完整性。未知布局、未加载、下载/解码失败、列表变化及超限均保存具体诊断。
 
-**服务机本次回报。** [用户提供的输出](../state/g8-main-integration-20260924/operator-report.json)来自 `D:\Code\FacebookScraper` 的 `main` `696beac`，工作区干净；运行时报告 archive/state 均为该源码目录的同名子目录，`backup_manifest=null`。按每个 attempt 最新行筛出的 `scheduled_attempts=[]`，目前没有可直接传给补验入口的本地 scheduled attempt。这个筛选不证明账本不存在、所有状态都为空或远端没有排期，也不证明没有其它方式的备份；下一步先查账本存在性、最新状态分布及原远端对象，不补造 attempt，不因空列表重发。服务机升级与真实 G8 仍为 **待真实联调**，完整布局仍为 **代码未完成**。
+**服务机本次回报。** [首次输出](../state/g8-main-integration-20260924/operator-report.json)来自 `D:\Code\FacebookScraper` 的 `main` `696beac`；运行时 archive/state 均为该源码目录的同名子目录。用户随后确认已拉取更新，提供 `tests_scheduled_media`、`tests_scheduled_readback`、`tests_scheduled_media_recheck` 三项通过、退出码 0，服务机证据位置为 `state/offline-validation-20260924T030244Z`；这是用户提供的离线结果，不是远端布局验收。实际账本检查为 `ledger_exists=false`、`total_rows=0`、最新状态分布为空、无未决记录；用户确认没有可复用远端排期，转入冻结预览。没有原 attempt，暂不运行补验入口，不补造账本。真实 G8 仍为 **待真实联调**，完整布局仍为 **代码未完成**。
+
+**首次 Facebook 样本停在最终确认前。** 2026-09-24 只读访问服务机审校 API，稿件 `fa_neakasaofficial/122125865115379375` 为 `content_locked`，`publication`、`publish_operation` 和 `schedule` 均为空。冻结快照 `b2ee4ede288044c78037330d0447a899` 的目标为 Facebook / Neakasa Deutschland，`neakasaofficial` 是来源账号；沿用接口返回的既有资产绑定，不新增配置。拟定北京时间 `2026-09-30 17:30` 对应柏林 `2026-09-30 11:30 CEST`，尚未绑定提交时刻或取得本次最终确认。连续两次预览一致，实际读取的正文与单张 736 × 912 JPEG 字节均匹配快照指纹；[只读核对记录](../state/g8-frozen-preview-20260924-db6c0a43/receipt.json)及正文、图片、任务详情按 [SHA-256 清单](../state/g8-frozen-preview-20260924-db6c0a43/preservation.json)保全到主检出。只访问了审校接口，没有创建远端排期；旧月历缓存不能证明最新占用，提交入口仍须现场重读检查。该样本只覆盖 Facebook 单图，多图顺序和 Instagram 仍各缺真实结构证据。
 
 隔离浏览器测试覆盖 FB/IG 身份重定位和诊断采集失败；完整成功链在取图边界注入合成的完整清单与 JPEG 字节，后续实际执行比较、保全、工作流、journal 和验收闸，**不证明任何真实 FB/IG 完整媒体布局**。定向结果及逐脚本最近日志见 [验证汇总](../state/g8-remote-images-20260923/verification.json)。未连接真实业务 Chrome、模型或远端账号，没有新排期、G1 重录或 G8 真实通过结论。
 
@@ -806,7 +808,7 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 | 旧快照缺 `publish_target`；旧证明无 `evidence_version` | 前者拒绝补造身份；后者保持原结构契约，不批量迁移旧账本 |
 | 重复补验追加观察；失败保留历史 ID/回读字段 | 保留历史事实与防重，当前图片/全文标记按本次结果，投影通知幂等 |
 | 普通月历缓存、已公开详情、激活与重新提交 | 不扩展；目标取图不赋予发布或激活权限 |
-| 服务机部署、样本移交及新排期 | 未执行，真实状态仍待现场材料；新排期必须另确认具体快照 |
+| 服务机部署、样本移交及新排期 | 用户已更新并回报定向离线通过；首次单图冻结内容已只读核对，新排期仍须确认具体快照 |
 
 **主干交付集成：离线通过。** 在原实现上接入 main `b6755ec` 的月历平台/公开链接改动，保留 `RemotePlannerCard.permalinks`、月份缓存兼容和按远端 ID 关联归档链接。[本次 14/14 定向脚本](../state/offline-validation-20260924T022323Z/results.json)覆盖新图片取证/比较/补验、月份读取/回读、缓存/API/内容分类、单篇排期、最终表单、发布恢复和 hygiene。相对该主干无配置、依赖、前端、抓取或加工模块改动；未运行全库、Actions 或真实服务测试。日志与服务机回报按 [SHA-256 清单](../state/g8-main-integration-20260924/preservation.json)保全到主检出，原工作树保留用于后续布局适配。用户选择主干源码交付，服务机按 §13 更新，不搬运开发机 archive/state；这项交付不升级 G8 状态，也不授权新的真实排期。
 
