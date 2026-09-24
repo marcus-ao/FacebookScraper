@@ -350,6 +350,7 @@ class LocalScheduleTests(unittest.TestCase):
         self.assertIsNone(entry['at'])
         self.assertEqual(entry['snapshot_id'], locked['snapshot_id'])
         self.assertEqual(entry['platform'], 'facebook')
+        self.assertEqual(entry.get('channels'), [])
 
     def test_choosing_a_time_moves_it_to_submitting_before_any_readback(self):
         """时刻绑在快照上，此时发布账本里还没有任何尝试。"""
@@ -375,6 +376,7 @@ class LocalScheduleTests(unittest.TestCase):
         self.assertEqual(entry['kind'], local_schedule.SCHEDULED)
         self.assertEqual(entry['at'], fixtures.TARGET.isoformat())
         self.assertEqual(entry['remote_id'], 'facebook=987654')
+        self.assertEqual(entry.get('channels'), ['facebook'])
 
     def test_a_released_freeze_leaves_nothing_on_the_calendar(self):
         locked = self.f.lock_content()

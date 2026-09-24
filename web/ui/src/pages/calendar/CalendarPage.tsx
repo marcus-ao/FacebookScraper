@@ -34,17 +34,18 @@ function cardCopy(card: CalendarCard): string {
   return card.rendered
 }
 
-function OriginalLinks({ card }: { card: CalendarCard }) {
+function CardLinks({ card }: { card: CalendarCard }) {
   const links = (['facebook', 'instagram'] as const).flatMap(channel => {
     const href = card.permalinks?.[channel]
     return href ? [[channel, href] as const] : []
   })
-  const only = links[0]
-  if (links.length === 1 && only) {
-    return <a href={only[1]} target="_blank" rel="noopener noreferrer">查看原帖</a>
-  }
-  const label: Record<Platform, string> = { facebook: '查看 Facebook 原帖', instagram: '查看 Instagram 原帖' }
-  return <>{links.map(([channel, href]) => <a key={channel} href={href} target="_blank" rel="noopener noreferrer">{label[channel]}</a>)}</>
+  const label: Record<Platform, string> = { facebook: '查看 Facebook 已发布帖子', instagram: '查看 Instagram 已发布帖子' }
+  return <>
+    {card.source_permalink && <a href={card.source_permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}
+    {card.source_task_id && card.source_platform && <Link to={`/review/${idPath(card.source_task_id)}?platform=${card.source_platform}`}>审校详情</Link>}
+    {links.map(([channel, href]) => <a key={channel} href={href} target="_blank" rel="noopener noreferrer">
+      {links.length === 1 ? '查看已发布帖子' : label[channel]}</a>)}
+  </>
 }
 
 export function CardDetail({ card }: { card: CalendarCard }) {
@@ -53,7 +54,7 @@ export function CardDetail({ card }: { card: CalendarCard }) {
     <p className={styles.facts}>
       <span>{card.at_business.slice(0, 16).replace('T', ' ')}</span>
       {account && <span>{account}</span>}
-      <OriginalLinks card={card} />
+      <CardLinks card={card} />
     </p>
     <p>{cardCopy(card)}</p>
   </div>

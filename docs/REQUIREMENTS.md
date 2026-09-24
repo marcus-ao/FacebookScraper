@@ -373,6 +373,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | F5-11 到点公开核实 | 离线通过 | 排期时刻过后按宽限期核对，未观测到就给 alert；措辞是「未观察到」不是「未发布」，不按时钟推算、不点 `Publish now` | 真实公开观测另验 | `tests_publish_operations::OverduePublicationTests`：未到宽限期不报、观测到公开即清除 |
 | F5-12 提交可观察 | 离线通过 | `/approve` 立刻返回操作编号，浏览器在请求外跑，进度落 `state/publish_operations/`；进程消失读回来是 `uncertain` 不是 `failed`；详情按冻结快照恢复进度，撤销后不恢复旧成功；HTTP 返回后维护登记仍覆盖后台提交；并发拒绝不排队 | 真实浏览器耗时另验 | `tests_publish_operations`：进度持久、HTTP 202 后阻止部署切换、撤销清除成功展示；`tests_browser_workflow`：刷新恢复轮询 |
 | F5-5 月历本地图层 | 离线通过 | 远端层与本地层分开展示并各自标来源；本地层不进 `evaluate_slot`；本地账本损坏显式报错而不是空图层 | 运营实际使用另验 | `tests_calendar_api`、`tests_publish_operations::LocalScheduleTests` |
+| F5-5 月历来源帖关联 | 离线通过 | 排期/已发布卡按渠道与排期时刻 ±5 分钟唯一关联，远端编号精确匹配优先；原帖与审校入口独立于已发布地址，坏账本保留 `local_error` | 服务机真实月历待联调 | `tests_calendar_api`：发布后 ID 改变、跨月边界、渠道及远端多卡歧义、来源真值和坏账本；`tests_publish_operations`、`CalendarPage.test.tsx`；不证明公开观测通过 |
 | F5-5 完整月份读取 | 待真实联调 | 服务机 probe 已报告 35 格；9 月 30 日时间子节点修复离线通过，随后真实刷新仍在 9 月 4 日 18:39 Story 详情失败 | 服务机已登录的 9223；Story 身份适配见下一行 | 两条现场条目和完整月份须一并复验，部分结果不算通过；不重录 G1 |
 | F5-5 全内容类型兼容 | 代码未完成 | IG 根媒体 Story 与直接关联 FB Story 已有适配；其它尚无对应结构的类型仍未完成，不因标签解析存在就声称覆盖 | 先复验当前 Story，再完整刷新月份；未知身份/类型继续阻止 decision_complete | 逐类边界见 FUNCTIONALITY F5-5.1，不升级整月或全类型验收 |
 | F5-5 当前 IG Story 单条读取 | 真实通过 | 2026-09-20 服务机 --verify-reader 保留 IG 18084155825688886、neakasa.de、18:39、story、empty；整体仍 partial | 仅该详情的 IG 变体；不代表 FB 或整月 | [原始日志与 SHA-256](../state/planner-content-compatibility/story-reader-20260920/summary.json)，读取版本 d9196af |
