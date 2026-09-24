@@ -96,6 +96,18 @@ def calendar_bounds(now: datetime, *, window: ScheduleWindow) -> CalendarBounds:
                           start, end, window.ui_timezone)
 
 
+def slot_range(target: datetime, gap_minutes: float | None = None) -> tuple[datetime, datetime]:
+    """Live reads and conflict checks share the same configured interval, including midnight."""
+    utc_target = aware_utc(target)
+    if gap_minutes is None:
+        gap_minutes = cfg().get("publish", "min_channel_gap_min", 90)
+    if (isinstance(gap_minutes, bool) or not isinstance(gap_minutes, (int, float))
+            or not math.isfinite(gap_minutes) or gap_minutes <= 0):
+        raise ValueError("同渠道排期间隔必须是大于零的有限分钟数")
+    gap = timedelta(minutes=gap_minutes)
+    return utc_target - gap, utc_target + gap
+
+
 def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory, *,
                   now: datetime, window: ScheduleWindow,
                   gap_minutes: float | None = None) -> SlotDecision:
@@ -104,12 +116,8 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
     aware_utc(now)
     if channel not in {"facebook", "instagram"}:
         raise ValueError("未知目标渠道：%s" % channel)
-    if gap_minutes is None:
-        gap_minutes = cfg().get("publish", "min_channel_gap_min", 90)
-    if (isinstance(gap_minutes, bool) or not isinstance(gap_minutes, (int, float))
-            or not math.isfinite(gap_minutes) or gap_minutes <= 0):
-        raise ValueError("同渠道排期间隔必须是大于零的有限分钟数")
-    gap = timedelta(minutes=gap_minutes)
+    _, end = slot_range(utc_target, gap_minutes)
+    gap = end - utc_target
     bounds = calendar_bounds(now, window=window)
     if not bounds.start_inclusive <= utc_target < bounds.end_exclusive:
         return SlotDecision(False, "outside_ui_month")

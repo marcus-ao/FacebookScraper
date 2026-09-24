@@ -1373,6 +1373,28 @@ scripts\run_pipeline.bat preflight
 
 记下：实际耗时、进度停在哪一步最久、远端 remote ID、飞书卡片的实际发送者。
 
+### 16.3.1 发布 Chrome 窗口消失或 9223 断开
+
+先看该任务的发布回执。`failed_pre_submit` 且没有提交意图时，本次未点击提交；`submit_ambiguous`、`submitted_unverified` 或 `scheduled` 都不能靠再次创建排期来验证浏览器。保留截图和时刻，不删除发布账本或 profile，不同时重复点击创建。
+
+1. 按 §13 更新源码并重启 Web。本次 Python 修复不新增配置或依赖，既有账号、渠道资产和快照沿用。可用 `scripts\run_python.bat -m tools.test_offline --only tests_publish_browser_lifecycle --only tests_final_form --only tests_manual_schedule` 做隔离检查；它会启动临时测试 Chrome，不连接业务 9223。
+2. 在服务机执行 `Get-NetTCPConnection -LocalPort 9223 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess`。无输出时运行 `scripts\start_chrome_publish.bat`；有输出时复用该窗口，人工核对 DE 发布身份。旧失败留下的编辑器可人工检查后关闭，至少保留一个普通标签页；程序不清理已有人工标签页。
+3. 本次记录明确提交前失败后，回审校台点「编辑确认无误」，检查当前冻结正文、图片、唯一渠道、账号和选定时间。确认弹窗中的实际内容无误后只创建一次。单篇核对应只展开相关日期；独立月历同步仍会逐条读整月。提交结果不确定时核对原远端记录，不再提交。
+4. 若窗口仍消失，先保存当前操作记录和错误截图，再查下面的只读信息。记录是整个窗口消失还是某标签页报错、发生时刻、是否手工重新启动过 Chrome。没有事件不等于没有发生退出；事后空闲内存不能证明故障瞬间的内存情况。
+
+```powershell
+Set-Location 'D:\Code\FacebookScraper'
+git rev-parse --short HEAD
+.\scripts\run_python.bat -c "import importlib.metadata as m; from core.config import cfg; print('playwright=' + m.version('playwright')); print('chrome=' + cfg().chrome_exe)"
+Get-NetTCPConnection -LocalPort 9223 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess
+Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory
+$publishEventSince = (Get-Date).AddHours(-4)
+Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=$publishEventSince} -ErrorAction SilentlyContinue | Where-Object { $_.Message -match 'chrome.exe' } | Select-Object -First 6 TimeCreated,Id,Message | Format-List
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEventSince} -ErrorAction SilentlyContinue | Select-Object -First 3 TimeCreated,Id,Message | Format-List
+```
+
+代码按控件就绪状态等待，已公开详情释放后增加 1 秒间隔并限制响应读取并发；这些措施用于减少资源占用，不能保证平台不会触发账号检查。无直接证据时不先关闭 GPU、重建登录 profile 或更改浏览器安全参数。
+
 ### 16.4 排期详情的图片控件证据
 
 **FB/IG 完整有序图片适配为代码未完成；目标诊断采集、比较和只读补验为离线通过。** 当前采集器只保存目标 dialog 内的有界图片候选、加载状态、脱敏层级和导航标签，无法确认媒体容器、总数及轮播关系，始终不声明完整，不点击翻页。`layout_unverified` 是真实缺口，不能手填成功值解除 G8。

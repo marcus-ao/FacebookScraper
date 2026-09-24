@@ -58,6 +58,8 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         await self.pw.stop()
 
     async def run_workflow(self, change):
+        if self.page.is_closed():
+            self.page = await self.context.new_page()
         await self.page.set_content(HTML)
         await self.page.locator('img').first.wait_for()
         await self.page.wait_for_function('Array.from(document.images).every(i=>i.complete&&i.naturalWidth)')
@@ -124,6 +126,21 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         result, submit = await self.run_workflow('none')
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
         self.assertEqual(submit.await_count, 1)
+
+    async def test_cleanup_closes_owned_planner_but_preserves_uncertain_composer(self):
+        result, submit = await self.run_workflow('none')
+        self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS)
+        self.assertEqual(submit.await_count, 1)
+        self.assertEqual(self.context.pages, [self.page])
+
+    async def test_pre_submit_failure_leaves_no_owned_browser_pages(self):
+        human = await self.context.new_page()
+        await human.set_content('<h1>Human tab</h1>')
+        result, submit = await self.run_workflow('date')
+        self.assertEqual(result.attempt.status, journal.STATUS_FAILED_PRE_SUBMIT)
+        submit.assert_not_called()
+        self.assertEqual(self.context.pages, [human])
+        self.assertEqual(await human.locator('h1').inner_text(), 'Human tab')
 
     async def test_disabled_submit_is_a_pre_click_failure_not_an_uncertain_attempt(self):
         result, submit = await self.run_workflow('disabled')

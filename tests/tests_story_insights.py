@@ -8,6 +8,7 @@ import unittest
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from unittest.mock import patch
+from playwright.async_api import Error as BrowserError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from month_detail_fixtures import ACCOUNTS, MonthDetailCase
@@ -113,6 +114,24 @@ class StoryInsightsTests(MonthDetailCase):
         result = await self.inventory()
         self.assertTrue(result.decision_complete)
         self.assertEqual({c.channels[0]: c.at.minute for c in result.cards}, {'instagram':39, 'facebook':40})
+
+    async def test_lost_facebook_detail_aborts_entire_inventory(self):
+        self.linked_facebook()
+        original = month.published_details.read_facebook_story
+
+        async def close_during_facebook(page, *args, **kwargs):
+            if failure == 'crashed':
+                raise BrowserError('Page crashed')
+            await page.close()
+            return await original(page, *args, **kwargs)
+
+        for failure in ('closed', 'crashed'):
+            with self.subTest(failure=failure), \
+                    patch.object(month.published_details, 'read_facebook_story', side_effect=close_during_facebook):
+                with self.assertRaises(month.BrowserReadInterrupted):
+                    await self.inventory()
+            self.assertFalse(self.page.is_closed())
+            self.assertTrue(self.browser.is_connected())
 
     async def test_inconsistent_facebook_evidence_keeps_instagram_and_blocks_decisions(self):
         for invalid in ['owner', 'time', 'channel', 'duplicate_relation', 'unlinked',

@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from core import maintenance
-from core.chrome import attach
+from core.chrome import attach, close_owned_page
 from core.config import cfg
 from core.paid_model import atomic_write_json
 from core.store import assert_physical_direct_path
@@ -22,7 +22,7 @@ from publish.planner_content import (PLACEMENTS, MEDIA_KINDS, DELIVERIES, READ_S
 
 
 @maintenance.guarded('planner_read')
-async def read_live_inventory(run=None) -> RemoteSlotInventory:
+async def read_live_inventory(run=None, *, detail_range=None) -> RemoteSlotInventory:
     """供已持发布锁的调用者读取；只新开并关闭自己的页，不启动/登录浏览器。"""
     if run is None:
         bs.require_readback_evidence()
@@ -37,18 +37,18 @@ async def read_live_inventory(run=None) -> RemoteSlotInventory:
         except SystemExit as exc:
             if run is None:
                 raise
-            raise bs.PublishStepError("发布浏览器未启动：" + str(exc)) from exc
+            raise bs.PublishStepError("无法连接发布浏览器：" + str(exc)) from exc
         page = await context.new_page()
         timezone_name = run.ui_timezone if run is not None else str(config.get("publish", "ui_timezone", ""))
         return await month_inventory.read(
             page, ui_timezone=timezone_name,
             business_timezone=bs.business_timezone(),
             timeout=float(config.get("publish", "ui_timeout_seconds", bs.DEFAULT_UI_TIMEOUT)),
-            run=run)
+            run=run, detail_range=detail_range)
     finally:
         try:
             if page is not None:
-                await page.close()
+                await close_owned_page(page)
         finally:
             if pw is not None:
                 await pw.stop()
@@ -79,6 +79,7 @@ def _serialize(inventory: RemoteSlotInventory) -> dict:
             "visible_start": inventory.visible_start.isoformat() if inventory.visible_start else None,
             "visible_end": inventory.visible_end.isoformat() if inventory.visible_end else None,
             "cards_loaded": inventory.cards_loaded,
+            "details_scoped": inventory.details_scoped,
             "diagnostics": list(inventory.diagnostics),
             "cards": [{"at": _moment(card.at).isoformat(), "channels": list(card.channels),
                        "remote_ids": dict(card.remote_ids), "rendered": card.rendered,
@@ -98,6 +99,8 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("cards_loaded"), bool):
         raise ValueError("月历缓存格式无效")
+    if type(data.get('details_scoped', False)) is not bool:
+        raise ValueError('月历详情范围格式无效')
     resolve_ui_timezone(data["ui_timezone"])
     cards = []
     for row in data["cards"]:
@@ -143,7 +146,7 @@ def inventory_from_cache(snapshot: dict) -> RemoteSlotInventory | None:
         tuple(_moment(at) for at in data["occupied"]), data["ui_timezone"],
         date.fromisoformat(data["visible_start"]) if data.get("visible_start") else None,
         date.fromisoformat(data["visible_end"]) if data.get("visible_end") else None,
-        tuple(cards), data["cards_loaded"], tuple(data.get('diagnostics',[])))
+        tuple(cards), data["cards_loaded"], tuple(data.get('diagnostics',[])), data.get('details_scoped', False))
 
 
 def _load(path: Path) -> dict:

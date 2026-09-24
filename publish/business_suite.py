@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from playwright.async_api import expect
 
 from core.config import cfg
+from core.chrome import close_owned_page
 from publish import evidence
 from publish import selectors
 from publish.evidence import token_present as evidence_token_present
@@ -171,6 +172,7 @@ class RemoteSlotInventory:
     cards: tuple[RemotePlannerCard, ...] = ()
     cards_loaded: bool = False
     diagnostics: tuple[dict, ...] = ()
+    details_scoped: bool = False
 
     @property
     def classification_complete(self) -> bool:
@@ -180,7 +182,7 @@ class RemoteSlotInventory:
     def decision_complete(self) -> bool:
         # The existing policy counts every same-channel card, regardless of placement.
         # Unknown/unreadable entries still occupy their observed time and block decisions.
-        return self.channels_complete and self.classification_complete and not self.diagnostics and all(
+        return not self.details_scoped and self.channels_complete and self.classification_complete and not self.diagnostics and all(
             card.read_status == 'complete' for card in self.cards)
 
     @property
@@ -307,32 +309,36 @@ async def open_composer(context, *, asset_context: dict, timeout: float = DEFAUL
     if context_ids(calendar_url) != asset_context:
         raise ProbeRequired('打开编辑器前缺少唯一的已录证资产标识')
     page = await context.new_page()
-    await page.goto(calendar_url,
-                    wait_until="domcontentloaded", timeout=_ms(timeout))
-    await assert_page_usable(page)
-    if context_ids(page.url) != asset_context:
-        raise ProbeRequired('月历跳转后的业务资产与录证不一致')
-
-    create = locator_for(page, "create_post_button")
     try:
-        await create.first.click(timeout=_ms(timeout))
-    except Exception as exc:                      # noqa: BLE001
-        raise PublishStepError(
-            "内容日历上找不到 %r（%s）。\n"
-            "  可能是没登录、当前不是那个 Page、或者 Meta 改了这个按钮。\n"
-            "  ❌ 不得自动登录（全局红线 1）：请在发布专用 Chrome 里人工登录后重试。"
-            % (COMPOSER["create_post_button"].name, exc)) from exc
+        await page.goto(calendar_url,
+                        wait_until="domcontentloaded", timeout=_ms(timeout))
+        await assert_page_usable(page)
+        if context_ids(page.url) != asset_context:
+            raise ProbeRequired('月历跳转后的业务资产与录证不一致')
 
-    caption = locator_for(page, "caption_box")
-    try:
-        await caption.first.wait_for(state="visible", timeout=_ms(timeout))
-    except Exception:                             # noqa: BLE001
-        # 录证中的 Done 弹层是可选步骤，仅出现时处理。
-        await _click_if_present(page, "composer_done_button", timeout=timeout)
-        await caption.first.wait_for(state="visible", timeout=_ms(timeout))
-    if context_ids(page.url) != asset_context:
-        raise ProbeRequired('编辑器跳转后的业务资产与录证不一致')
-    return page
+        create = locator_for(page, "create_post_button")
+        try:
+            await create.first.click(timeout=_ms(timeout))
+        except Exception as exc:                      # noqa: BLE001
+            raise PublishStepError(
+                "内容日历上找不到 %r（%s）。\n"
+                "  可能是没登录、当前不是那个 Page、或者 Meta 改了这个按钮。\n"
+                "  ❌ 不得自动登录（全局红线 1）：请在发布专用 Chrome 里人工登录后重试。"
+                % (COMPOSER["create_post_button"].name, exc)) from exc
+
+        caption = locator_for(page, "caption_box")
+        try:
+            await caption.first.wait_for(state="visible", timeout=_ms(timeout))
+        except Exception:                             # noqa: BLE001
+            # 录证中的 Done 弹层是可选步骤，仅出现时处理。
+            await _click_if_present(page, "composer_done_button", timeout=timeout)
+            await caption.first.wait_for(state="visible", timeout=_ms(timeout))
+        if context_ids(page.url) != asset_context:
+            raise ProbeRequired('编辑器跳转后的业务资产与录证不一致')
+        return page
+    except BaseException:
+        await close_owned_page(page)
+        raise
 
 
 async def _click_if_present(page, key: str, *,

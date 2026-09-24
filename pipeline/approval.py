@@ -193,7 +193,9 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
         if inventory_reader is not None:
             inventory = await inventory_reader(now=moment, run=run)
         else:
-            inventory = await planner_cache.read_live_inventory(run=run)
+            if report is not None:
+                report(0, '核对所选日期及相邻间隔的远端月历 …')
+            inventory = await planner_cache.read_live_inventory(run=run, detail_range=planning.slot_range(target))
         decision = planning.evaluate_slot(target, source['platform'], inventory, now=moment, window=window)
         if not decision.allowed:
             raise ApprovalConflict(planning.slot_refusal(decision) + '；请重新选择，系统不会自动顺延。',

@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from core import maintenance
-from core.chrome import attach
+from core.chrome import attach, close_owned_page
 from core.config import cfg
 from core.translated import source_text_sha256
 from core import notify
@@ -88,7 +88,8 @@ async def check_live_slot(page, post, when: datetime, *, ui_timezone: str, timeo
                            run=None, now=None):
     """在单次提交意图落盘前再读远端；缓存从不参与最终裁决。"""
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-        business_timezone=bs.business_timezone(), timeout=timeout, run=run)
+        business_timezone=bs.business_timezone(), timeout=timeout, run=run,
+        detail_range=planning.slot_range(when))
     window = planning.config_window() if run is not None else planning.configured_window(post.platform)
     decision = planning.evaluate_slot(when, post.platform, inventory,
         now=now or datetime.now().astimezone(), window=window)
@@ -137,7 +138,7 @@ async def _execute_unlocked(
         except SystemExit as exc:
             if run is None:
                 raise
-            raise bs.PublishStepError("发布浏览器未启动：" + str(exc)) from exc
+            raise bs.PublishStepError("无法连接发布浏览器：" + str(exc)) from exc
 
         if submit_enabled:
             step = "G6 提交前 Planner 基线"
@@ -299,6 +300,7 @@ async def _execute_unlocked(
             channels_verified=readback.channels,
             note="自动回读确认已排期")
         journal.append(c.state_dir, scheduled)
+        current = scheduled
         return AttemptOutcome(0, scheduled, "自动提交并回读为 scheduled")
     except Exception as exc:                      # noqa: BLE001
         message = str(exc)
@@ -319,9 +321,16 @@ async def _execute_unlocked(
             step=step, screenshot=screenshot, note=message,
             warnings=tuple(base.warnings) + tuple(notes))
         journal.append(c.state_dir, failed)
+        current = failed
         return AttemptOutcome(1, failed, message, tuple(getattr(exc, "suggestions", ()) or ()))
     finally:
-        # 只断开自动化侧；不关闭标签页，不关闭用户 Chrome。
+        # Own Planner tabs are disposable. Keep only a manual preparation or
+        # uncertain composer for inspection; failed pre-click content is frozen on disk.
+        if planner_page is not None:
+            await close_owned_page(planner_page)
+        if page is not None and submit_enabled and current.status in {
+                journal.STATUS_FAILED_PRE_SUBMIT, journal.STATUS_SCHEDULED}:
+            await close_owned_page(page)
         if pw is not None:
             try:
                 await pw.stop()

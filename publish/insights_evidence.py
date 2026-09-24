@@ -32,7 +32,8 @@ class InsightsEvidence:
     """Bind native Story entities through the root IG media, never business content IDs."""
     def __init__(self, page, source_id):
         self.page, self.source_id = page, source_id
-        self.tasks, self.identities = [], []
+        self.tasks, self.identities = set(), []
+        self.body_slots = asyncio.Semaphore(4)
         self.facebook_identities = []
         self.media_owners = []
         self.story_identities = []
@@ -77,7 +78,9 @@ class InsightsEvidence:
         parsed = urlsplit(response.url)
         if (parsed.hostname == 'business.facebook.com' and parsed.path.rstrip('/') in
                 {'/api/graphql', '/graphql'} and self.budget.accept(self.view)):
-            self.tasks.append(asyncio.create_task(self.collect(response)))
+            task = asyncio.create_task(self.collect(response))
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
 
     def observe_media(self, document):
         """A published post or reel names its own account on the media ID itself.
@@ -188,8 +191,11 @@ class InsightsEvidence:
 
     async def collect(self, response):
         try:
-            raw = await asyncio.wait_for(response.body(), 5)
-            if response.status != 200 or len(raw) > 4_000_000:
+            if response.status != 200:
+                return
+            async with self.body_slots:
+                raw = await asyncio.wait_for(response.body(), 5)
+            if len(raw) > 4_000_000:
                 return
             for document in response_documents(raw):
                 self.observe_media(document)
@@ -245,8 +251,10 @@ class InsightsEvidence:
 
     async def finish(self):
         self.page.remove_listener('response', self.observe)
-        for task in self.tasks:
+        pending = tuple(self.tasks)
+        for task in pending:
             if not task.done():
                 task.cancel()
-        if self.tasks:
-            await asyncio.gather(*self.tasks, return_exceptions=True)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self.tasks.clear()

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from publish.channel_evidence import require as channel_proof
-from core.chrome import _cdp_profile_matches
+from core.chrome import _cdp_profile_matches, close_owned_page
 import asyncio
 import calendar
 import hashlib
@@ -26,6 +26,15 @@ DAY_SELECTOR = '[role="link"][draggable="false"]'
 RECOMMENDATION = 'Recommendations are based on when your followers were most active on Instagram and Facebook respectively in the last 7 days.'
 TIME_PATTERN = re.compile(r'\b(\d{1,2}:\d{2}\s*[AP]M)\b')
 FILENAME = 'planner_controls.json'
+# Release a heavy insights page before opening the next; UI readiness still
+# governs clicks and no background/parallel history readers are started.
+DETAIL_RELEASE_SECONDS = 1.0
+
+
+class BrowserReadInterrupted(bs.PublishStepError):
+    """Stop a month read when its browser/page disappears; never resume submitting."""
+
+
 # Click 225 in the bound 2026-09-20 recording targets a time-only link; the
 # caption is on its third ancestor. Never climb into a day or a sibling card.
 ITEM_DATA_JS = r'''n => {
@@ -199,11 +208,32 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
         return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone,
                                       card_spec=card_spec)
+    except BrowserReadInterrupted:
+        raise
     except Exception as exc:
+        raise_if_browser_lost(page, exc)
         raise PlannerItemError(row, item, stage, exc) from exc
     finally:
         # Hover cards must not contaminate the final month sweep or the next slot.
-        await page.mouse.move(0, 0)
+        try:
+            await page.mouse.move(0, 0)
+        except BrowserError as exc:
+            raise_if_browser_lost(page, exc)
+
+
+def raise_if_browser_lost(page, cause):
+    """Connection loss is fatal for this read, never an unknown historical card."""
+    browser = page.context.browser
+    if page.is_closed() or (browser is not None and not browser.is_connected()):
+        raise BrowserReadInterrupted('读取月历时发布浏览器或标签页已关闭、连接已断开；本次读取已停止。'
+                                  '请检查发布 Chrome，再根据发布回执决定是否重试；不会自动重启或重新提交。') from cause
+    nested, seen = cause, set()
+    while nested is not None and id(nested) not in seen:
+        seen.add(id(nested))
+        if isinstance(nested, BrowserError) and 'crash' in str(nested).lower():
+            raise BrowserReadInterrupted('读取月历时发布浏览器页面发生崩溃；本次读取已停止。'
+                '请保留系统故障记录并检查发布回执；不会自动重启或重新提交。') from cause
+        nested = nested.__cause__ or nested.__context__
 
 
 async def ready_item(page, row, item, *, timeout, card_spec=None):
@@ -312,6 +342,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             try:
                 await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             except BrowserError as exc:
+                raise_if_browser_lost(detail, exc)
                 raise content.DetailReadError('navigation_failed') from exc
             destination = urlsplit(detail.url)
             if (destination.hostname != parsed.hostname or destination.path.rstrip('/') != parsed.path.rstrip('/')
@@ -328,13 +359,17 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             for variant in variants:
                 variant['source_content_id'] = remote
             return {'variants': variants}
+        except Exception as exc:
+            raise_if_browser_lost(detail, exc)
+            raise
         finally:
             try:
                 await evidence.finish()
                 if observer:
                     await observer.finish()
             finally:
-                await detail.close()
+                await close_owned_page(detail)
+                await asyncio.sleep(DETAIL_RELEASE_SECONDS)
     spec = card_spec or bs.require_readback_evidence()
     parsed = bs._entry_naive(raw, spec)
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
@@ -439,7 +474,21 @@ def moments(day, clock, ui_zone, business_zone):
     return tuple(at.astimezone(business_zone) for at in ((first, second) if first.utcoffset() != second.utcoffset() else (first,)))
 
 
-async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
+async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, detail_range=None):
+    """Check the whole grid; optionally expand only complete UI days needed by one decision.
+
+    Never select individual cards by the outer clock: aggregate channel times
+    can differ. Relevant days still read every item and verify each channel.
+    A scoped result cannot certify another day or an entire-month deletion.
+    """
+    ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_ui_timezone(business_timezone)
+    selected_dates = None
+    if detail_range is not None:
+        start, end = detail_range
+        if (start.tzinfo is None or end.tzinfo is None or start.utcoffset() is None
+                or end.utcoffset() is None or start.timestamp() > end.timestamp()):
+            raise ValueError('月历详情范围须为带时区的有序时刻')
+        selected_dates = start.astimezone(ui_zone).date(), end.astimezone(ui_zone).date()
     if run is None:
         await prepare(page, timeout=timeout)
         card_spec = None
@@ -447,9 +496,10 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
         await open_calendar(page, run.asset_context, timeout=timeout)
         card_spec = run.planner_card
     rows = await read_grid(page, timeout=timeout)
-    ui_zone, business_zone = bs.resolve_ui_timezone(ui_timezone), bs.resolve_ui_timezone(business_timezone)
+    detail_rows = rows if selected_dates is None else [row for row in rows
+        if selected_dates[0] <= row['date'] <= selected_dates[1]]
     cards, occupied, diagnostics = [], {}, []
-    for row in rows:
+    for row in detail_rows:
         for item in row['items']:
             try:
                 material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone,
@@ -494,7 +544,8 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
     if rows != await read_grid(page, timeout=timeout):
         raise bs.PublishStepError('核对详情期间远端月历已更新，请重新读取')
     return bs.RemoteSlotInventory(tuple(occupied[key] for key in sorted(occupied)), ui_timezone,
-        rows[0]['date'], rows[-1]['date'], tuple(cards), True, tuple(diagnostics))
+        detail_rows[0]['date'] if detail_rows else None, detail_rows[-1]['date'] if detail_rows else None,
+        tuple(cards), True, tuple(diagnostics), selected_dates is not None)
 
 
 def require():

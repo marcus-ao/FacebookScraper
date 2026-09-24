@@ -1,6 +1,7 @@
 """通过 CDP 附着人工登录的 Chrome；回填、监测和发布使用独立 profile。"""
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import os
@@ -190,7 +191,7 @@ async def attach(port: int | None = None,
                  profile: Path | str | None = None, *,
                  start_script: str | None = None,
                  login_hint: str | None = None):
-    """返回 (playwright, browser, context)，调用方负责关闭；发布须显式传入 port/profile。"""
+    """返回 (playwright, browser, context)；调用方用 pw.stop() 断开，保留人工 Chrome。"""
     from playwright.async_api import async_playwright
 
     using_default_target = port is None and profile is None
@@ -242,9 +243,25 @@ async def attach(port: int | None = None,
         await pw.stop()
         raise
     if not browser.contexts:
-        try:
-            await browser.close()
-        finally:
-            await pw.stop()
+        await pw.stop()
         raise SystemExit("Chrome 已连上但没有可用上下文，请在该窗口里打开任意标签页后重试。")
     return pw, browser, browser.contexts[0]
+
+
+async def close_owned_page(page) -> str | None:
+    """Release only a caller-created page without closing Chrome's last tab.
+
+    Closing the last tab can exit a manually launched Chrome. Keep an empty tab
+    in that case so a later attachment does not report a missing debug port.
+    Never use this on a human tab or an unresolved submission's composer.
+    """
+    try:
+        if getattr(getattr(page, 'context', None), 'pages', ()) == [page]:
+            await asyncio.wait_for(page.goto('about:blank', wait_until='commit', timeout=5000), 6)
+        else:
+            await asyncio.wait_for(page.close(), 6)
+    except Exception as exc:
+        # Cleanup must not replace a durable scheduling result or the original error.
+        print('发布临时页面未能释放：' + type(exc).__name__)
+        return type(exc).__name__
+    return None

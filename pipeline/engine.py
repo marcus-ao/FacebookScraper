@@ -26,7 +26,7 @@ from pipeline.settings import pipeline_settings
 from pipeline import risk_scan
 from localize import images as image_de
 from core import paid_requests
-from core.chrome import attach
+from core.chrome import attach, close_owned_page
 from routes import delta
 # 复用发布层的时区歧义判据；导入模块本身不会附着或启动浏览器。
 from publish import business_suite as bs
@@ -1497,7 +1497,7 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
     c.assert_publish_chrome_isolated()
 
     async def read_slots():
-        pw = None
+        pw = page = None
         try:
             pw, _browser, context = await attach(
                 port=c.publish_debug_port, profile=c.publish_profile_dir,
@@ -1510,6 +1510,8 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 timeout=float(c.get("publish", "ui_timeout_seconds",
                                     bs.DEFAULT_UI_TIMEOUT)))
         finally:
+            if page is not None:
+                await close_owned_page(page)
             if pw is not None:
                 await pw.stop()
 

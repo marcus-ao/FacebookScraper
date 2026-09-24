@@ -50,7 +50,8 @@ def baseline_from_inventory(inventory, when, final_text, target_channels):
 
 async def baseline(page, when, final_text, *, ui_timezone, target_channels, timeout=30, run=None):
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-                                          business_timezone=bs.business_timezone(), timeout=timeout, run=run)
+                                          business_timezone=bs.business_timezone(), timeout=timeout, run=run,
+                                          detail_range=(when, when))
     return baseline_from_inventory(inventory, when, final_text, target_channels)
 
 
@@ -70,7 +71,8 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
             raise bs.PublishStepError('提交前已有同条件排期，不能用旧卡片确认本次提交')
         diagnostics['failure_stage'] = 'inventory_read'
         inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
-                                              business_timezone=bs.business_timezone(), timeout=timeout, run=run)
+                                              business_timezone=bs.business_timezone(), timeout=timeout, run=run,
+                                              detail_range=(when, when))
         diagnostics.update(inventory_cards=len(inventory.cards),
                            complete_month=inventory.decision_complete and inventory.covers((when,)),
                            failure_stage='matching', caption_mismatch=0, time_mismatch=0,

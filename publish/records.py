@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 
 from core import maintenance, notify, review, store, translated
-from core.chrome import attach
+from core.chrome import attach, close_owned_page
 from core.config import cfg
 from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings, MirrorService
@@ -187,7 +187,9 @@ async def reverify_media(attempt_id: str, *, timeout=30) -> dict:
         finally:
             try:
                 if page is not None:
-                    await page.close()
+                    cleanup_error = await close_owned_page(page)
+                    if cleanup_error:
+                        cleanup_errors['page'] = cleanup_error
             except Exception as exc:
                 cleanup_errors['page'] = type(exc).__name__
             try:
