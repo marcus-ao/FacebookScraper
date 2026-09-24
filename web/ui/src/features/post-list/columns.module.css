@@ -42,8 +42,13 @@
 .summaryLink:hover { text-decoration: underline; }
 .platform { white-space: nowrap; }
 
-.thumbEmpty {
-  display: inline-block;
+.placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--rc-bg);
+  color: var(--rc-fg-muted);
+  font-size: var(--rc-icon-size);
   border: 1px solid var(--rc-border);
 }
 

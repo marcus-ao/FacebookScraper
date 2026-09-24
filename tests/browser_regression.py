@@ -119,7 +119,28 @@ def stage_e(page, ui):
     assert parse_qs(urlparse(page.url).query)['limit']==['20']
     last=[entry for entry in ui.requests if entry['path']=='/api/tasks'][-1]
     assert parse_qs(last['query'])=={'scope':['history'],**params}
-    return {'B19_list':'PASS','B19_old_detail_api':'PASS','B19_full_detail':'PASS','B24':'PASS','density':measurements}
+    # 隔离响应覆盖三类无图行，并用真实 404 验证 React 的 onError 回退。
+    payload = ui.fx.client.get('/api/tasks?scope=history&limit=50').json()
+    image_row = next(row for row in payload['tasks'] if row['thumbnail_url'])
+    payload['tasks'] = [image_row] + [
+        dict(image_row, id='in_fixture/' + kind, thumbnail_url='', preview_kind=kind,
+             image_count=1 if kind == 'image_pending' else 0, text_de_excerpt=label)
+        for kind, label in [('video', '视频帖'), ('text', '纯文字帖'), ('image_pending', '图片待补齐')]]
+    payload['pagination'].update(total=4, page=1)
+    payload['summary']['total'] = 4
+    ui.overrides[('GET', '/api/tasks')] = (200, payload)
+    page.goto(ui.fx.base_url + '/history', wait_until='networkidle')
+    for label in ('视频帖', '纯文字帖', '图片待补齐'):
+        expect(page.get_by_role('img', name=label, exact=True)).to_have_count(1)
+    page.screenshot(path=str(EVIDENCE/'history-media-placeholders.png'))
+    ui.overrides[('GET', urlparse(image_row['thumbnail_url']).path)] = (404, {'detail': 'missing fixture image'})
+    ui.requests.clear()
+    page.reload(wait_until='networkidle')
+    expect(page.locator('tr[data-task-id] td:first-child img')).to_have_count(0)
+    expect(page.get_by_role('img', name='图片待补齐', exact=True)).to_have_count(2)
+    assert sum('/image/' in row['path'] for row in ui.requests) == 1, ui.requests
+    return {'B19_list':'PASS','B19_old_detail_api':'PASS','B19_full_detail':'PASS','B24':'PASS',
+            'density':measurements, 'media_placeholders':'PASS', 'thumbnail_error_fallback':'PASS'}
 
 
 def stage_d1(page, ui):

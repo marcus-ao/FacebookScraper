@@ -136,11 +136,14 @@ export interface IndexFreshness {
 }
 
 
+export type PreviewKind = 'image' | 'image_pending' | 'video' | 'text'
+
 export interface ReviewListItem {
   readonly id: TaskId
   readonly source_text_sha256: Sha256
   readonly platform: Platform
   readonly thumbnail_url: string
+  readonly preview_kind: PreviewKind
   /** 90 字摘要；空串表示尚无德语译文。 */
   readonly text_de_excerpt: string
   readonly image_count: number
@@ -188,6 +191,7 @@ export interface HistoryListItem {
   readonly status: DisplayStatus
   readonly image_count: number
   readonly thumbnail_url: string
+  readonly preview_kind: PreviewKind
 }
 
 export interface HistoryListResponse {

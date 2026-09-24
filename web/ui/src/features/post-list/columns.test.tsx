@@ -30,6 +30,7 @@ const reviewRow: ReviewRow = {
   id: 'fa_x/1' as TaskId,
   platform: 'facebook',
   thumbnail_url: '/api/tasks/fa_x/1/image/0?variant=de',
+  preview_kind: 'image',
   text_de_excerpt: 'Der neue Roboter räumt hinter deiner Katze auf.',
   image_count: 3,
   tags: ['自动猫砂盆', '新品', '促销'],
@@ -44,6 +45,7 @@ const historyRow: HistoryRow = {
   id: 'in_y/2' as TaskId,
   platform: 'instagram',
   thumbnail_url: '/api/tasks/in_y/2/image/0?variant=de',
+  preview_kind: 'image',
   text_de_excerpt: '',
   image_count: 1,
   tags: [],
@@ -257,10 +259,15 @@ describe('单元格细节', () => {
     expect(cell(reviewColumns(), 'thumbnail', reviewRow)).toContain('alt=""')
   })
 
-  it('没有缩略图时画空位，不渲染 <img src="">', () => {
-    const markup = cell(reviewColumns(), 'thumbnail', { ...reviewRow, thumbnail_url: '' })
+  it.each([
+    ['video', '视频帖', 'play-circle'],
+    ['text', '纯文字帖', 'file-text'],
+    ['image_pending', '图片待补齐', 'picture'],
+  ] as const)('没有缩略图时用 %s 图标说明类型', (preview_kind, label, icon) => {
+    const markup = cell(reviewColumns(), 'thumbnail', { ...reviewRow, thumbnail_url: '', preview_kind })
     expect(markup).not.toContain('<img')
-    expect(markup).toContain('aria-hidden="true"')
+    expect(markup).toContain(`role="img" aria-label="${label}" title="${label}"`)
+    expect(markup).toContain(`data-icon="${icon}"`)
   })
 
   it('分类最多两个，多的收进 +N', () => {

@@ -404,6 +404,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 | 验收单元 | 状态 | 尚需完成 | 证据要求 |
 |---|---|---|---|
 | 历史/恢复/风险采样/设置 API | 离线通过 | range/page/total、`detail.meta` 来源指纹/`snapshot_id`、批次与消息恢复、风险/采样元信息和设置说明已接 | 现有接口/版本错误与只读回归 |
+| 列表无图类型占位 | 离线通过 | 历史归档与待审行共用 `preview_kind`；无图显示视频、纯文字、图片待补齐图标；加载失败也回退，保持 40px 缩略图与 48px 行高。服务机视觉效果待联调 | `tests_history`、前端列/shape/样式测试、stage E 两种宽度与 HTTP 404 回退、`history_thumbnail_cost.py` 无空图请求；证据位置见 [HANDOFF §1](HANDOFF.md#1-当前工作区事实) |
 | Web/CLI 五阶段只读状态 | 离线通过 | 共用 snapshot，含批次 `operation_id`/费用/版本、处理时效、Trends blocked 和独立投递状态 | `tests_runtime_status` + 浏览器 UI 夹具；只读 GET 零外部操作 |
 | 单一 React 审校台 | 离线通过 | `web/ui/` 是唯一源码目录，构建为 `web/ui/dist`；真实路由支持深链接刷新和分享 | `npm --prefix web/ui test`、`tests_browser_workflow`、`browser_regression.py --stage ALL`；浏览器证据只对应产生它的那次构建 |
 | 审校三点菜单的减少动画兼容 | 离线通过 | 全局过渡时长为零，保留减少动画；列表和详情的菜单在视口内，可打开操作对话框并取消。服务机仍需更新构建后复验 | `browser_regression.py --stage REVIEW_MENU`：两种动画偏好、两种宽度、列表四态及 FB/IG 详情，共 24 个组合；[前后对照与证据边界](HANDOFF.md#12-已交付修复留下的硬约束) |

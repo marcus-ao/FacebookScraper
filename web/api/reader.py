@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:                          # 支持 `python -m web.a
 
 from localize import images as image_de  # noqa: E402
 from localize import suggest as text_suggestions  # noqa: E402
-from core import store, review, localization                         # noqa: E402
+from core import store, review, localization, monitoring             # noqa: E402
 from core.mirror import MirrorService, MirrorSettings                # noqa: E402
 from core import translated as translation             # noqa: E402
 from publish import operations
@@ -243,6 +243,14 @@ def _thumbnail_url(task_id: str, images: list[Mapping[str, Any]]) -> str:
     return "/api/tasks/%s/image/0?variant=de" % task_id if isinstance(local, str) and local.strip() else ""
 
 
+def _preview_kind(row, images, thumbnail_url) -> str:
+    if thumbnail_url:
+        return 'image'
+    if monitoring._skip_reason(row) in {'video', 'mixed_media'}:
+        return 'video'
+    return 'image_pending' if images else 'text'
+
+
 class _Context:
     """一次请求内的取数上下文。构造一次，列表与详情共用。"""
 
@@ -321,11 +329,13 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
         entry = _effective_translation_of(source) if reviewable[source.ref] else None
         when = already[source.ref] or allocated.get(source.ref)
         images = _image_media(source)
+        thumbnail_url = _thumbnail_url(task_id, images)
         tasks.append({
             "id": task_id,
             "source_text_sha256": translation.source_text_sha256(source.text),
             "platform": source.platform,
-            "thumbnail_url": _thumbnail_url(task_id, images),
+            "thumbnail_url": thumbnail_url,
+            "preview_kind": _preview_kind(source.row, images, thumbnail_url),
             "text_de_excerpt": excerpt(entry.get("text_de", "")) if entry else "",
             "image_count": len(images),
             "tags": list(source.row.get("tags") or []),
@@ -378,13 +388,15 @@ def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None,
     for row in result['rows']:
         # 数的是 image 媒体，不是全部媒体：只有视频的帖子取不到第 0 张图。
         images = _row_image_media(row)
+        thumbnail_url = _thumbnail_url(row['id'], images)
         tasks.append({'id': row['id'], 'platform': row['platform'], 'month': row['month'],
                       'created_at': row.get('created_at'), 'account': row['account_dir'],
                       'read_only': row['account_dir'] not in cfg().active_accounts(),
                       'text_de_excerpt': excerpt(row.get('text_de') or row.get('text') or ''),
                       'tags': row['tags'], 'status': row['status'],
                       'image_count': len(images),
-                      'thumbnail_url': _thumbnail_url(row['id'], images)})
+                      'thumbnail_url': thumbnail_url,
+                      'preview_kind': _preview_kind(row, images, thumbnail_url)})
     return {'tasks': tasks, 'index': result['index'], 'scope': 'history',
             'range': {'scope': 'history', 'days': None, 'month': month, 'platform': platform},
             'pagination': {'page': page, 'limit': limit, 'total': result['total']},

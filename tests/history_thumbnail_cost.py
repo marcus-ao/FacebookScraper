@@ -27,6 +27,8 @@ def main() -> int:
         history = fx.client.get("/api/tasks?scope=history&limit=50").json()
         report["history_rows_first_page"] = len(history["tasks"])
         report["history_total"] = history["pagination"]["total"]
+        thumbnail_paths = {row['thumbnail_url'].split('?')[0] for row in history['tasks'] if row['thumbnail_url']}
+        report["rows_with_thumbnail"] = len(thumbnail_paths)
         timings = []
         for row in history["tasks"][:6]:
             start = time.monotonic()
@@ -59,6 +61,7 @@ def main() -> int:
                 "seconds_to_networkidle": round(time.monotonic() - start, 2),
             }
             context.close()
+            assert all(r['path'] in thumbnail_paths for r in ui.requests if '/image/' in r['path']), ui.requests
             browser.close()
 
     print(json.dumps(report, ensure_ascii=False, indent=2))

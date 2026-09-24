@@ -32,7 +32,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "snoozed"
+   "status": "snoozed",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122099269947379375",
@@ -66,7 +67,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "skipped"
+   "status": "skipped",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122100548013379375",
@@ -92,7 +94,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122106341451379375",
@@ -118,7 +121,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122106447351379375",
@@ -144,7 +148,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122107567503379375",
@@ -170,7 +175,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122108017803379375",
@@ -196,7 +202,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122109978009379375",
@@ -222,7 +229,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122109979221379375",
@@ -248,7 +256,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122109979635379375",
@@ -274,7 +283,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122111831625379375",
@@ -300,7 +310,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122112905877379375",
@@ -326,7 +337,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122113320783379375",
@@ -352,7 +364,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122114567793379375",
@@ -378,7 +391,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122115327633379375",
@@ -404,7 +418,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122115328071379375",
@@ -430,7 +445,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122115329853379375",
@@ -456,7 +472,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122115330051379375",
@@ -482,7 +499,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122116692387379375",
@@ -508,7 +526,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122118136581379375",
@@ -534,7 +553,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122120053587379375",
@@ -560,7 +580,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122120460231379375",
@@ -586,7 +607,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122120722845379375",
@@ -612,7 +634,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122120942949379375",
@@ -638,7 +661,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122122467843379375",
@@ -664,7 +688,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   },
   {
    "id": "fa_neakasaofficial/122123185335379375",
@@ -690,7 +715,8 @@
    "risk_count": 0,
    "risk_scan_status": "not_scanned",
    "author_flag": null,
-   "status": "not_ready"
+   "status": "not_ready",
+   "preview_kind": "image"
   }
  ],
  "pagination": {

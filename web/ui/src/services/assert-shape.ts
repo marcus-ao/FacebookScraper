@@ -66,12 +66,14 @@ const DISPLAY_STATUS = shape.oneOf(
   'handed_off',
 )
 const RISK_SCAN_STATUS = shape.oneOf('not_scanned', 'completed', 'failed', 'stale')
+const PREVIEW_KIND = shape.oneOf('image', 'image_pending', 'video', 'text')
 
 export const REVIEW_LIST_ITEM_SHAPE: ShapeSpec = {
   id: shape.string,
   source_text_sha256: shape.string,
   platform: PLATFORM,
   thumbnail_url: shape.string,
+  preview_kind: PREVIEW_KIND,
   text_de_excerpt: shape.string,
   image_count: shape.number,
   tags: shape.array,
@@ -104,6 +106,7 @@ export const HISTORY_LIST_ITEM_SHAPE: ShapeSpec = {
   status: DISPLAY_STATUS,
   image_count: shape.number,
   thumbnail_url: shape.string,
+  preview_kind: PREVIEW_KIND,
 }
 
 export const HISTORY_LIST_SHAPE: ShapeSpec = {
