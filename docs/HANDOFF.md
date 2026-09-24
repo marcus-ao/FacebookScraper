@@ -30,6 +30,8 @@
 
 **来源关联的歧义边界。** 同一任务/渠道附近有多张远端卡时，精确编号优先，其余时间近似匹配关闭；无精确编号时全部不挂链接。仅一张人工帖恰好落进本系统排期窗口、又没有其它远端证据时，时刻加渠道仍无法证明两者内容相同；这是该展示规则的限制，服务机需人工核对，不能升级成身份或公开状态证据。
 
+**列表与月历修复组合验证（离线通过）。** 合并提交 `dce0323` 同时包含类型占位与月历来源关联，合并无冲突。`tests_history` 7 项、`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 596 项及生产构建通过；隔离浏览器 stage E/F 验证 48px 行高、三类占位、图片 404 回退、三类月历链接与审校跳转。证据位于 `.worktrees/review-preview-integration/state/`：`offline-validation-20260924T040016Z/`、`integration-frontend.log`、`integration-build.log`、`ui-regression/browser-stage-e.json` 与 `ui-regression/browser-stage-f.json`。未使用真实账号或业务数据；服务机部署与联调仍待执行。
+
 **源码服务机改址。** 仓库网络入口以 `ops/service-machine.network.json` 为准，非受管飞书入口同步至 `[feishu].base_url`。`scripts/update_service_address.bat` 支持 IP/前缀或明确 CIDR，保留未指定端口；只输入 IP 时不猜新子网。局域网入口 `scripts/run_web_lan.bat` 从同一 JSON 读取监听和端口，再调用原前端构建流程。防火墙及客户端操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。受管 `control/host.json` 优先且不由此工具修改，历史文档中的地址不是新的现场确认。
 
 **业务前端精简（2026-09-23）。** 界面只显示业务时刻值，去掉「北京/上海」字眼与「硬闸」术语，未知态改为「未知/待核对」。历史三个筛选各有显式「全部」选项，月份按行内日期（`created_at`）而不是归档目录月份。发布月历只保留时刻、账号、状态短签；刷新、失败警报、`local_error` 与今天高亮仍在。运营设置页从界面移除，`GET/PUT /api/settings` 保留给维护者。受众柏林时刻与凌晨提示一并撤下（用户决定，护栏后果已知悉）。
