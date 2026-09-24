@@ -421,7 +421,10 @@ def stage_f(page, ui):
     data=ui.fx.client.get('/api/calendar').json();data.update(refresh_available=True,cached_at='2026-09-13T08:00:00Z',display_start='2026-09-01T09:00:00+02:00',display_end_exclusive='2026-10-01T09:00:00+02:00',month_ui='2026-09',status='cached')
     data['coverage']['matches_current_month']=True
     data['cards']=[{'at':'2026-09-15T08:00:00Z','at_business':'2026-09-15T10:00:00+02:00','channels':['facebook'],'card_sha256':'fixture','delivery':'scheduled','rendered':'fixture'}]
-    data['cards']=[{**data['cards'][0],'delivery':'published','rendered':'公开发布正文','card_sha256':'published'},
+    data['cards']=[{**data['cards'][0],'delivery':'published','rendered':'公开发布正文','card_sha256':'published',
+        'source_task_id':ui.fx.fb_id,'source_platform':'facebook',
+        'source_permalink':'https://www.facebook.com/neakasaofficial/posts/1234567890',
+        'permalinks':{'facebook':'https://www.facebook.com/neakasa.de/posts/9876543210'}},
         {**data['cards'][0],'delivery':'scheduled','rendered':'已排期正文','card_sha256':'scheduled'}]
     ui.overrides[('GET','/api/calendar')]=(200,data)
     ui.overrides[('POST','/api/calendar/refresh')]=(503,{**data,'stale':True,'error':'fixture failure','cards':[data['cards'][0]]})
@@ -429,6 +432,17 @@ def stage_f(page, ui):
     expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('定时',exact=True)).to_be_visible()
     assert '公开发布正文' not in page.locator('main').inner_text()
     page.get_by_role('button',name=re.compile('已发布')).click();expect(page.get_by_text('公开发布正文',exact=True)).to_be_visible()
+    expect(page.get_by_role('link',name='查看原帖 ↗',exact=True)).to_have_attribute(
+        'href','https://www.facebook.com/neakasaofficial/posts/1234567890')
+    expect(page.get_by_role('link',name='审校详情',exact=True)).to_have_attribute(
+        'href','/review/'+ui.fx.fb_id+'?platform=facebook')
+    expect(page.get_by_role('link',name='查看已发布帖子',exact=True)).to_have_attribute(
+        'href','https://www.facebook.com/neakasa.de/posts/9876543210')
+    page.screenshot(path=str(EVIDENCE/'calendar-source-links.png'))
+    page.get_by_role('link',name='审校详情',exact=True).click()
+    expect(page.get_by_role('link',name='查看原帖 ↗',exact=True)).to_be_visible()
+    assert '/review/'+ui.fx.fb_id in page.url, page.url
+    page.goto(ui.fx.base_url+'/calendar',wait_until='networkidle')
     page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name='刷新月历',exact=True).click()
     expect(page.get_by_text('本次月历未完整更新',exact=True)).to_be_visible()
@@ -456,7 +470,8 @@ def stage_f(page, ui):
     expect(page.get_by_text('该篇帖子不含文本部分,请跳转原帖进行复核确认',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
     page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
-    return {'F':'PASS','published_scheduled_distinct':True,'refresh_payload_cards_retained':True,
+    return {'F':'PASS','source_and_published_links_distinct':True,'review_navigation':True,
+            'published_scheduled_distinct':True,'refresh_payload_cards_retained':True,
             'unread_item_still_occupies':True,'empty_caption_not_placeholder':True,
             'refresh_body':{},'empty_day_min_height':min(heights)}
 

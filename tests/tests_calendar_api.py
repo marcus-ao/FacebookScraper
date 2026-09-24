@@ -1,11 +1,12 @@
 """Calendar routes operate only on temporary caches and injected browser readers."""
 import asyncio
-import sqlite3
 import sys
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -15,11 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config  # noqa: E402
 from publish.business_suite import ProbeRequired, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
 from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
-from publish.journal import PublishAttempt, PublishOperationLock, append as append_attempt  # noqa: E402
+from publish.journal import PublishOperationLock  # noqa: E402
 from publish import planner_cache  # noqa: E402
 from publish.month_inventory import PlannerItemError  # noqa: E402
 from publish.planner_content import DetailReadError  # noqa: E402
-from web.api import calendar  # noqa: E402
+from web.api import calendar, reader  # noqa: E402
 
 NOW = datetime(2026, 9, 12, 10, tzinfo=timezone.utc)
 WINDOW = ScheduleWindow("fixture", timedelta(minutes=20), timedelta(days=30), "America/Los_Angeles")
@@ -27,6 +28,13 @@ SLOT = datetime(2026, 10, 1, 4, tzinfo=timezone.utc)  # Berlin 06:00, LA Sep 30 
 ROWS = RemoteSlotInventory((SLOT,), WINDOW.ui_timezone, date(2026, 9, 1), date(2026, 9, 30),
                           (RemotePlannerCard(SLOT, ("facebook",), (("facebook", "123456"),), "Manual post",
                                              placement="feed", time_verified=True),), True)
+SOURCE_URL = 'https://www.facebook.com/neakasaofficial/posts/1'
+ENTRY = {'kind': 'scheduled', 'task_id': 'fa_neakasaofficial/post-1', 'platform': 'facebook',
+         'channels': ['instagram'], 'review_status': 'scheduled', 'at': SLOT.isoformat(),
+         'snapshot_id': 'a' * 32, 'remote_id': 'instagram=4378984725697354'}
+PUBLISHED = RemotePlannerCard(SLOT + timedelta(minutes=1), ('instagram',),
+                             (('instagram', '18084155825688886'),), 'Published caption',
+                             delivery='published', placement='feed', time_verified=True)
 
 
 class CalendarApiTests(unittest.TestCase):
@@ -51,16 +59,26 @@ class CalendarApiTests(unittest.TestCase):
         self.client = TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000))
         self.addCleanup(self.client.close)
 
-    def populate(self):
-        asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=ROWS),
+    def populate(self, card=None):
+        rows = replace(ROWS, cards=(card,), occupied=(card.at,)) if card else ROWS
+        asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=rows),
                                                state_dir=self.state, now=NOW))
+
+    def linked_payload(self, card=PUBLISHED, entries=None, source_url=SOURCE_URL, source_error=None):
+        self.populate(card)
+        source = SimpleNamespace(row={'permalink': source_url}) if source_url is not None else None
+        with patch.object(calendar.local_schedule, 'entries', return_value=[ENTRY] if entries is None else entries), \
+                patch.object(reader, 'source_post', return_value=source, side_effect=source_error):
+            response = self.client.get('/api/calendar')
+        self.assertEqual(response.status_code, 200)
+        return response.json()
 
     def test_local_layer_is_drawn_beside_the_remote_one_but_never_judges_slots(self):
         """⛔ 本地记录只画给人看；拿它证明自己没冲突，等于不检查。"""
         self.populate()
         frozen = {"kind": "content_locked", "task_id": "fa_x/1", "platform": "facebook",
                   "review_status": "content_locked", "at": None, "snapshot_id": "a" * 32,
-                  "remote_id": ""}
+                  "remote_id": "", "channels": []}
         submitting = {**frozen, "kind": "submitting", "task_id": "fa_x/2",
                       "review_status": "approved", "at": SLOT.isoformat()}
         with patch.object(calendar.local_schedule, "entries",
@@ -75,34 +93,128 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(len(data["cards"]), 1)
         self.assertEqual(data["cards"][0]["remote_ids"], {"facebook": "123456"})
 
-    def test_review_permalink_is_attached_by_the_publish_remote_id(self):
-        self.populate()
-        self.state.mkdir(exist_ok=True)
-        database = self.state / "index.sqlite"
-        connection = sqlite3.connect(database)
-        try:
-            connection.execute("CREATE TABLE posts (platform TEXT, post_id TEXT, permalink TEXT)")
-            connection.execute("INSERT INTO posts VALUES ('facebook', 'post-1', ?)",
-                               ("https://www.facebook.com/neakasaofficial/posts/1",))
-            connection.commit()
-        finally:
-            connection.close()
-        append_attempt(self.state, PublishAttempt(
-            post_id="post-1", platform="facebook", status="scheduled",
-            scheduled_at=SLOT.isoformat(), recorded_at=NOW.isoformat(),
-            text_de_sha256="abc", remote_id="facebook=123456"))
-        data = self.client.get("/api/calendar").json()
-        self.assertEqual(data["cards"][0]["permalinks"],
-                         {"facebook": "https://www.facebook.com/neakasaofficial/posts/1"})
-        database.unlink()
+    def test_published_card_links_to_source_when_its_id_changed_after_scheduling(self):
+        card = self.linked_payload()['cards'][0]
+        self.assertEqual(card.get('source_task_id'), 'fa_neakasaofficial/post-1')
+        self.assertEqual(card['source_platform'], 'facebook')
+        self.assertEqual(card['source_permalink'], SOURCE_URL)
+
+    def test_scheduled_remote_id_match_takes_priority_over_the_time_window(self):
+        scheduled = replace(PUBLISHED, delivery='scheduled', at=SLOT + timedelta(hours=2),
+                            remote_ids=(('instagram', '4378984725697354'),))
+        nearby_other = dict(ENTRY, task_id='fa_neakasaofficial/other', at=scheduled.at.isoformat(),
+                            remote_id='instagram=999999')
+        card = self.linked_payload(scheduled, [ENTRY, nearby_other])['cards'][0]
+        self.assertEqual(card.get('source_task_id'), ENTRY['task_id'])
+
+    def test_source_matching_requires_unique_scheduled_entries_for_every_channel(self):
+        cases = [
+            ('outside window', replace(PUBLISHED, at=SLOT + timedelta(minutes=5, seconds=1)), [ENTRY]),
+            ('different channel', PUBLISHED, [dict(ENTRY, channels=['facebook'])]),
+            ('two tasks', PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/other')]),
+            ('unknown delivery', replace(PUBLISHED, delivery='unknown'), [ENTRY]),
+            ('failed delivery', replace(PUBLISHED, delivery='failed'), [ENTRY]),
+            ('submitting only', PUBLISHED, [dict(ENTRY, kind='submitting')]),
+            ('unknown channel', replace(PUBLISHED, channels=(), remote_ids=()), [ENTRY]),
+            ('unmatched channel', replace(PUBLISHED, channels=('facebook', 'instagram')), [ENTRY]),
+            ('different tasks per channel', replace(PUBLISHED, channels=('facebook', 'instagram')),
+             [ENTRY, dict(ENTRY, channels=['facebook'], task_id='fa_neakasaofficial/other')]),
+            ('manual card without local schedule', PUBLISHED, []),
+        ]
+        for name, remote, entries in cases:
+            with self.subTest(name=name):
+                card = self.linked_payload(remote, entries)['cards'][0]
+                for field in ('source_task_id', 'source_platform', 'source_permalink'):
+                    self.assertIn(field, card)
+                    self.assertIsNone(card[field])
+
+    def test_five_minute_boundary_and_duplicate_rows_for_one_task_are_allowed(self):
+        for minutes in (-5, 5):
+            with self.subTest(minutes=minutes):
+                card = self.linked_payload(replace(PUBLISHED, at=SLOT + timedelta(minutes=minutes)),
+                                           [ENTRY, dict(ENTRY)])['cards'][0]
+                self.assertEqual(card.get('source_task_id'), ENTRY['task_id'])
+
+    def test_both_channels_must_resolve_to_the_same_task(self):
+        both = replace(PUBLISHED, channels=('facebook', 'instagram'))
+        entry = dict(ENTRY, channels=['facebook', 'instagram'],
+                     remote_id='facebook=123456;instagram=4378984725697354')
+        card = self.linked_payload(both, [entry])['cards'][0]
+        self.assertEqual(card.get('source_task_id'), ENTRY['task_id'])
+
+    def test_competing_remote_cards_do_not_share_one_source_on_the_same_channel(self):
+        exact = replace(PUBLISHED, at=SLOT, delivery='scheduled',
+                        remote_ids=(('instagram', '4378984725697354'),))
+        nearby = replace(PUBLISHED, at=SLOT + timedelta(minutes=2),
+                         remote_ids=(('instagram', '999999'),))
+        facebook = replace(PUBLISHED, channels=('facebook',), remote_ids=(('facebook', '888888'),))
+        entry = dict(ENTRY, channels=['facebook', 'instagram'])
+        cases = [
+            ('exact wins', (exact, nearby), [ENTRY['task_id'], None]),
+            ('two time matches', (PUBLISHED, nearby), [None, None]),
+            ('independent channels', (PUBLISHED, facebook), [ENTRY['task_id'], ENTRY['task_id']]),
+        ]
+        for name, cards, expected in cases:
+            with self.subTest(name=name):
+                inventory = replace(ROWS, cards=cards, occupied=tuple(card.at for card in cards))
+                asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=inventory),
+                                                       state_dir=self.state, now=NOW))
+                with patch.object(calendar.local_schedule, 'entries', return_value=[entry]), \
+                        patch.object(reader, 'source_post', return_value=None):
+                    data = self.client.get('/api/calendar').json()
+                self.assertEqual([card['source_task_id'] for card in data['cards']], expected)
+
+    def test_source_link_validation_keeps_the_review_link(self):
+        for url in (None, '', 'http://www.facebook.com/posts/1', 'https://example.test/post',
+                    'https://www.facebook.com.evil.test/post', 'https://user@www.facebook.com/posts/1'):
+            with self.subTest(url=url):
+                card = self.linked_payload(source_url=url)['cards'][0]
+                self.assertEqual(card.get('source_task_id'), ENTRY['task_id'])
+                self.assertIsNone(card['source_permalink'])
+        for error in (OSError('fixture unreadable'), ValueError('fixture malformed')):
+            with self.subTest(error=error):
+                card = self.linked_payload(source_error=error)['cards'][0]
+                self.assertEqual(card.get('source_task_id'), ENTRY['task_id'])
+                self.assertIsNone(card['source_permalink'])
+
+    def test_published_urls_are_not_replaced_by_the_source_url(self):
+        url = 'https://www.instagram.com/p/Published/'
+        remote = replace(PUBLISHED, permalinks=(('instagram', url),))
+        card = self.linked_payload(remote)['cards'][0]
+        self.assertEqual(card['permalinks'], {'instagram': url})
+        self.assertEqual(card.get('source_permalink'), SOURCE_URL)
+
+    def test_source_matching_uses_entries_before_the_month_filter(self):
+        at = datetime(2026, 9, 1, 7, tzinfo=timezone.utc)
+        entry = dict(ENTRY, at=(at - timedelta(minutes=1)).isoformat())
+        data = self.linked_payload(replace(PUBLISHED, at=at), [entry])
+        self.assertEqual(data['local'], [])
+        self.assertEqual(data['cards'][0].get('source_task_id'), ENTRY['task_id'])
+
+    def test_source_permalink_comes_from_post_truth_without_an_index(self):
+        from core import config, store
+        self.config._d['paths']['archive'] = str(Path(self.temp.name) / 'archive')
+        archive = store.Archive(self.config.archive_dir, 'fa_neakasaofficial')
+        archive.append(store.Post('post-1', 'facebook', 'neakasaofficial', 'Source caption',
+                                  NOW.isoformat(), permalink=SOURCE_URL))
+        self.populate(PUBLISHED)
+        with patch.object(config, '_cfg', self.config), \
+                patch.object(calendar.local_schedule, 'entries', return_value=[ENTRY]):
+            data = self.client.get('/api/calendar').json()
+        self.assertEqual(data['cards'][0].get('source_permalink'), SOURCE_URL)
+        self.assertFalse((self.state / 'index.sqlite').exists())
 
     def test_a_broken_review_ledger_is_reported_not_shown_as_an_empty_local_layer(self):
         self.populate()
         with patch.object(calendar.local_schedule, "entries",
                           side_effect=ValueError("审校记录第 3 行损坏")):
-            data = self.client.get("/api/calendar").json()
+            response = self.client.get("/api/calendar")
+            data = response.json()
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(data["local"], [])
         self.assertIn("损坏", data["local_error"])
+        self.assertIn('source_task_id', data['cards'][0])
+        self.assertIsNone(data['cards'][0]['source_task_id'])
 
     def test_missing_is_explicit_and_get_does_not_create_state_or_open_browser(self):
         with patch("web.api.calendar.read_live_inventory", AsyncMock(side_effect=AssertionError("browser"))):

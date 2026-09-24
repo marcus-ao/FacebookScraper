@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RouterProvider, createMemoryRouter } from 'react-router'
+import { MemoryRouter, RouterProvider, createMemoryRouter } from 'react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createQueryClient } from '@/app/queryClient'
 import { routes } from '@/app/router'
 import type { CalendarCard, CalendarPayload } from '@/types/domain'
+import type { TaskId } from '@/types/brands'
 import { CardDetail } from './CalendarPage'
 import fixture from '@/types/__fixtures__/calendar.json'
 
@@ -16,36 +17,67 @@ function render(data: CalendarPayload) {
   </QueryClientProvider>).replace(/<[^>]+>/g, '')
 }
 
-const detailText = (card: CalendarCard) =>
-  renderToStaticMarkup(<CardDetail card={card} />).replace(/<[^>]+>/g, '')
+const detailMarkup = (card: CalendarCard) =>
+  renderToStaticMarkup(<MemoryRouter><CardDetail card={card} /></MemoryRouter>)
+const detailText = (card: CalendarCard) => detailMarkup(card).replace(/<[^>]+>/g, '')
 
 describe('点击后的详情', () => {
   const card = () => (fixture as unknown as CalendarPayload).cards[0]!
 
-  it('时刻、账号和原帖链接并列，正文在下面', () => {
+  it('时刻、账号和已发布帖链接并列，正文在下面', () => {
     const text = detailText({ ...card(), accounts: { instagram: 'neakasa.global' },
       permalinks: { instagram: 'https://www.instagram.com/p/AbCdEf' } })
     expect(text).toContain('2026-09-04 18:39')
     expect(text).toContain('neakasa.global')
-    expect(text).toContain('查看原帖')
+    expect(text).toContain('查看已发布帖子')
+    expect(text).not.toContain('查看原帖')
     expect(text).toContain(card().rendered)
     expect(text).not.toContain('系统观测到的后台记录')
   })
 
-  it('两个渠道各给一条原帖链接', () => {
-    const markup = renderToStaticMarkup(<CardDetail card={{ ...card(),
+  it('两个渠道各给一条已发布帖子链接', () => {
+    const markup = detailMarkup({ ...card(),
       channels: ['facebook', 'instagram'],
       permalinks: { facebook: 'https://www.facebook.com/permalink.php?story_fbid=1',
-        instagram: 'https://www.instagram.com/p/AbCdEf' } }} />)
-    expect(markup).toContain('查看 Facebook 原帖')
-    expect(markup).toContain('查看 Instagram 原帖')
+        instagram: 'https://www.instagram.com/p/AbCdEf' } })
+    expect(markup).toContain('查看 Facebook 已发布帖子')
+    expect(markup).toContain('查看 Instagram 已发布帖子')
     expect(markup).toContain('href="https://www.instagram.com/p/AbCdEf"')
+  })
+
+  it('来源链接与审校详情独立于已发布地址', () => {
+    const markup = detailMarkup({ ...card(), source_task_id: 'fa_来源/post 1' as TaskId,
+      source_platform: 'facebook', source_permalink: 'https://www.facebook.com/source/posts/1',
+      permalinks: { instagram: 'https://www.instagram.com/p/Published/' } })
+    expect(markup).toContain('查看原帖 ↗')
+    expect(markup).toContain('href="https://www.facebook.com/source/posts/1"')
+    expect(markup).toContain('审校详情')
+    expect(markup).toContain('href="/review/fa_%E6%9D%A5%E6%BA%90/post%201?platform=facebook"')
+    expect(markup).toContain('查看已发布帖子')
+    expect(markup).toContain('href="https://www.instagram.com/p/Published/"')
+  })
+
+  it('只有来源链接时仍可跳转原帖', () => {
+    const text = detailText({ ...card(), source_permalink: 'https://www.instagram.com/p/Source/', permalinks: {} })
+    expect(text).toContain('查看原帖 ↗')
+    expect(text).not.toContain('审校详情')
+    expect(text).not.toContain('查看已发布帖子')
+  })
+
+  it('来源地址缺失时仍能进入已关联的审校详情', () => {
+    const text = detailText({ ...card(), source_task_id: 'fa_x/1' as TaskId,
+      source_platform: 'facebook', source_permalink: null, permalinks: {} })
+    expect(text).toContain('审校详情')
+    expect(text).not.toContain('查看原帖')
+    expect(text).not.toContain('查看已发布帖子')
   })
 
   it('没有公开地址就不显示按钮；没有正文改成复核提示', () => {
     const text = detailText({ ...card(), rendered: '', caption_status: 'empty', permalinks: {} })
     expect(text).toContain('该篇帖子不含文本部分,请跳转原帖进行复核确认')
     expect(text).not.toContain('查看原帖')
+    expect(text).not.toContain('审校详情')
+    expect(text).not.toContain('查看已发布帖子')
     expect(text).not.toContain('正文尚未核实')
   })
 

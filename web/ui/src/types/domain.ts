@@ -585,8 +585,14 @@ export interface CalendarCard {
   readonly media_kind?: 'text' | 'link' | 'image' | 'carousel' | 'mixed' | 'video' | 'unknown'
   readonly caption_status?: 'present' | 'empty' | 'unknown'
   readonly accounts?: Readonly<Partial<Record<Platform, string>>>
-  /** 读取时已经核对过的公开地址；没有就不显示「查看原帖」。 */
+  /** Business Suite 读取到的已发布帖子地址，与被抓取的来源帖分开。 */
   readonly permalinks?: Readonly<Partial<Record<Platform, string>>>
+  /** 唯一匹配到的审校任务；无匹配或有歧义时为 null。 */
+  readonly source_task_id?: TaskId | null
+  /** 来源任务的平台，用于审校详情导航。 */
+  readonly source_platform?: Platform | null
+  /** 来源 post.json 的公开地址，与审校详情的原帖链接相同。 */
+  readonly source_permalink?: string | null
   readonly relationships?: readonly string[]
   readonly read_status?: 'complete' | 'unsupported' | 'unavailable' | 'incomplete' | 'legacy'
   /** 为假时不能用这张卡的时刻证明它落在目标范围外。旧缓存缺这个字段时按未核实。 */
@@ -607,6 +613,7 @@ export interface CalendarLocalEntry {
   readonly kind: 'content_locked' | 'submitting' | 'scheduled'
   readonly task_id: TaskId
   readonly platform: Platform
+  readonly channels: readonly Platform[]
   readonly review_status: ReviewStatus
   readonly at: string | null
   readonly at_business: string | null

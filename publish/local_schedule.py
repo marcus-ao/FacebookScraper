@@ -58,6 +58,7 @@ def entries(*, account_dirs=None) -> list[dict]:
             result.append({
                 'kind': kind, 'task_id': account_dir.name + '/' + post_id,
                 'platform': state['platform'], 'review_status': state['status'],
+                'channels': list(row['target_channels']) if row else [],
                 'at': at.isoformat() if at is not None else None,
                 'snapshot_id': state.get('snapshot_id') or '',
                 'remote_id': (row or {}).get('remote_id') or ''})

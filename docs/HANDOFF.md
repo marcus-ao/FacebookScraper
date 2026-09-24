@@ -22,6 +22,14 @@
 
 **接手前先看 `git status`。** 只提交自己范围，不覆盖别人的改动。
 
+**月历来源关联（离线通过）。** 账本保留的是排期时的详情 ID，发布后卡片可能变成 IG 媒体 ID、聚合 entity ID 或缺少编号，旧的远端编号等值连接因此漏链。现按 `local_schedule.entries()` 的已排期记录，以目标渠道及排期时刻 ±5 分钟唯一关联，精确远端编号优先；全渠道须指向同一审校任务。原帖地址来自 `reader.source_post()` 的 `post.json`，不依赖 SQLite、不覆盖已发布地址；账本读取失败仍显示 `local_error`。该关联只负责导航，不充当发布验收证据。服务机真实月历待联调。
+
+隔离验证：`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 594 项和构建通过；浏览器 stage F 验证三类地址和进入审校详情，使用临时归档与模拟月历，没有真实账号调用。证据保存在 `.worktrees/calendar-source-link/state/` 的 `offline-validation-20260924T034358Z/`（月历与 hygiene）、`offline-validation-20260924T033652Z/`（发布操作）、`frontend-tests.log`、`frontend-build.log`、`ui-regression/browser-stage-f.json` 与 `ui-regression/calendar-source-links.png`。服务机部署后须只读核对本系统已发布卡的原帖链接与审校详情一致，并检查未匹配本地排期的人工帖没有来源入口。
+
+**月历待办。** `publish/observations.status()` 仍假设账本排期 ID 与已发布卡 ID 相同；本轮不改公开观测判据，不能拿来源链接出现替它宣称已公开。
+
+**来源关联的歧义边界。** 同一任务/渠道附近有多张远端卡时，精确编号优先，其余时间近似匹配关闭；无精确编号时全部不挂链接。仅一张人工帖恰好落进本系统排期窗口、又没有其它远端证据时，时刻加渠道仍无法证明两者内容相同；这是该展示规则的限制，服务机需人工核对，不能升级成身份或公开状态证据。
+
 **源码服务机改址。** 仓库网络入口以 `ops/service-machine.network.json` 为准，非受管飞书入口同步至 `[feishu].base_url`。`scripts/update_service_address.bat` 支持 IP/前缀或明确 CIDR，保留未指定端口；只输入 IP 时不猜新子网。局域网入口 `scripts/run_web_lan.bat` 从同一 JSON 读取监听和端口，再调用原前端构建流程。防火墙及客户端操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。受管 `control/host.json` 优先且不由此工具修改，历史文档中的地址不是新的现场确认。
 
 **业务前端精简（2026-09-23）。** 界面只显示业务时刻值，去掉「北京/上海」字眼与「硬闸」术语，未知态改为「未知/待核对」。历史三个筛选各有显式「全部」选项，月份按行内日期（`created_at`）而不是归档目录月份。发布月历只保留时刻、账号、状态短签；刷新、失败警报、`local_error` 与今天高亮仍在。运营设置页从界面移除，`GET/PUT /api/settings` 保留给维护者。受众柏林时刻与凌晨提示一并撤下（用户决定，护栏后果已知悉）。
