@@ -330,6 +330,18 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         for private in (opaque,'PRIVATE CAPTION','PRIVATE VALUE','SECRET_TOKEN','access_token','cookie'):
             self.assertNotIn(private,json.dumps(fields))
 
+    async def test_identity_schema_includes_instagram_media_account_binding(self):
+        fields = entity_identity_fields({'data': {'instagram_post': {
+            'id': '18129143875786241', 'caption': 'PRIVATE CAPTION',
+            'bizlink_instagram_actor': {'id': '17841475604335349', 'username': 'neakasa.de',
+                                       'access_token': 'SECRET_TOKEN'}}}})
+        self.assertIsNotNone(fields)
+        self.assertEqual(fields['instagram_post']['id'], '18129143875786241')
+        self.assertEqual(fields['instagram_post']['bizlink_instagram_actor'],
+                         {'id': '17841475604335349', 'username': 'neakasa.de'})
+        self.assertNotIn('PRIVATE CAPTION', json.dumps(fields))
+        self.assertNotIn('SECRET_TOKEN', json.dumps(fields))
+
 
 if __name__ == '__main__':
     unittest.main()

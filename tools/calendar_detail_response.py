@@ -6,6 +6,7 @@ import re
 from urllib.parse import parse_qs, urlsplit, urlunsplit, urlencode
 
 from core.meta_json import response_documents
+from publish.insights_evidence import InsightsResponseBudget
 
 
 IDS = {'id', 'entity_id', 'content_id', 'post_id', 'story_id', 'media_id', 'owner_id', 'actor_id',
@@ -100,12 +101,13 @@ def content_fields(payload):
 
 
 def entity_identity_fields(document):
-    """Expose missing identity field names/types only on the root entity relation.
+    """Expose identity field names/types on root entity and IG media relations.
 
     Opaque IDs may encode JSON. Decode bounded JSON data (never execute it), then
     apply the same redaction; decoded values are diagnostic evidence, not native IDs.
     """
-    entity = (document.get('data') or {}).get('tofu_entity') if isinstance(document, dict) else None
+    data = (document.get('data') or {}) if isinstance(document, dict) else {}
+    entity = data.get('tofu_entity')
     budget = 500
 
     def shape(node, key='', depth=0):
@@ -143,7 +145,10 @@ def entity_identity_fields(document):
             return result
         return {'type':type(node).__name__}
 
-    return shape(entity) if isinstance(entity, dict) else None
+    result = shape(entity) if isinstance(entity, dict) else {}
+    if isinstance(data.get('instagram_post'), dict):
+        result['instagram_post'] = shape(data['instagram_post'])
+    return result or None
 
 
 class ResponseEvidence:
@@ -153,14 +158,18 @@ class ResponseEvidence:
         self.identity_only = identity_only
         self.view = 'initial'
         self.tasks = []
+        self.budget = InsightsResponseBudget()
 
     def start(self):
         self.page.on('response', self.observe)
 
+    def begin_channel(self, channel):
+        self.view = channel
+
     def observe(self, response):
         parsed = urlsplit(response.url)
         if (parsed.hostname != 'business.facebook.com' or parsed.path.rstrip('/') not in
-                {'/api/graphql', '/graphql'} or len(self.tasks) >= 40):
+                {'/api/graphql', '/graphql'} or not self.budget.accept(self.view)):
             return
         # Capture arrival context, never claim the response belongs to this view.
         self.tasks.append(asyncio.create_task(self.collect(response, self.view)))
@@ -175,7 +184,8 @@ class ResponseEvidence:
                 if self.identity_only:
                     fields = entity_identity_fields(document)
                     if fields:
-                        self.emit({'ENTITY_IDENTITY':fields, 'response_status':response.status})
+                        self.emit({'ENTITY_IDENTITY':fields, 'response_status':response.status,
+                                   'during_view': view})
                     continue
                 fields = content_fields(document)
                 if fields:
@@ -215,4 +225,4 @@ class ResponseEvidence:
         self.page.remove_listener('response', self.observe)
         if self.tasks:
             await asyncio.gather(*self.tasks)
-        self.emit({'RESPONSE_SUMMARY': {'observed': len(self.tasks), 'limit': 40}})
+        self.emit({'RESPONSE_SUMMARY': self.budget.summary()})

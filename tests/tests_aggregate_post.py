@@ -1,5 +1,6 @@
 """Replay the retained aggregate Post detail page, never a live account."""
 import copy
+import json
 import sys
 import unittest
 from datetime import date
@@ -9,6 +10,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from month_detail_fixtures import ACCOUNTS, MonthDetailCase
 from publish import published_details
+from publish import month_inventory as month
+from publish.insights_evidence import InsightsResponseBudget
+from tools.probe_calendar_detail import ReaderObserver
 
 POST_ID = '122187915260939228'
 POST_IG_ID = '18129143875786241'
@@ -75,6 +79,74 @@ class AggregatePostTests(MonthDetailCase):
         self.documents = [copy.deepcopy(AGGREGATE_ROOT), copy.deepcopy(AGGREGATE_STORY),
                           copy.deepcopy(AGGREGATE_IG)]
         self.detail = AGGREGATE.replace('{caption}', 'Der Neakasa Herbst-Sale ist da! FB')
+
+    async def late_instagram_responses(self, instagram):
+        async def response(route):
+            url = route.request.url
+            documents = ([AGGREGATE_ROOT, AGGREGATE_STORY] if 'identity=initial' in url
+                         else [instagram] if 'identity=instagram' in url else [{'data': {'metrics': []}}])
+            await route.fulfill(content_type='application/json',
+                                body='\n'.join(json.dumps(value) for value in documents))
+        await self.context.route('**/api/graphql/**', response)
+        self.detail = self.detail.replace("fetch('/api/graphql/',{method:'POST'});", '''
+          const originalSelect=select;
+          select=tab=>{
+            originalSelect(tab);
+            if(tab.textContent==='Instagram') fetch('/api/graphql/?identity=instagram');
+          };
+          clock.textContent='Loading';
+          (async()=>{
+            await fetch('/api/graphql/?identity=initial');
+            for(let i=0;i<44;i++) await fetch('/api/graphql/?metric='+i);
+            clock.textContent='Post \\u00b7 Published on: Tue Sep 15, 7:17pm';
+          })();''')
+
+    async def test_instagram_identity_is_observed_after_initial_metrics_fill_the_budget(self):
+        await self.late_instagram_responses(AGGREGATE_IG)
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete, result.diagnostics)
+        self.assertEqual([(card.channels, dict(card.remote_ids), card.at.minute) for card in result.cards],
+                         [(('facebook',), {'facebook': POST_ID}, 17),
+                          (('instagram',), {'instagram': POST_IG_ID}, 18)])
+
+    async def test_reader_probe_keeps_observing_the_later_channel_with_the_production_reader(self):
+        await self.late_instagram_responses(AGGREGATE_IG)
+        records = []
+
+        def observe(page):
+            observer = ReaderObserver(page, records.append, identity_only=True)
+            observer.start()
+            return observer
+
+        with patch.object(month, 'accounts', return_value=ACCOUNTS):
+            result = await month.read_item_detail(self.page, {'date': self.day},
+                {'href': 'https://business.facebook.com/latest/insights/object_insights/?content_id=' + POST_ID,
+                 'time': self.clock}, None, '', timeout=5, observe_detail=observe)
+        self.assertEqual([value['channels'] for value in result['variants']], [('facebook',), ('instagram',)])
+        summary = next(row['RESPONSE_SUMMARY'] for row in records if 'RESPONSE_SUMMARY' in row)
+        self.assertEqual(summary['by_view'], {'initial': 40, 'facebook': 0, 'instagram': 1})
+        self.assertEqual(summary['dropped_by_view']['initial'], 5)
+        media = [row for row in records if 'instagram_post' in row.get('ENTITY_IDENTITY', {})]
+        self.assertEqual(len(media), 1)
+        self.assertEqual(media[0]['during_view'], 'instagram')
+        self.assertEqual(media[0]['ENTITY_IDENTITY']['instagram_post']['id'], POST_IG_ID)
+
+    async def test_late_instagram_identity_still_requires_the_members_own_media_and_owner(self):
+        for invalid in ('media', 'owner'):
+            with self.subTest(invalid=invalid):
+                self.load_responses()
+                instagram = copy.deepcopy(AGGREGATE_IG)
+                post = instagram['data']['instagram_post']
+                if invalid == 'media':
+                    post['id'] = '18199999999999999'
+                else:
+                    post['bizlink_instagram_actor']['id'] = '17849999999999999'
+                await self.late_instagram_responses(instagram)
+                result = await self.inventory()
+                self.assertFalse(result.decision_complete)
+                self.assertEqual([card.channels for card in result.cards if card.read_status == 'complete'],
+                                 [('facebook',)])
+                self.assertEqual([item['missing_fields'] for item in result.diagnostics], [['aggregate_identity']])
 
     async def test_each_channel_of_an_aggregate_keeps_its_own_identity_and_minute(self):
         result = await self.inventory()
@@ -223,6 +295,20 @@ class AggregatePostTests(MonthDetailCase):
         result = await self.inventory()
         self.assertFalse(result.decision_complete)
         self.assertEqual([d['missing_fields'] for d in result.diagnostics], [['selected_channel']])
+
+
+class ResponseBudgetTests(unittest.TestCase):
+    def test_each_channel_has_reserved_capacity_and_revisits_cannot_expand_it(self):
+        budget = InsightsResponseBudget()
+        for view in ('initial', 'Facebook', 'Instagram'):
+            self.assertEqual(sum(budget.accept(view) for _ in range(45)), 40)
+        self.assertFalse(budget.accept('reload'))
+        self.assertFalse(budget.accept('facebook'))
+        self.assertFalse(budget.accept('instagram'))
+        self.assertEqual(budget.summary(), {
+            'observed': 120, 'limit': 120, 'per_view_limit': 40,
+            'by_view': {'initial': 40, 'facebook': 40, 'instagram': 40},
+            'dropped_by_view': {'initial': 6, 'facebook': 6, 'instagram': 6}})
 
 
 if __name__ == '__main__':

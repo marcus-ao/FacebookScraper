@@ -520,6 +520,8 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
         return [material]
     variants=[]
     for channel,node in available:
+        if evidence is not None:
+            evidence.begin_channel(channel)
         await node.click(timeout=timeout*1000)
         deadline = time.monotonic()+timeout
         while await node.get_attribute('aria-selected') != 'true' and time.monotonic()<deadline:

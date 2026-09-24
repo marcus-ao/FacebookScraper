@@ -308,6 +308,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
         try:
             if observe_detail:
                 observer = observe_detail(detail)
+                evidence.on_channel = getattr(observer, 'begin_channel', None)
             try:
                 await detail.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
             except BrowserError as exc:

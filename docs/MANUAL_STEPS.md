@@ -1383,6 +1383,8 @@ scripts\run_pipeline.bat preflight
 
 09-15 19:17 的聚合 Post 更新后，保持 9223 中该 Post 详情打开，用 `scripts\run_python.bat -m tools.probe_calendar_detail --date 2026-09-15 --time 19:17 --kind Post --verify-reader` 复验一次。结果须完整列出各自的 FB/IG 身份和时刻，不能用同刻的单渠道 Story 替代；`PARTIAL` 时保留含 `DETAIL_STRUCTURE`、`ENTITY_IDENTITY`、`READER_RESULT` 的整份日志。单条完整通过后才刷新月历并检查未核实项，再回到原冻结稿件确认排期；不将探针成功当作已创建排期或 G8 通过。
 
+若 FB 已完整而 IG 缺 `aggregate_identity`，同时旧输出为 `RESPONSE_SUMMARY: 40/40`，先更新并重启 Web，再对同一 Post 只读复验。新版摘要列出 `by_view`、`dropped_by_view` 和每视图 40 条/整页最多 120 条限制；同一轮保留 `instagram_post` 的媒体与账号关联以及 `during_view`。达到初始额度不再关闭后续渠道采集，重复切换也不会增加额度。仍缺身份时返回完整日志，不能用已选中 IG 或预览中的账号名字代替原生绑定，也不要用再次创建排期取证。
+
 1. 在服务机核对已有 `published.jsonl`，选当前最新行为 `scheduled` 的原 `attempt_id`。它必须有单一渠道、确切 `remote_id`、原 `snapshot_id`、最终正文/图片摘要、来源指纹版本、绑定时刻和 UI 时区。保留原冻结目录及已有 `channel_controls.json`，不新增资产 ID 配置，不把开发机空目录覆盖过去。
 2. 快照中的 `publish_target` 必须与当前配置账号、既有资产绑定和发布 Chrome 一致；缺失或变化时入口在访问浏览器前拒绝。旧 v1 来源指纹仍按 v1 校验，但缺历史目标绑定不能自动补造。没有合格原对象时，才按 §16.3 展示并确认具体冻结正文、逐张图片及 SHA、账号、唯一渠道、北京/柏林时刻、UI 时区与占用结果，再创建一次受控样本。
 3. 在对应服务机源码目录，用人已登录的发布 Chrome 9223 执行只读补验。将下面的 `ATTEMPT_ID` 替换为原记录的值；没有 `--submit` 参数。

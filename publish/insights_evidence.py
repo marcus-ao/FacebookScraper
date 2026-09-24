@@ -6,6 +6,28 @@ from urllib.parse import urlsplit
 from core.meta_json import response_documents
 
 
+class InsightsResponseBudget:
+    """Reserve bounded response reads for initial load and each channel selection."""
+    per_view_limit = 40
+
+    def __init__(self):
+        self.counts = dict.fromkeys(('initial', 'facebook', 'instagram'), 0)
+        self.dropped = dict.fromkeys(self.counts, 0)
+
+    def accept(self, view):
+        key = view.lower() if view.lower() in {'facebook', 'instagram'} else 'initial'
+        if self.counts[key] >= self.per_view_limit:
+            self.dropped[key] += 1
+            return False
+        self.counts[key] += 1
+        return True
+
+    def summary(self):
+        return {'observed': sum(self.counts.values()), 'limit': len(self.counts) * self.per_view_limit,
+                'per_view_limit': self.per_view_limit, 'by_view': dict(self.counts),
+                'dropped_by_view': dict(self.dropped)}
+
+
 class InsightsEvidence:
     """Bind native Story entities through the root IG media, never business content IDs."""
     def __init__(self, page, source_id):
@@ -16,6 +38,8 @@ class InsightsEvidence:
         self.story_identities = []
         self.story_actors = []
         self.aggregate_members = []
+        self.view, self.on_channel = 'initial', None
+        self.budget = InsightsResponseBudget()
 
     @property
     def media_identities(self):
@@ -42,10 +66,17 @@ class InsightsEvidence:
     def start(self):
         self.page.on('response', self.observe)
 
+    def begin_channel(self, channel):
+        # Selection reserves collection capacity, never establishes identity.
+        # Counts persist when revisiting a channel; repeated clicks add no budget.
+        self.view = channel
+        if self.on_channel:
+            self.on_channel(channel)
+
     def observe(self, response):
         parsed = urlsplit(response.url)
         if (parsed.hostname == 'business.facebook.com' and parsed.path.rstrip('/') in
-                {'/api/graphql', '/graphql'} and len(self.tasks) < 40):
+                {'/api/graphql', '/graphql'} and self.budget.accept(self.view)):
             self.tasks.append(asyncio.create_task(self.collect(response)))
 
     def observe_media(self, document):
