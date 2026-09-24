@@ -33,8 +33,12 @@ SENSITIVE_INPUT_SELECTOR = (
 
 _ZWSP = selectors.ZERO_WIDTH_SPACE
 # Time input 容器文本形如 12 : 30 AM。
-_RENDERED_TIME = re.compile(r"(\d{1,2})\s*:\s*(\d{2})\s*([AP]M)", re.IGNORECASE)
-_RENDERED_DATE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_RENDERED_TIME = re.compile(r"(\d{1,2})\s*:\s*(\d{1,2})\s*([AP]M)", re.IGNORECASE)
+_RENDERED_DATE = re.compile(r"(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{4})")
+# Composer uses English month names after blur, independent of the Python host locale.
+_ENGLISH_MONTHS = {label: number for number, name in enumerate((
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+    'september', 'october', 'november', 'december'), 1) for label in (name, name[:3])}
 
 
 class ProbeRequired(RuntimeError):
@@ -722,17 +726,15 @@ async def set_schedule(page, when: datetime, *, ui_timezone: str,
 
         # ---- 日期。placeholder 是 mm/dd/yyyy（dump 第 26 条），所以是美式格式 ----
         await _type_into(page, date_input, date_text, timeout=timeout)
+        await page.keyboard.press('Tab')
         actual_date = (await date_input.input_value()).strip()
-        if not _same_date(actual_date, local):
-            raise PublishStepError(
-                "%s的日期回读对不上：期望 %s，UI 上是 %r。"
-                "\n  ⚠️ 先怀疑**日期格式变了**（placeholder 应当仍是 mm/dd/yyyy）；"
-                "格式变了而代码照旧 strftime，会静默地排到**另一个日子**。"
-                % (where, date_text, actual_date))
+        _verify_date(actual_date, local, where + '的日期回读对不上')
 
         rendered = await _set_one_time(
             page, group, hour12, local.minute, meridiem,
             timeout=timeout, where=where)
+        actual_date = (await date_input.input_value()).strip()
+        _verify_date(actual_date, local, where + '的日期回读对不上')
         readbacks.append("%s %s" % (actual_date, rendered))
 
     # 同时显示业务时刻和 UI 时刻，便于对照。
@@ -789,16 +791,30 @@ async def verify_form(page, text, when, *, ui_timezone, timeout=DEFAULT_UI_TIMEO
         raise PublishStepError('提交前必须且只能有一套排期控件；未提交')
     local = when.astimezone(resolve_ui_timezone(ui_timezone))
     assert_ui_time_unambiguous(when, ui_timezone)
-    if not _same_date(await dates.input_value(), local):
-        raise PublishStepError('提交前日期已变化；未提交')
+    _verify_date(await dates.input_value(), local, '提交前日期')
     controls = await _time_controls(groups, '提交前排期控件')
-    values = [(await _field_value(control)) for control in controls]
-    rendered = (await groups.inner_text()).replace(_ZWSP, '').strip()
+    observed, rendered = await _read_time(groups, controls)
     expected = (local.hour % 12 or 12, local.minute, 'AM' if local.hour < 12 else 'PM')
-    # contenteditable spinbuttons expose inner text; real input controls expose values.
-    observed = ' : '.join(values[:2]) + ' ' + values[2] if all(value is not None for value in values) else rendered
-    if not _same_time(observed, *expected) or not _same_time(rendered, *expected):
-        raise PublishStepError('提交前时刻已变化；未提交')
+    if not _time_matches(observed, rendered, *expected):
+        raise PublishStepError('提交前时刻与确认时刻不一致或无法识别：期望 %s（%s），'
+            '字段为 %r，显示为 %r；未提交' % (local.strftime('%Y-%m-%d %H:%M'),
+            ui_timezone, observed, rendered))
+
+
+async def _read_time(group, controls):
+    values = []
+    for control in controls:
+        value = await _field_value(control)
+        # Native input values do not appear in innerText; editable spinbuttons do.
+        values.append(_schedule_text(value if value is not None else await control.inner_text()))
+    return ' : '.join(values[:2]) + ' ' + values[2], _schedule_text(await group.inner_text())
+
+
+def _time_matches(observed, rendered, hour12, minute, meridiem):
+    # A second displayed clock must agree, but a container of input elements may be empty.
+    return (_same_time(observed, hour12, minute, meridiem)
+            and (not _RENDERED_TIME.fullmatch(rendered)
+                 or _same_time(rendered, hour12, minute, meridiem)))
 
 
 async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
@@ -810,9 +826,11 @@ async def _set_one_time(page, group, hour12: int, minute: int, meridiem: str,
         await _type_into(page, hours, hour_text, timeout=timeout)
         await _type_into(page, minutes_input, "%02d" % minute, timeout=timeout)
         await _type_into(page, meridiem_input, meridiem, timeout=timeout)
-        rendered = (await group.inner_text() or "").replace(_ZWSP, "").strip()
-        if _same_time(rendered, hour12, minute, meridiem):
-            return rendered
+        # Commit the last edited field without pressing Enter, which could submit the form.
+        await page.keyboard.press('Tab')
+        observed, rendered = await _read_time(group, (hours, minutes_input, meridiem_input))
+        if _time_matches(observed, rendered, hour12, minute, meridiem):
+            return rendered if _RENDERED_TIME.fullmatch(rendered) else observed
 
     # 报告各输入值，便于定位时分或 AM/PM 的错误。
     detail = []
@@ -864,17 +882,41 @@ async def _type_into(page, target, value: str, *,
     return await _field_value(target)
 
 
-def _same_date(rendered: str, local: datetime) -> bool:
-    match = _RENDERED_DATE.search(rendered or "")
-    if not match:
-        return False
-    month, day, year = (int(item) for item in match.groups())
-    return (month, day, year) == (local.month, local.day, local.year)
+def _schedule_text(value: str) -> str:
+    return ' '.join((value or '').translate(str.maketrans('', '', '\u200b\u200e\u200f\ufeff')).split())
+
+
+def _parse_date(rendered: str) -> date | None:
+    value = _schedule_text(rendered)
+    numeric = _RENDERED_DATE.fullmatch(value)
+    named = re.fullmatch(r'([A-Za-z]+) (\d{1,2}),? (\d{4})', value)
+    iso = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', value)
+    if numeric:
+        month, day, year = map(int, numeric.groups())
+    elif named:
+        month = _ENGLISH_MONTHS.get(named[1].lower(), 0)
+        day, year = int(named[2]), int(named[3])
+    elif iso:
+        year, month, day = map(int, iso.groups())
+    else:
+        return None
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _verify_date(rendered: str, local: datetime, where: str) -> None:
+    actual = _parse_date(rendered)
+    if actual != local.date():
+        reason = '无法识别' if actual is None else '与确认日期不一致'
+        raise PublishStepError('%s（%s）：期望 %s（%s），页面为 %r；未提交'
+            % (where, reason, local.date().isoformat(), local.tzinfo, rendered))
 
 
 def _same_time(rendered: str, hour12: int, minute: int, meridiem: str) -> bool:
-    """按语义比对，不按字符串比——`12 : 30 AM` 的补零形态没被实测过。"""
-    match = _RENDERED_TIME.search(rendered or "")
+    """比较小时、分钟和 AM/PM，忽略补零与展示空白。"""
+    match = _RENDERED_TIME.fullmatch(_schedule_text(rendered))
     if not match:
         return False
     return (int(match.group(1)), int(match.group(2)),

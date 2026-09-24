@@ -1695,8 +1695,9 @@ async def schedule_bad_date():
 
 
 bad_date = asyncio.run(schedule_bad_date())
-check("日期回读对不上" in bad_date and "mm/dd/yyyy" in bad_date,
-      "G5 日期回读对不上时点名「先怀疑日期格式变了」——静默排到别的日子是最贵的错")
+check(all(value in bad_date for value in ('日期回读对不上', '不一致', '2026-09-08',
+                                        'Europe/Berlin', '08/09/2026', '未提交')),
+      "G5 日期确实不同则停止，错误同时列出确认日期、UI 时区和实际值")
 
 check(raises(ValueError,
              lambda: asyncio.run(set_schedule(

@@ -73,6 +73,7 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 'count': "document.querySelector('li').remove()",
                 'time': "document.querySelector('[aria-label=minutes]').value='31'",
                 'date': "document.querySelector('[aria-label=\"Date picker\"]').value='09/26/2026'",
+                'formatted_date': "document.querySelector('[aria-label=\"Date picker\"]').value='Sep 25, 2026'",
                 'switch': "document.querySelector('[role=switch]').checked=false",
                 'disabled': "document.querySelector('#submit').disabled=true",
                 'enable_later': "document.querySelector('#submit').disabled=true;setTimeout(()=>document.querySelector('#submit').disabled=false,120)",
@@ -145,6 +146,109 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         result, submit = await self.run_workflow('preview_url')
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
         self.assertEqual(submit.await_count, 1)
+
+    async def test_date_display_format_changes_do_not_block_the_same_schedule(self):
+        result, submit = await self.run_workflow('formatted_date')
+        self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
+        self.assertEqual(submit.await_count, 1)
+
+    async def schedule_editor(self, *, native_inputs=False, wrong_date_on_blur=False):
+        await self.page.set_content(HTML)
+        await self.page.evaluate('''({nativeInputs, wrongDate}) => {
+            const date = document.querySelector('[aria-label="Date picker"]');
+            date.onblur = () => {
+                const parsed = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/.exec(date.value);
+                if (parsed) date.value = new Date(+parsed[3], +parsed[1]-1, +parsed[2])
+                    .toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+                if (wrongDate) date.value = 'Oct 1, 2026';
+            };
+            const group = document.querySelector('[role="application"]');
+            const inputs = [...group.querySelectorAll('input')];
+            const shown = group.querySelector('span');
+            if (nativeInputs) shown.remove();
+            else {
+                const render = () => shown.textContent = inputs[0].value + ' : ' + inputs[1].value + ' ' + inputs[2].value;
+                inputs.forEach(input => input.oninput = render);
+            }
+        }''', {'nativeInputs': native_inputs, 'wrongDate': wrong_date_on_blur})
+
+    async def test_set_and_verify_same_instant_after_blur_and_timezone_conversion(self):
+        cases = (
+            ('2026-09-30T23:00:00+08:00', 'Asia/Shanghai', 'Sep 30, 2026', '11', '00', 'PM'),
+            ('2026-10-01T00:15:00+08:00', 'Asia/Shanghai', 'Oct 1, 2026', '12', '15', 'AM'),
+            ('2026-10-01T00:15:00+08:00', 'America/Los_Angeles', 'Sep 30, 2026', '9', '15', 'AM'),
+            ('2026-12-31T18:00:00+00:00', 'Asia/Shanghai', 'Jan 1, 2027', '2', '00', 'AM'),
+            ('2026-09-30T12:00:00+08:00', 'Asia/Shanghai', 'Sep 30, 2026', '12', '00', 'PM'),
+        )
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            for moment, zone, day, hour, minute, meridiem in cases:
+                with self.subTest(moment=moment, zone=zone):
+                    await self.schedule_editor()
+                    when = datetime.fromisoformat(moment)
+                    readback = await bs.set_schedule(self.page, when, ui_timezone=zone,
+                        verify_device=False, target_channels=('facebook',), timeout=1)
+                    self.assertIn(day, readback)
+                    self.assertEqual(await self.page.get_by_role('textbox', name='Date picker').input_value(), day)
+                    self.assertEqual(await self.page.get_by_role('spinbutton').evaluate_all('items=>items.map(i=>i.value)'),
+                                     [hour, minute, meridiem])
+                    self.assertFalse(await self.page.get_by_role('spinbutton', name='meridiem').evaluate('el=>el===document.activeElement'))
+                    await bs.verify_form(self.page, TEXT, when, ui_timezone=zone, timeout=1)
+
+    async def test_native_time_values_do_not_require_duplicate_container_text(self):
+        await self.schedule_editor(native_inputs=True)
+        when = datetime.fromisoformat('2026-09-30T23:00:00+08:00')
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            await bs.set_schedule(self.page, when, ui_timezone='Asia/Shanghai', verify_device=False, timeout=1)
+            await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+            await self.page.get_by_role('spinbutton', name='minutes').fill('0')
+            await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+            await self.page.get_by_role('spinbutton', name='meridiem').fill('AM')
+            with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
+                await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+
+    async def test_editable_time_segments_normalize_spaces_padding_and_case(self):
+        await self.page.set_content(HTML)
+        await self.page.get_by_role('spinbutton').evaluate_all('''items => items.forEach((old, index) => {
+            const field = document.createElement('div');
+            field.contentEditable = 'true'; field.setAttribute('role', 'spinbutton');
+            if (old.hasAttribute('aria-label')) field.setAttribute('aria-label', old.getAttribute('aria-label'));
+            field.textContent = ['\\u200e12', ' 30 ', ' pm '][index]; old.replaceWith(field);
+        })''')
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
+            await self.page.get_by_role('spinbutton', name='meridiem').fill('AM')
+            with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
+                await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
+
+    async def test_date_reversion_on_blur_is_caught_during_initial_fill(self):
+        await self.schedule_editor(wrong_date_on_blur=True)
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            with self.assertRaisesRegex(bs.PublishStepError, '日期'):
+                await bs.set_schedule(self.page, datetime.fromisoformat('2026-09-30T23:00:00+08:00'),
+                    ui_timezone='Asia/Shanghai', verify_device=False, timeout=1)
+
+    async def test_final_date_formats_and_diagnostics(self):
+        when = datetime.fromisoformat('2026-09-30T23:00:00+08:00')
+        await self.page.set_content(HTML)
+        await self.page.get_by_role('spinbutton').first.fill('11')
+        await self.page.get_by_role('spinbutton', name='minutes').fill('00')
+        await self.page.locator('[role="application"] span').evaluate('el=>el.textContent="11 : 00 PM"')
+        dates = self.page.get_by_role('textbox', name='Date picker')
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            for shown in ('9/30/2026', '09/30/2026', 'Sep 30, 2026', 'September 30, 2026',
+                          '2026-09-30', '\u200eSep\u00a030,\u202f2026\u200b'):
+                with self.subTest(shown=shown):
+                    await dates.fill(shown)
+                    await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+            for shown, reason in (('Oct 1, 2026', '不一致'), ('Sep 30, 2027', '不一致'),
+                                  ('30/09/2026', '无法识别'), ('unknown', '无法识别'),
+                                  ('Sep 31, 2026', '无法识别'), ('9/30/2026 changed', '无法识别')):
+                with self.subTest(shown=shown):
+                    await dates.fill(shown)
+                    with self.assertRaises(bs.PublishStepError) as raised:
+                        await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+                    for detail in ('2026-09-30', 'Asia/Shanghai', shown, reason, '未提交'):
+                        self.assertIn(detail, str(raised.exception))
 
 
 if __name__ == '__main__':
