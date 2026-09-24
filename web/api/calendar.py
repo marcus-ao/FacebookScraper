@@ -1,7 +1,11 @@
 """月历只读展示与显式刷新；浏览器访问复用业务读取器与发布锁。"""
 from __future__ import annotations
 
+import re
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -9,7 +13,9 @@ from fastapi.responses import JSONResponse
 from core.config import ROOT, cfg
 from publish import business_suite as bs
 from publish import local_schedule, planning
+from publish import journal
 from publish.planner_cache import inventory_from_cache, read_cache, read_live_inventory, refresh_cache
+from publish.planner_content import public_permalink
 from publish.planning import calendar_bounds, configured_window
 
 router = APIRouter()
@@ -28,6 +34,35 @@ _DETAIL_ERRORS = {
     'load_timeout': '详情业务字段加载超时', 'permission_denied': '详情不可访问或权限不足',
     'structure_unknown': '详情结构尚未识别', 'read_failed': '条目读取失败',
 }
+
+
+def source_permalinks_by_remote() -> dict[tuple[str, str], str]:
+    """审核归档里的公开地址，按发布记录的远端编号对上月历卡片。对不上就不填。"""
+    state = Path(cfg().get("paths", "state", "state"))
+    archived: dict[tuple[str, str], str] = {}
+    database = state / "index.sqlite"
+    if database.is_file():
+        try:
+            with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+                for platform, post_id, permalink in connection.execute(
+                        "SELECT platform, post_id, permalink FROM posts WHERE ifnull(permalink, '') != ''"):
+                    checked = public_permalink(permalink)
+                    if checked:
+                        archived[(platform, post_id)] = checked
+        except sqlite3.Error:
+            archived = {}
+    try:
+        attempts = journal.load(state)
+    except (OSError, ValueError):
+        return {}
+    found: dict[tuple[str, str], str] = {}
+    for row in attempts:
+        permalink = archived.get((row.get("platform"), row.get("post_id")))
+        if not permalink:
+            continue
+        for channel, remote in re.findall(r"(facebook|instagram)=(\d{6,})", str(row.get("remote_id") or "")):
+            found[(channel, remote)] = permalink
+    return found
 
 
 def current_time() -> datetime:
@@ -72,10 +107,17 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                    and start <= month_start.date().isoformat()
                    and end >= (month_end.date() - timedelta(days=1)).isoformat())
     cards = []
+    remote_links = source_permalinks_by_remote()
     for card in data.get("cards", []):
         at = datetime.fromisoformat(card["at"])
         if at.astimezone(ui_zone).strftime("%Y-%m") == local.strftime("%Y-%m"):
-            cards.append({**card, "at_business": at.astimezone(business_zone).isoformat(),
+            links = dict(card.get("permalinks") or {})
+            for channel, remote in (card.get("remote_ids") or {}).items():
+                found = remote_links.get((channel, str(remote)))
+                if found:
+                    links[channel] = found
+            cards.append({**card, "permalinks": links,
+                          "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
     cards.sort(key=lambda item: item["at"])
 

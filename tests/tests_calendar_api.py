@@ -1,5 +1,6 @@
 """Calendar routes operate only on temporary caches and injected browser readers."""
 import asyncio
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config  # noqa: E402
 from publish.business_suite import ProbeRequired, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
 from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
-from publish.journal import PublishOperationLock  # noqa: E402
+from publish.journal import PublishAttempt, PublishOperationLock, append as append_attempt  # noqa: E402
 from publish import planner_cache  # noqa: E402
 from publish.month_inventory import PlannerItemError  # noqa: E402
 from publish.planner_content import DetailReadError  # noqa: E402
@@ -73,6 +74,27 @@ class CalendarApiTests(unittest.TestCase):
         # 远端层不受影响：占用仍然只由读回来的卡片决定。
         self.assertEqual(len(data["cards"]), 1)
         self.assertEqual(data["cards"][0]["remote_ids"], {"facebook": "123456"})
+
+    def test_review_permalink_is_attached_by_the_publish_remote_id(self):
+        self.populate()
+        self.state.mkdir(exist_ok=True)
+        database = self.state / "index.sqlite"
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute("CREATE TABLE posts (platform TEXT, post_id TEXT, permalink TEXT)")
+            connection.execute("INSERT INTO posts VALUES ('facebook', 'post-1', ?)",
+                               ("https://www.facebook.com/neakasaofficial/posts/1",))
+            connection.commit()
+        finally:
+            connection.close()
+        append_attempt(self.state, PublishAttempt(
+            post_id="post-1", platform="facebook", status="scheduled",
+            scheduled_at=SLOT.isoformat(), recorded_at=NOW.isoformat(),
+            text_de_sha256="abc", remote_id="facebook=123456"))
+        data = self.client.get("/api/calendar").json()
+        self.assertEqual(data["cards"][0]["permalinks"],
+                         {"facebook": "https://www.facebook.com/neakasaofficial/posts/1"})
+        database.unlink()
 
     def test_a_broken_review_ledger_is_reported_not_shown_as_an_empty_local_layer(self):
         self.populate()
