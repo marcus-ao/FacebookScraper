@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tomllib
 import zipfile
@@ -82,7 +81,8 @@ def main(argv=None):
         arguments = args.args[1:] if args.args[:1] == ['--'] else args.args
         if not arguments:
             parser.error('exec 需要 Python 参数，例如 -m pipeline preflight')
-        return subprocess.call([str(python), *arguments], cwd=ROOT)
+        from core.console import run_foreground
+        return run_foreground([str(python), *arguments], cwd=ROOT)
     else:
         from core.config import cfg
         c = cfg()

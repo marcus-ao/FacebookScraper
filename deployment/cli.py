@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.maintenance import Gate, operation
+from core.console import note_stop
 from core.paid_model import FileLock
 from deployment.controller import Controller
 from deployment.github import GitHub, GitHubError
@@ -191,6 +192,7 @@ def entrypoint():
     try:
         return main()
     except KeyboardInterrupt:
+        note_stop()
         return 130
     except Exception as exc:
         # Underlying HTTP/process exceptions can include credentials; never print arbitrary text.

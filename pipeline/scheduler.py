@@ -307,6 +307,8 @@ def main(argv=None, *, stop_event=None) -> int:
         print(f"[!] 调度器未运行：{exc}")
         return 1
     except KeyboardInterrupt:
+        from core.console import note_stop
+        note_stop()
         return 0
     finally:
         if runtime is not None:
