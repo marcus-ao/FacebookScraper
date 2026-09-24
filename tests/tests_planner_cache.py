@@ -229,5 +229,25 @@ class PlannerCacheTests(unittest.TestCase):
         self.assertEqual(json.loads(external.read_text()), {"secret": "must remain unchanged"})
 
 
+    def test_public_permalink_roundtrips_and_a_bad_host_or_missing_field_stays_safe(self):
+        link = 'https://www.instagram.com/p/AbCdEf'
+        card = RemotePlannerCard(SLOT, ('instagram',), (('instagram', '123456'),), 'caption', 'sha',
+                                 placement='feed', time_verified=True, permalinks=(('instagram', link),))
+        stored = RemoteSlotInventory((SLOT,), 'America/Los_Angeles', date(2026, 9, 1), date(2026, 9, 30),
+                                     (card,), True)
+        result = self.refresh(AsyncMock(return_value=stored))
+        self.assertEqual(inventory_from_cache(result).cards[0].permalinks, (('instagram', link),))
+        data = json.loads(self.path.read_text(encoding='utf-8'))
+        del data['inventory']['cards'][0]['permalinks']
+        self.path.write_text(json.dumps(data), encoding='utf-8')
+        self.assertEqual(inventory_from_cache(read_cache(self.path, now=NOW)).cards[0].permalinks, ())
+        data = json.loads(self.path.read_text(encoding='utf-8'))
+        data['inventory']['cards'][0]['permalinks'] = {'instagram': 'https://evil.example/p/1'}
+        with self.assertRaises(ValueError):
+            inventory_from_cache(data)
+        self.path.write_text(json.dumps(data), encoding='utf-8')
+        self.assertEqual(read_cache(self.path, now=NOW)['status'], 'unavailable')
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -487,7 +487,8 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None):
                         relationships=tuple(variant.get('relationships',())),
                         read_status=variant.get('read_status','complete'),
                         time_verified=variant.get('time_verified', True), diagnostic_index=diagnostic_index,
-                        source_content_id=variant.get('source_content_id','')))
+                        source_content_id=variant.get('source_content_id',''),
+                        permalinks=tuple(sorted((variant.get('permalinks') or {}).items()))))
     # Verify a final sweep so edits/late rendering during detail reads invalidate the inventory.
     if rows != await read_grid(page, timeout=timeout):
         raise bs.PublishStepError('核对详情期间远端月历已更新，请重新读取')

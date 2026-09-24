@@ -426,6 +426,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.decision_complete)
         partial = result.cards[0]
         self.assertEqual(partial.caption_status, 'unknown')
+        self.assertEqual(dict(partial.permalinks), {
+            'facebook': 'https://www.facebook.com/permalink.php?story_fbid=12345678&id=123456'})
         self.assertTrue(partial.time_verified)
         self.assertEqual(result.cards_in_range('facebook', partial.at, partial.at), (partial,))
         outside = partial.at.replace(day=15)

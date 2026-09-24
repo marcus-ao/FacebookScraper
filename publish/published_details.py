@@ -80,14 +80,16 @@ async def preview_identity(page, channel, placement):
           if(channel==='facebook' && /(^|\.)facebook\.com$/.test(u.hostname)) {
             const ownerId=u.searchParams.get('id')||'';
             if(u.pathname==='/profile.php' && /^\d+$/.test(ownerId) && text && (a.closest('h1,h2,h3,[role="heading"]') || a.querySelector('h1,h2,h3,[role="heading"]'))) owners.set(ownerId+'\0'+text,{id:ownerId,name:text});
-            if(['/permalink.php','/story.php'].includes(u.pathname) && u.searchParams.has('story_fbid')) permalinks.push({ownerId,id:u.searchParams.get('story_fbid')});
+            if(['/permalink.php','/story.php'].includes(u.pathname) && u.searchParams.has('story_fbid')) permalinks.push({ownerId,id:u.searchParams.get('story_fbid'),href:u.href});
           }
         }
         if(owners.size && permalinks.length) {
           if(owners.size!==1) return {owner:'',remote_id:''};
           const owner=[...owners.values()][0];
-          const ids=new Set(permalinks.filter(p=>p.ownerId===owner.id).map(p=>p.id));
-          return {owner:owner.name,remote_id:ids.size===1?[...ids][0]:''};
+          const matched=permalinks.filter(p=>p.ownerId===owner.id);
+          const ids=new Set(matched.map(p=>p.id));
+          const hrefs=new Set(matched.map(p=>p.href));
+          return {owner:owner.name,remote_id:ids.size===1?[...ids][0]:'',permalink:ids.size===1&&hrefs.size===1?[...hrefs][0]:''};
         }
       }
       return {owner:'',remote_id:''};

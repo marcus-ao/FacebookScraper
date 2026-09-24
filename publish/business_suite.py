@@ -153,6 +153,8 @@ class RemotePlannerCard:
     # 缺省为假：旧缓存没有该字段时不能把外层时刻当成已核实。
     time_verified: bool = False
     diagnostic_index: int | None = None
+    # 读取时已经核对过的公开地址；旧缓存没有这个字段。
+    permalinks: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
