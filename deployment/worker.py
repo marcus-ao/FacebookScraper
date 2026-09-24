@@ -90,4 +90,9 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        from core.console import note_stop
+        note_stop()
+        raise SystemExit(0)

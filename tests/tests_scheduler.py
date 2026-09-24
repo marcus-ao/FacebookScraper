@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -131,6 +132,29 @@ class SchedulerEntryTests(unittest.TestCase):
         runtime.start_processing.return_value.result.assert_not_called()
         runtime.await_delivery.assert_not_called()
         runtime.close.assert_called_once()
+
+    def test_ctrl_c_returns_zero_and_one_stop_line(self):
+        runner = self.runner()
+        runner.tick.side_effect = KeyboardInterrupt
+        runtime = Mock()
+        with patch.object(scheduler, 'Scheduler', return_value=runner), \
+             patch('pipeline.service.Runtime', return_value=runtime), \
+             patch.dict(os.environ, {}, clear=False), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            os.environ.pop('FBSCRAPER_STOP_NOTICE', None)
+            self.assertEqual(scheduler.main(['--run']), 0)
+        self.assertEqual(err.getvalue().strip().splitlines(), ['已停止。'])
+        runtime.close.assert_called_once()
+
+    def test_ctrl_c_stays_quiet_when_a_parent_will_announce(self):
+        runner = self.runner()
+        runner.tick.side_effect = KeyboardInterrupt
+        with patch.object(scheduler, 'Scheduler', return_value=runner), \
+             patch('pipeline.service.Runtime', return_value=Mock()), \
+             patch.dict(os.environ, {'FBSCRAPER_STOP_NOTICE': '1'}), \
+             contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(scheduler.main(['--run']), 0)
+        self.assertNotIn('已停止。', err.getvalue())
 
 
 if __name__ == '__main__':

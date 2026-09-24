@@ -106,7 +106,7 @@ exit /b 0
     def prepare_lan(self):
         for directory in ('tools', 'core', 'ops'):
             (self.root / directory).mkdir()
-        for name in ('tools/source_web.py', 'core/web_access.py', 'scripts/run_web_lan.bat'):
+        for name in ('tools/source_web.py', 'core/console.py', 'core/web_access.py', 'scripts/run_web_lan.bat'):
             shutil.copyfile(ROOT / name, self.root / name)
         self.network = self.root / 'ops/service-machine.network.json'
         self.network.write_text(json.dumps({'web_host': '0.0.0.0', 'web_port': 9876,

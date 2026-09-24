@@ -1092,7 +1092,11 @@ def main(argv=None, *, config: DeltaConfig | None = None) -> int:
 
 
 if __name__ == "__main__":
-    from core.console import force_utf8
+    from core.console import force_utf8, note_stop
 
     force_utf8()
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        note_stop()
+        raise SystemExit(0)

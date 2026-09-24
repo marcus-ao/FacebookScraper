@@ -2,8 +2,9 @@
 import argparse
 import os
 from pathlib import Path
-import subprocess
 import sys
+
+from core.console import run_foreground
 
 from core.web_access import load_web_access
 
@@ -20,7 +21,7 @@ def main(argv=None):
         if policy.web_host != '0.0.0.0':
             raise ValueError('Source LAN startup requires web_host=0.0.0.0.')
         print(f'Source LAN Web: {policy.public_base_url}', flush=True)
-        return subprocess.call([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/c',
+        return run_foreground([os.environ.get('COMSPEC', 'cmd.exe'), '/d', '/c',
             str(ROOT / 'scripts/run_web.bat'), '--host', policy.web_host,
             '--port', str(policy.web_port), '--no-proxy-headers'], cwd=ROOT)
     except (OSError, ValueError) as exc:
