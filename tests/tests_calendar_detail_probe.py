@@ -125,6 +125,21 @@ class DetailProbeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.page.evaluate('window.changed'))
         self.assertEqual(await self.page.get_by_role('tab',selected=True).inner_text(),'Total performance')
 
+    async def test_reader_observer_keeps_header_and_tabs_for_channel_failures(self):
+        records = []
+        observer = probe.ReaderObserver(self.page, records.append, identity_only=True)
+        observer.start()
+        await observer.finish()
+        structures = [row['DETAIL_STRUCTURE'] for row in records if 'DETAIL_STRUCTURE' in row]
+        self.assertEqual(len(structures), 1)
+        self.assertTrue(structures[0]['readiness']['caption_ready'])
+        self.assertEqual([tab['text'] for tab in structures[0]['tabs']],
+                         ['Total performance', 'Facebook', 'Instagram'])
+        self.assertEqual(structures[0]['readiness']['selected_channels'], ['Total performance'])
+        for private in ('SECRET_TOKEN', 'PRIVATE CAPTION', 'Private link text'):
+            self.assertNotIn(private, json.dumps(records))
+        self.assertFalse(await self.page.evaluate('window.submitted'))
+
     async def test_channel_hydration_does_not_skip_instagram_or_capture_loading_as_ready(self):
         # The supplied live log has no aria-controls and loses all visible tabs
         # during the Facebook samples. The delay here is an isolated reproduction.

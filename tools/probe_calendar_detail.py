@@ -128,6 +128,11 @@ class ReaderObserver(ResponseEvidence):
             self.emit({'PREVIEW_STRUCTURE': structure})
         except Exception as exc:
             self.emit({'PREVIEW_STRUCTURE': 'unreadable', 'read_error_type': type(exc).__name__})
+        try:
+            structure = await asyncio.wait_for(self.page.evaluate(SNAPSHOT), 8)
+            self.emit({'DETAIL_STRUCTURE': structure})
+        except Exception as exc:
+            self.emit({'DETAIL_STRUCTURE': 'unreadable', 'read_error_type': type(exc).__name__})
         await super().finish()
 
 

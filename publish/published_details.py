@@ -439,22 +439,37 @@ async def read_story(page, row, item, expected_accounts, baseline, evidence, *, 
         await asyncio.sleep(.2)
 
 
-async def channel_tabs(page, header, *, deadline):
-    """Resolve the channel tabs against the header badge instead of one sample.
+def _required_channels(header, evidence):
+    """Header badges and source-bound native members both require channel coverage."""
+    members = getattr(evidence, 'aggregate_members', ())
+    if len(members) > 1:
+        raise DetailReadError('identity_unverified', missing_fields=('consistent_aggregate_identity',))
+    return {name.lower() for name in header['platforms']} | (set(members[0]) if members else set())
 
-    Tabs mount after the header, so counting them once cannot prove their absence:
-    that is how an aggregate detail gets read as a single channel and then fails
-    for a missing channel. A header naming two platforms spans channels and must
-    carry their tabs; a single badge cannot have them, and the post-read tab check
-    still catches one that mounts afterwards.
+
+async def channel_tabs(page, header, *, deadline, evidence=None):
+    """Wait for channel evidence; an unpopulated badge list is not a single channel.
+
+    Badges and tabs hydrate separately. Re-read both and include the native member
+    list already bound to this detail's content_id, never the configured accounts.
     """
     tabs = [(key,page.get_by_role('tab',name=label,exact=True))
             for key,label in [('facebook','Facebook'),('instagram','Instagram')]]
+    required = _required_channels(header, evidence)
     while True:
+        current = await header_snapshot(page)
+        if current:
+            header = current
         available = [(key,node) for key,node in tabs if await node.count()==1]
-        if len(header['platforms']) < 2 or len(available) == len(header['platforms']):
-            return tabs, available
+        # A repaint may remove a badge or tab; it cannot revoke a channel seen.
+        required.update(_required_channels(header, evidence))
+        required.update(key for key, _ in available)
+        if current and ((available and required <= {key for key,_ in available})
+                        or (not available and len(required) == 1)):
+            return header, tabs, available, required
         if time.monotonic() >= deadline:
+            if header['metadata'].split('·', 1)[0].strip() not in LABELS:
+                raise DetailReadError('unsupported_type')
             raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
         await asyncio.sleep(.2)
 
@@ -471,7 +486,7 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
             raise DetailReadError('structure_unknown', missing_fields=('published_header',))
         await asyncio.sleep(.2)
         header = await header_snapshot(page)
-    tabs, available = await channel_tabs(page, header, deadline=deadline)
+    header, tabs, available, required = await channel_tabs(page, header, deadline=deadline, evidence=evidence)
     if evidence is not None and header['metadata'].split('·',1)[0].strip()=='Story':
         # A Story published to Facebook alone has no Instagram root to bind and no
         # channel tab to select. Every other Story keeps the recorded path, so an
@@ -496,7 +511,9 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
             if any([await node.count() for _,node in tabs]):
                 raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
             return variants
-        if any([await node.count() for _,node in tabs]) or await page.get_by_role('tab',name='Total performance',exact=True).count():
+        if (any([await node.count() for _,node in tabs])
+                or await page.get_by_role('tab',name='Total performance',exact=True).count()
+                or not (required | _required_channels(header, evidence)).issubset(material['channels'])):
             raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
         if material['ui_at'].strftime('%I:%M %p').lstrip('0') != item['time'].lstrip('0'):
             raise DetailReadError('time_mismatch',placement=material['placement'])
@@ -522,8 +539,8 @@ async def read(page, row, item, expected_accounts, *, timeout=30, evidence=None,
                                   variants=(*variants, *exc.variants)) from exc
     if [(key,await node.count()) for key,node in tabs] != [(key,int(any(key==found for found,_ in available))) for key,_ in tabs]:
         raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
-    if not set(header['platforms']).issubset({channel.title() for channel,_ in available}):
-        raise DetailReadError('missing_fields', missing_fields=('channel_tabs',))
+    if not (required | _required_channels(header, evidence)).issubset({channel for channel,_ in available}):
+        raise DetailReadError('missing_fields', missing_fields=('channel_tabs',), variants=variants)
     if not any(value['ui_at'].strftime('%I:%M %p').lstrip('0')==item['time'].lstrip('0') for value in variants):
         raise DetailReadError('time_mismatch')
     if len(variants)>1:

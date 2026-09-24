@@ -4,9 +4,11 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from month_detail_fixtures import ACCOUNTS, MonthDetailCase
+from publish import published_details
 
 POST_ID = '122187915260939228'
 POST_IG_ID = '18129143875786241'
@@ -93,6 +95,99 @@ class AggregatePostTests(MonthDetailCase):
         self.assertEqual(ig.relationships, ('cross_platform',))
         self.assertEqual(result.occupied_for_channel('facebook'), (fb.at,))
         self.assertEqual(result.occupied_for_channel('instagram'), (ig.at,))
+
+    async def test_empty_initial_badges_do_not_route_an_aggregate_as_single_channel(self):
+        # The 9/24 log has two native members but ends in read_view's empty-channel
+        # failure. This isolated hydration sequence reproduces that routing defect;
+        # the operator log does not retain the exact DOM arrival times.
+        self.detail += '''<script>
+          const initialTabs=[...document.querySelectorAll('[role=tab]')]
+            .filter(n=>['Total performance','Facebook','Instagram'].includes(n.textContent));
+          initialTabs.forEach(n=>n.remove());
+          platforms.replaceChildren();
+          setTimeout(()=>{
+            platforms.innerHTML='<img alt="Facebook"><img alt="Instagram">';
+            initialTabs.forEach(n=>document.body.insertBefore(n,document.querySelector('aside')));
+          },1000);
+        </script>'''
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete, result.diagnostics)
+        self.assertEqual([(card.channels, dict(card.remote_ids), card.at.minute) for card in result.cards],
+                         [(('facebook',), {'facebook': POST_ID}, 17),
+                          (('instagram',), {'instagram': POST_IG_ID}, 18)])
+
+    async def test_native_members_wait_for_instagram_when_header_only_shows_facebook(self):
+        self.detail += '''<script>
+          const igTab=[...document.querySelectorAll('[role=tab]')].find(n=>n.textContent==='Instagram');
+          igTab.remove();
+          platforms.innerHTML='<img alt="Facebook">';
+          clock.textContent='Loading';
+          setTimeout(()=>clock.textContent='Post \\u00b7 Published on: Tue Sep 15, 7:17pm',300);
+          setTimeout(()=>document.body.insertBefore(igTab,document.querySelector('aside')),1400);
+        </script>'''
+        result = await self.inventory()
+        self.assertTrue(result.decision_complete, result.diagnostics)
+        self.assertEqual([card.channels for card in result.cards], [('facebook',), ('instagram',)])
+
+    async def test_known_cross_post_cannot_be_complete_with_a_missing_channel_tab(self):
+        self.detail += '''<script>
+          [...document.querySelectorAll('[role=tab]')].find(n=>n.textContent==='Instagram').remove();
+          platforms.innerHTML='<img alt="Facebook">';
+          clock.textContent='Loading';
+          setTimeout(()=>clock.textContent='Post \\u00b7 Published on: Tue Sep 15, 7:17pm',300);
+        </script>'''
+        result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        self.assertEqual([item['missing_fields'] for item in result.diagnostics], [['channel_tabs']])
+
+    async def test_a_later_header_cannot_remove_an_observed_channel(self):
+        # Legacy DOM identity remains supported when no native response arrives.
+        # Once both badges are seen, a repaint cannot authorize reading only FB.
+        self.documents = []
+        self.detail += '''<script>
+          document.querySelectorAll('[role=tab]').forEach(n=>n.remove());
+          preview.innerHTML='<h2><a href="https://www.facebook.com/profile.php?id=61578176852811">Neakasa Deutschland</a></h2>'
+            + '<a href="https://www.facebook.com/permalink.php?story_fbid=122187915260939228&id=61578176852811">View post</a>';
+        </script>'''
+        original_snapshot = published_details.header_snapshot
+
+        async def shrinking_header(page):
+            snapshot = await original_snapshot(page)
+            if snapshot and snapshot['platforms'] == ['Facebook', 'Instagram']:
+                await page.locator('#platforms img[alt=Instagram]').evaluate('(node)=>node.remove()')
+            return snapshot
+
+        with patch.object(published_details, 'header_snapshot', shrinking_header):
+            result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        self.assertEqual([item['missing_fields'] for item in result.diagnostics], [['channel_tabs']])
+
+    async def test_a_disappearing_tab_cannot_remove_an_observed_channel(self):
+        self.documents = []
+        self.detail += '''<script>
+          document.querySelectorAll('[role=tab]').forEach(n=>n.remove());
+          platforms.innerHTML='<img alt="Facebook">';
+          preview.innerHTML='<h2><a href="https://www.facebook.com/profile.php?id=61578176852811">Neakasa Deutschland</a></h2>'
+            + '<a href="https://www.facebook.com/permalink.php?story_fbid=122187915260939228&id=61578176852811">View post</a>';
+          const initialTab=document.createElement('button');
+          initialTab.setAttribute('role','tab');
+          initialTab.textContent='Instagram';
+          document.body.append(initialTab);
+          setTimeout(()=>{
+            initialTab.remove();
+            const panel=document.createElement('div');
+            panel.id='fb-view';
+            panel.setAttribute('role','tabpanel');
+            panel.setAttribute('aria-labelledby','fb-tab');
+            panel.append(document.querySelector('header'),document.querySelector('aside'));
+            document.body.insertAdjacentHTML('beforeend',
+              '<button role="tab" id="fb-tab" aria-selected="true" aria-controls="fb-view">Facebook</button>');
+            document.body.append(panel);
+          },1000);
+        </script>'''
+        result = await self.inventory()
+        self.assertFalse(result.decision_complete)
+        self.assertEqual([item['missing_fields'] for item in result.diagnostics], [['channel_tabs']])
 
     async def test_a_name_not_bound_to_this_members_own_ids_cannot_be_used(self):
         for invalid, unresolved in [('other_root', 'facebook'), ('viewer_only', 'facebook'),
