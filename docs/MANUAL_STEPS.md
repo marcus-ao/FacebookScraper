@@ -705,6 +705,8 @@ scripts\run_python.bat -m tools.test_offline --only tests_parse
 
 `--only` 可重复，按改动选择脚本；省略时运行全量，仅在影响范围确有需要时使用。`tools/test_offline.py` 给每个脚本独立的 archive/state/环境和日志——⛔ **它不会让测试结果自动变成真实外部系统结果。** 前端改动运行相关单测与构建；构建保留已有的大 chunk 提示。
 
+脚本失败时终端显示日志开头和末尾，并给出该脚本完整日志路径；中段只在文件中保留。出现 `Event loop is closed` 或 `closed pipe` 时先查看开头的首个异常，不能仅凭退出清理信息判定业务浏览器崩溃。
+
 需要完整前端验证时，再选用以下入口，不逐次全部执行：
 
 ```powershell
@@ -1377,10 +1379,12 @@ scripts\run_pipeline.bat preflight
 
 先看该任务的发布回执。`failed_pre_submit` 且没有提交意图时，本次未点击提交；`submit_ambiguous`、`submitted_unverified` 或 `scheduled` 都不能靠再次创建排期来验证浏览器。保留截图和时刻，不删除发布账本或 profile，不同时重复点击创建。
 
-1. 按 §13 更新源码并重启 Web。本次 Python 修复不新增配置或依赖，既有账号、渠道资产和快照沿用。可用 `scripts\run_python.bat -m tools.test_offline --only tests_publish_browser_lifecycle --only tests_final_form --only tests_manual_schedule` 做隔离检查；它会启动临时测试 Chrome，不连接业务 9223。
+1. 按 §13 更新源码并重启 Web。本次 Python 修复不新增配置或依赖，既有账号、渠道资产和快照沿用。可用 `scripts\run_python.bat -m tools.test_offline --only tests_publish_browser_lifecycle --only tests_final_form --only tests_manual_schedule` 做隔离检查；浏览器测试使用已安装的 Chrome 程序创建无登录临时会话，不连接业务 9223，不依赖 Playwright 额外下载的浏览器。
 2. 在服务机执行 `Get-NetTCPConnection -LocalPort 9223 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess`。无输出时运行 `scripts\start_chrome_publish.bat`；有输出时复用该窗口，人工核对 DE 发布身份。旧失败留下的编辑器可人工检查后关闭，至少保留一个普通标签页；程序不清理已有人工标签页。
 3. 本次记录明确提交前失败后，回审校台点「编辑确认无误」，检查当前冻结正文、图片、唯一渠道、账号和选定时间。确认弹窗中的实际内容无误后只创建一次。单篇核对应只展开相关日期；独立月历同步仍会逐条读整月。提交结果不确定时核对原远端记录，不再提交。
 4. 若窗口仍消失，先保存当前操作记录和错误截图，再查下面的只读信息。记录是整个窗口消失还是某标签页报错、发生时刻、是否手工重新启动过 Chrome。没有事件不等于没有发生退出；事后空闲内存不能证明故障瞬间的内存情况。
+
+旧版 `tests_final_form` 若全部在 `asyncSetUp` 报 `BrowserType.launch: Executable doesn't exist ... chromium_headless_shell`，更新后重跑上述三项即可。这是测试误依赖下载浏览器及失败清理遗漏，尚未进入表单业务断言；后续 `Event loop is closed` 不要求修改 Windows 事件循环、重装 Python 或重建发布 profile。本项仅改测试与日志展示，不需要为它重启 Web。
 
 ```powershell
 Set-Location 'D:\Code\FacebookScraper'

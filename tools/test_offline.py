@@ -48,7 +48,11 @@ def main(argv=None):
         results.append(row)
         print(('PASS' if code == 0 else 'FAIL') + f' {script.stem} ({row["seconds"]}s)', flush=True)
         if code:
-            print(log.read_text('utf-8', errors='replace')[-3500:], flush=True)
+            content = log.read_text('utf-8', errors='replace')
+            if len(content) > 7000:
+                content = content[:3500] + '\n... middle omitted; full log below ...\n' + content[-3500:]
+            print(content, flush=True)
+            print(f'Full log: {log}', flush=True)
         (output / 'results.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
     failed = sum(r['exit_code'] != 0 for r in results)
     print(f'{len(results) - failed}/{len(results)} scripts passed; evidence {output}', flush=True)

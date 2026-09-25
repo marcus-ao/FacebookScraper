@@ -1,4 +1,4 @@
-"""Read-only composer verification after the live Planner wait, in isolated Chromium."""
+"""Read-only composer verification after the live Planner wait, in isolated Chrome."""
 import io
 import sys
 import tempfile
@@ -13,6 +13,7 @@ from PIL import Image
 from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from core.config import Config
 from publish import business_suite as bs, workflow, journal
 
 WHEN = datetime(2026, 9, 25, 12, 30, tzinfo=timezone.utc)
@@ -32,8 +33,12 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         self.pw = await async_playwright().start()
-        self.browser = await self.pw.chromium.launch(headless=True)
+        # asyncTearDown is skipped if setup fails; register cleanup as resources are acquired.
+        self.addAsyncCleanup(self.pw.stop)
+        self.browser = await self.pw.chromium.launch(executable_path=Config().chrome_exe, headless=True)
+        self.addAsyncCleanup(self.browser.close)
         self.context = await self.browser.new_context()
+        self.addAsyncCleanup(self.context.close)
         self.page = await self.context.new_page()
         self.bodies, self.paths = {}, []
         for i, colour in enumerate(('red', 'green'), 1):
@@ -52,10 +57,6 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
             else:
                 await request.abort()
         await self.context.route('**/*', route)
-
-    async def asyncTearDown(self):
-        await self.browser.close()
-        await self.pw.stop()
 
     async def run_workflow(self, change):
         if self.page.is_closed():
@@ -272,6 +273,34 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                         await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
                     for detail in ('2026-09-30', 'Asia/Shanghai', shown, reason, '未提交'):
                         self.assertIn(detail, str(raised.exception))
+
+
+class FixtureCleanupTests(unittest.TestCase):
+    def test_setup_failure_releases_every_resource_already_acquired(self):
+        for phase in ('launch', 'context', 'page'):
+            with self.subTest(phase=phase):
+                released = []
+                context = SimpleNamespace(new_page=AsyncMock(side_effect=RuntimeError('fixture page failed')),
+                    close=AsyncMock(side_effect=lambda: released.append('context')))
+                browser = SimpleNamespace(new_context=AsyncMock(return_value=context),
+                    close=AsyncMock(side_effect=lambda: released.append('browser')))
+                pw = SimpleNamespace(chromium=SimpleNamespace(launch=AsyncMock(return_value=browser)),
+                    stop=AsyncMock(side_effect=lambda: released.append('driver')))
+                if phase == 'launch':
+                    pw.chromium.launch.side_effect = RuntimeError('fixture launch failed')
+                elif phase == 'context':
+                    browser.new_context.side_effect = RuntimeError('fixture context failed')
+                manager = SimpleNamespace(start=AsyncMock(return_value=pw))
+                result = unittest.TestResult()
+                with patch(f'{__name__}.async_playwright', return_value=manager):
+                    case = FinalFormTests('test_unchanged_form_arms_durably_and_submits_once')
+                    case.run(result)
+                self.assertEqual(len(result.errors), 1)
+                self.assertIn(f'fixture {phase} failed', result.errors[0][1])
+                expected = {'launch': ['driver'], 'context': ['browser', 'driver'],
+                            'page': ['context', 'browser', 'driver']}[phase]
+                self.assertEqual(released, expected)
+                self.assertFalse(case.directory.exists())
 
 
 if __name__ == '__main__':
