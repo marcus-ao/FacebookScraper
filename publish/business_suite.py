@@ -813,7 +813,12 @@ async def _read_time(group, controls):
         value = await _field_value(control)
         # Native input values do not appear in innerText; editable spinbuttons do.
         values.append(_schedule_text(value if value is not None else await control.inner_text()))
-    return ' : '.join(values[:2]) + ' ' + values[2], _schedule_text(await group.inner_text())
+    rendered = _schedule_text(await group.inner_text())
+    # Segmented controls can clear all editing buffers on blur. Only the exact
+    # committed clock in this group may supply them; never override nonempty fields.
+    if not any(values) and _RENDERED_TIME.fullmatch(rendered):
+        return rendered, rendered
+    return ' : '.join(values[:2]) + ' ' + values[2], rendered
 
 
 def _time_matches(observed, rendered, hour12, minute, meridiem):

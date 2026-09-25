@@ -58,10 +58,13 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 await request.abort()
         await self.context.route('**/*', route)
 
-    async def run_workflow(self, change):
+    async def run_workflow(self, change, *, transient_schedule=False):
         if self.page.is_closed():
             self.page = await self.context.new_page()
-        await self.page.set_content(HTML)
+        if transient_schedule:
+            await self.schedule_editor(transient_inputs=True)
+        else:
+            await self.page.set_content(HTML)
         await self.page.locator('img').first.wait_for()
         await self.page.wait_for_function('Array.from(document.images).every(i=>i.complete&&i.naturalWidth)')
         config = SimpleNamespace(state_dir=self.directory/'state', publish_debug_port=0,
@@ -75,6 +78,7 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 'images': "document.querySelector('ul').append(document.querySelector('li'))",
                 'count': "document.querySelector('li').remove()",
                 'time': "document.querySelector('[aria-label=minutes]').value='31'",
+                'display_time': "document.querySelector('[role=application] span').textContent='12 : 31 PM'",
                 'date': "document.querySelector('[aria-label=\"Date picker\"]').value='09/26/2026'",
                 'formatted_date': "document.querySelector('[aria-label=\"Date picker\"]').value='Sep 25, 2026'",
                 'switch': "document.querySelector('[role=switch]').checked=false",
@@ -91,14 +95,21 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(journal.load(config.state_dir)[-1]['status'], journal.STATUS_SUBMIT_AMBIGUOUS)
             return bs.SubmitResult(clicked=True, confirmed=False, error='fixture unresolved')
         submit_mock = AsyncMock(side_effect=submit)
+        async def open_composer(*args, **kw):
+            await self.page.bring_to_front()
+            return self.page
+        real_schedule = bs.set_schedule
+        async def set_schedule(*args, **kw):
+            return await real_schedule(*args, **kw, verify_device=False)
         with ExitStack() as stack:
             for obj, name, value in (
                 (workflow,'cfg',lambda:config),
                 (workflow,'attach',AsyncMock(return_value=(SimpleNamespace(stop=AsyncMock()), None, self.context))),
                 (workflow.month_readback,'baseline',AsyncMock(return_value=bs.ScheduledBaseline('fixture',0))),
-                (bs,'open_composer',AsyncMock(return_value=self.page)),
+                (bs,'open_composer',AsyncMock(side_effect=open_composer)),
                 (bs,'upload_images',AsyncMock(return_value=())),
-                (bs,'fill_caption',AsyncMock()), (bs,'set_schedule',AsyncMock(return_value='fixture')),
+                (bs,'fill_caption',AsyncMock()),
+                (bs,'set_schedule',set_schedule if transient_schedule else AsyncMock(return_value='fixture')),
                 (bs,'assert_page_usable',AsyncMock()),
                 (workflow.channels,'select',AsyncMock(return_value={'channel':'facebook','account':'fixture'})),
                 (workflow.channels,'verify_before_submit',AsyncMock()),
@@ -109,7 +120,8 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 (bs,'capture_failure',AsyncMock(return_value=SimpleNamespace(screenshot='', lines=lambda:[]))),
             ):
                 stack.enter_context(patch.object(obj,name,value))
-            result = await workflow._execute_unlocked(post, WHEN, ui_timezone='UTC', timeout=.3,
+            result = await workflow._execute_unlocked(post, WHEN, ui_timezone='UTC',
+                timeout=2 if transient_schedule else .3,
                 stamp='fixture', submit_enabled=True, report=lambda *_:None)
         return result, submit_mock
 
@@ -170,9 +182,10 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
         self.assertEqual(submit.await_count, 1)
 
-    async def schedule_editor(self, *, native_inputs=False, wrong_date_on_blur=False):
+    async def schedule_editor(self, *, native_inputs=False, wrong_date_on_blur=False,
+                              transient_inputs=False):
         await self.page.set_content(HTML)
-        await self.page.evaluate('''({nativeInputs, wrongDate}) => {
+        await self.page.evaluate('''({nativeInputs, wrongDate, transientInputs}) => {
             const date = document.querySelector('[aria-label="Date picker"]');
             date.onblur = () => {
                 const parsed = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/.exec(date.value);
@@ -184,11 +197,68 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
             const inputs = [...group.querySelectorAll('input')];
             const shown = group.querySelector('span');
             if (nativeInputs) shown.remove();
+            else if (transientInputs) {
+                const committed = inputs.map(input => input.value);
+                inputs.forEach((input, index) => {
+                    input.oninput = () => {
+                        if (input.value) committed[index] = input.value;
+                        shown.textContent = committed[0] + ' : ' + committed[1] + ' ' + committed[2];
+                    };
+                    input.onblur = () => input.value = '';
+                });
+            }
             else {
                 const render = () => shown.textContent = inputs[0].value + ' : ' + inputs[1].value + ' ' + inputs[2].value;
                 inputs.forEach(input => input.oninput = render);
             }
-        }''', {'nativeInputs': native_inputs, 'wrongDate': wrong_date_on_blur})
+        }''', {'nativeInputs': native_inputs, 'wrongDate': wrong_date_on_blur,
+               'transientInputs': transient_inputs})
+
+    async def test_committed_time_remains_readable_after_editing_buffers_clear_on_blur(self):
+        await self.schedule_editor(transient_inputs=True)
+        when = datetime.fromisoformat('2026-09-30T23:00:00+08:00')
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            readback = await bs.set_schedule(self.page, when, ui_timezone='Asia/Shanghai',
+                verify_device=False, target_channels=('facebook',), timeout=1)
+            self.assertIn('11 : 00 PM', readback)
+            self.assertEqual(await self.page.get_by_role('spinbutton').evaluate_all('items=>items.map(i=>i.value)'),
+                             ['', '', ''])
+            await bs.verify_form(self.page, TEXT, when, ui_timezone='Asia/Shanghai', timeout=1)
+
+    async def test_transient_clock_uses_real_g5_and_final_read_before_single_submit(self):
+        for change in ('none', 'display_time', 'time'):
+            with self.subTest(change=change):
+                result, submit = await self.run_workflow(change, transient_schedule=True)
+                if change == 'none':
+                    self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
+                    self.assertEqual(submit.await_count, 1)
+                else:
+                    self.assertEqual(result.attempt.status, journal.STATUS_FAILED_PRE_SUBMIT, result.message)
+                    self.assertEqual(result.attempt.step, '提交前最终表单复核')
+                    self.assertIn('时刻', result.message)
+                    submit.assert_not_called()
+
+    async def test_empty_editing_fields_require_one_exact_committed_clock(self):
+        await self.page.set_content(HTML)
+        await self.page.get_by_role('spinbutton').evaluate_all('items=>items.forEach(i=>i.value="")')
+        shown = self.page.locator('[role="application"] span')
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            for rendered in ('', 'unknown', '12 : 31 PM', '12 : 30 AM',
+                             '12:30 PM / 11:30 PM', 'Time: 12:30 PM', '112:30 PM'):
+                with self.subTest(rendered=rendered):
+                    await shown.evaluate('(el, text)=>el.textContent=text', rendered)
+                    with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
+                        await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
+
+    async def test_visible_clock_does_not_override_nonempty_conflicting_fields(self):
+        await self.page.set_content(HTML)
+        with patch.object(bs, 'assert_page_usable', AsyncMock()):
+            for values in (['11', '', ''], ['', '31', ''], ['', '', 'AM'], ['11', '30', 'PM']):
+                with self.subTest(values=values):
+                    await self.page.get_by_role('spinbutton').evaluate_all(
+                        '(items, values)=>items.forEach((item, i)=>item.value=values[i])', values)
+                    with self.assertRaisesRegex(bs.PublishStepError, '时刻'):
+                        await bs.verify_form(self.page, TEXT, WHEN, ui_timezone='UTC', timeout=1)
 
     async def test_set_and_verify_same_instant_after_blur_and_timezone_conversion(self):
         cases = (
