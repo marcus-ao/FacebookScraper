@@ -8,18 +8,21 @@ import sqlite3
 import tempfile
 from collections import Counter, defaultdict
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from core import paid_model, review, store, translated
+from core import post_type as post_type_module
 from core.config import cfg
 from core.store import (ArchivePathError, _archive_row_error, _post_quality_rank,
                         assert_physical_direct_path, iter_post_dirs)
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 POST_COLUMNS = (
     "task_id", "account_dir", "platform", "post_id", "account", "owner",
-    "coauthors_json", "created_at", "archived_at", "permalink", "text",
+    "coauthors_json", "created_at", "display_month", "post_type", "archived_at", "permalink", "text",
     "source_route", "month", "primary_tag", "archive_relpath", "folder_name",
     "media_complete", "status", "row_json",
 )
@@ -113,7 +116,8 @@ def _projected_records(archive_root: Path, state_dir: Path | None,
             tags = list(dict.fromkeys(source_tags))
             row = dict(source, id=account_dir.name + "/" + pid, account_dir=account_dir.name,
                        month=store.archive_month(dict(source, folder_name=directory.name)), status=status, tags=source_tags,
-                       text_de=effective["text_de"] if effective else None)
+                       text_de=effective["text_de"] if effective else None,
+                       post_type=post_type_module.classify_post(source))
             task_id = row["id"]
             archive_relpath = directory.relative_to(archive_root).as_posix()
             media = store.media_storage_info(account_dir, source)
@@ -122,7 +126,8 @@ def _projected_records(archive_root: Path, state_dir: Path | None,
                 source.get("account"), source.get("owner"),
                 json.dumps(source.get("coauthors") or [], ensure_ascii=False,
                            separators=(",", ":")),
-                created, source.get("archived_at"), source.get("permalink"),
+                created, created_month(row), row["post_type"],
+                source.get("archived_at"), source.get("permalink"),
                 source.get("text") or "", source.get("source_route") or "",
                 row["month"], tags[0] if tags else None, archive_relpath,
                 source.get("folder_name") or directory.name,
@@ -166,7 +171,7 @@ def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None =
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute("PRAGMA journal_mode=DELETE")
                 connection.executescript("""
-                    PRAGMA user_version=2;
+                    PRAGMA user_version=3;
                     CREATE TABLE posts (
                         task_id TEXT PRIMARY KEY,
                         account_dir TEXT NOT NULL,
@@ -176,6 +181,8 @@ def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None =
                         owner TEXT,
                         coauthors_json TEXT NOT NULL,
                         created_at TEXT NOT NULL,
+                        display_month TEXT NOT NULL,
+                        post_type TEXT NOT NULL,
                         archived_at TEXT,
                         permalink TEXT,
                         text TEXT NOT NULL,
@@ -214,6 +221,7 @@ def rebuild_index(archive_root: Path, db_path: Path, *, state_dir: Path | None =
                     );
                     CREATE INDEX display_filters ON posts (month, status, created_at, task_id);
                     CREATE INDEX display_platform ON posts (platform, created_at, task_id);
+                    CREATE INDEX display_history_type ON posts (post_type, display_month, created_at, task_id);
                     CREATE INDEX display_tags ON post_tags (tag, task_id);
                 """)
                 post_placeholders = ",".join("?" for _ in POST_COLUMNS)
@@ -366,12 +374,20 @@ def check_consistency(archive_root: Path, db_path: Path, *, state_dir: Path | No
 
 
 def created_month(row: dict) -> str:
-    """历史页月份跟着行内日期（created_at）走；归档目录月份按北京换算，与行内日期可能差一天跨月。"""
+    """历史页筛选月份与可见业务日期一致；不改变归档目录月份。"""
     created = row.get('created_at') or ''
-    return created[:7] if re.match(r'^\d{4}-\d{2}-\d{2}', created) else 'undated'
+    if not isinstance(created, str) or not re.match(r'^\d{4}-\d{2}-\d{2}(?:T|$)', created):
+        return 'undated'
+    try:
+        instant = datetime.fromisoformat(created.replace('Z', '+00:00'))
+        if instant.tzinfo is not None:
+            instant = instant.astimezone(ZoneInfo('Asia/Shanghai'))
+        return instant.strftime('%Y-%m')
+    except ValueError:
+        return 'undated'
 
 
-def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=None,
+def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=None, post_type=None,
                page: int = 1, limit: int = 50) -> dict:
     if not 1 <= limit <= 100 or page < 1:
         raise ValueError('历史查询每页 1–100 篇，页数从 1 开始')
@@ -380,11 +396,11 @@ def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=Non
         if value:
             filters.append(column + ' = ?')
             values.append(value)
-    # month 按行内日期过滤，与 created_month 同一条规则；'undated' 兜住无日期帖子。
-    if month == 'undated':
-        filters.append("created_at NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*'")
-    elif month:
-        filters.append('substr(created_at, 1, 7) = ?')
+    if post_type in post_type_module.POST_TYPES:
+        filters.append('post_type = ?')
+        values.append(post_type)
+    if month:
+        filters.append('display_month = ?')
         values.append(month)
     if tag == '__untagged__':
         filters.append('NOT EXISTS (SELECT 1 FROM post_tags t WHERE t.task_id = posts.task_id)')
@@ -399,10 +415,8 @@ def query_page(db_path: Path, *, platform=None, month=None, tag=None, status=Non
             [*values, limit, (page - 1) * limit])]
         tags = [row[0] for row in connection.execute('SELECT DISTINCT tag FROM post_tags ORDER BY tag')]
         months = [row[0] for row in connection.execute(
-            "SELECT DISTINCT substr(created_at, 1, 7) FROM posts"
-            " WHERE created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*' ORDER BY 1 DESC")]
-        if connection.execute("SELECT 1 FROM posts WHERE created_at NOT GLOB"
-                              " '[0-9][0-9][0-9][0-9]-[0-9][0-9]-*' LIMIT 1").fetchone():
+            "SELECT DISTINCT display_month FROM posts WHERE display_month != 'undated' ORDER BY 1 DESC")]
+        if connection.execute("SELECT 1 FROM posts WHERE display_month = 'undated' LIMIT 1").fetchone():
             months.append('undated')
     return {'rows': rows, 'total': total, 'tags': tags, 'months': months}
 

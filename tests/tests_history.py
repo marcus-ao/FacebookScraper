@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import tests_web_review as fixtures
 from core import index_db, store
+from core.post_type import classify_post
 from web.api import query_index, reader
 
 
@@ -38,6 +39,73 @@ class HistoryTests(unittest.TestCase):
             'text_de': 'Neu', 'source_text_sha256': detail.json()['text']['source_text_sha256'], 'human_revision': None})
         self.assertEqual(response.status_code, 409)
         self.assertFalse((self.archive.base / 'translated_human.jsonl').exists())
+
+    def test_source_post_type_uses_complete_media_evidence_not_local_bytes(self):
+        cases = [
+            ({'source_media_complete': True, 'media': [{'kind': 'image'}], 'text': 'Caption'}, 'static_image_text'),
+            ({'source_media_complete': True, 'media': [{'kind': 'image'}], 'text': ''}, 'image_only'),
+            ({'source_media_complete': True, 'media': [{'kind': 'video'}], 'text': 'Caption'}, 'video'),
+            ({'source_media_complete': True, 'media': [{'kind': 'image'}, {'kind': 'video'}], 'text': ''}, 'image_video'),
+            ({'source_media_complete': True, 'media': [], 'text': 'Caption'}, 'text_only'),
+            ({'source_media_complete': False, 'media': [], 'text': 'Caption'}, 'pending'),
+            ({'source_media_complete': True, 'media': [], 'text': ''}, 'pending'),
+            ({'source_media_complete': True, 'media_complete': False,
+              'media': [{'kind': 'image', 'local_path': None}], 'text': 'Caption'}, 'static_image_text'),
+            ({'source_media_complete': True, 'source_media_count': 2,
+              'media': [{'kind': 'image'}], 'text': 'Caption'}, 'pending'),
+            ({'source_media_complete': True, 'media': [{'kind': 'unknown'}], 'text': 'Caption'}, 'pending'),
+            ({'media_complete': False, 'media': [{'kind': 'video'}], 'text': 'Caption'}, 'pending'),
+        ]
+        for row, expected in cases:
+            with self.subTest(row=row):
+                self.assertEqual(classify_post(row), expected)
+
+    def test_history_type_filter_and_business_month_match_index_and_fallback(self):
+        image = store.Media('https://example.invalid/image.jpg', 'image')
+        video = store.Media('https://example.invalid/video.mp4', 'video')
+        cases = [
+            ('mixed-1', 'Caption', [image, video], True, 'image_video'),
+            ('mixed-2', '', [image, video], True, 'image_video'),
+            ('still', 'Caption', [image], True, 'static_image_text'),
+            ('image-only', '', [image], True, 'image_only'),
+            ('video', 'Caption', [video], True, 'video'),
+            ('pending', 'Caption', [], False, 'pending'),
+        ]
+        for post_id, body, media, complete, _expected in cases:
+            self.archive.append(store.Post(post_id, 'instagram', 'neakasa.tech', body,
+                '2021-01-31T20:30:00Z', media=media, source_media_complete=complete, tags=['M2']))
+
+        indexed = self.f.client.get(
+            '/api/tasks?scope=history&platform=instagram&month=2021-02&tag=M2&post_type=image_video&limit=1&page=1').json()
+        self.assertEqual(indexed['pagination']['total'], 2)
+        self.assertEqual(len(indexed['tasks']), 1)
+        self.assertEqual(indexed['tasks'][0]['post_type'], 'image_video')
+        self.assertIn('2021-02', indexed['summary']['months'])
+        indexed_second = self.f.client.get(
+            '/api/tasks?scope=history&platform=instagram&month=2021-02&tag=M2&post_type=image_video&limit=1&page=2').json()
+        self.assertEqual(indexed_second['pagination']['total'], 2)
+        self.assertNotEqual(indexed['tasks'][0]['id'], indexed_second['tasks'][0]['id'])
+
+        with patch('web.api.query_index.refresh_display_index', return_value={
+                'available': False, 'stale': True, 'error': 'offline'}):
+            fallback = self.f.client.get(
+                '/api/tasks?scope=history&platform=instagram&month=2021-02&tag=M2&post_type=image_video&limit=1&page=1').json()
+            fallback_second = self.f.client.get(
+                '/api/tasks?scope=history&platform=instagram&month=2021-02&tag=M2&post_type=image_video&limit=1&page=2').json()
+        for actual, expected in ((fallback, indexed), (fallback_second, indexed_second)):
+            self.assertEqual(actual['pagination'], expected['pagination'])
+            self.assertEqual([row['id'] for row in actual['tasks']],
+                             [row['id'] for row in expected['tasks']])
+
+        all_rows = self.f.client.get('/api/tasks?scope=history&limit=50').json()
+        invalid = self.f.client.get('/api/tasks?scope=history&post_type=bogus&limit=50').json()
+        self.assertEqual(invalid['pagination']['total'], all_rows['pagination']['total'])
+        self.assertEqual([row['id'] for row in invalid['tasks']], [row['id'] for row in all_rows['tasks']])
+        by_id = {row['id']: row for row in all_rows['tasks']}
+        for post_id, _body, _media, _complete, expected in cases:
+            row = by_id['in_neakasa.tech/' + post_id]
+            self.assertEqual(row['post_type'], expected)
+        self.assertEqual(by_id['in_neakasa.tech/still']['preview_kind'], 'image_pending')
 
     def test_old_active_post_detail_ignores_daily_horizon(self):
         self.f.source['created_at'] = '2021-01-01T12:00:00Z'

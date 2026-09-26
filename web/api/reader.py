@@ -301,10 +301,12 @@ class _Context:
 def list_tasks(*, days: int = DEFAULT_DAYS,
                now: datetime | None = None, status: str | None = None,
                tag: str | None = None, month: str | None = None, platform: str | None = None,
-               scope: str = 'review', page: int = 1, limit: int | None = None) -> dict:
+               post_type: str | None = None, scope: str = 'review',
+               page: int = 1, limit: int | None = None) -> dict:
     """读取任务列表，按原帖发布时间从新到旧展示。"""
     if scope == 'history':
-        return history_tasks(now=now, status=status, tag=tag, month=month, platform=platform, page=page, limit=limit or 50)
+        return history_tasks(now=now, status=status, tag=tag, month=month, platform=platform,
+                             post_type=post_type, page=page, limit=limit or 50)
     ctx = _Context(days=days, now=now)
     indexed = query_index.candidates(status=status, tag=tag, month=month, now=ctx.now)
     ids = set(indexed["task_ids"]) if indexed["task_ids"] is not None else None
@@ -381,9 +383,10 @@ def list_tasks(*, days: int = DEFAULT_DAYS,
     }
 
 
-def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None, page=1, limit=50):
+def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None, post_type=None,
+                  page=1, limit=50):
     result = query_index.history_page(now=now, status=status, tag=tag, month=month,
-                                     platform=platform, page=page, limit=limit)
+                                     platform=platform, post_type=post_type, page=page, limit=limit)
     tasks = []
     for row in result['rows']:
         # 数的是 image 媒体，不是全部媒体：只有视频的帖子取不到第 0 张图。
@@ -394,6 +397,7 @@ def history_tasks(*, now=None, status=None, tag=None, month=None, platform=None,
                       'read_only': row['account_dir'] not in cfg().active_accounts(),
                       'text_de_excerpt': excerpt(row.get('text_de') or row.get('text') or ''),
                       'tags': row['tags'], 'status': row['status'],
+                      'post_type': row['post_type'],
                       'image_count': len(images),
                       'thumbnail_url': thumbnail_url,
                       'preview_kind': _preview_kind(row, images, thumbnail_url)})

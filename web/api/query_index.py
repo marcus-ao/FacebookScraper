@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core import index_db
+from core.post_type import POST_TYPES
 from core.config import ROOT, cfg
 from core.paid_model import FileLock, atomic_write_json
 from core import store
@@ -177,25 +178,29 @@ def refresh_display_index(*, now: datetime | None = None, force: bool = False,
                 'error': type(exc).__name__}
 
 
-def history_page(*, platform=None, month=None, tag=None, status=None, page=1, limit=50, now=None):
+def history_page(*, platform=None, month=None, tag=None, status=None, post_type=None,
+                 page=1, limit=50, now=None):
+    post_type = post_type if post_type in POST_TYPES else None
     metadata = refresh_display_index(history=True, now=now,
                                      max_age_seconds=HISTORY_INDEX_MAX_AGE_SECONDS)
     archive, state, database = _paths(history=True)
     if not metadata['stale']:
         try:
             return dict(index_db.query_page(database, platform=platform, month=month, tag=tag,
-                                            status=status, page=page, limit=limit), index=metadata)
+                                            status=status, post_type=post_type,
+                                            page=page, limit=limit), index=metadata)
         except Exception as exc:
             metadata = dict(metadata, stale=True, error=type(exc).__name__)
     rows = index_db._display_rows(archive, state, include_frozen=True)
     tags = sorted({tag for row in rows for tag in row['tags']})
-    # 与 query_page 同一条规则：月份按行内日期，不按归档目录月份。
+    # 与 query_page 同一条规则：月份按业务可见日期，不按归档目录月份。
     month_set = {index_db.created_month(row) for row in rows}
     months = sorted((value for value in month_set if value != 'undated'), reverse=True)
     if 'undated' in month_set:
         months.append('undated')
     rows = [row for row in rows if (not platform or row['platform'] == platform)
             and (not month or index_db.created_month(row) == month) and (not status or row['status'] == status)
+            and (not post_type or row['post_type'] == post_type)
             and (not tag or (not row['tags'] if tag == '__untagged__' else tag in row['tags']))]
     rows.sort(key=lambda row: row['id'])
     rows.sort(key=lambda row: row['created_at'], reverse=True)

@@ -91,10 +91,12 @@ async def review_validation(request: Request, exc: Exception) -> JSONResponse:
 @app.get("/api/tasks")
 def get_tasks(status: str | None = None, tag: str | None = None, month: str | None = None,
               platform: str | None = Query(None, pattern='^(facebook|instagram)$'),
+              post_type: str | None = None,
               scope: str = Query('review', pattern='^(review|history)$'),
               page: int = Query(1, ge=1), limit: int | None = Query(None, ge=1, le=100)) -> JSONResponse:
     """审校队列与历史分页；参数和响应契约见 web/DESIGN.md。"""
     payload = reader.list_tasks(status=status, tag=tag, month=month, platform=platform,
+                                post_type=post_type,
                                 scope=scope, page=page, limit=limit)
     return JSONResponse(payload)
 

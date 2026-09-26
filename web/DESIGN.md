@@ -32,7 +32,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | 接口 | 契约 |
 |---|---|
 | `GET /api/tasks` | 当前任务及服务端分组计数；查询不触发模型或发布。两个 scope 的行都只在确有第 0 张图时给 `thumbnail_url`，无图给空串，`image_count` 同样只数 image 媒体；空地址按 `preview_kind` 显示视频、纯文字或图片待补齐图标，图片请求失败也回退为图片待补齐 |
-| `GET /api/tasks?scope=history` | page、limit、platform、month、tag、status 筛选；limit 为 1–100，默认 50；pagination.total 为全部匹配数，range.days 为 null |
+| `GET /api/tasks?scope=history` | page、limit、platform、month、tag、status、post_type 筛选；类型取静态图文、纯图片、视频、图片＋视频、纯文字、待核对六类，非法值按全部处理。month 按业务显示日期归月；组合过滤先于分页，limit 为 1–100，默认 50；pagination.total 为全部匹配数，range.days 为 null。历史行含由来源证据派生的 `post_type`，与预览可用性的 `preview_kind` 分开 |
 | `GET /api/tasks/{id}` | 人工优先内容、来源指纹、子资源版本、风险、模型任务与发布状态；按 ID 查询不受 90 天限制 |
 | `GET /api/tasks/{id}/image/{index}` | 原图或德语图，缺德语图须显式标识回退 |
 | `GET /api/tasks/{id}/approval-options` | `lockable` 表示内容可冻结，`available` 表示还能算出可选时间；`preview` 在已冻结时给出将提交的正文、图片和目标。历史录证缺失不能代替内容原因 |
