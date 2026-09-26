@@ -8,12 +8,24 @@ from publish import business_suite as bs, month_inventory, scheduled_media, snap
 from publish.channel_evidence import accounts
 
 
-def matching(inventory, when, final_text, target_channels):
-    # 网格对齐不证明目标卡片详情；按目标时刻核验，范围外的详情缺口不参与本次回读。
+def matching(inventory, when, final_text, target_channels, *, confirm_existing=False):
     if len(target_channels) != 1:
         raise bs.PublishStepError('排期回读必须且只能有一个目标渠道')
     try:
-        relevant = inventory.cards_in_range(target_channels[0], when, when)
+        if confirm_existing:
+            # A verified object's existence is positive evidence. It must not
+            # borrow the stronger "no unseen occupancy" rule used before submit.
+            # Keep unrelated failures in diagnostics; this never certifies a free slot.
+            if (not inventory.occupancy_complete or not inventory.covers((when,))
+                    or not set(range(len(inventory.diagnostics))).issubset(
+                        {card.diagnostic_index for card in inventory.cards})):
+                raise bs.ProbeRequired('月历覆盖或条目证据不完整')
+            relevant = tuple(card for card in inventory.cards if card.at.timestamp() == when.timestamp())
+            if any(not card.time_verified or not card.channels for card in relevant):
+                raise bs.ProbeRequired('目标时刻的详情时刻或渠道尚未核实')
+            relevant = tuple(card for card in relevant if target_channels[0] in card.channels)
+        else:
+            relevant = inventory.cards_in_range(target_channels[0], when, when)
     except bs.ProbeRequired as exc:
         raise bs.PublishStepError('月历范围或相关条目未读完整，不能核验本次排期') from exc
     if any(card.read_status != 'complete' or card.placement == 'unknown'
@@ -92,7 +104,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
                             'text_preview': candidate.rendered[:200], 'caption_matches': text_equal,
                             'time_matches': time_equal, 'channel_matches': channel_equal})
         diagnostics['samples'] = sorted(samples, key=lambda row: not (row['time_matches'] or row['caption_matches']))[:20]
-        cards = matching(inventory, when, final_text, target_channels)
+        cards = matching(inventory, when, final_text, target_channels, confirm_existing=True)
         diagnostics['matched_entries'] = len(cards)
         if len(cards) != 1:
             raise bs.PublishStepError('目标时刻未找到唯一的同渠道、同时间、完整正文排期详情')
@@ -145,7 +157,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         return bs.ScheduledReadback(found=True, **base, channels=card.channels,
             remote_id=identity, card_sha256=card.card_sha256, screenshot=shot,
             image_count=diagnostics['remote_media'].get('image_count'),
-            success_signal='planner_target_range_and_scheduled_detail',
+            success_signal='planner_scheduled_object_identity',
             diagnostics=diagnostics)
     except Exception as exc:
         shot = await bs._readback_screenshot(page, screenshot_path, timeout)

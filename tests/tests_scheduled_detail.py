@@ -13,7 +13,7 @@ from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
-from publish import business_suite as bs, month_inventory as month
+from publish import business_suite as bs, month_inventory as month, month_readback
 from tests_month_inventory import SPEC, CAPTION, ENTRY
 
 
@@ -123,6 +123,31 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             result = await self.time_only_inventory()
             self.assertFalse(result.decision_complete)
             self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_verified_1730_receipt_survives_2300_detail_read_failure(self):
+        await self.mount_time_only()
+        await self.page.locator('[draggable=false] a').evaluate('''first => {
+          const second=first.cloneNode(true); second.textContent='11:00\\u202fPM';
+          first.parentElement.append(second);
+        }''')
+        read_item = month.read_item
+        async def service_failure(page, row, item, **kwargs):
+            if item['index'] == 1:
+                raise month.PlannerItemError(row, item, 'scheduled_detail')
+            return await read_item(page, row, item, **kwargs)
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC), \
+                patch.object(month, 'read_item', service_failure), \
+                patch.object(bs, '_readback_screenshot', AsyncMock(return_value='')):
+            result = await month_readback.verify(self.page, self.when, CAPTION,
+                ui_timezone='Asia/Shanghai', target_channels=('facebook',), timeout=1.5)
+        self.assertTrue(result.found, result.error)
+        self.assertEqual(result.remote_id, 'facebook=123456789')
+        diagnostic, = result.diagnostics['inventory_diagnostics']
+        self.assertEqual((diagnostic['time'], diagnostic['code']), ('11:00 PM', 'read_failed'))
+        self.assertFalse(result.diagnostics['complete_month'])
+        self.assertEqual(await self.page.evaluate('writes'), [])
 
     async def test_time_only_caption_arriving_after_header_is_expanded_before_read(self):
         await self.mount_time_only()

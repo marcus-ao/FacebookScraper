@@ -41,9 +41,10 @@ class ReceiptReconcileTests(unittest.TestCase):
             ((f.post.platform, '123456789'),), f.post.text_de, 'hash', 'scheduled',
             placement='feed', caption_status='present', accounts=((f.post.platform, self.run.account),), time_verified=True)
 
-    def reconcile(self, cards=None):
-        inventory = bs.RemoteSlotInventory((self.card.at,), self.run.ui_timezone,
-            self.card.at.date(), self.card.at.date(), tuple(cards if cards is not None else [self.card]), True)
+    def reconcile(self, cards=None, diagnostics=()):
+        cards = tuple(cards if cards is not None else [self.card])
+        inventory = bs.RemoteSlotInventory(tuple(c.at for c in cards), self.run.ui_timezone,
+            self.card.at.date(), self.card.at.date(), cards, True, diagnostics)
         page = SimpleNamespace(close=AsyncMock())
         self.pw = SimpleNamespace(stop=AsyncMock())
         context = SimpleNamespace(new_page=AsyncMock(return_value=page))
@@ -87,6 +88,21 @@ class ReceiptReconcileTests(unittest.TestCase):
                 self.assertTrue(result['message'])
                 self.assertIsNotNone(journal.pending_record_for_refs(config.cfg().state_dir, self.attempt.source_refs))
                 self.assertEqual(review.latest(self.f.account)[self.f.source['post_id']]['status'], 'approved')
+
+    def test_other_scheduled_detail_failure_preserves_diagnostics_and_recovers_original_attempt(self):
+        unknown = bs.RemotePlannerCard(self.card.at.replace(hour=(self.card.at.hour+5) % 24),
+            delivery='scheduled', read_status='incomplete', diagnostic_index=0)
+        diagnostic = {'date': unknown.at.date().isoformat(), 'time': unknown.at.strftime('%I:%M %p'),
+                      'stage': 'scheduled_detail', 'code': 'read_failed'}
+        before = journal.journal_path(config.cfg().state_dir).read_bytes()
+        result = self.reconcile([self.card, unknown], diagnostics=(diagnostic,))
+        self.assertEqual(result['status'], 'scheduled')
+        row = result['publication']
+        self.assertEqual(row['attempt_id'], self.attempt.attempt_id)
+        self.assertEqual(row['remote_id'], 'facebook=123456789')
+        self.assertEqual(row['readback_diagnostics']['inventory_diagnostics'], [diagnostic])
+        self.assertTrue(journal.journal_path(config.cfg().state_dir).read_bytes().startswith(before))
+        self.assertEqual(operations.read(self.op['operation_id'])['status'], operations.SUCCEEDED)
 
     def test_corrupt_frozen_bytes_or_changed_asset_means_zero_browser_visits(self):
         caption = self.folder / 'text_de.txt'
