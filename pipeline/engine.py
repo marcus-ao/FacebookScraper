@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from core import account_roles, maintenance
 from core.config import cfg
-from core.store import Archive, post_directory
+from core.store import Archive, post_directory, read_post_truth
 from publish import journal
 from publish.compose import ComposeError, _read_post_truth, compose_post
 from localize import text as translation
@@ -23,7 +23,7 @@ from core.paid_model import FileLock
 from core import operating_settings, paid_model, paid_consent, review
 from core import translated as translated_content
 from pipeline.settings import pipeline_settings
-from pipeline import risk_scan
+from pipeline import content_confirmation, risk_scan
 from localize import images as image_de
 from core import paid_requests
 from core.chrome import attach, close_owned_page
@@ -1042,6 +1042,16 @@ def _publish_fingerprint(post) -> str:
         ",".join(journal.file_sha256(path) for path in post.image_paths))
 
 
+def _require_batch_confirmations(sources: Iterable[SourcePost]) -> None:
+    """整批选中帖在首个远端读取前都要有当前人工决定。"""
+    for item in sources:
+        source, _ = read_post_truth(item.account_dir, dict(item.row))
+        try:
+            content_confirmation.require_current(item.account_dir, source)
+        except review.ReviewConflict as exc:
+            raise PipelineRunError('%s：%s；本批未开始发布' % (item.post_id, exc)) from exc
+
+
 def _queue(state_dir: Path, items: Iterable[HumanItem], now: datetime) -> int:
     added = 0
     for item in items:
@@ -1488,6 +1498,9 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
                 "ready 项生成后最终正文或图片已经变化；请重新 pipeline run 后再确认")
         prepared.append((row, post))
 
+    _require_batch_confirmations(
+        current[frozenset(row['source_refs'])].canonical for row, _post in prepared)
+
     try:
         for _row, post in prepared:
             capabilities.require(post.platform)
@@ -1549,6 +1562,9 @@ def _approve_unlocked(*, item_ids: list[str], selections: Mapping[str, str],
         if _publish_fingerprint(post) != str(details["publish_fingerprint"]):
             raise PipelineRunError("读取远端槽位期间发布内容发生变化；整批未提交")
         final_batch.append((row, post, slot))
+
+    _require_batch_confirmations(
+        current[frozenset(row['source_refs'])].canonical for row, _post, _slot in final_batch)
 
     print("=== 本次批量确认（%d 篇；德国时间 10:00/17:00）===" % len(final_batch))
     for index, (row, post, slot) in enumerate(final_batch, 1):

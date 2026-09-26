@@ -14,6 +14,7 @@ import time
 import tokenize
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
@@ -1886,6 +1887,50 @@ check("ui_constraints_verified" in entry,
       "--submit 那条路径上仍然存在 ui_constraints_verified 这道闸")
 check(submit_gate_code == 2 and "ui_constraints_verified" in captured.getvalue(),
       "--submit 自动隐含 strict；任一硬闸不过都在碰浏览器之前失败闭合")
+with tempfile.TemporaryDirectory() as folder:
+    root = Path(folder) / 'archive'
+    fixture = make_fixture(root, platform='facebook', image_count=1, collaboration=False)
+    state = Path(folder) / 'state'
+    state.mkdir()
+
+    class ConfirmationCfg:
+        archive_dir = root
+        state_dir = state
+
+        def get(self, section, key, default=None):
+            if (section, key) == ('publish', 'timezone'):
+                return 'Asia/Shanghai'
+            return default
+
+    post = SimpleNamespace(post_id=fixture['source']['post_id'], platform='facebook',
+                           post_dir=fixture['post_dir'], source_text=fixture['source']['text'],
+                           text_de='Fixture caption', image_paths=(fixture['post_dir'] / '01.jpg',),
+                           image_sources=('original_confirmed',))
+    prepared_calls = []
+
+    async def fake_prepare(*args, **kwargs):
+        prepared_calls.append(kwargs['submit_enabled'])
+        return 0, {'status': journal.STATUS_PREPARED, 'attempt_id': 'fixture'}
+
+    with patch.object(publish_entry, 'cfg', return_value=ConfirmationCfg()), \
+            patch.object(publish_entry, '_resolve_ui_timezone', return_value='Asia/Shanghai'), \
+            patch.object(publish_entry, 'compose_post', return_value=post), \
+            patch.object(publish_entry, 'print_checklist'), \
+            patch.object(publish_entry, 'prepare', side_effect=fake_prepare), \
+            patch.object(publish_entry.bs, 'assert_ui_time_unambiguous'), \
+            patch.object(publish_entry.bs, 'require_submission_evidence'), \
+            patch.object(publish_entry.bs, 'require_readback_evidence'), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        submit_without_review = publish_entry.main([
+            '--post-id', post.post_id, '--at', '2026-09-28T10:00:00+08:00',
+            '--account', fixture['account'], '--submit', '--assume-yes'])
+        prepare_without_review = publish_entry.main([
+            '--post-id', post.post_id, '--at', '2026-09-28T10:00:00+08:00',
+            '--account', fixture['account'], '--assume-yes'])
+    check(submit_without_review == 2 and '确认' in output.getvalue(),
+          'CLI 真实提交缺正文/逐图确认时在浏览器前拒绝')
+    check(prepare_without_review == 0 and prepared_calls == [False],
+          'CLI 只准备草稿仍可运行，不把人工确认误设为准备门槛')
 check("publish_debug_port" in workflow_entry and "publish_profile_dir" in workflow_entry
       and "assert_publish_chrome_isolated" in workflow_entry,
       "入口只附着发布专用 profile/端口，且启动前核对与抓取小号隔离")

@@ -67,6 +67,10 @@ class HumanPipelineTests(unittest.TestCase):
     def save_human(self, text='Von Hand verbessert. #Neakasa'):
         return translated.append_human_translation(self.human_path, self.row, text, now=self.now)
 
+    def test_batch_preflight_refuses_missing_content_decisions_before_browser(self):
+        with self.assertRaisesRegex(engine.PipelineRunError, '确认'):
+            engine._require_batch_confirmations([self.source()])
+
     def test_publish_uses_human_even_after_machine_regeneration(self):
         self.save_human()
         self.write_machine('Noch eine maschinelle Fassung. #Neakasa')

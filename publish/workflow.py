@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from core import maintenance
@@ -108,6 +109,7 @@ async def _execute_unlocked(
         source_refs: tuple[str, ...] = (),
         target_channels: tuple[str, ...] | None = None,
         report=print_progress, run=None, opening_inventory=None,
+        pre_submit_check: Callable[[object], None] | None = None,
         ) -> AttemptOutcome:
     """核验目标、填写内容并提交；保留人工会话和其他远端内容。"""
     c = cfg()
@@ -214,6 +216,8 @@ async def _execute_unlocked(
         media_check = await media.verify_upload(page, post.image_paths, timeout=timeout, previous=media_check)
         await bs.verify_form(page, post.text_de, when, ui_timezone=ui_timezone, timeout=timeout)
         await channels.verify_before_submit(page, target_channels, run=run)
+        if pre_submit_check is not None:
+            pre_submit_check(post)
         step = "G6 单次提交"
         # 点击前先耐久记录未决意图，避免点击后崩溃又被当作可安全重试。
         armed = journal.transition(
@@ -344,7 +348,8 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
                   source_refs: tuple[str, ...] = (),
                   target_channels: tuple[str, ...] | None = None,
                   force: bool = False, report=print_progress,
-                  run=None, opening_inventory=None) -> AttemptOutcome:
+                  run=None, opening_inventory=None,
+                  pre_submit_check: Callable[[object], None] | None = None) -> AttemptOutcome:
     """在全局发布锁内重查 journal，再执行一次浏览器尝试。"""
     c = cfg()
     target_channels = target_channels or (post.platform,)
@@ -374,7 +379,7 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
             post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
             submit_enabled=submit_enabled, source_refs=refs,
             target_channels=target_channels, report=report, run=run,
-            opening_inventory=opening_inventory)
+            opening_inventory=opening_inventory, pre_submit_check=pre_submit_check)
         try:
             records.project(outcome.attempt)
         except Exception:

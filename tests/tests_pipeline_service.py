@@ -4,6 +4,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -181,6 +182,28 @@ class ServiceTests(unittest.TestCase):
         with patch.object(engine, 'attach') as attach:
             with self.assertRaisesRegex(engine.PipelineRunError, '挂起'):
                 engine.approve(item_ids=['ready-stale'], selections={}, state_dir=self.state,
+                               now=self.now, assume_yes=True)
+            attach.assert_not_called()
+
+    def test_ready_batch_missing_manual_confirmation_refuses_before_remote_attach(self):
+        self.fixture.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        sources, issues, skipped = engine.load_sources([self.fixture.account], self.now - timedelta(days=2))
+        self.assertFalse(issues)
+        self.assertFalse(skipped)
+        source = sources[0]
+        candidate = engine.Candidate(source, (source,), 'independent')
+        post = SimpleNamespace(
+            platform='facebook', post_id=source.post_id, text_de='Ein sauberes Zuhause. #Neakasa',
+            image_paths=(self.fixture.post_dir / 'media_de' / '01.jpg',), image_sources=('media_de',),
+            warnings=(), source_author=None, source_author_name=None)
+        ready = engine._ready_item(candidate, post)
+        engine.append_human_item(self.state, ready, self.now)
+        with patch.object(engine, 'compose_post', return_value=post), \
+                patch.object(engine, 'next_slots', return_value=(self.now + timedelta(days=1),)), \
+                patch.object(engine.capabilities, 'require', side_effect=AssertionError('remote gate reached')), \
+                patch.object(engine, 'attach') as attach:
+            with self.assertRaisesRegex(engine.PipelineRunError, '确认'):
+                engine.approve(item_ids=[ready.item_id], selections={}, state_dir=self.state,
                                now=self.now, assume_yes=True)
             attach.assert_not_called()
 

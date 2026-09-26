@@ -8,7 +8,7 @@ from pathlib import Path
 from core import maintenance, notify, paid_consent, review, translated
 from core.config import cfg
 from core.store import read_post_truth
-from pipeline import engine
+from pipeline import content_confirmation, engine
 from publish import business_suite as bs, compose, journal, manual_run, planner_cache, planning, workflow, records, snapshots
 
 
@@ -48,7 +48,12 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
     try:
         result['fingerprint'] = engine._publish_fingerprint(
             composed_post(account_dir, source, now=moment))
-        result['lockable'] = True
+        try:
+            content_confirmation.require_current(account_dir, source)
+            result['lockable'] = True
+        except review.ReviewConflict as exc:
+            result['lock_reason'] = str(exc)
+            result['reason'] = str(exc)
     except (ValueError, compose.ComposeError, engine.PipelineRunError) as exc:
         result['lock_reason'] = str(exc)
         result['reason'] = str(exc)
@@ -67,7 +72,10 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
         if result['lockable']:
             result['reason'] = str(exc)
     state = review.latest(account_dir).get(source['post_id'])
-    if result['lockable'] and state and state.get('status') == 'content_locked':
+    if state and state.get('status') == 'content_locked':
+        if not result['lockable']:
+            result['lock_reason'] = '请解除冻结、重新核对并确认当前正文和每张图片，然后再次冻结'
+            result['reason'] = result['lock_reason']
         try:
             result['preview'] = _preview(account_dir, source, state)
         except review.ReviewConflict as exc:
@@ -85,6 +93,7 @@ def lock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
         source, _ = session.validate(indexed, expected_revision=review_revision,
                                      expected_source_sha256=source_text_sha256)
         post = composed_post(account_dir, source, now=moment)
+        content_confirmation.require_current(account_dir, source)
         try:
             _, _, snapshot = snapshots.freeze(post, source, scheduled_at=None,
                                               expected_fingerprint=content_fingerprint)
@@ -149,6 +158,13 @@ def _preview(account_dir: Path, source: dict, state: dict) -> dict:
     }
 
 
+def _require_frozen_decisions(account_dir: Path, source: dict) -> None:
+    try:
+        content_confirmation.require_current(account_dir, source)
+    except review.ReviewConflict as exc:
+        raise ApprovalConflict('请解除冻结、重新核对并确认当前正文和每张图片，然后再次冻结：%s' % exc) from exc
+
+
 def _operation_status(attempt: dict) -> str:
     if attempt.get('status') == journal.STATUS_SCHEDULED:
         return 'succeeded'
@@ -189,6 +205,7 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                 composed_post(account_dir, source, now=moment), snapshot_id, source, account_dir))
         except review.ReviewConflict as exc:
             raise ApprovalConflict(str(exc)) from exc
+        _require_frozen_decisions(account_dir, source)
         window = planning.config_window()
         if inventory_reader is not None:
             inventory = await inventory_reader(now=moment, run=run)
@@ -218,16 +235,29 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                 warning_sink=None)
             if engine._publish_fingerprint(post) != content_fingerprint:
                 raise ApprovalConflict('内容在确认之后已有变化，请重新核对并冻结')
+            _require_frozen_decisions(account_dir, source)
             frozen = _bind(post, snapshot_id, source, account_dir, run.target())
             approved = session.change(source, 'approved', expected_revision=review_revision,
                                       expected_source_sha256=source_text_sha256, now=moment, snapshot_id=snapshot_id)
         records.queue_approved(snapshot_id, now=moment)
+        def pre_submit_check(frozen_post) -> None:
+            with review.transaction(account_dir) as session:
+                current, state = session.validate(source, expected_revision=approved['revision'],
+                    expected_source_sha256=source_text_sha256)
+                if state['status'] != 'approved':
+                    raise ApprovalConflict('审校决定已变化，请重新确认后提交')
+                _require_frozen_decisions(account_dir, current)
+                fresh = composed_post(account_dir, current, now=moment)
+                snapshots.validate_content(_snapshot_post(fresh, snapshot_id, current, account_dir))
+                if engine._publish_fingerprint(fresh) != engine._publish_fingerprint(frozen_post):
+                    raise ApprovalConflict('最终内容已变化，请重新核对并冻结')
         try:
             extra = {} if executor is not None else {'report': report or workflow.print_progress}
             outcome = await (executor or workflow.execute)(frozen, target, ui_timezone=window.ui_timezone,
                 timeout=float(c.get('publish', 'ui_timeout_seconds', bs.DEFAULT_UI_TIMEOUT)),
                 stamp=approved['revision'], submit_enabled=True, source_refs=(ref,),
-                target_channels=(source['platform'],), run=run, opening_inventory=inventory, **extra)
+                target_channels=(source['platform'],), run=run, opening_inventory=inventory,
+                pre_submit_check=pre_submit_check, **extra)
             attempt = asdict(outcome.attempt)
         except Exception:
             # 无回执时保留快照；下面只恢复审校状态，绝不声称远端已经排期。

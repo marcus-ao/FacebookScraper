@@ -351,6 +351,10 @@ class WebReviewTests(unittest.TestCase):
         return self.client.post(self.url + "/content-lock", json={
             **self.action_body(), "content_fingerprint": options["fingerprint"]})
 
+    def confirm_ready_content(self):
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        self.assertEqual(self.confirm_content('images/0').status_code, 200)
+
     def test_missing_german_image_blocks_the_freeze_and_says_how_to_fix_it(self):
         """缺德语图的帖子根本发不出去，也就没有「确认无误」可言。"""
         options = self.client.get(self.url + "/approval-options").json()
@@ -365,6 +369,7 @@ class WebReviewTests(unittest.TestCase):
     def test_content_can_be_frozen_and_released_without_a_verified_browser(self):
         """没有历史录证也能冻结并看到可选时间；提交仍要本次目标。"""
         self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        self.confirm_ready_content()
         options = self.client.get(self.url + "/approval-options")
         self.assertEqual(options.status_code, 200, options.text)
         self.assertTrue(options.json()["available"])
@@ -412,13 +417,15 @@ class WebReviewTests(unittest.TestCase):
 
     def test_approval_without_verified_browser_fails_without_success_record(self):
         self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
+        self.confirm_ready_content()
         self.assertEqual(self.lock().status_code, 200)
         body = {**self.action_body(), "human_revision": None,
                 "scheduled_at": "2026-09-20T10:00", "content_fingerprint": "not-a-real-fingerprint"}
         response = self.client.post(self.url + "/approve", json=body)
         self.assertIn(response.status_code, {400, 409}, response.text)
         # 冻结留下一条记录；排期一条都不能有。
-        self.assertEqual([row["status"] for row in review.history(self.account)], ["content_locked"])
+        self.assertEqual([row["action"] for row in review.history(self.account)],
+                         ["body_reviewed", "image_reviewed", "content_locked"])
 
     def action_body(self, **extra):
         detail = self.client.get(self.url).json()

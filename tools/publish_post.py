@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core import maintenance
+from core import maintenance, review
+from core.store import Archive, read_post_truth
 from core.config import cfg                                  # noqa: E402
 from core.console import force_utf8                          # noqa: E402
 from publish import business_suite as bs                     # noqa: E402
@@ -20,6 +21,7 @@ from publish import records                                  # noqa: E402
 from publish import workflow                                 # noqa: E402
 from publish.compose import (ComposeError,                   # noqa: E402
                              require_probe_evidence, compose_post)
+from pipeline import content_confirmation
 
 
 def _now_stamp() -> str:
@@ -106,12 +108,25 @@ def _resolve_ui_timezone(strict: bool) -> str:
 async def prepare(post, when: datetime, *, ui_timezone: str,
                   timeout: float, stamp: str, submit_enabled: bool = False,
                   source_refs: tuple[str, ...] = (),
-                  force: bool = False) -> tuple[int, dict]:
+                  force: bool = False, pre_submit_check=None) -> tuple[int, dict]:
     """兼容包装；真正的追加式状态机在 :mod:`publish.workflow`。"""
     outcome = await workflow.execute(
         post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
-        submit_enabled=submit_enabled, source_refs=source_refs, force=force)
+        submit_enabled=submit_enabled, source_refs=source_refs, force=force,
+        pre_submit_check=pre_submit_check)
     return outcome.code, asdict(outcome.attempt)
+
+
+def _current_source(post, archive_root: Path) -> tuple[Path, dict]:
+    account_dir = post.post_dir.parent.parent
+    if account_dir.parent != archive_root:
+        raise review.ReviewConflict('帖子归档账号已变化，请重新组装内容')
+    rows = [row for row in Archive(archive_root, account_dir.name).rows()
+            if row.get('post_id') == post.post_id and row.get('platform') == post.platform]
+    if len(rows) != 1:
+        raise review.ReviewConflict('来源帖子已变化，请重新核对后提交')
+    source, _ = read_post_truth(account_dir, rows[0])
+    return account_dir, source
 
 
 def _manual_resolve(state_dir: Path, post_id: str, *, scheduled: bool) -> int:
@@ -256,6 +271,25 @@ def main(argv=None) -> int:
             print("✗ --submit 仍由证据门禁关闭，浏览器没有被触碰：\n%s" % exc)
             return 6
 
+        try:
+            account_dir, source = _current_source(post, c.archive_dir)
+            content_confirmation.require_current(account_dir, source)
+        except (review.ReviewConflict, ValueError, OSError) as exc:
+            print('✗ 当前正文或图片尚未完成审校确认，浏览器没有被触碰：\n  %s' % exc)
+            return 2
+
+    def pre_submit_check(frozen_post) -> None:
+        account_dir, current = _current_source(post, c.archive_dir)
+        content_confirmation.require_current(account_dir, current)
+        fresh = compose_post(args.post_id, when, archive_root=c.archive_dir,
+            account=args.account,
+            price_map=(c.get('publish', 'price_map', {}) if args.apply_price_map else None),
+            require_verified_ui_constraints=strict, warning_sink=None)
+        if (journal.text_sha256(fresh.text_de) != journal.text_sha256(frozen_post.text_de)
+                or tuple(journal.file_sha256(path) for path in fresh.image_paths)
+                != tuple(journal.file_sha256(path) for path in frozen_post.image_paths)):
+            raise review.ReviewConflict('最终文案或图片已有变化，请重新核对后提交')
+
     print_checklist(post, when, ui_timezone)
     if not strict:
         print("⚠️ 非严格模式：IG 的画幅/图片数/正文长度/标签数上限**还没实测过**，"
@@ -275,7 +309,8 @@ def main(argv=None) -> int:
         code, trace = asyncio.run(prepare(
             post, when, ui_timezone=ui_timezone, timeout=timeout, stamp=stamp,
             submit_enabled=args.submit,
-            source_refs=source_refs, force=args.force))
+            source_refs=source_refs, force=args.force,
+            pre_submit_check=pre_submit_check if args.submit else None))
     except (RuntimeError, bs.PublishStepError) as exc:
         print("✗ 发布互斥/锁内 journal 重查拦下了本次尝试；浏览器没有被触碰：\n  %s"
               % exc)

@@ -14,7 +14,7 @@ from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, paid_consent, review, translated
-from pipeline import approval, engine
+from pipeline import approval, content_confirmation, engine
 from publish import channel_evidence, manual_run
 from publish import business_suite as bs, compose, journal, snapshots, workflow
 from web.api.approval import business_time
@@ -52,11 +52,29 @@ class ApprovalTests(unittest.TestCase):
         patch.object(bs, 'require_submission_evidence', return_value=None).start()
         patch.object(bs, 'require_readback_evidence', return_value=None).start()
 
+    def confirm_fixture(self):
+        tokens = content_confirmation.current_tokens(self.account, self.source)
+        current = content_confirmation.current_state(self.account, self.source)
+        if current['body']['confirmed'] and all(item['confirmed'] for item in current['images']):
+            return review.state_for(self.account, self.source)['revision']
+        revision = review.state_for(self.account, self.source)['revision']
+        for action, payload in [('body_reviewed', {
+                'confirmed': True, 'content_token': tokens['body']}), *[
+            ('image_reviewed', {'confirmed': True, 'content_token': item['token'],
+                                'media_index': item['media_index']}) for item in tokens['images']]]:
+            event = review.transition(self.account, self.source, action,
+                expected_revision=revision, expected_source_sha256=self.params['source_text_sha256'], now=NOW,
+                content_confirmation=payload)
+            revision = event['revision']
+        self.params['review_revision'] = revision
+        return revision
+
     def lock_content(self):
         """排期前必须先「编辑确认无误」；返回冻结后的审校版本。"""
+        revision = self.confirm_fixture()
         return approval.lock(self.account, self.source, now=NOW,
                              source_text_sha256=self.params['source_text_sha256'],
-                             review_revision=None,
+                             review_revision=revision,
                              content_fingerprint=self.params['content_fingerprint'])
 
     def approve(self, **kwargs):
@@ -64,6 +82,35 @@ class ApprovalTests(unittest.TestCase):
         params = dict(self.params, review_revision=locked['revision'])
         params.update(kwargs.pop('params', {}))
         return asyncio.run(approval.approve(self.account, self.source, **params, **kwargs))
+
+    def test_missing_manual_content_decisions_block_lock_before_snapshot(self):
+        options = approval.options(self.account, self.source, now=NOW)
+        self.assertFalse(options['lockable'])
+        self.assertIn('确认', options['lock_reason'])
+        with self.assertRaisesRegex(review.ReviewConflict, '确认'):
+            approval.lock(self.account, self.source, now=NOW,
+                source_text_sha256=self.params['source_text_sha256'],
+                review_revision=None, content_fingerprint=self.params['content_fingerprint'])
+        self.assertFalse((config.cfg().state_dir / 'publish_snapshots').exists())
+
+    def test_legacy_frozen_snapshot_requires_unlock_and_new_decisions_before_submit(self):
+        self.allow_fixture_evidence()
+        _, _, snapshot = snapshots.freeze(self.post, self.source, scheduled_at=None,
+                                           expected_fingerprint=self.params['content_fingerprint'])
+        locked = review.transition(self.account, self.source, 'content_locked',
+            expected_revision=None, expected_source_sha256=self.params['source_text_sha256'],
+            snapshot_id=snapshot.name, now=NOW)
+        metadata, _, files, _ = snapshots.load(snapshot.name)
+        self.assertEqual(metadata['status'], 'frozen')
+        self.assertTrue(files['text_de.txt'])
+        reader, execute = AsyncMock(return_value=self.inventory), AsyncMock()
+        with self.assertRaisesRegex(review.ReviewConflict, '解除冻结.*确认'):
+            asyncio.run(approval.approve(self.account, self.source,
+                **dict(self.params, review_revision=locked['revision']),
+                inventory_reader=reader, executor=execute))
+        reader.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
 
     def test_missing_asset_record_means_zero_remote_reads(self):
         (config.cfg().state_dir / channel_evidence.FILENAME).unlink()
@@ -107,6 +154,7 @@ class ApprovalTests(unittest.TestCase):
 
     def test_content_can_be_frozen_before_the_publish_gate_is_open(self):
         """内容合格就可以选时刻；历史录证不参与这个判断。"""
+        self.confirm_fixture()
         options = approval.options(self.account, self.source, now=NOW)
         self.assertTrue(options['available'])
         self.assertTrue(options['lockable'])
@@ -328,6 +376,61 @@ class ApprovalTests(unittest.TestCase):
         states = [row['status'] for row in journal.load(config.cfg().state_dir)]
         self.assertIn(journal.STATUS_PREPARED, states)
         self.assertNotIn(journal.STATUS_SUBMIT_AMBIGUOUS, states)
+
+    def test_content_recheck_runs_before_submit_intent_is_written(self):
+        self.allow_fixture_evidence()
+        page = object()
+        context = SimpleNamespace(new_page=AsyncMock(return_value=page), stop=AsyncMock())
+        submit = AsyncMock()
+
+        def changed_after_preparation(_frozen):
+            raise review.ReviewConflict('当前图片确认已失效')
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(workflow.channels, 'select',
+                AsyncMock(return_value={'channel': 'facebook', 'account': 'fixture'})))
+            stack.enter_context(patch.object(workflow.channels, 'verify_before_submit', AsyncMock()))
+            stack.enter_context(patch.object(workflow.media, 'verify_upload',
+                AsyncMock(return_value={'image_count': 1})))
+            stack.enter_context(patch.object(workflow, 'attach',
+                AsyncMock(return_value=(context, None, context))))
+            stack.enter_context(patch.object(workflow, '_screenshot', AsyncMock(return_value='')))
+            stack.enter_context(patch.object(workflow, 'check_live_slot', AsyncMock()))
+            stack.enter_context(patch.object(workflow.channel_evidence, 'require',
+                return_value={'context_ids': {'asset_id': '123', 'business_id': '456'}}))
+            stack.enter_context(patch.object(workflow.month_readback, 'baseline',
+                AsyncMock(return_value=bs.ScheduledBaseline(TARGET.isoformat(), 0))))
+            for name, result in {'open_composer': page, 'upload_images': (), 'fill_caption': None,
+                                 'set_schedule': 'fixture-time', 'wait_submit_ready': None,
+                                 'verify_form': None,
+                                 'capture_failure': SimpleNamespace(screenshot=None, lines=lambda: [])}.items():
+                stack.enter_context(patch.object(bs, name, AsyncMock(return_value=result)))
+            stack.enter_context(patch.object(bs, 'submit', submit))
+            outcome = asyncio.run(workflow.execute(self.post, TARGET,
+                ui_timezone='America/Los_Angeles', timeout=.1, stamp='fixture',
+                submit_enabled=True, pre_submit_check=changed_after_preparation))
+        self.assertEqual(outcome.attempt.status, journal.STATUS_FAILED_PRE_SUBMIT)
+        self.assertIn('确认已失效', outcome.message)
+        submit.assert_not_called()
+        self.assertNotIn(journal.STATUS_SUBMIT_AMBIGUOUS,
+                         [row['status'] for row in journal.load(config.cfg().state_dir)])
+
+    def test_approval_callback_rechecks_source_during_composer(self):
+        self.allow_fixture_evidence()
+
+        async def executor(frozen, _when, **kwargs):
+            self.assertTrue(callable(kwargs['pre_submit_check']))
+            path = self.fixture.post_dir / 'post.json'
+            source = json.loads(path.read_text('utf-8'))
+            source['media'][0]['url'] = 'https://fixture.test/changed-image-locator.jpg'
+            path.write_text(json.dumps(source), encoding='utf-8', newline='')
+            kwargs['pre_submit_check'](frozen)
+            self.fail('source change should stop the prepared submit')
+
+        with self.assertRaisesRegex(review.ReviewConflict, '来源指纹'):
+            self.approve(inventory_reader=AsyncMock(return_value=self.inventory), executor=executor)
+        self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'pending_review')
+        self.assertFalse(journal.load(config.cfg().state_dir))
 
 
 if __name__ == '__main__':
