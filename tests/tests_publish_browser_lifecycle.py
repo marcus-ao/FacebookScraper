@@ -42,7 +42,7 @@ class ScopedReadTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(cached.decision_complete)
 
     async def test_scope_converts_to_ui_dates_and_keeps_unknown_items_on_relevant_days(self):
-        at = datetime(2026, 9, 29, 16, 30, tzinfo=timezone.utc)  # Sep 30 00:30 in the UI
+        at = datetime(2026, 9, 29, 16, 0, tzinfo=timezone.utc)  # Sep 30 00:00; the one-minute gap crosses midnight.
         rows = [{'date': date(2026, 9, day), 'items': [
             {'index': 0, 'time': '11:50 PM', 'href': ''}]} for day in (28, 29, 30)]
         async def unreadable(_page, row, item, **kw):
@@ -94,7 +94,7 @@ class ScopedReadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_uncovered_month_boundary_cannot_approve_a_cross_midnight_gap(self):
         rows = [{'date': date(2026, 9, 30), 'items': []}]
-        at = WHEN + timedelta(minutes=50)
+        at = WHEN + timedelta(minutes=59)  # 23:59; even the one-minute gap reaches the next day.
         with patch.object(month, 'prepare', AsyncMock()), \
                 patch.object(month, 'read_grid', AsyncMock(return_value=rows)):
             result = await month.read(None, ui_timezone='Asia/Shanghai', business_timezone='UTC',

@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.async_api import expect
@@ -56,6 +57,10 @@ class PublishStepError(RuntimeError):
 
 class PlannerDialogCloseError(PublishStepError):
     """A retained detail overlay blocks later cards; stop this inventory read."""
+
+
+class PlannerNavigationError(PublishStepError):
+    """Viewing a calendar object must not navigate into a new composer."""
 
 
 @dataclass(frozen=True)
@@ -1237,6 +1242,7 @@ async def _open_channel_dialogs(
         raise ProbeRequired("remote_id_regex 无效：%s" % exc) from exc
     found: dict[str, str] = {}
     dialog = None
+    before = urlsplit(_safe_page_url(page))
     try:
         await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
@@ -1286,7 +1292,11 @@ async def _open_channel_dialogs(
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
-    except Exception:                                 # noqa: BLE001
+    except Exception as exc:                          # noqa: BLE001
+        after = urlsplit(_safe_page_url(page))
+        if (before.hostname == 'business.facebook.com' and '/content_calendar' in before.path
+                and (after.hostname != before.hostname or after.path.rstrip('/') != before.path.rstrip('/'))):
+            raise PlannerNavigationError('查看排期条目时离开了月历；未修改或重新提交帖子，请核对已有排期。') from exc
         if observe_detail is not None:
             raise
         pass

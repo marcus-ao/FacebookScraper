@@ -1426,6 +1426,17 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 
 **后台已成功、审校台仍待回执。** 2026-09-25 的 FB attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 已出现成功提示；9 月 30 日 23:00 的卡片只显示时间，正文在 `Post details` 的文章预览中折叠。原版本在打开详情前拒绝，旧恢复入口又只补本地投影，所以反复返回 409。修复后会打开该条详情并展开 `See more`，读取完整正文、独立账号、时刻与详情 ID；不会等待图片下方的评论加载条。
 
+**同日第三条 Instagram 已成功、月历出现 `+ 1 more`。** 2026-09-26 服务机已从周视图读到 09-30 的 FB 17:30、IG 20:00、FB 23:00，并打开 IG 详情 `1099867215965804`；不要再创建该 IG 排期。新版在原 attempt 的核对中自动读取完整周列表，核实全文、时刻、账号和编号，再恢复月视图复查。推荐卡不是帖子；月历折叠按钮也不是时间卡。部署步骤如下：
+
+1. 按 §13 拉取源码并从原 Web 启动脚本重启，保持 9223 的原发布会话。
+2. 用隔离数据运行 `scripts\run_python.bat -m tools.test_offline --only tests_calendar_overflow --only tests_scheduled_detail --only tests_month_readback --only tests_receipt_reconcile --only tests_final_form`；通过只证明本机读取器回归，不代表真实回执已恢复。
+3. 从 Instagram 的已处理/原审校页打开该帖，刷新后点一次“核对并补齐本地回执”。预期原提交 `2026-09-30 20:00 +08:00` 得到 `instagram=1099867215965804`，以实际完整回读为准；既有通知链沿原 attempt 幂等发送。
+4. 点一次“刷新月历”，确认同日三张真实排期各一条，原 Facebook 回执仍在。若读取失败，保留具体错误及原未决记录；不要解除冻结、手改账本或再次提交。
+
+新移动应用推广弹窗不一定匹配旧成功标题，提交后仍会进行一次只读核对；仅弹窗文字或截图不足以写入 `scheduled`。这次流程不核验远端图片顺序，也不升级 G8。
+
+**以下步骤仅用于此前尚未恢复的 Facebook 原回执；已确认记录无需再验。**
+
 1. 按 §13 拉取源码并用 `scripts\run_web_lan.bat` 重新构建和启动，确认旧 Web 已退出；9223 保持原发布账号登录。
 2. 运行 `scripts\run_python.bat -m tools.test_offline --only tests_receipt_reconcile --only tests_scheduled_detail --only tests_month_readback`。检查使用隔离数据和临时浏览器，不创建真实排期。
 3. 回到原帖审校页刷新，点一次“核对并补齐本地回执”。入口会查询已有未决提交，核实后沿**原 attempt** 追加 `scheduled`，补齐本地显示和原操作结果；已确认记录再次核对只补本地投影。

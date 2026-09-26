@@ -89,6 +89,61 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.cards[0].at, self.when)
         self.assertEqual(await self.page.evaluate('writes'), [])
 
+    async def mount_instagram_preview(self, *, owner='neakasa.de', stuck=False):
+        # Service 2026-09-26: Instagram has no article or date link; the
+        # author span and its following caption live after the Like/Save row.
+        await self.page.locator('[draggable=false] a').evaluate("el=>el.textContent='8:00\\u202fPM'")
+        await self.page.get_by_role('dialog', include_hidden=True).evaluate('''(el, data) => {
+          el.innerHTML=`<h3>Post details</h3>ID: 1099867215965804
+            <h4>Post overview</h4><span>This view of your post may not represent exactly how it appears on your Instagram feed.</span>
+            <button>Actions</button><div>${data.owner}</div><div><img alt=""><img alt=""><img alt=""></div>
+            <button>Like</button><button>Comment</button><button>Share</button><button>Save</button>
+            <div id="caption"><span>${data.owner}</span><span></span> <span id="body">
+              <span><div>Tag 1 auf der @ifa.berlin – was für ein Start!<br></div><span> ✨... <button>more</button></span></span>
+            </span></div><button>Boost</button><button>Publish now</button>`;
+          window.writes=[];
+          el.querySelector('#body button').onclick=()=>{
+            if(!data.stuck) document.getElementById('body').innerHTML=
+              '<span>Tag 1 auf der @ifa.berlin – was für ein Start! ✨<br>Voller Text mit #Neakasa und @home.</span>';
+          };
+          [...el.querySelectorAll('button')].filter(b=>b.textContent!=='more').forEach(b=>b.onclick=()=>writes.push(b.innerText));
+        }''', {'owner': owner, 'stuck': stuck})
+
+    async def test_instagram_time_only_preview_reads_full_caption_without_facebook_article(self):
+        await self.mount_instagram_preview()
+        result = await self.time_only_inventory()
+        self.assertFalse(result.diagnostics, result.diagnostics)
+        self.assertEqual(len(result.cards), 1)
+        card = result.cards[0]
+        self.assertEqual(card.channels, ('instagram',))
+        self.assertEqual(card.remote_ids, (('instagram', '1099867215965804'),))
+        self.assertEqual(card.at, self.when.replace(hour=20, minute=0))
+        self.assertEqual(bs._card_text(card.rendered),
+            'Tag 1 auf der @ifa.berlin – was für ein Start! ✨ Voller Text mit #Neakasa und @home.')
+        self.assertEqual(card.accounts, (('instagram', 'neakasa.de'),))
+        self.assertTrue(card.time_verified)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_instagram_truncated_caption_or_wrong_owner_cannot_supply_a_receipt(self):
+        for changes in ({'stuck': True}, {'owner': 'wrong.account'}):
+            with self.subTest(changes=changes):
+                await self.mount()
+                await self.mount_instagram_preview(**changes)
+                result = await self.time_only_inventory()
+                self.assertTrue(result.diagnostics)
+                self.assertFalse(result.channels_complete)
+                self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_unexpected_composer_navigation_is_not_a_missing_month_or_unread_card(self):
+        async def respond(route):
+            body = ('<a href="/latest/composer/">8:00 PM</a>'
+                    if 'content_calendar' in route.request.url else '<h1>Create post</h1>')
+            await route.fulfill(content_type='text/html', body=body)
+        await self.page.route('https://business.facebook.com/**', respond)
+        await self.page.goto('https://business.facebook.com/latest/content_calendar')
+        with self.assertRaisesRegex(bs.PlannerNavigationError, '离开了月历'):
+            await bs._open_channel_dialogs(self.page, self.page.get_by_role('link'), SPEC, timeout=2)
+
     async def test_two_time_only_posts_on_one_day_keep_separate_details_and_identity(self):
         await self.mount_time_only()
         await self.page.evaluate('''() => {

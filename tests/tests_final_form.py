@@ -58,7 +58,7 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 await request.abort()
         await self.context.route('**/*', route)
 
-    async def run_workflow(self, change, *, transient_schedule=False):
+    async def run_workflow(self, change, *, transient_schedule=False, readback_found=False):
         if self.page.is_closed():
             self.page = await self.context.new_page()
         if transient_schedule:
@@ -95,6 +95,12 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(journal.load(config.state_dir)[-1]['status'], journal.STATUS_SUBMIT_AMBIGUOUS)
             return bs.SubmitResult(clicked=True, confirmed=False, error='fixture unresolved')
         submit_mock = AsyncMock(side_effect=submit)
+        self.readback_mock = AsyncMock(return_value=bs.ScheduledReadback(
+            found=readback_found, observed_at=WHEN.isoformat(), target_at=WHEN.isoformat(),
+            ui_at=WHEN.isoformat(), final_text_sha256='fixture', channels=('facebook',),
+            remote_id='facebook=123456789' if readback_found else '',
+            success_signal='planner_scheduled_object_identity' if readback_found else '',
+            error='' if readback_found else 'fixture readback unresolved'))
         async def open_composer(*args, **kw):
             await self.page.bring_to_front()
             return self.page
@@ -106,6 +112,7 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
                 (workflow,'cfg',lambda:config),
                 (workflow,'attach',AsyncMock(return_value=(SimpleNamespace(stop=AsyncMock()), None, self.context))),
                 (workflow.month_readback,'baseline',AsyncMock(return_value=bs.ScheduledBaseline('fixture',0))),
+                (workflow.month_readback,'verify',self.readback_mock),
                 (bs,'open_composer',AsyncMock(side_effect=open_composer)),
                 (bs,'upload_images',AsyncMock(return_value=())),
                 (bs,'fill_caption',AsyncMock()),
@@ -139,6 +146,28 @@ class FinalFormTests(unittest.IsolatedAsyncioTestCase):
         result, submit = await self.run_workflow('none')
         self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS, result.message)
         self.assertEqual(submit.await_count, 1)
+
+    async def test_missing_success_prompt_still_confirms_the_new_remote_schedule(self):
+        result, submit = await self.run_workflow('none', readback_found=True)
+        self.assertEqual(result.attempt.status, journal.STATUS_SCHEDULED, result.message)
+        self.assertEqual(result.attempt.remote_id, 'facebook=123456789')
+        self.assertEqual(result.attempt.success_signal, '')
+        self.assertEqual(result.attempt.readback_signal, 'planner_scheduled_object_identity')
+        self.assertEqual(submit.await_count, 1)
+        self.readback_mock.assert_awaited_once()
+        baseline = self.readback_mock.call_args.kwargs['pre_submit_baseline']
+        self.assertEqual(baseline.match_count, 0)
+        states = [row['status'] for row in journal.load(self.directory/'state')]
+        self.assertNotIn(journal.STATUS_SUBMITTED_UNVERIFIED, states)
+        self.assertEqual(states[-1], journal.STATUS_SCHEDULED)
+
+    async def test_missing_success_prompt_and_missing_receipt_remain_ambiguous(self):
+        result, submit = await self.run_workflow('none')
+        self.assertEqual(result.attempt.status, journal.STATUS_SUBMIT_AMBIGUOUS)
+        self.readback_mock.assert_awaited_once()
+        self.assertEqual(result.attempt.verification, 'fixture readback unresolved')
+        self.assertEqual(submit.await_count, 1)
+        self.assertEqual(self.context.pages, [self.page])
 
     async def test_cleanup_closes_owned_planner_but_preserves_uncertain_composer(self):
         result, submit = await self.run_workflow('none')
