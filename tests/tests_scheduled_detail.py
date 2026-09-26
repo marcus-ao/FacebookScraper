@@ -48,6 +48,64 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             return await month.read_scheduled_target(self.page, card or self.card,
                 ui_timezone='Asia/Shanghai', card_spec=SPEC, timeout=1.5, observe_detail=observer)
 
+    async def mount_time_only(self, *, changed_clock=False, truncate=False):
+        # Structure from the 2026-09-25 service Post details accessibility snapshot.
+        # The article's unrelated boost/progress/comment controls are deliberately present.
+        await self.page.locator('[draggable=false] a').evaluate("el=>el.textContent='5:30\\u202fPM'")
+        await self.page.get_by_role('dialog', include_hidden=True).evaluate('''(el, data) => {
+          el.innerHTML=`<h3>Post details</h3>ID: 123456789
+            <h4>Post overview</h4><div>This view may not represent Facebook's Feed.</div>
+            <button>Actions</button><article><h2><a href="/profile.php?id=123456">Neakasa Deutschland</a></h2>
+            <a href="/987654321">September 30 at ${data.changed ? '6:30' : '5:30'} PM</a>
+            <img alt="Shared with Public"><span id="actions-label" hidden>Actions for this post by Neakasa Deutschland</span><button aria-labelledby="actions-label"></button>
+            <div id="body">This is a manual… <button id="expand">See more</button></div>
+            <a href="/photo.php"><img alt="May be an image of text"></a>
+            Boost this post to get more reach.<div role="progressbar"></div>
+            <button>Comment</button><div role="textbox">Private comment draft</div></article>
+            <button>Boost</button><button>Publish now</button>`;
+          document.getElementById('expand').onclick=()=>{
+            if(!data.truncate) document.getElementById('body').innerHTML=
+              'This is a manual test.<img alt="😊"> <a>#SmartPetFeeder</a> #CatLovers #NeakasaRiko';
+          };
+          window.writes=[];
+          [...el.querySelectorAll('button')].filter(b=>b.id!=='expand').forEach(b=>b.onclick=()=>writes.push(b.innerText));
+        }''', {'changed': changed_clock, 'truncate': truncate})
+
+    async def time_only_inventory(self):
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
+            return await month.read(self.page, ui_timezone='Asia/Shanghai',
+                business_timezone='Asia/Shanghai', timeout=1.5, detail_range=(self.when, self.when))
+
+    async def test_time_only_card_expands_its_own_preview_and_reads_full_caption(self):
+        await self.mount_time_only()
+        result = await self.time_only_inventory()
+        self.assertFalse(result.diagnostics)
+        self.assertEqual(len(result.cards_in_range('facebook', self.when, self.when)), 1)
+        self.assertEqual(result.cards[0].rendered, CAPTION)
+        self.assertEqual(result.cards[0].remote_ids, self.card.remote_ids)
+        self.assertEqual(result.cards[0].at, self.when)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_time_only_wrong_preview_time_or_unexpanded_text_stays_incomplete(self):
+        for changes in ({'changed_clock': True}, {'truncate': True}):
+            await self.mount()
+            await self.mount_time_only(**changes)
+            result = await self.time_only_inventory()
+            self.assertFalse(result.decision_complete)
+            self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_time_only_existing_object_can_be_reacquired_for_read_only_media(self):
+        await self.mount_time_only()
+        captured = []
+        async def observe(dialog):
+            captured.append(await dialog.get_by_role('article').count())
+            return 'capture'
+        self.assertEqual(await self.read(observe), 'capture')
+        self.assertEqual(captured, [1])
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
     async def test_only_exact_target_is_observed_and_dialog_is_closed(self):
         async def observe(dialog):
             self.assertIn('123456789', await dialog.inner_text())

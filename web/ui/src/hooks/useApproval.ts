@@ -17,11 +17,13 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const [when, setWhenState] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null), [confirmed, setConfirmed] = useState(false)
   const [snapshot, setSnapshot] = useState<{ detail: TaskDetail; body: ApprovalBody; preview: FrozenPreview } | null>(null)
   const [operation, setOperation] = useState<PublishOperation | null>(null)
+  const [recovering, setRecovering] = useState(false), [recoveryNotice, setRecoveryNotice] = useState('')
+  const [recoveryError, setRecoveryError] = useState(false)
   // 人工修改或清空后不再自动预填。
   const touched = useRef(false)
   useDeploymentDraft(snapshot !== null || (touched.current && !confirmed))
   const setWhen = (value: string) => { touched.current = true; setWhenState(value) }
-  useEffect(() => { touched.current = false; setWhenState(''); setSnapshot(null); setOperation(null); setBusy(false); setConfirmed(false) }, [detail.id])
+  useEffect(() => { touched.current = false; setWhenState(''); setSnapshot(null); setOperation(null); setBusy(false); setConfirmed(false); setRecoveryNotice(''); setRecoveryError(false) }, [detail.id])
   useEffect(() => {
     const saved = detail.publish_operation ?? null
     setOperation(saved)
@@ -57,6 +59,7 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   }, [runningId])
 
   const locked = detail.status === 'content_locked'
+  const pendingReceipt = ['submitted_unverified', 'submit_ambiguous'].includes(String(detail.publication?.status))
   const eligible = locked
   const lockable = ['pending_review', 'edited'].includes(detail.status) && !!options.data?.lockable
   const previewMissing = locked && !!options.data && !options.data.preview
@@ -101,18 +104,28 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
     try { await unschedulePublication(detail.id, reasonText); await refresh(); await options.refetch() }
     catch (cause) { setError(cause) } finally { setBusy(false) }
   }
-  const recover = async () => { setBusy(true); setError(null); try { await reconcilePublication(detail.id); await refresh(); await options.refetch() } catch (cause) { setError(cause) } finally { setBusy(false) } }
+  const recover = async () => {
+    if (busy || recovering) return
+    setBusy(true); setRecovering(true); setError(null); setRecoveryError(false); setRecoveryNotice('')
+    try {
+      const receipt = await reconcilePublication(detail.id)
+      if (receipt.status !== 'scheduled' || receipt.projection_error) setRecoveryNotice(receipt.projection_error || receipt.message || '')
+      await refresh(); await options.refetch()
+    } catch (cause) { setError(cause); setRecoveryError(true) }
+    finally { setBusy(false); setRecovering(false) }
+  }
   const payload = isApiError(error) && error.payload && typeof error.payload === 'object' ? error.payload as Record<string, unknown> : null
   const fromError = Array.isArray(payload?.suggestions) ? payload.suggestions : []
   const fromOperation = operation?.status === 'failed' && Array.isArray(operation.result?.suggestions) ? operation.result.suggestions : []
   const suggestions = [...fromError, ...fromOperation].filter((value): value is string => typeof value === 'string')
-  const errorMessage = operation && operation.status !== 'running' && operation.status !== 'succeeded' ? operation.message
+  const errorMessage = recoveryError && isApiError(error) ? error.message
+    : operation && operation.status !== 'running' && operation.status !== 'succeeded' ? operation.message
     : isApiError(error) && /夏令时/.test(error.message) ? '这个时刻在夏令时切换中不存在或出现两次，请选择其他时刻'
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,
-    snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover,
+    snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover, recovering, recoveryNotice, recoveryError, pendingReceipt,
     // 确认期间查询可能刷新；展示内容与提交目标必须来自打开时的同一份选项。
     open: () => { if (deploymentStore.canStartEditing() && !reason && options.data?.preview) setSnapshot(structuredClone({ detail, body: approvalBody(detail, when, options.data), preview: options.data.preview })) },
-    refresh: async () => { await refresh(); await options.refetch(); setError(null); setOperation(null) } }
+    refresh: async () => { await refresh(); await options.refetch(); setError(null); setRecoveryNotice(''); setRecoveryError(false) } }
 }
 export type ApprovalController = ReturnType<typeof useApproval>

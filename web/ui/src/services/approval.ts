@@ -9,7 +9,7 @@ export type ApprovalBody = ReturnType<typeof approvalBody>
 /** 提交立刻返回操作编号；浏览器那几分钟在请求之外跑，页面轮询它。 */
 export const approve = (id: string, body: ApprovalBody) => request<PublishOperation>(`/api/tasks/${idPath(id)}/approve`, jsonBody(body))
 export const publishOperation = (operationId: string) => request<PublishOperation>(`/api/publish-operations/${operationId}`)
-export const reconcilePublication = (id: string) => request<unknown>(`/api/tasks/${idPath(id)}/publication/reconcile`, jsonBody({}))
+export const reconcilePublication = (id: string) => request<{ status: string; message?: string; projection_error?: string }>(`/api/tasks/${idPath(id)}/publication/reconcile`, jsonBody({}))
 export const isScheduledReceipt = (receipt: ApproveReceipt) => receipt.ok === true && receipt.status === 'scheduled'
 
 export const lockContent = (id: string, body: { source_text_sha256: string; review_revision: string | null; content_fingerprint: string }) =>

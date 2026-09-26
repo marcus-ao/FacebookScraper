@@ -13,7 +13,7 @@ from core.feishu import FeishuSettings, Outbox
 from core.mirror import MirrorSettings, MirrorService
 from core.paid_model import atomic_write_json
 from core.process_identity import worker_alive
-from publish import business_suite as bs, journal, month_readback, planner_cache, snapshots
+from publish import business_suite as bs, journal, month_readback, operations, planner_cache, snapshots
 from publish.manual_run import load as load_manual_run
 
 
@@ -151,6 +151,100 @@ async def unschedule(account, indexed, *, reason: str, inventory_reader=None, no
                 'remote_ids': sorted(wanted)}
 
 
+async def _read_frozen_attempt(row, *, timeout, verify_images=False):
+    """Attach for one existing object's readback; own only the temporary reader tab."""
+    c = cfg()
+    metadata, _, files, _ = snapshots.load_for_attempt(row)
+    run = load_manual_run(row['platform'])
+    if (row.get('target_channels') != [row['platform']]
+            or metadata.get('publish_target') != run.target() or row['ui_timezone'] != run.ui_timezone):
+        raise review.ReviewConflict('冻结时的发布目标或 UI 时区缺失或已变化，不能推断原账号绑定')
+    when = snapshots.require_bound(metadata)
+    pw = page = None
+    cleanup_errors = {}
+    try:
+        pw, _browser, context = await attach(port=c.publish_debug_port, profile=c.publish_profile_dir,
+            start_script=r'scripts\start_chrome_publish.bat', login_hint='DE 发布账号')
+        page = await context.new_page()
+        shot = c.state_dir / 'publish_attempts' / (row['attempt_id'] + '_recheck_'
+            + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '.png')
+        # Revisit an existing submission. Never fabricate an empty pre-submit baseline.
+        readback = await month_readback.verify(page, when, files['text_de.txt'].decode('utf-8'),
+            ui_timezone=run.ui_timezone, target_channels=(row['platform'],), expected_remote_id=row['remote_id'],
+            timeout=timeout, run=run, frozen_attempt=row, verify_images=verify_images, screenshot_path=shot)
+    except (Exception, SystemExit) as exc:
+        readback = bs.ScheduledReadback(False, datetime.now(timezone.utc).isoformat(),
+            when.isoformat(), row['ui_scheduled_at'], row['final_text_sha256'],
+            error='原排期读取失败：' + (str(exc) if isinstance(exc, SystemExit) else type(exc).__name__),
+            diagnostics={'remote_images_verified': False, 'failure_stage': 'receipt_recheck_read'})
+    finally:
+        if page is not None:
+            cleanup_error = await close_owned_page(page)
+            if cleanup_error:
+                cleanup_errors['page'] = cleanup_error
+        if pw is not None:
+            try:
+                await pw.stop()
+            except Exception as exc:
+                cleanup_errors['connection'] = type(exc).__name__
+    return readback, cleanup_errors
+
+
+@maintenance.guarded('planner_read')
+async def reconcile(account, indexed, *, timeout=30) -> dict:
+    """Read an unresolved submission, then append its receipt; never submit again."""
+    c = cfg()
+    with journal.PublishOperationLock(c.state_dir / 'publish.lock', allow_reentrant=True):
+        source, _ = store.read_post_truth(account, indexed)
+        ref = journal.source_ref(source['platform'], source['post_id'])
+        row = journal.pending_record_for_refs(c.state_dir, (ref,))
+        if row and row['status'] in journal.NO_AUTO_RETRY_STATUSES:
+            unresolved = {item['attempt_id']: item for item in journal.load(c.state_dir)
+                          if ref in item.get('source_refs', ())}
+            if sum(item['status'] in journal.NO_AUTO_RETRY_STATUSES for item in unresolved.values()) != 1:
+                raise review.ReviewConflict('存在多条未决提交，不能将同一个远端对象绑定到不同尝试；请保留账本核对')
+            readback, cleanup = await _read_frozen_attempt(row, timeout=timeout)
+            diagnostics = dict(row.get('readback_diagnostics') or {})
+            diagnostics.update(readback.diagnostics)
+            diagnostics['receipt_recheck'] = {'observed_at': readback.observed_at,
+                'target_found': readback.found, 'error': readback.error}
+            if cleanup:
+                diagnostics['browser_cleanup_errors'] = cleanup
+            updates = dict(recorded_at=datetime.now(timezone.utc).isoformat(),
+                step='已有提交只读回执核对', readback_diagnostics=diagnostics,
+                screenshot=readback.screenshot or row.get('screenshot', ''))
+            if readback.found:
+                updates.update(remote_id=readback.remote_id, remote_ids=tuple(readback.remote_id.split(';')),
+                    channels_verified=readback.channels, readback_signal=readback.success_signal,
+                    verification=month_readback.verification_text(readback),
+                    note='人工触发只读核对：唯一同账号、渠道、时刻和完整冻结正文的排期已确认；未重新提交')
+            else:
+                updates.update(verification=readback.error, note='只读核对未完成；保留未决状态和防重')
+            updated = journal.transition(journal.attempt_from_row(row),
+                journal.STATUS_SCHEDULED if readback.found else row['status'], **updates)
+            journal.append(c.state_dir, updated)
+            row = asdict(updated)
+            if not readback.found:
+                return {'status': row['status'], 'publication': row,
+                        'message': '尚未补齐远端回执：' + readback.error + '；请勿重新提交。'}
+        else:
+            result = recover(account, indexed)
+            row = journal.scheduled_record_for_refs(c.state_dir, (ref,))
+            if row is None:
+                return result
+        result = {'status': row['status'], 'publication': row, 'message': '已核实已有排期并补齐回执。'}
+        try:
+            result['projection'] = project(row)
+        except Exception:
+            result['projection_error'] = '远端排期已记录，本地显示待补齐；可再次核对，不要重新提交。'
+        operation = operations.for_task(account.name + '/' + source['post_id'], row['snapshot_id'])
+        previous = ((operation or {}).get('result') or {}).get('publication') or {}
+        if operation and previous.get('attempt_id') == row['attempt_id']:
+            operations.finish(operation['operation_id'], status=operations.SUCCEEDED,
+                message=result['message'], result=dict(result, ok=True))
+        return result
+
+
 @maintenance.guarded('planner_read')
 async def reverify_media(attempt_id: str, *, timeout=30) -> dict:
     """Revisit an exact scheduled attempt without uploading, submitting or deleting."""
@@ -164,39 +258,7 @@ async def reverify_media(attempt_id: str, *, timeout=30) -> dict:
                 or not row.get('readback_signal') or not row.get('ui_readback')
                 or not re.fullmatch(re.escape(channel) + r'=\d{6,}', row.get('remote_id') or '')):
             raise review.ReviewConflict('原排期缺少确切的单渠道回读或 remote ID 绑定')
-        metadata, _, files, _ = snapshots.load_for_attempt(row)
-        run = load_manual_run(channel)
-        if metadata.get('publish_target') != run.target() or row['ui_timezone'] != run.ui_timezone:
-            raise review.ReviewConflict('冻结时的发布目标或 UI 时区缺失或已变化，不能推断原账号绑定')
-        when = snapshots.require_bound(metadata)
-        pw = page = None
-        cleanup_errors = {}
-        try:
-            pw, _browser, context = await attach(port=c.publish_debug_port, profile=c.publish_profile_dir,
-                start_script=r'scripts\start_chrome_publish.bat', login_hint='DE 发布账号')
-            page = await context.new_page()
-            # This is a revisit of a known object, never a fabricated empty submission baseline.
-            readback = await month_readback.verify(page, when, files['text_de.txt'].decode('utf-8'),
-                ui_timezone=run.ui_timezone, target_channels=(channel,), expected_remote_id=row['remote_id'],
-                timeout=timeout, run=run, frozen_attempt=row, verify_images=True)
-        except (Exception, SystemExit) as exc:
-            readback = bs.ScheduledReadback(False, datetime.now(timezone.utc).isoformat(),
-                when.isoformat(), row['ui_scheduled_at'], row['final_text_sha256'],
-                error='原排期读取失败：' + type(exc).__name__,
-                diagnostics={'remote_images_verified': False, 'failure_stage': 'media_recheck_read'})
-        finally:
-            try:
-                if page is not None:
-                    cleanup_error = await close_owned_page(page)
-                    if cleanup_error:
-                        cleanup_errors['page'] = cleanup_error
-            except Exception as exc:
-                cleanup_errors['page'] = type(exc).__name__
-            try:
-                if pw is not None:
-                    await pw.stop()
-            except Exception as exc:
-                cleanup_errors['connection'] = type(exc).__name__
+        readback, cleanup_errors = await _read_frozen_attempt(row, timeout=timeout, verify_images=True)
         diagnostics = dict(row.get('readback_diagnostics') or {})
         diagnostics.update(readback.diagnostics)
         diagnostics.pop('browser_cleanup_errors', None)

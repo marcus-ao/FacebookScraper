@@ -880,6 +880,12 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 **验证状态：离线通过。** [接入主干后的四脚本](../state/quiet-ctrl-c/offline-validation-20260924T070533Z/results.json)通过：Windows 隔离控制台 9 项覆盖真实 `run_web.bat`/`run_web_lan.bat` 启动链、隔离 ASGI 应用上的实际 Uvicorn 优雅退出与子进程关闭标记、超过八秒的清理、参数保真与控制器直启提示；另有 scheduler、Web launcher 和 hygiene。[部署、运行绑定与地址定向](../state/quiet-ctrl-c/offline-validation-20260924T065210Z/results.json)通过；该较早记录中的 hygiene 与中断夹具失败已由接入主干后的结果替代。测试使用临时目录、合成子进程和隔离 Web 应用，未连接真实账号、模型、飞书或发布服务；服务机真实 PowerShell 停止行为仍为 **待真实联调**。
 
+**已有排期回执恢复（2026-09-25）：待真实联调。** 服务机 attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 已收到 `Your post is scheduled`，目标为 `2026-09-30T23:00:00+08:00`。用户只读取证确认月历只有时间链接、没有 href/aria/父级标签，旧代码在 `item_ready` 以 `item_caption` 拒绝；实际 `Post details` 中的 FB 对象为 `1084557747316275`，文章预览含独立账号、日期和折叠正文。恢复接口之前只调用本地投影函数，未决提交必然 409，前端将它误作内容版本冲突。原服务 API 与脱敏诊断保存在 [本次证据目录](../state/g8-scheduled-reconcile-20260925/)。
+
+时间卡现可直接进入只读详情；已录证 Facebook article 中展开 `See more`，从作者/日期/操作菜单之后、首张媒体之前读取正文，保留 emoji，排除推广与评论区域。无结构依据的 IG 时间卡不套用 FB 适配。`publication/reconcile` 持发布锁核对原快照与资产，用唯一账号/渠道/时刻/全文匹配补齐原 attempt，既有 remote ID 不允许替换；没有匹配或详情不完整继续保留未决，不重放提交、不伪造提交前基线。原 `recover` 函数仍只修本地投影。页面显示实际提交时刻与具体恢复错误，已确认 journal 优先于旧操作提示；不把未决状态说成排期已确认。复验步骤见 [MANUAL_STEPS §16.4](MANUAL_STEPS.md#164-排期详情的图片控件证据)。G8 图片完整性与顺序仍未验收。
+
+**离线验证。** 12 个相关后端脚本的最新结果全部通过，覆盖月历/详情读取、原回执恢复、发布操作、表单/浏览器生命周期和 hygiene；DecisionPanel 三项定向测试与前端生产构建通过。隔离浏览器场景验证具体恢复错误、未决回执和已确认回执的页面转换，记录三次核对请求、零次提交请求。各批次原始日志、早期已修正的夹具断言失败及最新结果索引见 [verification.json](../state/g8-scheduled-reconcile-20260925/verification.json)，浏览器请求记录见 [browser-stage-receipt_reconcile.json](../state/g8-scheduled-reconcile-20260925/browser-stage-receipt_reconcile.json)。这些测试使用隔离数据、合成页面或模拟 API；服务机原对象在修复后的只读回验尚未执行。
+
 ## 2. 红线
 
 1. 不自动登录。人在三个专用 Chrome profile 登录，代码只附着。

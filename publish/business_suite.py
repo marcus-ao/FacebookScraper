@@ -1223,7 +1223,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 
 
 async def _open_channel_dialogs(
-        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None
+        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None
         ) -> dict[str, str]:
     """只读详情的渠道与 remote ID；仅用 Escape 关闭，不操作 Publish now 或 Boost。"""
     attrs = spec.attributes
@@ -1243,6 +1243,8 @@ async def _open_channel_dialogs(
         dialog = dialogs.first
         # 无详情弹窗时保留渠道未知，由调用方决定是否完整。
         await dialog.wait_for(state="visible", timeout=_ms(timeout))
+        if prepare_detail is not None:
+            await prepare_detail(dialog)
         deadline = time.monotonic() + timeout
         previous, stable_since = None, time.monotonic()
         while True:

@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright, expect
 from browser_fixture import frozen_preview
 from ui_fixture import EVIDENCE, BrowserFixture, ROOT, UIFixture
 from browser_schedule_preview import stage_schedule_preview
+from browser_receipt_reconcile import stage_receipt_reconcile
 
 
 def choose(page, label, value):
@@ -656,7 +657,7 @@ def stage_review_menu(page, ui):
     return {'review_menu': 'PASS', 'measurements': measurements, 'cancel_without_mutation': True}
 
 
-STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i,'REVIEW_MENU':stage_review_menu,'SCHEDULE_PREVIEW':stage_schedule_preview}
+STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i,'REVIEW_MENU':stage_review_menu,'SCHEDULE_PREVIEW':stage_schedule_preview,'RECEIPT_RECONCILE':stage_receipt_reconcile}
 
 def main():
     parser=argparse.ArgumentParser()

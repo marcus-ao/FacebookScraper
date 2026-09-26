@@ -74,6 +74,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
                                               business_timezone=bs.business_timezone(), timeout=timeout, run=run,
                                               detail_range=(when, when))
         diagnostics.update(inventory_cards=len(inventory.cards),
+                           inventory_diagnostics=list(inventory.diagnostics),
                            complete_month=inventory.decision_complete and inventory.covers((when,)),
                            failure_stage='matching', caption_mismatch=0, time_mismatch=0,
                            channel_mismatch=0, delivery_mismatch=0)

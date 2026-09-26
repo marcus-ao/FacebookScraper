@@ -25,8 +25,16 @@ export function ApprovalAction({ controller: c }: { controller: ApprovalControll
 }
 
 /** 提交跑在请求之外：关掉页面再回来，这块还在。 */
-function SubmissionProgress({ controller: c }: { controller: ApprovalController }) {
+function SubmissionProgress({ controller: c, detail }: { controller: ApprovalController; detail: TaskDetail }) {
   const op = c.operation
+  if (detail.publication?.status === 'scheduled') return <Alert type="success" title="排期已确认" />
+  if (c.pendingReceipt && op?.status !== 'running') {
+    const at = typeof detail.publication?.scheduled_at === 'string' ? detail.publication.scheduled_at : op?.scheduled_at
+    const accepted = detail.publication?.status === 'submitted_unverified'
+    return <Alert type="warning" title={accepted ? '已收到排期成功信号，待补齐回执' : '这次提交结果待核对'}
+      description={<><p>本次提交时刻：<BusinessTime at={at} /></p>
+        <p>{accepted ? '后台已返回成功提示，本地尚未读全排期详情。' : '本地尚未确认后台是否收下。'}请用下方按钮核对已有排期，勿重新提交。</p></>} />
+  }
   if (!op) return null
   if (op.status === 'running') {
     return <Alert type="info" title={`正在创建排期：第 ${op.step_index}/${op.step_total} 步 · ${op.step}`}
@@ -51,7 +59,7 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
   return <section className={styles.panel} aria-label="审核与排期">
     <div className={styles.heading}><h2>审核与排期</h2><Button type="text" size="small" disabled={c.busy} onClick={() => void c.refresh()}>重新核对排期条件</Button></div>
     {(detail.status === 'scheduled' || c.confirmed) && <p role="status">排期已确认。<BusinessTime at={detail.schedule?.at} /> · 公开发布结果仍以远端观测为准。</p>}
-    <SubmissionProgress controller={c} />
+    <SubmissionProgress controller={c} detail={detail} />
     {c.locked && <p role="status" className={styles.help}>
       <Tag color="processing">内容已冻结</Tag>正文与图片已按当前版本锁定，不会再被误改。要改内容请先解除冻结。
       <Button type="link" size="small" disabled={c.busy} onClick={() => void c.unlock()}>解除冻结</Button>
@@ -60,16 +68,17 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
       {c.eligible && <label>发布时间<Input aria-label="发布时间" type="datetime-local" value={c.when} min={min} max={max} disabled={editing || c.busy || !data?.available} onChange={event => c.setWhen(event.target.value)} /></label>}
       <div className={styles.facts}><span>作者：{AUTHOR_KIND_LABEL[detail.meta.author_kind]} {detail.meta.owner ? '@' + detail.meta.owner : ''}</span><span>原帖发布：{formatDate(detail.meta.created_at)}</span>{detail.meta.coauthors.length > 0 && <span>合作方：{detail.meta.coauthors.join('、')}</span>}{detail.meta.permalink && <a href={detail.meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}</div>
     </div>
-    {c.reason && <p className={styles.help}>{!data?.available && data?.reason ? data.reason : c.reason}</p>}
-    {min && max && <div className={styles.help}>可选 {min.replace('T', ' ')} 至 {max.replace('T', ' ')}</div>}
+    {c.reason && !c.pendingReceipt && detail.status !== 'scheduled' && <p className={styles.help}>{!data?.available && data?.reason ? data.reason : c.reason}</p>}
+    {min && max && !c.pendingReceipt && detail.status !== 'scheduled' && <div className={styles.help}>可选 {min.replace('T', ' ')} 至 {max.replace('T', ' ')}</div>}
     {c.eligible && <Collapse ghost items={[{ key: 'occupancy', label: `${near ? '附近已有同渠道排期 · ' : ''}查看所选时刻前后一天的同渠道占用（间隔 ${calendar.data?.gap_minutes ?? '—'} 分钟）`, children: <>
       <p>依据缓存：<BusinessTime at={calendar.data?.cached_at ? zonedInput(calendar.data.cached_at, zone) : null} />{calendar.data?.stale ? ' · 可能已过期' : ''}；正式排期前会再次核对后台。</p>
       {occupied.length ? occupied.map((card, i) => <p key={i}><BusinessTime at={card.at_business} /> · {card.delivery === 'published' ? '已观测到公开发布' : card.delivery === 'scheduled' ? '已创建定时任务' : '发布状态待核验'}</p>) : <p>当前缓存未发现所选时刻附近的同渠道记录，不能据此保证空闲。</p>}
     </> }]} />}
     {!!c.error && <Alert type="warning" title={c.errorMessage} />}
+    {!!c.recoveryNotice && <Alert type="warning" title={c.recoveryNotice} />}
     {c.suggestions.length > 0 && <Space wrap><span>可以改选：</span>{c.suggestions.map(value => <Button key={value} onClick={() => c.setWhen(zonedInput(value, zone))}>{zonedInput(value, zone).replace('T', ' ')}</Button>)}</Space>}
-    {isConflict(c.error) && <ConflictRecovery kind="schedule" onRecover={() => void c.refresh()} recovering={c.options.isFetching} />}
-    {(detail.publication || detail.status === 'approved') && <p><Button disabled={c.busy || editing} onClick={() => void c.recover()}>核对并补齐本地回执</Button> <Typography.Text type="secondary">只核对已有发布尝试，恢复结果需再次确认。</Typography.Text></p>}
+    {isConflict(c.error) && !c.recoveryError && <ConflictRecovery kind="schedule" onRecover={() => void c.refresh()} recovering={c.options.isFetching} />}
+    {(detail.publication || detail.status === 'approved') && <p><Button loading={c.recovering} disabled={c.busy || editing} onClick={() => void c.recover()}>核对并补齐本地回执</Button> <Typography.Text type="secondary">只查询已有排期并补齐回执，不会再次提交。</Typography.Text></p>}
     {detail.status === 'scheduled' && <p><Button danger disabled={c.busy} onClick={() => setUndoOpen(true)}>我已在后台删除这条排期</Button> <Typography.Text type="secondary">系统不会替你删远端卡片；删完回来登记，它会重读月历核实。</Typography.Text></p>}
     {detail.review.wake_at && <p>恢复审校：<ShanghaiTime at={detail.review.wake_at} /></p>}{detail.review.reason && <p>处理理由：{detail.review.reason}</p>}{detail.review.handoff_url && <a href={detail.review.handoff_url} target="_blank" rel="noopener noreferrer">查看手工发布的帖子</a>}
     {data?.reason && !data.available && <Collapse ghost items={[{ key: 'reason', label: '查看核验信息', children: <pre className={styles.diagnostic}>{data.reason}</pre> }]} />}

@@ -18,7 +18,7 @@ from core.config import ROOT, cfg
 from core.paid_model import atomic_write_json
 from core.store import assert_physical_direct_path
 from publish import business_suite as bs, selectors
-from publish import planner_content as content, published_details
+from publish import planner_content as content, published_details, scheduled_details
 from publish.insights_evidence import InsightsEvidence
 from publish.channel_evidence import accounts, context_ids
 
@@ -294,7 +294,7 @@ async def ready_item(page, row, item, *, timeout, card_spec=None):
         value = (fresh, raw)
         if value != previous:
             previous, stable_since = value, time.monotonic()
-        if (fresh['href'] or raw) and time.monotonic() - stable_since >= .4:
+        if time.monotonic() - stable_since >= .4:
             # Hydration is accepted only after checking the original slot identity;
             # read() compares this refreshed DOM snapshot with the final sweep.
             item.update(fresh)
@@ -371,6 +371,23 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
                 await close_owned_page(detail)
                 await asyncio.sleep(DETAIL_RELEASE_SECONDS)
     spec = card_spec or bs.require_readback_evidence()
+    if not raw:
+        material = None
+
+        async def prepare_dialog(dialog):
+            await scheduled_details.expand(dialog, timeout=timeout)
+
+        async def observe_dialog(dialog, ids):
+            nonlocal material
+            material = await scheduled_details.read(dialog, row['date'], item['time'], ids, accounts())
+            if observe_scheduled is not None:
+                await observe_scheduled(dialog, ids)
+
+        await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
+            prepare_detail=prepare_dialog, observe_detail=observe_dialog)
+        if material is None:
+            raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
+        return material
     parsed = bs._entry_naive(raw, spec)
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     if parsed is None or parsed != expected:
@@ -411,8 +428,14 @@ async def read_scheduled_target(page, card, *, ui_timezone, observe_detail, time
                 continue
             node, raw = ready
             match = re.search(spec.attributes['datetime_regex'], raw)
-            if (match and bs._entry_naive(raw, spec) == local
-                    and bs._card_text(raw[:match.start()]) == bs._card_text(card.rendered)):
+            if not raw:
+                detail = await read_item_detail(page, row, item, node, raw, timeout=timeout,
+                                               card_spec=spec, ui_timezone=ui_timezone)
+                if (detail['remote_ids'] == dict(card.remote_ids)
+                        and bs._card_text(detail['text']) == bs._card_text(card.rendered)):
+                    matches.append((row, item))
+            elif (match and bs._entry_naive(raw, spec) == local
+                  and bs._card_text(raw[:match.start()]) == bs._card_text(card.rendered)):
                 matches.append((row, item))
     if len(matches) != 1:
         raise bs.PublishStepError('取图时未能重新定位唯一的原排期卡片')
@@ -426,7 +449,9 @@ async def read_scheduled_target(page, card, *, ui_timezone, observe_detail, time
     async def observe(dialog, ids):
         if ids != dict(card.remote_ids) or set(ids) != {channel}:
             raise bs.PublishStepError('重新打开的排期详情不是原 remote ID')
-        if bs._card_text(card.rendered) not in await bs._node_text(dialog):
+        caption = ((await scheduled_details.read(dialog, row['date'], item['time'], ids, accounts()))['text']
+                   if not raw else await bs._node_text(dialog))
+        if bs._card_text(card.rendered) not in bs._card_text(caption):
             raise bs.PublishStepError('重新打开的排期详情没有完整冻结正文')
         captured.append(await observe_detail(dialog))
 
