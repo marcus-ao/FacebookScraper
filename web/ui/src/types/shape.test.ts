@@ -250,8 +250,8 @@ describe('GET /api/calendar', () => {
     expect(calendar.local_error).toBeNull()
   })
 
-  it('gap_minutes 是 90 —— 同渠道冲突窗口', () => {
-    expect(calendar.gap_minutes).toBe(90)
+  it('gap_minutes 是 1 —— 当前同渠道冲突窗口', () => {
+    expect(calendar.gap_minutes).toBe(1)
   })
 })
 

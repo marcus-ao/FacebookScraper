@@ -100,7 +100,7 @@ def slot_range(target: datetime, gap_minutes: float | None = None) -> tuple[date
     """Live reads and conflict checks share the same configured interval, including midnight."""
     utc_target = aware_utc(target)
     if gap_minutes is None:
-        gap_minutes = cfg().get("publish", "min_channel_gap_min", 90)
+        gap_minutes = cfg().get("publish", "min_channel_gap_min", 1)
     if (isinstance(gap_minutes, bool) or not isinstance(gap_minutes, (int, float))
             or not math.isfinite(gap_minutes) or gap_minutes <= 0):
         raise ValueError("同渠道排期间隔必须是大于零的有限分钟数")
@@ -128,7 +128,7 @@ def evaluate_slot(target: datetime, channel: str, inventory: RemoteSlotInventory
     if inventory.ui_timezone != window.ui_timezone:
         return SlotDecision(False, "calendar_incomplete")
     def covered(at):
-        # 目标本身可见不足以判断前后90分钟；跨可见边界时不能猜另一月为空。
+        # 须覆盖整个配置间隔；跨可见边界时不能猜另一月为空。
         return inventory.covers([at - gap, at + gap])
 
     if not covered(utc_target):

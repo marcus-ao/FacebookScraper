@@ -153,21 +153,16 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
         await self.page.set_content('<div role="link" draggable="false">15'
                                     '<div role="link">10:00 AM</div></div>')
-        # Refusing to confirm must cost the run an error, never a silently skipped scheduled post.
+        # A stable time-only item now opens details. A missing dialog must stay
+        # an explicit unread post, not become a recommendation or empty slot.
         with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
-                patch.object(month.bs, 'require_readback_evidence', return_value=SimpleNamespace(
-                    attributes={'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
-                                'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})):
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
             with self.assertRaises(PublishStepError) as caught:
                 await month.read_item(self.page, row, {'index': 0, 'href': '', 'text': '10:00 AM',
-                                                       'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=.5)
-        # The budget running out is how this ends, but not why: an item left for a
-        # real task because its tooltip never opened has to say so, or every such
-        # slot reads as a browser timeout and the placeholder stays invisible.
-        self.assertEqual(caught.exception.diagnostic['stage'], 'item_ready')
-        self.assertEqual(caught.exception.diagnostic['code'], 'structure_unknown')
-        self.assertEqual(caught.exception.diagnostic['missing_fields'],
-                         ['item_caption', 'recommendation_absent'])
+                                                       'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=1.5)
+        self.assertEqual(caught.exception.diagnostic['stage'], 'scheduled_detail')
+        self.assertEqual(caught.exception.diagnostic['code'], 'load_timeout')
+        self.assertEqual(caught.exception.diagnostic['missing_fields'], [])
 
     async def test_conflict_inventory_contains_unknown_channel_cards(self):
         rows = [{'date': date(2026, 9, 15), 'items': [{'index': 0, 'time': '10:00 AM'}]}]
@@ -363,8 +358,9 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def test_scheduled_aggregate_cannot_copy_one_id_into_two_channels(self):
         await self.page.set_content('''<button onclick="document.querySelector('[role=dialog]').hidden=false">Open</button>
           <div role="dialog" aria-label="Post details" hidden>ID: 123456
-          Facebook's Feed Neakasa Deutschland Instagram feed neakasa.de</div>''')
-        value = await month.bs._open_channel_dialogs(self.page,self.page.get_by_role('button'),SPEC,timeout=1)
+          Facebook's Feed Neakasa Deutschland Instagram feed neakasa.de
+          <button onclick="this.parentElement.hidden=true">Close</button></div>''')
+        value = await month.bs._open_channel_dialogs(self.page,self.page.get_by_role('button', name='Open', exact=True),SPEC,timeout=1)
         self.assertEqual(value,{})
 
     async def test_shared_story_and_feed_source_links_do_not_supply_content_identity(self):

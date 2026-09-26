@@ -17,7 +17,7 @@ from web.api import reader
 router = APIRouter()
 
 # 跨发实测渠道分钟相差 1 分钟（REQUIREMENTS F5-5：7:17/7:18）；
-# 本系统同渠道受 publish.min_channel_gap_min（90 分钟）约束，5 分钟只容纳一篇。
+# 这只是来源关联的候选窗口，不是排期间隔；相邻分钟多帖须唯一匹配，歧义不填。
 SOURCE_MATCH_TOLERANCE = timedelta(minutes=5)
 
 _ERRORS = {
@@ -185,7 +185,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             "age_seconds": snapshot.get("age_seconds"), "cards": cards,
             "local": local_layer, "local_error": local_error,
             "coverage": coverage(inventory),
-            "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 90),
+            "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 1),
             "refresh_available": unavailable is None, "refresh_unavailable_reason": unavailable,
             "advisory_only": True, "month_ui": local.strftime("%Y-%m"),
             "ui_timezone": ui_timezone, "business_timezone": business_timezone,

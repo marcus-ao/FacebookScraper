@@ -64,6 +64,14 @@ class CalendarApiTests(unittest.TestCase):
         asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=rows),
                                                state_dir=self.state, now=NOW))
 
+    def test_default_gap_and_configured_value_are_reported_to_the_page(self):
+        with patch.object(calendar.local_schedule, 'entries', return_value=[]):
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 1)
+            self.config._d['publish']['min_channel_gap_min'] = 2
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 2)
+            del self.config._d['publish']['min_channel_gap_min']
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 1)
+
     def linked_payload(self, card=PUBLISHED, entries=None, source_url=SOURCE_URL, source_error=None):
         self.populate(card)
         source = SimpleNamespace(row={'permalink': source_url}) if source_url is not None else None
@@ -112,6 +120,8 @@ class CalendarApiTests(unittest.TestCase):
             ('outside window', replace(PUBLISHED, at=SLOT + timedelta(minutes=5, seconds=1)), [ENTRY]),
             ('different channel', PUBLISHED, [dict(ENTRY, channels=['facebook'])]),
             ('two tasks', PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/other')]),
+            ('one minute apart', PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/next',
+                at=(SLOT + timedelta(minutes=1)).isoformat(), remote_id='instagram=999999')]),
             ('unknown delivery', replace(PUBLISHED, delivery='unknown'), [ENTRY]),
             ('failed delivery', replace(PUBLISHED, delivery='failed'), [ENTRY]),
             ('submitting only', PUBLISHED, [dict(ENTRY, kind='submitting')]),

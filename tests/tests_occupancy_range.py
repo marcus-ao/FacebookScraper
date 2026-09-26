@@ -36,23 +36,23 @@ class OccupancyRangeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.decision(inventory(replace(partial, time_verified=False), diagnostics=rows.diagnostics)).allowed)
         self.assertFalse(self.decision(inventory(diagnostics=rows.diagnostics)).allowed)
 
-    def test_missing_caption_or_placement_still_occupies_at_89_but_not_90_minutes(self):
+    def test_missing_caption_or_placement_still_occupies_at_59_but_not_60_seconds(self):
         partial = card(read_status='incomplete', caption_status='unknown')
-        for minutes, allowed in ((89, False), (90, True)):
-            self.assertEqual(self.decision(inventory(partial), WHEN+timedelta(minutes=minutes)).allowed, allowed)
+        for seconds, allowed in ((59, False), (60, True)):
+            self.assertEqual(self.decision(inventory(partial), WHEN+timedelta(seconds=seconds)).allowed, allowed)
         self.assertTrue(planning.evaluate_slot(WHEN, 'instagram', inventory(partial),
             now=WHEN-timedelta(days=1), window=WINDOW).allowed)
-        self.assertTrue(self.decision(inventory(replace(partial, channels=())), WHEN+timedelta(minutes=90)).allowed)
+        self.assertTrue(self.decision(inventory(replace(partial, channels=())), WHEN+timedelta(minutes=1)).allowed)
 
     def test_suggestions_apply_same_range_rule_at_each_candidate(self):
-        unknown = card(WHEN+timedelta(minutes=100), (), read_status='incomplete')
+        unknown = card(WHEN+timedelta(minutes=2), (), read_status='incomplete')
         rows = inventory(card(), unknown)
         decision = self.decision(rows)
         self.assertEqual(decision.reason, 'conflict')
         self.assertEqual(len(decision.suggestions), 3)
         for at in decision.suggestions:
             self.assertTrue(self.decision(rows, at).allowed)
-            self.assertGreaterEqual(abs((at-unknown.at).total_seconds()), 5400)
+            self.assertGreaterEqual(abs((at-unknown.at).total_seconds()), 60)
 
     def test_cache_roundtrip_preserves_proof_and_legacy_cache_does_not_invent_it(self):
         rows = inventory(card(WHEN+timedelta(days=1), read_status='incomplete', diagnostic_index=0),

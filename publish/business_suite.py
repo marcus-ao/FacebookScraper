@@ -54,6 +54,10 @@ class PublishStepError(RuntimeError):
         self.suggestions = tuple(suggestions)
 
 
+class PlannerDialogCloseError(PublishStepError):
+    """A retained detail overlay blocks later cards; stop this inventory read."""
+
+
 @dataclass(frozen=True)
 class AccountContext:
     """会话与账号核验结果；selection_verified=False 不表示目标账号已确认。"""
@@ -1225,13 +1229,14 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 async def _open_channel_dialogs(
         page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None
         ) -> dict[str, str]:
-    """只读详情的渠道与 remote ID；仅用 Escape 关闭，不操作 Publish now 或 Boost。"""
+    """只读详情身份；用详情自己的 Close 关闭并等它消失，再读下一条。"""
     attrs = spec.attributes
     try:
         pattern = re.compile(str(attrs.get("remote_id_regex") or ""))
     except re.error as exc:
         raise ProbeRequired("remote_id_regex 无效：%s" % exc) from exc
     found: dict[str, str] = {}
+    dialog = None
     try:
         await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
@@ -1286,10 +1291,19 @@ async def _open_channel_dialogs(
             raise
         pass
     finally:
-        try:
-            await page.keyboard.press("Escape")
-        except Exception:                             # noqa: BLE001
-            pass
+        # Service Post details has a Close button. Escape can be consumed by
+        # preview focus/menus; sending the key alone does not prove dismissal.
+        if dialog is not None and await dialog.is_visible():
+            try:
+                close = dialog.get_by_role('button', name='Close', exact=True)
+                if await close.count() == 1:
+                    await close.click(timeout=_ms(timeout))
+                else:
+                    await page.keyboard.press('Escape')
+                await dialog.wait_for(state='hidden', timeout=_ms(timeout))
+            except Exception as exc:
+                raise PlannerDialogCloseError(
+                    '上一条排期详情未能关闭，本次月历读取已停止；请重新核对已有排期。') from exc
     return found
 
 

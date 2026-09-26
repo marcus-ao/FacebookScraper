@@ -114,7 +114,7 @@
    "end_exclusive": "2026-10-01T07:00:00+00:00"
   }
  },
- "gap_minutes": 90,
+ "gap_minutes": 1,
  "refresh_available": true,
  "refresh_unavailable_reason": null,
  "advisory_only": true,

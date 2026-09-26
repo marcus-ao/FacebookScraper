@@ -634,7 +634,7 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 旧缓存若没有 `time_verified`，按时刻未核实，不能用来排除占用。
 仍在 2026 年 9 月时，日期格范围应为 `2026-08-30` 至 `2026-10-03`；核对 9 月 4 日 Story、
 9 月 30 日 17:30 手工帖子和其它实际类型，逐渠道对照账号、时间与 ID，不预设两渠道相同。
-同渠道且时刻已核实的内容继续遵循 90 分钟规则。渠道未知落在目标前后 90 分钟内，或时刻没有独立证据时，不能判为空档。
+同渠道且时刻已核实的内容继续遵循 1 分钟规则。渠道未知落在目标前后 1 分钟内，或时刻没有独立证据时，不能判为空档。
 保留旧数据或 `decision_complete=false` 均不算本次完整读取通过。
 全程不得新增、修改、删除或重新提交真实内容；开发机隔离测试不能代替服务机结果。
 
@@ -647,14 +647,14 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 - 每张最终图片及哈希；
 - 唯一渠道和目标账号；
 - 北京时刻（2026-09-23 起界面不再并排显示德国受众当地时刻，联调包仍须自行核对受众侧钟点）；
-- Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
+- Planner 当前覆盖与同渠道前后 1 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
 两个联调包都不存在：清库把归档和此前准备的 FB 待制作包一起删了。要重新走到这一步，得先回填出有正文和图片的新帖，再逐篇准备。
 
 用户确认后才执行一次提交。提交前后都不要编辑冻结目录。只有 Planner 回读确认目标渠道、时刻和 remote ID 后才能写 `scheduled`。`scheduled` 不代表到时已经公开。
 
-两篇合起来须分别覆盖长正文完整回读、多图字节/数量/顺序、FB 德国链接、IG CTA；人工选时若同渠道 90 分钟内冲突，拒绝并给建议，不自动顺延。提交前再读完整远端 Planner，不能用未加载完的月历判空档。公开状态仅只读观察，未证实写 unknown。
+两篇合起来须分别覆盖长正文完整回读、多图字节/数量/顺序、FB 德国链接、IG CTA；人工选时若同渠道 1 分钟内冲突，拒绝并给建议，不自动顺延。提交前再读完整远端 Planner，不能用未加载完的月历判空档。公开状态仅只读观察，未证实写 unknown。
 
 月历显示 partial 时仍保留异常和旧缓存时间；是否可以排期由当次实时读取按目标渠道、相关时段判断。已核实在范围外的详情异常不阻塞该时段，可能影响的未知条目仍会拒绝。最后一次读取完成后系统再次只读核对表单；等待期间不要修改正文、图片或时刻，发现变化会停止，请重新打开当前审校结果确认。远端删除登记仍须完整读取证明目标确实消失。
 
@@ -1433,7 +1433,45 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 
 核对时不要解除冻结、手改账本或再次创建排期。待回执页面显示的是“本次提交时刻”，不会将其标成已经回读确认。成功信号、正文和编号不代替 G8 图片证据。
 
-**同日第二条被旧卡读取失败阻断。** 2026-09-26 服务机的 `122125865115379375` 已提交到 9 月 30 日 17:30，原 attempt 为 `2d85e661-8bb9-429a-a1e6-ce6cf9686d67`；报错实际来自同日 23:00 的另一条详情。更新后在这篇只点“核对并补齐本地回执”，核实完整目标对象后沿原 attempt 追加结果；另一张卡的读取诊断仍保留，不表示整月已完整，也不能据此新建排期。23:00 那篇已是 `scheduled`，再次核对只补其本地投影和通知。服务机定向验证可追加 `--only tests_occupancy_range`，覆盖正向确认不能放宽提交前空档规则。
+**同日两条 Facebook 原回执已确认。** 2026-09-26 用户输出确认 `122125865115379375` 的 17:30 原 attempt `2d85e661-8bb9-429a-a1e6-ce6cf9686d67`、`122128135023379375` 的 23:00 原 attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 均为 `scheduled`，前者通知已送达。不要为验证读取再次创建这两条排期。后者若仍 `pending / deliveries=[]`，从“Facebook 待审 → 已处理”打开该帖，点一次“核对并补齐本地回执”即可沿原事件补送；不需要重新创建排期或输入任何资产 ID。
+
+**Instagram 选时被同日 Facebook 卡点击超时阻断。** 服务机只读诊断确认读完 17:30 后，23:00 卡点击超时并变成未知渠道。新版关闭详情时等待它消失，再点下一条；不能用减小间隔代替这项修复。按 §13 更新源码、重启原 Web 入口后，先跑定向隔离验证：
+
+```powershell
+.\scripts\run_python.bat -m tools.test_offline --only tests_scheduled_detail --only tests_planning --only tests_occupancy_range --only tests_manual_schedule
+```
+
+本次默认间隔为 1 分钟；同渠道相邻整分钟允许，同刻仍冲突，跨渠道独立。保持原 9223 窗口登录、没有发布任务运行时，再执行一次只读核对。它临时打开月历、读取这一天已有详情并关闭自己的标签，不创建或修改排期、不发送飞书消息：
+
+```powershell
+@'
+import asyncio, json
+from datetime import datetime, timezone
+from core.config import cfg
+from publish import journal, manual_run, planner_cache, planning
+
+async def main():
+    c = cfg()
+    target = datetime.fromisoformat('2026-09-30T20:00:00+08:00')
+    with journal.PublishOperationLock(c.state_dir / 'publish.lock'):
+        inv = await planner_cache.read_live_inventory(
+            run=manual_run.load('instagram'), detail_range=planning.slot_range(target))
+        decision = planning.evaluate_slot(target, 'instagram', inv,
+            now=datetime.now(timezone.utc), window=planning.config_window())
+    print(json.dumps({
+        'gap_minutes': c.get('publish', 'min_channel_gap_min', 1),
+        'allowed': decision.allowed, 'reason': decision.reason,
+        'diagnostics': list(inv.diagnostics),
+        'cards': [{'at': x.at.isoformat(), 'channels': x.channels,
+                   'time_verified': x.time_verified, 'read_status': x.read_status}
+                  for x in inv.cards]
+    }, ensure_ascii=False, indent=2))
+
+asyncio.run(main())
+'@ | .\scripts\run_python.bat -
+```
+
+现有两条 Facebook 详情读全且没有其它未知/冲突条目时，应显示 `gap_minutes=1`、`allowed=true`、`reason=available`、`diagnostics=[]`。这是只读空档判断，不是创建成功。若关不掉详情或再次超时，保留完整错误，不为取证提交帖子。通过后回到原 Instagram 稿件，沿用冻结内容，重新展示最终正文、三张有序图片、`neakasa.de`、唯一 Instagram 渠道和实际选定时刻，人工确认后仅提交一次；已有 scheduled/未决记录则走原回执核对。
 
 **排期已确认但飞书未通知。** 新版在确认或补齐 `scheduled` 后立即向原发布机器人投递该 attempt 的回执，沿用四机器人配置；普通监测模式也发送已入队排期回执，不需为此开启 `--process`。待审静默规则不变，已确认排期回执即时发送。更新并重启 Web 后，对已成功的帖子点一次“核对并补齐本地回执”，会检查原通知是否真正送达；已发送不会重发，入队失败或已入队但尚未尝试发送时沿原事件补齐。若常驻监测进程仍运行旧代码，在它空闲时正常停止并用原命令重启，保持原有参数。
 

@@ -208,7 +208,7 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
         return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone,
                                       card_spec=card_spec)
-    except BrowserReadInterrupted:
+    except (BrowserReadInterrupted, bs.PlannerDialogCloseError):
         raise
     except Exception as exc:
         raise_if_browser_lost(page, exc)

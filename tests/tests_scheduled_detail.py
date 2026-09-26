@@ -4,7 +4,7 @@ import html
 import sys
 import unittest
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -13,7 +13,8 @@ from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
-from publish import business_suite as bs, month_inventory as month, month_readback
+from publish import business_suite as bs, month_inventory as month, month_readback, planning
+from publish.compose import ScheduleWindow
 from tests_month_inventory import SPEC, CAPTION, ENTRY
 
 
@@ -123,6 +124,69 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             result = await self.time_only_inventory()
             self.assertFalse(result.decision_complete)
             self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_two_details_close_via_recorded_button_when_escape_is_ignored(self):
+        await self.mount_time_only()
+        await self.page.evaluate('''() => {
+          const dialog=document.querySelector('[role=dialog]');
+          dialog.style.cssText='position:fixed;inset:0;z-index:10;background:white';
+          dialog.insertAdjacentHTML('afterbegin','<button id="close">Close</button>');
+          const template=dialog.innerHTML;
+          const first=document.querySelector('[draggable=false] a');
+          const second=first.cloneNode(true); second.textContent='11:00\\u202fPM';
+          first.parentElement.append(second);
+          window.opened=[]; window.detailClosures=[]; document.onkeydown=()=>{};
+          [first,second].forEach((entry,index)=>entry.onclick=()=>{
+            opened.push(index);
+            dialog.innerHTML=template.replace('ID: 123456789', 'ID: '+(index ? '987654321' : '123456789'));
+            dialog.querySelector('article a[href="/987654321"]').textContent=
+              'September 30 at '+(index ? '11:00' : '5:30')+' PM';
+            dialog.hidden=false;
+            dialog.querySelector('#expand').onclick=()=>{
+              dialog.querySelector('#body').innerHTML=index ? 'Other scheduled post' :
+                'This is a manual test.<img alt="😊"> #SmartPetFeeder #CatLovers #NeakasaRiko';
+            };
+            dialog.querySelector('#close').onclick=()=>setTimeout(()=>{
+              dialog.hidden=true; detailClosures.push(index);
+            },150);
+          });
+        }''')
+        result = await self.time_only_inventory()
+        self.assertFalse(result.diagnostics, result.diagnostics)
+        self.assertEqual(await self.page.evaluate('opened'), [0, 1])
+        self.assertEqual(await self.page.evaluate('detailClosures'), [0, 1])
+        target = self.when.replace(hour=20, minute=0)
+        window = ScheduleWindow('', timedelta(0), None, 'Asia/Shanghai')
+        decision = planning.evaluate_slot(target, 'instagram', result,
+            now=target-timedelta(days=4), window=window)
+        self.assertTrue(decision.allowed, decision)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_escape_fallback_waits_until_the_dialog_has_actually_closed(self):
+        await self.page.evaluate('''() => {
+          document.onkeydown=e=>{if(e.key==='Escape')
+            setTimeout(()=>document.querySelector('[role=dialog]').hidden=true,250)};
+        }''')
+        await bs._open_channel_dialogs(self.page, self.page.locator('[draggable=false] a'), SPEC, timeout=1.5)
+        self.assertFalse(await self.page.get_by_role('dialog').is_visible())
+
+    async def test_unclosable_detail_stops_before_clicking_another_card(self):
+        await self.mount_time_only()
+        await self.page.evaluate('''() => {
+          const dialog=document.querySelector('[role=dialog]');
+          dialog.insertAdjacentHTML('afterbegin','<button>Close</button>');
+          const first=document.querySelector('[draggable=false] a');
+          const second=first.cloneNode(true); second.textContent='11:00\\u202fPM';
+          first.parentElement.append(second);
+          window.opened=[]; document.onkeydown=()=>{};
+          [first,second].forEach((entry,index)=>entry.onclick=()=>{
+            opened.push(index); dialog.hidden=false;
+          });
+        }''')
+        with self.assertRaisesRegex(bs.PlannerDialogCloseError, '详情未能关闭'):
+            await self.time_only_inventory()
+        self.assertEqual(await self.page.evaluate('opened'), [0])
+        self.assertEqual(await self.page.evaluate('writes'), [])
 
     async def test_verified_1730_receipt_survives_2300_detail_read_failure(self):
         await self.mount_time_only()
