@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Checkbox, Collapse, Input, Select, Space, Tag, Typography } from 'antd'
-import { LockOutlined } from '@ant-design/icons'
 import type { LocalizationDraft, TaskDetail } from '@/types/domain'
 import { suggestHashtags } from '@/services/hashtags'
 import type { HashtagSuggestions } from '@/services/hashtags'
@@ -9,21 +8,21 @@ import { PaidActionButton } from '@/components/PaidActionButton'
 import { canEditTask } from './model'
 import styles from './LocalizationEditor.module.css'
 
-export function parseSemanticTags(value: string, protectedTags: readonly string[]) {
-  return [...new Set([...protectedTags, ...value.split(/[\s,，]+/u).filter(Boolean).map(tag => tag.startsWith('#') ? tag : '#' + tag)])]
+export function parsePublicationTags(value: string) {
+  return [...new Set(value.split(/[\s,，]+/u).filter(Boolean).map(tag => tag.startsWith('#') ? tag : '#' + tag))]
 }
 const metrics = { trend_score: 'Google Trends 德国组内指数', media_count: 'Instagram 全球累计帖子数', peer_uses_14d: '德国同类账号近 14 天使用次数' } as const
 const canOpen = (value: string) => /^https?:\/\/[^\s]+$/i.test(value)
 
 export function LocalizationEditor({ detail, draft, editing, saving, onChange, onConfirm, onInsert }: { detail: TaskDetail; draft: LocalizationDraft; editing: boolean; saving: boolean; onChange: (draft: LocalizationDraft) => void; onConfirm: (draft: LocalizationDraft) => void; onInsert: (index: number) => void }) {
-  const semantic = draft.tags.filter(tag => !draft.protected_tags.includes(tag))
-  const source = draft.source_tags.filter(tag => !draft.protected_tags.includes(tag))
-  const [input, setInput] = useState(semantic.join(' '))
+  const chosen = draft.tags
+  const source = draft.source_tags
+  const [input, setInput] = useState(chosen.join(' '))
   const [suggestion, setSuggestion] = useState<HashtagSuggestions | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(false)
-  useEffect(() => { setInput(semantic.join(' ')) }, [editing])
+  useEffect(() => { setInput(chosen.join(' ')) }, [editing])
   const update = (fields: Partial<LocalizationDraft>) => onChange({ ...draft, ...fields })
   const confirm = (fields: Partial<LocalizationDraft>) => editing ? update(fields) : onConfirm({ ...draft, ...fields })
   const confirmationDisabled = (!editing && saving) || !canEditTask(detail)
@@ -35,14 +34,13 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
   const linkUpdate = (index: number, fields: Partial<LocalizationDraft['links'][number]>) => update({ links: draft.links.map((link, i) => i === index ? { ...link, ...fields } : link), links_confirmed: false })
   return <div className={styles.grid}>
     <section className={styles.section} aria-label="话题标签选择"><h2>话题标签 <Typography.Text type={draft.platform === 'instagram' && draft.tags.length >= 27 ? 'warning' : 'secondary'}>{draft.tags.length}{draft.platform === 'instagram' ? ' / 30' : ''} 个</Typography.Text></h2>
-      <Space wrap><Typography.Text type="secondary">品牌与型号 · 保持原样</Typography.Text>{draft.protected_tags.map(tag => <Tag key={tag} icon={<LockOutlined />}>{tag}</Tag>)}</Space>
-      {editing ? <label className={styles.field}>本篇语义标签（空格分隔，可整段粘贴）<Input.TextArea aria-label="本篇语义标签" rows={2} value={input} onChange={event => {
-        setInput(event.target.value); update({ tags: parseSemanticTags(event.target.value, draft.protected_tags), hashtags_confirmed: false })
+      {editing ? <label className={styles.field}>本篇拟发布标签（空格分隔，可整段粘贴）<Input.TextArea aria-label="本篇拟发布标签" rows={2} value={input} onChange={event => {
+        setInput(event.target.value); update({ tags: parsePublicationTags(event.target.value), hashtags_confirmed: false })
       }} /></label> : null}
-      <Space wrap className={styles.difference ?? ''}>{semantic.length ? semantic.map(tag => <Tag key={tag} closable={editing} onClose={event => {
-        event.preventDefault(); const tags = semantic.filter(value => value !== tag); setInput(tags.join(' ')); update({ tags: [...draft.protected_tags, ...tags], hashtags_confirmed: false })
-      }}>{source.includes(tag) ? '' : '本篇新增 '}{tag}</Tag>) : '无语义标签'}</Space>
-      <div className={styles.difference}>{source.filter(tag => !semantic.includes(tag)).map(tag => <Tag key={tag}>原帖未采用 {tag}</Tag>)}</div>
+      <Space wrap className={styles.difference ?? ''}>{chosen.length ? chosen.map(tag => <Tag key={tag} closable={editing} onClose={event => {
+        event.preventDefault(); const tags = chosen.filter(value => value !== tag); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false })
+      }}>{tag}</Tag>) : '本篇不使用话题标签'}</Space>
+      {source.some(tag => !chosen.includes(tag)) || chosen.some(tag => !source.includes(tag)) ? <div className={styles.difference}>与原帖不同：{source.filter(tag => !chosen.includes(tag)).map(tag => <Tag key={tag}>未采用 {tag}</Tag>)}{chosen.filter(tag => !source.includes(tag)).map(tag => <Tag key={tag}>新增 {tag}</Tag>)}</div> : null}
       <Checkbox disabled={confirmationDisabled} checked={draft.hashtags_confirmed} onChange={event => confirm({ hashtags_confirmed: event.target.checked })}>我已确认本篇使用的话题标签</Checkbox>
       {canEditTask(detail) && <p className={styles.help}>{editing ? '确认随本次编辑一起保存。' : saving ? '正在保存确认…' : '勾选或取消后自动保存。'}</p>}
       {source.length > 0 && !detail.read_only && detail.hashtag_suggestions_enabled !== false && <p><PaidActionButton label="生成德语标签建议" amount="按实际用量计费" {...(!editing ? { disabledReason: '请先进入编辑德语' } : {})} loading={busy} onClick={() => void suggest()} /></p>}
@@ -56,7 +54,7 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
             {metric === 'trend_score' && <> · 比较组 {signal.comparison_group ?? '未提供'} · 采样批次 {signal.sample_batch ?? '未提供'} · 时段 {signal.time_range ?? '未提供'}</>}
             {!candidate.current_signals?.[metric] && '（已过期或不可跨批比较）'}</> : '未采样，不能当作 0'}</div> })}
         </div>)}</div>)}
-        <Button disabled={!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256} onClick={() => { const tags = parseSemanticTags(selected.join(' '), draft.protected_tags); setInput(tags.filter(tag => !draft.protected_tags.includes(tag)).join(' ')); update({ tags, hashtags_confirmed: false }) }}>采用勾选到编辑区</Button>
+        <Button disabled={!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256} onClick={() => { const tags = parsePublicationTags(selected.join(' ')); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false }) }}>采用勾选到编辑区</Button>
         <span className={styles.help}> 勾选不会自动生效，按这个按钮才替换编辑区的标签。</span>
       </> }]} />}
       {draft.platform === 'instagram' && draft.tags.length >= 27 && <p className={styles.help}>接近 30 个上限。保存不会替你删标签，超出的部分要自己取舍。</p>}

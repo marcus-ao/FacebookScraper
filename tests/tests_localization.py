@@ -66,10 +66,22 @@ class LocalizationTests(unittest.TestCase):
         draft["links"][0].update(target_url="https://de.example/other", confirmed=False)
         self.assertFalse(loc.validate(draft)["ready"])
 
-    def test_brand_case_is_preserved_but_semantic_replacement_allowed(self):
+    def test_brand_model_and_every_other_publication_tag_can_be_replaced_or_cleared(self):
         draft = self.draft(link_map={"https://us.example/p#buy": "https://de.example/p"})
-        draft.update(tags=["#neakasa", "#M1Pro", "#Katzenliebe"], hashtags_confirmed=True)
-        self.assertIn("protected_tags_changed", {r["code"] for r in loc.validate(draft)["issues"]})
+        draft.update(tags=["#MeineWahl", "#neakasa"], hashtags_confirmed=True,
+                     links_confirmed=True)
+        self.assertTrue(loc.validate(draft)['ready'])
+        self.assertEqual(loc.render(draft).splitlines()[-1], '#MeineWahl #neakasa')
+        draft['tags'] = []
+        self.assertTrue(loc.validate(draft)['ready'])
+        self.assertNotIn('#Neakasa', loc.render(draft))
+        draft['hashtags_confirmed'] = False
+        self.assertIn('hashtags_unconfirmed', {row['code'] for row in loc.validate(draft)['issues']})
+
+    def test_tag_syntax_remains_a_server_rule(self):
+        for invalid in ('Neakasa', '#two words', '#bad!'):
+            with self.subTest(invalid=invalid), self.assertRaises(loc.LocalizationValidationError):
+                loc.normalize_fields(dict(self.draft(), tags=[invalid]))
 
     def test_facebook_inline_link_replaces_placeholder_and_only_unused_links_append(self):
         draft = self.draft(link_map={'https://us.example/p#buy': 'https://de.example/p'})
@@ -201,7 +213,8 @@ class LocalizationTests(unittest.TestCase):
         self.machine["text_de"] = "Caption with every hashtag missing."
         draft = self.draft()
         self.assertEqual(draft["tags"], [])
-        self.assertIn("protected_tags_changed", {row["code"] for row in loc.validate(draft)["issues"]})
+        self.assertFalse(draft['hashtags_confirmed'])
+        self.assertIn('hashtags_unconfirmed', {row['code'] for row in loc.validate(draft)['issues']})
 
     def test_body_urls_or_tags_and_unsafe_link_are_explicit_issues(self):
         draft = self.draft()

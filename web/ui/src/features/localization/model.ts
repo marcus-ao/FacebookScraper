@@ -15,8 +15,7 @@ export function localizationBody(detail: TaskDetail, draft: LocalizationDraft) {
 export function recoverDraft(previous: TaskDetail, latest: TaskDetail, draft: LocalizationDraft): LocalizationDraft {
   const changed = previous.text.source_text_sha256 !== latest.text.source_text_sha256
   return { ...structuredClone(latest.localization), body_de: draft.body_de, ig_cta: draft.ig_cta,
-    tags: [...new Set([...latest.localization.protected_tags,
-      ...draft.tags.filter(tag => !previous.localization.protected_tags.includes(tag))])],
+    tags: [...draft.tags],
     hashtags_confirmed: changed ? false : draft.hashtags_confirmed,
     links_confirmed: changed ? false : draft.links_confirmed,
     links: latest.localization.links.map(link => {

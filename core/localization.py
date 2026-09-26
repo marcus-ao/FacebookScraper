@@ -147,7 +147,7 @@ def draft_for(source: dict, effective_translation: dict | None, record: dict | N
               and (original["links"] or mentions_profile_link(original["body"])) else "")
     draft = {"platform": source["platform"], "body_de": current["body"], "source_body": original["body"],
              "source_tags": original["tags"], "protected_tags": protected, "tags": tags,
-             "hashtags_confirmed": not bool([tag for tag in original["tags"] if tag not in protected]),
+             "hashtags_confirmed": not bool(original["tags"] or tags),
              "links": links, "ig_cta": ig_cta, "links_confirmed": False,
              "ig_bio_url": ig_bio_url, "cta_presets": list(CTA_PRESETS),
              "revision": record.get("revision") if record else None,
@@ -259,11 +259,7 @@ def validate(draft: dict) -> dict:
     if split_content(draft.get("body_de") or "")["tags"]:
         issue("body_hashtags", "请把正文中的话题标签移到标签区")
     tags = draft.get("tags") or []
-    protected = draft.get("protected_tags") or []
-    if any(tags.count(tag) < protected.count(tag) for tag in protected):
-        issue("protected_tags_changed", "品牌和型号标签须保留原始写法")
-    semantic = [tag for tag in draft.get("source_tags", []) if tag not in protected]
-    if (semantic or [tag for tag in tags if tag not in protected]) and not draft.get("hashtags_confirmed"):
+    if (draft.get("source_tags") or tags) and not draft.get("hashtags_confirmed"):
         issue("hashtags_unconfirmed", "请确认本篇使用的话题标签")
     if (draft.get("links") or draft.get("ig_cta")) and not draft.get("links_confirmed"):
         issue("links_section_unconfirmed", "请确认本篇的链接与主页引导")

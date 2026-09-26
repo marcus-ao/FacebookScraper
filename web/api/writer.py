@@ -250,7 +250,7 @@ def save_localization(task_id: str, fields: dict, *, source_text_sha256: str,
         draft.update(clean, source_stale=False)
         result = localization.validate(draft)
         invalid = [item["message"] for item in result["issues"] if item["code"] in {
-            "body_missing", "body_urls", "body_hashtags", "invalid_link", "invalid_cta", "protected_tags_changed"}]
+            "body_missing", "body_urls", "body_hashtags", "invalid_link", "invalid_cta"}]
         if invalid:
             raise localization.LocalizationValidationError("；".join(invalid))
         human = translated.append_human_translation(source.account_dir / "translated_human.jsonl",

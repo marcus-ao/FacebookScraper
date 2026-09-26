@@ -353,10 +353,16 @@ class WebReviewTests(unittest.TestCase):
 
     def confirm_ready_content(self):
         self.assertEqual(self.confirm_content('body').status_code, 200)
-        self.assertEqual(self.confirm_content('images/0').status_code, 200)
+        image = self.confirm_content('images/0')
+        self.assertEqual(image.status_code, 200, image.text)
+
+    def confirm_ready_localization(self):
+        response = self.save_localization(confirmation_only=True, hashtags_confirmed=True)
+        self.assertEqual(response.status_code, 200, response.text)
 
     def test_missing_german_image_blocks_the_freeze_and_says_how_to_fix_it(self):
         """缺德语图的帖子根本发不出去，也就没有「确认无误」可言。"""
+        self.confirm_ready_localization()
         options = self.client.get(self.url + "/approval-options").json()
         self.assertFalse(options["lockable"])
         self.assertIn("缺少德语图", options["lock_reason"])
@@ -364,10 +370,11 @@ class WebReviewTests(unittest.TestCase):
         refused = self.client.post(self.url + "/content-lock", json={
             **self.action_body(), "content_fingerprint": "not-a-real-fingerprint"})
         self.assertIn(refused.status_code, {400, 409}, refused.text)
-        self.assertEqual(review.history(self.account), [])
+        self.assertEqual([row['action'] for row in review.history(self.account)], ['edited'])
 
     def test_content_can_be_frozen_and_released_without_a_verified_browser(self):
         """没有历史录证也能冻结并看到可选时间；提交仍要本次目标。"""
+        self.confirm_ready_localization()
         self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
         self.confirm_ready_content()
         options = self.client.get(self.url + "/approval-options")
@@ -379,7 +386,7 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(locked.status_code, 200, locked.text)
         self.assertEqual(locked.json()["status"], "content_locked")
         frozen = self.client.get(self.url + "/approval-options").json()
-        self.assertEqual(frozen["preview"]["text"], "Ein sauberes Zuhause. #Neakasa")
+        self.assertEqual(frozen["preview"]["text"], "Ein sauberes Zuhause.\n\n#Neakasa")
         image = self.client.get(frozen["preview"]["images"][0]["url"])
         self.assertEqual(image.status_code, 200, image.text)
         self.assertEqual(image.content[:2], b"\xff\xd8")
@@ -413,9 +420,11 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(released.json()["status"], "edited")
         self.assertIsNone(released.json()["publish_operation"])
         self.assertEqual(self.client.put(self.url + "/text_de", json={
-            **self.action_body(), "text_de": "Neu", "human_revision": None}).status_code, 200)
+            **self.action_body(), "text_de": "Neu",
+            "human_revision": released.json()["text"]["human_revision"]}).status_code, 200)
 
     def test_approval_without_verified_browser_fails_without_success_record(self):
+        self.confirm_ready_localization()
         self.write_generated_image("Ein sauberes Zuhause. #Neakasa")
         self.confirm_ready_content()
         self.assertEqual(self.lock().status_code, 200)
@@ -425,7 +434,7 @@ class WebReviewTests(unittest.TestCase):
         self.assertIn(response.status_code, {400, 409}, response.text)
         # 冻结留下一条记录；排期一条都不能有。
         self.assertEqual([row["action"] for row in review.history(self.account)],
-                         ["body_reviewed", "image_reviewed", "content_locked"])
+                         ["edited", "body_reviewed", "image_reviewed", "content_locked"])
 
     def action_body(self, **extra):
         detail = self.client.get(self.url).json()
@@ -810,15 +819,33 @@ class WebReviewTests(unittest.TestCase):
         self.assertFalse(response.json()["localization_validation"]["ready"])
         self.assertTrue(response.json()["localization"]["has_record"])
 
-    def test_localization_rejects_hidden_urls_brand_changes_or_dropped_source_link(self):
+    def test_localization_rejects_hidden_urls_or_dropped_source_link(self):
         self.source["text"] += " https://us.example/product"
         self.write_source()
         self.write_machine("Noch zu prüfen. #Neakasa")
-        for extra in ({"body_de": "URL https://us.example/new"}, {"tags": []}, {"links": []},
+        for extra in ({"body_de": "URL https://us.example/new"}, {"links": []},
                       {"body_de": "Hashtag #new"}):
             with self.subTest(extra=extra):
                 self.assertEqual(self.save_localization(**extra).status_code, 400)
         self.assertFalse((self.account / "translated_human.jsonl").exists())
+
+    def test_localization_preserves_arbitrary_or_empty_publication_tags(self):
+        self.source['text'] += ' #M1Pro'
+        self.write_source()
+        self.write_machine('Ein sauberes Zuhause. #Neakasa #M1Pro')
+        chosen = self.save_localization(tags=['#MeineWahl'], hashtags_confirmed=True,
+                                        links_confirmed=True)
+        self.assertEqual(chosen.status_code, 200, chosen.text)
+        self.assertEqual(chosen.json()['localization']['tags'], ['#MeineWahl'])
+        self.assertTrue(self.human_rows()[-1]['text_de'].endswith('#MeineWahl'))
+        empty = self.save_localization(tags=[], hashtags_confirmed=True, links_confirmed=True)
+        self.assertEqual(empty.status_code, 200, empty.text)
+        self.assertEqual(empty.json()['localization']['tags'], [])
+        self.assertEqual(self.client.get(self.url).json()['localization']['tags'], [])
+        self.assertNotIn('#Neakasa', self.human_rows()[-1]['text_de'])
+        self.assertNotIn('#M1Pro', self.human_rows()[-1]['text_de'])
+        malformed = self.save_localization(tags=['bad tag'])
+        self.assertEqual(malformed.status_code, 400, malformed.text)
 
     def test_instagram_three_blocks_remove_urls_keep_custom_cta_and_warn_only(self):
         relative = self.post_dir.relative_to(self.account)

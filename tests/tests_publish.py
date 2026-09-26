@@ -28,6 +28,7 @@ from core.console import force_utf8  # noqa: E402
 force_utf8()
 
 from core.config import cfg  # noqa: E402
+from core import localization, translated  # noqa: E402
 from core.store import post_dirname  # noqa: E402
 from publish.business_suite import (ProbeRequired, PublishStepError,  # noqa: E402
                                     ensure_logged_in, fill_caption,
@@ -126,7 +127,7 @@ def make_fixture(root: Path, *, platform: str = "instagram",
     translated_path = account_dir / "translated.jsonl"
     translated_path.write_text(
         json.dumps(translation, ensure_ascii=False) + "\n", encoding="utf-8")
-    return {
+    fixture = {
         "account": account_name,
         "account_dir": account_dir,
         "post_dir": post_dir,
@@ -134,13 +135,36 @@ def make_fixture(root: Path, *, platform: str = "instagram",
         "translation": translation,
         "translated_path": translated_path,
     }
+    confirm_fixture_tags(fixture)
+    return fixture
 
 
-def rewrite_translation(fixture, **changes):
+def confirm_fixture_tags(fixture):
+    """隔离夹具明确记录人工标签选择，不能依赖品牌标签自动确认。"""
+    source = fixture["source"]
+    account = fixture["account_dir"]
+    machine = fixture["translation"]
+    draft = localization.draft_for(source, machine)
+    draft["hashtags_confirmed"] = True
+    draft["links_confirmed"] = True
+    human = translated.append_human_translation(
+        account / "translated_human.jsonl", source, localization.render(draft))
+    localization.append_localization(
+        account, source, draft, human_revision=human["revision"], expected_revision=None,
+        expected_source_sha256=translated.source_text_sha256(source["text"]))
+
+
+def rewrite_translation(fixture, *, confirm_tags=False, **changes):
     row = dict(fixture["translation"])
     row.update(changes)
     fixture["translated_path"].write_text(
         json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    fixture["translation"] = row
+    # 这个临时夹具是新一份机器产物；旧人工稿不能遮住新产物。
+    for name in ("translated_human.jsonl", "localization.jsonl"):
+        (fixture["account_dir"] / name).unlink(missing_ok=True)
+    if confirm_tags:
+        confirm_fixture_tags(fixture)
 
 
 class FakeLocator:
@@ -613,14 +637,15 @@ with tempfile.TemporaryDirectory() as d:
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot kostet 10 €。\n\n#Neakasa #P1Pro")
+    rewrite_translation(fixture, text_de="Das Angebot kostet 10 €。\n\n#Neakasa #P1Pro",
+                        confirm_tags=True)
     check(raises(ComposeError,
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
                  "$10"),
           "发布前再次复用 money_preserved，金额被改动会点名原金额")
 
-# 发布前再次核对金额与受保护标签。
+# 发布前再次核对金额与人工标签决定。
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
@@ -629,8 +654,11 @@ with tempfile.TemporaryDirectory() as d:
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
                  "标签"),
-          "发布前品牌型号标签被改写会被拦下，"
-          "而不是把改错的标签发到德语主页")
+          "机器改写品牌标签但无人确认时拒绝发布")
+    confirm_fixture_tags(fixture)
+    changed = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    check(changed.text_de.endswith("#Eins #P1Pro"),
+          "人工确认后允许替换品牌标签，最终只发布选定标签")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
@@ -640,12 +668,17 @@ with tempfile.TemporaryDirectory() as d:
                  lambda: compose_post("fixture-post", WHEN, archive_root=root,
                                       warning_sink=None),
                  "标签"),
-          "原帖品牌或型号标签被删掉会被拦下")
+          "机器漏掉型号标签但无人确认时拒绝发布")
+    confirm_fixture_tags(fixture)
+    removed = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
+    check(removed.text_de.endswith("#Neakasa") and "#P1Pro" not in removed.text_de,
+          "人工确认后允许删除型号标签，最终不自动补回")
 
 with tempfile.TemporaryDirectory() as d:
     root = Path(d) / "archive"
     fixture = make_fixture(root)
-    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#P1Pro #Neakasa")
+    rewrite_translation(fixture, text_de="Das Angebot bleibt bei $10.\n\n#P1Pro #Neakasa",
+                        confirm_tags=True)
     reordered = compose_post("fixture-post", WHEN, archive_root=root, warning_sink=None)
     check(reordered.text_de.endswith("#P1Pro #Neakasa"),
           "品牌型号保持原写法；分区编辑允许运营调整标签顺序")
