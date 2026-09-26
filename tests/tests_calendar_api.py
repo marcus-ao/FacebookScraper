@@ -107,6 +107,48 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(card['source_platform'], 'facebook')
         self.assertEqual(card['source_permalink'], SOURCE_URL)
 
+    def test_two_scheduled_posts_are_two_cards_not_four_local_and_remote_rows(self):
+        cards, entries = [], []
+        for index, hour in enumerate((9, 15)):
+            at = NOW.replace(day=30, hour=hour, minute=30 if index == 0 else 0)
+            remote_id = str(1884787296017457 + index)
+            cards.append(RemotePlannerCard(at, ('facebook',), (('facebook', remote_id),),
+                'Scheduled caption', delivery='scheduled', placement='feed',
+                caption_status='present', read_status='complete', time_verified=True))
+            entries.append(dict(ENTRY, task_id=f'fa_neakasaofficial/post-{index}',
+                channels=['facebook'], remote_id='facebook=' + remote_id, at=at.isoformat()))
+        rows = replace(ROWS, cards=tuple(cards), occupied=tuple(card.at for card in cards))
+        asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=rows),
+                                               state_dir=self.state, now=NOW))
+        with patch.object(calendar.local_schedule, 'entries', return_value=entries), \
+                patch.object(reader, 'source_post', return_value=None):
+            data = self.client.get('/api/calendar').json()
+        self.assertEqual(len(data['cards']), 2)
+        self.assertEqual({card['source_task_id'] for card in data['cards']},
+                         {entry['task_id'] for entry in entries})
+        self.assertEqual(data['local'], [])
+
+    def test_time_based_source_navigation_alone_does_not_hide_local_receipts(self):
+        data = self.linked_payload()
+        self.assertEqual(len(data['local']), 1)
+        self.assertEqual(data['cards'][0]['source_task_id'], ENTRY['task_id'])
+        self.assertEqual(data['cards'][0]['source_permalink'], SOURCE_URL)
+
+    def test_unmatched_ambiguous_partial_and_unverified_receipts_remain_visible(self):
+        cases = [
+            (replace(PUBLISHED, delivery='scheduled'), [ENTRY]),
+            (replace(PUBLISHED, at=SLOT + timedelta(minutes=6)), [ENTRY]),
+            (PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/next',
+                remote_id='instagram=999999', at=(SLOT + timedelta(minutes=1)).isoformat())]),
+            (PUBLISHED, [dict(ENTRY, channels=['facebook', 'instagram'])]),
+            (replace(PUBLISHED, time_verified=False), [ENTRY]),
+            (PUBLISHED, [dict(ENTRY, kind='submitting')]),
+        ]
+        for remote, entries in cases:
+            with self.subTest(entries=entries, time_verified=remote.time_verified):
+                data = self.linked_payload(remote, entries)
+                self.assertEqual(len(data['local']), len(entries))
+
     def test_scheduled_remote_id_match_takes_priority_over_the_time_window(self):
         scheduled = replace(PUBLISHED, delivery='scheduled', at=SLOT + timedelta(hours=2),
                             remote_ids=(('instagram', '4378984725697354'),))

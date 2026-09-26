@@ -135,6 +135,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
         entries, local_layer = [], []
         local_error = str(exc)
     cards = []
+    represented = {}
     remote_cards = data.get('cards', [])
     for card, source in zip(remote_cards, _sources_for(remote_cards, entries)):
         at = datetime.fromisoformat(card["at"])
@@ -153,7 +154,18 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                           "source_permalink": permalink,
                           "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
+            if source and card.get('time_verified') and card['delivery'] in {'scheduled', 'published'}:
+                # Time-near source links are navigation hints, not identity.
+                # Collapse a receipt only for its exact per-channel remote IDs.
+                exact_channels = {channel for channel, remote_id in card['remote_ids'].items()
+                                  if remote_id and f'{channel}={remote_id}' in source['remote_id'].split(';')}
+                represented.setdefault(source['task_id'], set()).update(exact_channels)
     cards.sort(key=lambda item: item["at"])
+    # Merge only uniquely identified scheduled receipts into their displayed
+    # remote cards. Unmatched/pending receipts remain visible; no ledger edit.
+    local_layer = [entry for entry in local_layer if not (
+        entry['kind'] == local_schedule.SCHEDULED and entry['channels']
+        and set(entry['channels']) <= represented.get(entry['task_id'], set()))]
 
     def coverage(value):
         return {'grid_complete': bool(value and value.cards_loaded),

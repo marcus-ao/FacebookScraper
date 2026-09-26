@@ -474,7 +474,7 @@ def stage_f(page, ui):
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
-    # 明细读不出来的条目照常进这个月：整月不再被标成过期，说明放进点击后的详情。
+    # Unknown recommendations in old caches must not appear as scheduled tasks.
     unread={**data,'status':'ready','refresh_status':'refreshed','stale':False,'error':None,
         'coverage':{**data['coverage'],'decision_complete':False,'unresolved_count':1},
         'cards':[{**data['cards'][0],'placement':'story','caption_status':'empty','rendered':'',
@@ -483,19 +483,28 @@ def stage_f(page, ui):
                   'card_sha256':'unread','channels':[],'read_status':'incomplete','delivery':'scheduled'}]}
     ui.overrides[('POST','/api/calendar/refresh')]=(200,unread)
     page.get_by_role('button',name='刷新月历',exact=True).click()
-    expect(page.get_by_text('定时',exact=True)).to_be_visible()
+    expect(page.get_by_text('定时',exact=True)).to_have_count(0)
+    expect(page.get_by_text('1 个后台条目尚未识别为实际帖子',exact=True)).to_be_visible()
     expect(page.get_by_text('未读全',exact=True)).to_have_count(0)
     expect(page.get_by_text('数据可能已过期',exact=True)).to_have_count(0)
-    page.get_by_role('button',name=re.compile('定时')).click()
-    expect(page.get_by_text('该篇帖子的具体信息尚未成功获取，请前往Meta后台任务日历进行人工复核确认',exact=True)).to_be_visible()
-    page.get_by_role('heading',name='发布月历',exact=True).click()
     page.get_by_role('button',name=re.compile('已发布')).click()
     expect(page.get_by_text('该篇帖子不含文本部分,请跳转原帖进行复核确认',exact=True)).to_be_visible()
     expect(page.get_by_text('This content has no text',exact=True)).to_have_count(0)
     page.screenshot(path=str(EVIDENCE/'calendar-unread-item.png'))
+    page.get_by_role('heading',name='发布月历',exact=True).click()
+    schedules={**unread,'local':[], 'cards':[
+        {**data['cards'][1], 'at_business':f'2026-09-30T{clock}:00+08:00',
+         'card_sha256':clock, 'source_task_id':ui.fx.fb_id,'source_platform':'facebook'}
+        for clock in ('17:30','23:00')] + [unread['cards'][1]]}
+    ui.overrides[('POST','/api/calendar/refresh')]=(200,schedules)
+    page.get_by_role('button',name='刷新月历',exact=True).click()
+    expect(page.locator('[data-day="2026-09-30"]').get_by_role('button')).to_have_count(2)
+    expect(page.get_by_text('本地',exact=True)).to_have_count(0)
+    page.screenshot(path=str(EVIDENCE/'calendar-schedules-merged.png'))
     return {'F':'PASS','source_and_published_links_distinct':True,'review_navigation':True,
             'published_scheduled_distinct':True,'refresh_payload_cards_retained':True,
-            'unread_item_still_occupies':True,'empty_caption_not_placeholder':True,
+            'unidentified_not_labeled_scheduled':True,'two_schedules_two_cards':True,
+            'empty_caption_not_placeholder':True,
             'refresh_body':{},'empty_day_min_height':min(heights)}
 
 

@@ -88,7 +88,17 @@ describe('点击后的详情', () => {
 })
 
 describe('月历同步展示', () => {
-  it('明细未读取的卡片照常占位，状态短签加警告', () => {
+  it('渠道已经确认、仅正文未读全的真实帖子继续显示', () => {
+    const base = fixture as unknown as CalendarPayload
+    const text = render({ ...base, cards: [{ ...base.cards[0]!,
+      channels: ['facebook'], rendered: '', caption_status: 'unknown',
+      read_status: 'incomplete', delivery: 'published' }] })
+    expect(text).toContain('Facebook')
+    expect(text).toContain('已发布')
+    expect(text).not.toContain('尚未识别为实际帖子')
+  })
+
+  it('旧缓存中未识别条目不冒充定时帖子，只提示待核对数量', () => {
     const base = fixture as unknown as CalendarPayload
     const card = base.cards[0]!
     const data: CalendarPayload = { ...base, status: 'ready', stale: false, error: null,
@@ -99,7 +109,8 @@ describe('月历同步展示', () => {
         unresolved_count: 1 },
     }
     const text = render(data)
-    expect(text).toContain('定时')
+    expect(text).not.toContain('定时')
+    expect(text).toContain('1 个后台条目尚未识别为实际帖子')
     // 没读出来的说明在详情里，不占格子。
     expect(text).not.toContain('未读全')
     expect(text).not.toContain('明细未读取')

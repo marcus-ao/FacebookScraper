@@ -75,17 +75,40 @@ def dates_for_cells(month: date, numbers: list[int]) -> tuple[date, ...]:
 
 async def visible_month(page):
     months, years = set(), set()
-    for node in await page.get_by_role('heading').all():
-        text = (await node.inner_text()).strip()
-        for name, values in (('%B', months), ('%Y', years)):
-            try:
-                value = datetime.strptime(text, name)
-            except ValueError:
-                continue
-            values.add(value.month if name == '%B' else value.year)
+    # Snapshot the visible headings together; English UI labels do not depend
+    # on the Windows Python locale. Both split and combined titles are valid.
+    for raw in await page.get_by_role('heading').all_inner_texts():
+        text = ' '.join(raw.split()).lower()
+        parts = text.split()
+        if text in bs._ENGLISH_MONTHS:
+            months.add(bs._ENGLISH_MONTHS[text])
+        elif re.fullmatch(r'[1-9]\d{3}', text):
+            years.add(int(text))
+        elif len(parts) == 2 and parts[0] in bs._ENGLISH_MONTHS and re.fullmatch(r'[1-9]\d{3}', parts[1]):
+            months.add(bs._ENGLISH_MONTHS[parts[0]])
+            years.add(int(parts[1]))
     if len(months) != 1 or len(years) != 1:
-        raise bs.PublishStepError('月历的月份与年份无法唯一识别')
+        raise bs.PublishStepError(f'月历的月份与年份尚未唯一识别（月份候选 {len(months)}，年份候选 {len(years)}）')
     return date(next(iter(years)), next(iter(months)), 1)
+
+
+async def ready_grid(page, *, timeout):
+    """Wait for a coherent title and complete cells, even when Meta shows no loader."""
+    deadline = time.monotonic() + max(0, timeout)
+    while True:
+        await settled(page, deadline - time.monotonic())
+        try:
+            month = await visible_month(page)
+            numbers = await page.locator(DAY_SELECTOR).evaluate_all(r'''els => els.map(el => {
+              const copy=el.cloneNode(true);
+              copy.querySelectorAll('[role="link"],a,button,[role="button"]').forEach(n=>n.remove());
+              const label=copy.textContent.trim(); return /^\d{1,2}$/.test(label) ? Number(label) : null;
+            })''')
+            return month, dates_for_cells(month, numbers)
+        except bs.PublishStepError:
+            if time.monotonic() >= deadline:
+                raise
+        await asyncio.sleep(min(.1, max(0, deadline - time.monotonic())))
 
 
 async def settled(page, timeout):
@@ -101,15 +124,8 @@ async def read_grid(page, *, timeout=30):
     deadline = time.monotonic() + timeout
     previous = None
     while True:
-        await settled(page, deadline - time.monotonic())
-        month = await visible_month(page)
+        month, dates = await ready_grid(page, timeout=deadline - time.monotonic())
         cells = page.locator(DAY_SELECTOR)
-        numbers = await cells.evaluate_all(r'''els => els.map(el => {
-          const copy=el.cloneNode(true);
-          copy.querySelectorAll('[role="link"],a,button,[role="button"]').forEach(n=>n.remove());
-          const label=copy.textContent.trim(); return /^\d{1,2}$/.test(label) ? Number(label) : null;
-        })''')
-        dates = dates_for_cells(month, numbers)
         result = []
         for index, day in enumerate(dates):
             cell = cells.nth(index)
@@ -147,7 +163,7 @@ async def read_grid(page, *, timeout=30):
                     raise bs.PublishStepError('月历条目时刻无法唯一读取，保留现场待探查')
                 item['time'] = ' '.join(values[0].split())
             result.append({'date': day, 'cell_index': index, 'items': items})
-        if await visible_month(page) != month:
+        if await ready_grid(page, timeout=deadline - time.monotonic()) != (month, dates):
             raise bs.PublishStepError('读取过程中月份已变化，请重试')
         if result == previous:
             return result
@@ -182,7 +198,9 @@ async def recommendation_state(page, item, *, timeout=1.5):
     card that could not be hovered, `absent` a hover that opened no tooltip.
     """
     await page.mouse.move(0, 0)
-    tip = page.get_by_role('tooltip', name=RECOMMENDATION, exact=True)
+    # Keep the recorded recommendation sentence as positive evidence; extra
+    # tooltip headings must not turn it into an unread scheduled post.
+    tip = page.get_by_role('tooltip').filter(has_text=RECOMMENDATION)
     try:
         await tip.wait_for(state='hidden', timeout=timeout * 1000)
     except Exception:
@@ -531,10 +549,10 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, de
                                            card_spec=card_spec)
             except PlannerItemError as exc:
                 diagnostics.append(exc.diagnostic)
-                # has_href 只区分展示：有 insights 链接看成已发布，否则看成定时。
-                # 这不是详情核实过的公开事实，时刻也还没按变体独立核对。
+                # A failed detail read proves neither a post nor a schedule.
+                # Retain its uncertainty for vacancy checks, not a false status.
                 material = {'channels': (), 'remote_ids': {}, 'text': '',
-                            'delivery': 'published' if exc.diagnostic['has_href'] else 'scheduled',
+                            'delivery': 'unknown',
                             'placement': exc.diagnostic['placement'],
                             'time_verified': False, 'diagnostic_index': len(diagnostics)-1,
                             'read_status': 'unsupported' if exc.diagnostic['code']=='unsupported_type' else

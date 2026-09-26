@@ -1441,6 +1441,14 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 .\scripts\run_python.bat -m tools.test_offline --only tests_scheduled_detail --only tests_planning --only tests_occupancy_range --only tests_manual_schedule
 ```
 
+**若只读空档检查已通过，正式排期仍报“月历的月份与年份无法唯一识别”。** 2026-09-26 的事后结构是正常拆分标题与 35 格；新版对无进度条的标题/日期格延迟共同等待，不要求改时间或重录资产。按 §13 更新并重启原 Web 入口，保持 9223 原账号登录，用下面的直接相关测试验证：
+
+```powershell
+.\scripts\run_python.bat -m tools.test_offline --only tests_month_inventory --only tests_calendar_api --only tests_planner_cache --only tests_planning
+```
+
+页面 `Ctrl+F5` 后点一次“刷新月历”。9 月 30 日两条已确认 Facebook 排期应各只有一张远端卡，点击后仍可进入审校详情；本地账本没有删除。原 9 月 27 日未识别的“00:00 定时”不再显示为任务，若尚无推荐的正向证据，只显示待核对数量；真正识别为推荐时段后不计帖子或占用。未知项仍不可当空档，不能只靠页面无卡保证可排。正常读取通过后再按原冻结内容确认 IG 一次；若已有成功信号/未决回执，走原记录核对，不重复提交。
+
 本次默认间隔为 1 分钟；同渠道相邻整分钟允许，同刻仍冲突，跨渠道独立。保持原 9223 窗口登录、没有发布任务运行时，再执行一次只读核对。它临时打开月历、读取这一天已有详情并关闭自己的标签，不创建或修改排期、不发送飞书消息：
 
 ```powershell

@@ -64,7 +64,10 @@ export function CalendarPage() {
   const query = useCalendar(), client = useQueryClient()
   const [busy, setBusy] = useState(false), [failed, setFailed] = useState(false)
   const data = query.data
-  const visibleCards = data?.cards ?? []
+  // Old caches may label an unread recommendation as scheduled. A missing
+  // channel stays a diagnostic, never a business task with an invented status.
+  const visibleCards = data?.cards.filter(card => card.channels.length > 0) ?? []
+  const unidentifiedCount = (data?.cards.length ?? 0) - visibleCards.length
   const observedAt = data?.cached_at
   const visibleCoverage = data?.coverage
   const today = businessToday(data?.business_timezone)
@@ -76,7 +79,7 @@ export function CalendarPage() {
       if (data) client.setQueryData(calendarOptions().queryKey, { ...data, ...fallback })
     } } finally { setBusy(false) }
   }
-  const show = observedAt && (visibleCoverage?.matches_current_month || (failed && visibleCards.length > 0))
+  const show = observedAt && (visibleCoverage?.matches_current_month || (failed && (data?.cards.length ?? 0) > 0))
   return <section aria-label="发布月历" aria-busy={busy}>
     <div className={styles.heading}><PageTitle />{data?.refresh_available
       ? <Tooltip title="会打开发布浏览器读取后台，通常需要数十秒"><Button loading={busy} onClick={() => void refresh()}>刷新月历</Button></Tooltip>
@@ -100,6 +103,7 @@ export function CalendarPage() {
         </div>)}
       </div> : !query.isPending && <Empty description={!data?.cached_at ? '还没有读取过发布日历' : '当前缓存没有覆盖本月；上次数据已保留'} />}
     </Spin>
+    {show && unidentifiedCount > 0 && <Alert type="warning" title={`${unidentifiedCount} 个后台条目尚未识别为实际帖子`} description="这些条目未作为排期显示。刷新月历可重新核对。" />}
     {/* 上次刷新没成功时展示的是旧数据，不能替它断言「这个月是空的」。 */}
     {show && !data?.stale && data?.coverage?.decision_complete && visibleCards.length === 0 && <p className={styles.help}>本次读取的月份中没有内容记录。</p>}
     {data?.local_error && <Alert type="error" title="本地排期记录读不出来" description={<>{data.local_error}<br />⛔ 这不等于「本地没有排期」；在核对清楚之前，不要拿这个月历判断哪些时刻空着。</>} />}
