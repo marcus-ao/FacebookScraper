@@ -263,9 +263,11 @@ describe('时刻只经过 lib/format.ts', () => {
     expect(offenders).toEqual([])
   })
 
-  it('Intl.DateTimeFormat 只在 format.ts 里，而且钉死 Asia/Shanghai', () => {
+  it('Intl.DateTimeFormat 只在 format.ts 里，显示用固定业务时区', () => {
     const format = read(join(SRC, 'lib/format.ts'))
-    expect(format).toContain("timeZone: 'Asia/Shanghai'")
+    expect(format).toContain("BUSINESS_TIMEZONE = 'Asia/Shanghai'")
+    expect(format).toContain('timeZone: zone')
+    expect(format).toContain('zonedInput(iso, BUSINESS_TIMEZONE)')
     const offenders = SOURCE_TS.filter(
       (path) => rel(path) !== 'lib/format.ts' && /Intl\.DateTimeFormat/.test(read(path)),
     ).map(rel)

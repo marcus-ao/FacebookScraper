@@ -21,8 +21,13 @@ export function HistoryPage() {
   const query = useHistoryList(filters)
   useEffect(() => {
     if (search.get('page') !== String(filters.page) || search.get('limit') !== String(filters.limit)) {
-      const next = new URLSearchParams(search); next.set('page', String(filters.page)); next.set('limit', String(filters.limit))
-      setSearch(next, { replace: true })
+      setSearch(current => {
+        const latest = parseHistoryListQuery(current)
+        const next = new URLSearchParams(current)
+        next.set('page', String(latest.page))
+        next.set('limit', String(latest.limit))
+        return next
+      }, { replace: true })
     }
   }, [search, filters.page, filters.limit, setSearch])
   const href = (row: HistoryListItem) => `/history/${idPath(row.id)}?${buildDetailSearch(search, 'history')}`
@@ -50,7 +55,13 @@ export function HistoryPage() {
       <div className={styles.heading}><PageTitle />
         <Pagination size="small" current={filters.page} pageSize={filters.limit} total={query.data?.pagination.total ?? 0}
           showSizeChanger pageSizeOptions={[...HISTORY_PAGE_SIZES]} showTotal={total=>`共 ${total} 篇`}
-          onChange={(page,limit)=>{const next=new URLSearchParams(search);next.set('page',String(limit===filters.limit?page:1));next.set('limit',String(limit));setSearch(next)}} />
+          onChange={(page,limit)=>setSearch(current => {
+            const latest = parseHistoryListQuery(current)
+            const next = new URLSearchParams(current)
+            next.set('page', String(limit === latest.limit ? page : 1))
+            next.set('limit', String(limit))
+            return next
+          })} />
       </div>
       <div className={styles.toolbar}><ListFilters filters={filters} months={query.data?.summary.months ?? []}
         tags={query.data?.summary.tags ?? []} onChange={change} postTypeFilter /></div>

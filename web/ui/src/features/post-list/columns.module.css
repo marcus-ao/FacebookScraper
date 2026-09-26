@@ -19,8 +19,8 @@
   position: absolute;
   top: 2px;
   right: 2px;
-  width: 15px;
-  height: 15px;
+  width: var(--rc-space-4);
+  height: var(--rc-space-4);
   border: 1px solid var(--rc-preview-paper);
   border-radius: 50%;
   background: var(--rc-preview-video-ink);

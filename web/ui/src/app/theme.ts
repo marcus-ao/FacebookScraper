@@ -9,6 +9,7 @@ const neutral = {
   border: '#e2e8f0',
   borderStrong: '#cbd5e1',
   scrim: 'rgba(15, 23, 42, 0.72)',
+  mobileScrim: 'rgba(0, 0, 0, 0.18)',
 } as const
 
 /** 红、黄用于问题提示；小字号文字使用更深的前景色。 */
@@ -224,6 +225,7 @@ export const cssVariables: Readonly<Record<string, string>> = {
   '--rc-border': neutral.border,
   '--rc-border-strong': neutral.borderStrong,
   '--rc-scrim': neutral.scrim,
+  '--rc-mobile-scrim': neutral.mobileScrim,
 
   '--rc-primary': primary.base,
   '--rc-primary-strong': primary.strong,
