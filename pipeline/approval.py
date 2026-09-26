@@ -235,6 +235,10 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                 warning_sink=None)
             if engine._publish_fingerprint(post) != content_fingerprint:
                 raise ApprovalConflict('内容在确认之后已有变化，请重新核对并冻结')
+            try:
+                snapshots.validate_content(_snapshot_post(post, snapshot_id, source, account_dir))
+            except review.ReviewConflict as exc:
+                raise ApprovalConflict(str(exc)) from exc
             _require_frozen_decisions(account_dir, source)
             frozen = _bind(post, snapshot_id, source, account_dir, run.target())
             approved = session.change(source, 'approved', expected_revision=review_revision,
@@ -246,9 +250,9 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
                     expected_source_sha256=source_text_sha256)
                 if state['status'] != 'approved':
                     raise ApprovalConflict('审校决定已变化，请重新确认后提交')
-                _require_frozen_decisions(account_dir, current)
                 fresh = composed_post(account_dir, current, now=moment)
                 snapshots.validate_content(_snapshot_post(fresh, snapshot_id, current, account_dir))
+                _require_frozen_decisions(account_dir, current)
                 if engine._publish_fingerprint(fresh) != engine._publish_fingerprint(frozen_post):
                     raise ApprovalConflict('最终内容已变化，请重新核对并冻结')
         try:

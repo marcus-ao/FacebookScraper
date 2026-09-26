@@ -217,7 +217,21 @@ def stage_d1(page, ui):
     assert len([r for r in ui.requests if r['method']=='PUT' and r['path'].endswith('/localization')])==writes
     expect(page.locator(f'tr[data-task-id="{task_id}"]')).to_contain_text('Über den Dialog gespeichert')
     assert ui.count_list_gets()==1
-    return {'D1':'PASS','check_full_localization':True,'dirty_guard':True,'save_conflict_preserves_draft':True,'save_or_discard_on_leave':True,'B23_GET_list_count':1}
+    # 邻篇已在查询缓存时，未改动的编辑模式允许离开，但不能带到另一篇。
+    ids=page.locator('tr[data-task-id]').evaluate_all('(rows)=>rows.map(row=>row.getAttribute("data-task-id"))')
+    position=ids.index(task_id)
+    next_position=position+1 if position+1<len(ids) else position-1
+    neighbor=ids[next_position]
+    page.locator(f'tr[data-task-id="{neighbor}"] a').first.click()
+    expect(page).to_have_url(re.compile(re.escape(neighbor)))
+    page.get_by_role('link',name='返回列表',exact=True).click()
+    page.locator(f'tr[data-task-id="{task_id}"] a').first.click()
+    page.get_by_role('button',name='编辑德语',exact=True).click()
+    expect(page.get_by_role('textbox',name='德语正文')).to_be_visible()
+    page.get_by_role('button',name='下一篇' if next_position>position else '上一篇',exact=True).click()
+    expect(page).to_have_url(re.compile(re.escape(neighbor)))
+    expect(page.get_by_role('textbox',name='德语正文')).to_have_count(0)
+    return {'D1':'PASS','check_full_localization':True,'dirty_guard':True,'save_conflict_preserves_draft':True,'save_or_discard_on_leave':True,'cached_neighbor_resets_editor':True,'B23_GET_list_count':1}
 
 
 def stage_d2(page, ui):
@@ -268,6 +282,9 @@ def stage_d3(page, ui):
     page.get_by_role('button',name=re.compile('逐张图片')).click()
     expect(page.get_by_text(re.compile('第 1 张原图无法读取'))).to_be_visible()
     ui.overrides.pop(('GET',source_path))
+    page.get_by_role('button',name='刷新素材').click()
+    expect(page.get_by_text(re.compile('第 1 张原图无法读取'))).to_have_count(0)
+    expect(page.get_by_role('img',name='原图 1')).to_have_attribute('src',re.compile('review_retry=1'))
     other=next(item for item in ui.list_data['tasks'] if item['image_count']>=2 and item['id']!=task_id)
     page.goto(ui.fx.base_url+'/review/'+other['id'],wait_until='networkidle')
     page.get_by_role('button',name=re.compile('逐张图片')).click()
@@ -304,7 +321,7 @@ def stage_d3(page, ui):
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,empty)
     page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=images',wait_until='networkidle')
     expect(page.get_by_text('本篇无需审核图片',exact=True)).to_be_visible()
-    return {'D3':'PASS','initial_seen_zero':True,'fallback_visible':True,'reset_on_task_change':True,
+    return {'D3':'PASS','initial_seen_zero':True,'fallback_visible':True,'retry_same_url':True,'reset_on_task_change':True,
             'zoom_escape_focus_return':True,'missing_source_bytes':True,'no_images':True,
             'zero_change_alert':True,'upload_entry':True,'versions_not_collapsed':True}
 

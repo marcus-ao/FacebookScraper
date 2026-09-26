@@ -33,7 +33,7 @@ function SubmissionProgress({ controller: c }: { controller: ApprovalController 
   const op = c.operation
   if (!op) return null
   if (op.status === 'running') {
-    return <Alert type="info" title={`正在创建排期：第 ${op.step_index}/${op.step_total} 步 · ${op.step}`}
+    return <Alert type="info" title="正在创建排期"
       description={<><Progress percent={Math.round((op.step_index / op.step_total) * 100)} size="small" />
         <Typography.Text type="secondary">浏览器正在后台操作，通常需要几十秒到几分钟。可以离开这个页面，回来还能看到进度。</Typography.Text></>} />
   }
@@ -42,7 +42,8 @@ function SubmissionProgress({ controller: c }: { controller: ApprovalController 
     return <Alert type="warning" title="提交结果待核对"
       description="请先核对已有提交尝试是否被接收，确认结果前不要再次提交。" />
   }
-  return <Alert type="warning" title="排期没有创建成功" description={op.message} />
+  return <Alert type="warning" title="排期没有创建成功"
+    description="请核对这次提交尝试的结果，再决定下一步。" />
 }
 
 export function ExactCaptionPreview({ detail, editing, frozenText, frozenOnly = false }: {

@@ -14,6 +14,7 @@ from activation_fixtures import activate as fixture_activate
 import tests_web_review as fixtures
 from publish_fixtures import verified_probe_config
 from core import config, paid_consent, review, translated
+from core.store import read_post_truth
 from pipeline import approval, content_confirmation, engine
 from publish import channel_evidence, manual_run
 from publish import business_suite as bs, compose, journal, snapshots, workflow
@@ -57,16 +58,17 @@ class ApprovalTests(unittest.TestCase):
         patch.object(bs, 'require_readback_evidence', return_value=None).start()
 
     def confirm_fixture(self):
-        tokens = content_confirmation.current_tokens(self.account, self.source)
-        current = content_confirmation.current_state(self.account, self.source)
+        source, _ = read_post_truth(self.account, self.source)
+        tokens = content_confirmation.current_tokens(self.account, source)
+        current = content_confirmation.current_state(self.account, source)
         if current['body']['confirmed'] and all(item['confirmed'] for item in current['images']):
-            return review.state_for(self.account, self.source)['revision']
-        revision = review.state_for(self.account, self.source)['revision']
+            return review.state_for(self.account, source)['revision']
+        revision = review.state_for(self.account, source)['revision']
         for action, payload in [('body_reviewed', {
                 'confirmed': True, 'content_token': tokens['body']}), *[
             ('image_reviewed', {'confirmed': True, 'content_token': item['token'],
                                 'media_index': item['media_index']}) for item in tokens['images']]]:
-            event = review.transition(self.account, self.source, action,
+            event = review.transition(self.account, source, action,
                 expected_revision=revision, expected_source_sha256=self.params['source_text_sha256'], now=NOW,
                 content_confirmation=payload)
             revision = event['revision']

@@ -35,6 +35,19 @@ describe('最终审核区', () => {
     expect(markup).toContain('核对并补齐本地回执')
     expect(markup).not.toContain('<span>再次提交</span>')
   })
+  it('提交进度与失败只给业务状态，不透出底层浏览器步骤和异常', () => {
+    const running = { ...controller, operation: { status: 'running', step_index: 2, step_total: 7,
+      step: '新开标签页进 composer', message: '' } }
+    const inProgress = html(detail, running as ApprovalController)
+    expect(inProgress).toContain('正在创建排期')
+    expect(inProgress).not.toContain('composer')
+    const failed = { ...controller, operation: { status: 'failed', step_index: 2, step_total: 7,
+      step: 'Planner 回读', message: 'remote DOM selector failed' } }
+    const result = html(detail, failed as ApprovalController)
+    expect(result).toContain('请核对这次提交尝试的结果')
+    expect(result).not.toContain('Planner')
+    expect(result).not.toContain('remote DOM')
+  })
   it('已排期说明定时任务已确认，公开发布仍待观测', () => {
     const markup = html({ ...detail, status: 'scheduled' }, controller)
     expect(markup).toContain('定时排期已确认')

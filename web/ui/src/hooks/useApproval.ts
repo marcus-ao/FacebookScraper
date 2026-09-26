@@ -107,7 +107,8 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const fromError = Array.isArray(payload?.suggestions) ? payload.suggestions : []
   const fromOperation = operation?.status === 'failed' && Array.isArray(operation.result?.suggestions) ? operation.result.suggestions : []
   const suggestions = [...fromError, ...fromOperation].filter((value): value is string => typeof value === 'string')
-  const errorMessage = operation && operation.status !== 'running' && operation.status !== 'succeeded' ? operation.message
+  const errorMessage = operation?.status === 'uncertain' ? '提交结果待核对，请先核对已有尝试'
+    : operation?.status === 'failed' ? '排期没有创建成功，请核对这次提交尝试的结果'
     : isApiError(error) && /夏令时/.test(error.message) ? '这个时刻在夏令时切换中不存在或出现两次，请选择其他时刻'
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,

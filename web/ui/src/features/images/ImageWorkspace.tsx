@@ -29,6 +29,7 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
   const [error, setError] = useState<string | null>(null)
   const [sourceFailed, setSourceFailed] = useState(false)
   const [proposedFailed, setProposedFailed] = useState(false)
+  const [retryNonce, setRetryNonce] = useState(0)
   const [zoom, setZoom] = useState(false)
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [preview, setPreview] = useState<ImageVersion | null>(null)
@@ -45,6 +46,16 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
   const proposedUrl = image.ready ? (image.de_url || image.original_url) : null
   const proposedReadable = !!proposedUrl && !proposedFailed
   const disabled = busy || editing || !canEditTask(detail)
+  const imageUrl = (url: string) => retryNonce ? `${url}${url.includes('?') ? '&' : '?'}review_retry=${retryNonce}` : url
+  const retry = async () => {
+    try {
+      await onChanged()
+      setSourceFailed(false)
+      setProposedFailed(false)
+      setRetryNonce(value => value + 1)
+      setError(null)
+    } catch { setError('素材暂时无法刷新，请稍后再试') }
+  }
   const act = async (run: () => Promise<unknown>) => {
     if (busy) return
     setBusy(true); setError(null)
@@ -58,11 +69,11 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
   })
   const pair = (large = false) => <div className={`${styles.pair} ${large ? styles.large : ''}`}>
     <figure><figcaption>第 {number} 张原图</figcaption>
-      {image.source_image_sha256 ? <img src={image.original_url} alt={`原图 ${number}`} onError={() => setSourceFailed(true)} />
+      {image.source_image_sha256 ? <img src={imageUrl(image.original_url)} alt={`原图 ${number}`} onError={() => setSourceFailed(true)} />
         : <div className={styles.empty}>原图无法读取</div>}
     </figure>
     <figure><figcaption>拟发布图片{image.selection === 'original_confirmed' && ' · 当前选用原图'}{image.manual && ' · 人工图片'}</figcaption>
-      {proposedUrl ? <img src={proposedUrl} alt={`拟发布图片 ${number}`} onError={() => setProposedFailed(true)} />
+      {proposedUrl ? <img src={imageUrl(proposedUrl)} alt={`拟发布图片 ${number}`} onError={() => setProposedFailed(true)} />
         : <div className={styles.empty}>暂无可用的拟发布图片</div>}
     </figure>
   </div>
@@ -73,9 +84,10 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
       <Button onClick={() => setZoom(true)}>放大对照</Button>
     </Space></div>
     {!sourceReadable && <Alert type="warning" showIcon title={`第 ${number} 张原图无法读取，请核对归档素材后刷新`}
-      action={<Button size="small" onClick={() => void onChanged()}>刷新素材</Button>} />}
+      action={<Button size="small" onClick={() => void retry()}>刷新素材</Button>} />}
     {sourceReadable && !proposedUrl && <p className={styles.note}>第 {number} 张尚无可用的拟发布图片。请选择原图、上传图片或生成德语图。</p>}
-    {proposedFailed && <Alert type="warning" showIcon title={`第 ${number} 张拟发布图片无法读取，请刷新后核对素材`} />}
+    {proposedFailed && <Alert type="warning" showIcon title={`第 ${number} 张拟发布图片无法读取，请刷新后核对素材`}
+      action={sourceFailed ? undefined : <Button size="small" onClick={() => void retry()}>刷新素材</Button>} />}
     {image.metrics?.changed_pixel_ratio === 0 && proposedUrl && <p className={styles.note}>第 {number} 张未见明显改动；可能无需修改，也可能未按要求生成，请核对图中文字。</p>}
     {image.warnings?.map((warning, index) => <p className={styles.note} key={index}>
       {warning.includes('宽高比') || warning.includes('画幅') ? `请核对第 ${number} 张图片的画幅是否适合发布。`

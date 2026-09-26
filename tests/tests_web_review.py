@@ -152,6 +152,50 @@ class WebReviewTests(unittest.TestCase):
         self.assertEqual(self.save('Eine neue Fassung. #Neakasa').status_code, 200)
         self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
 
+    def test_reverting_saved_body_does_not_revive_an_old_confirmation(self):
+        original = self.client.get(self.url).json()['localization']['body_de']
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        self.assertEqual(self.save('Zwischenfassung. #Neakasa').status_code, 200)
+        self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+        self.assertEqual(self.save(original + ' #Neakasa').status_code, 200)
+        self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+
+    def test_tag_only_save_keeps_body_confirmation(self):
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        saved = self.save_localization(tags=['#Neu'])
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()['content_review']['body']['confirmed'])
+
+    def test_tag_save_after_machine_revision_keeps_current_body_confirmation(self):
+        self.write_machine('Neue Maschinenfassung. #Neakasa')
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        saved = self.save_localization(tags=['#Neu'])
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertTrue(saved.json()['content_review']['body']['confirmed'])
+        self.write_machine('Spätere Maschinenfassung. #Neakasa')
+        self.assertTrue(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+
+    def test_machine_regeneration_keeps_confirmed_human_body(self):
+        self.assertEqual(self.save('Von Hand verbessert. #Neakasa').status_code, 200)
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        self.write_machine('Neue Maschinenfassung. #Neakasa')
+        self.assertTrue(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+
+    def test_source_text_revert_does_not_revive_body_confirmation(self):
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        first = dict(self.source)
+        self.source['text'] = 'Temporary source. #Neakasa'
+        history = self.post_dir / 'source_history.jsonl'
+        history.write_text(json.dumps({'source': first}) + '\n', encoding='utf-8')
+        self.write_source()
+        self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+        second = dict(self.source)
+        self.source['text'] = first['text']
+        with history.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'source': second}) + '\n')
+        self.write_source()
+        self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+
     def test_image_confirmation_requires_readable_selected_image(self):
         self.write_generated_image('Ein sauberes Zuhause. #Neakasa')
         detail = self.client.get(self.url).json()
@@ -162,6 +206,20 @@ class WebReviewTests(unittest.TestCase):
         self.assertFalse(current['content_review']['images'][0]['confirmed'])
         rejected = self.confirm_content('images/0', detail=current)
         self.assertEqual(rejected.status_code, 409, rejected.text)
+
+    def test_reselecting_old_image_does_not_revive_confirmation(self):
+        self.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        self.assertEqual(self.confirm_content('images/0').status_code, 200)
+        for choice in ('original', 'automatic'):
+            detail = self.client.get(self.url).json()
+            selected = self.client.post(self.url + '/image/0/selection', json={
+                'choice': choice, 'confirm': False,
+                'source_image_sha256': detail['images'][0]['source_image_sha256'],
+                'source_text_sha256': detail['text']['source_text_sha256'],
+                'review_revision': detail['review']['revision'],
+            })
+            self.assertEqual(selected.status_code, 200, selected.text)
+            self.assertFalse(selected.json()['content_review']['images'][0]['confirmed'])
 
     def test_body_and_each_image_confirmation_follow_only_their_current_content(self):
         Image.new('RGB', (1080, 1080), 'red').save(self.post_dir / '02.jpg')

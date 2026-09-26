@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from activation_fixtures import activate as fixture_activate
 
-from core import translated  # noqa: E402
+from core import localization, translated  # noqa: E402
 from core.console import force_utf8  # noqa: E402
 from core.store import Archive, post_dirname  # noqa: E402
 from pipeline import engine  # noqa: E402
@@ -64,25 +64,36 @@ class HumanPipelineTests(unittest.TestCase):
                                  datetime(2026, 9, 3, 12, tzinfo=timezone.utc),
                                  'facebook:acme:human-case')
 
-    def save_human(self, text='Von Hand verbessert. #Neakasa'):
-        return translated.append_human_translation(self.human_path, self.row, text, now=self.now)
+    def save_human(self, text='Von Hand verbessert. #Neakasa', *, confirm_tags=False):
+        if confirm_tags:
+            text = localization.render(localization.draft_for(
+                self.row, {'text_de': text, 'is_human': True}))
+        human = translated.append_human_translation(self.human_path, self.row, text, now=self.now)
+        if confirm_tags:
+            draft = localization.draft_for(self.row, dict(human, is_human=True))
+            draft['hashtags_confirmed'] = True
+            draft['links_confirmed'] = True
+            localization.append_localization(self.arc.base, self.row, draft,
+                human_revision=human['revision'], expected_revision=None,
+                expected_source_sha256=translated.source_text_sha256(self.row['text']), now=self.now)
+        return human
 
     def test_batch_preflight_refuses_missing_content_decisions_before_browser(self):
         with self.assertRaisesRegex(engine.PipelineRunError, '确认'):
             engine._require_batch_confirmations([self.source()])
 
     def test_publish_uses_human_even_after_machine_regeneration(self):
-        self.save_human()
+        human = self.save_human(confirm_tags=True)
         self.write_machine('Noch eine maschinelle Fassung. #Neakasa')
         self.assertEqual(_load_current_translation(self.arc, self.row),
-                         'Von Hand verbessert. #Neakasa')
+                         human['text_de'])
 
     def test_current_human_does_not_require_machine_or_prompt_version(self):
-        self.save_human()
+        human = self.save_human(confirm_tags=True)
         (self.arc.base / 'translated.jsonl').unlink()
         self.assertFalse(engine.translation_needed(self.source()))
         self.assertEqual(_load_current_translation(self.arc, self.row),
-                         'Von Hand verbessert. #Neakasa')
+                         human['text_de'])
 
     def test_stale_human_cannot_fall_back_to_current_machine_for_publish(self):
         self.save_human()
