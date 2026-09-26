@@ -1,6 +1,6 @@
 
 export const UNSAVED_MESSAGES = {
-  detail: '修改尚未保存，确定离开并放弃当前草稿？',
+  detail: '这篇内容有未保存的修改',
 } as const
 
 export type UnsavedMessageKey = keyof typeof UNSAVED_MESSAGES

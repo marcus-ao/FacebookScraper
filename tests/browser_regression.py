@@ -156,7 +156,10 @@ def stage_d1(page, ui):
     assert ui.count_list_gets()==1
     page.get_by_role('button',name='编辑德语',exact=True).click()
     page.get_by_role('textbox',name='德语正文').fill('Manuell geprüft 😀 $219.99')
-    expect(page.get_by_role('button',name='下一篇',exact=True)).to_be_disabled()
+    page.get_by_role('button',name=re.compile('标签与链接')).click()
+    expect(page.get_by_role('dialog')).to_have_count(0)
+    page.get_by_role('navigation',name='审核步骤').get_by_role('button',name=re.compile('德语正文')).click()
+    expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Manuell geprüft 😀 $219.99')
     page.wait_for_timeout(400)
     checks=[r for r in ui.requests if r['path'].endswith('/check')]
     assert checks and checks[-1]['body']['localization']['body_de']=='Manuell geprüft 😀 $219.99'
@@ -164,22 +167,40 @@ def stage_d1(page, ui):
     assert page.evaluate("() => {const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented}")
     page.get_by_role('link',name='返回列表',exact=True).click()
     expect(page.get_by_role('dialog')).to_be_visible()
-    page.get_by_role('button',name='留在本页').click()
+    page.get_by_role('button',name='继续编辑').click()
     expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Manuell geprüft 😀 $219.99')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/localization')]=(409,{'detail':'conflict'})
-    page.get_by_role('button',name='保存',exact=True).click()
+    page.get_by_role('button',name='保存修改',exact=True).click()
     page.get_by_role('button',name='载入最新内容并保留我的修改').click()
     expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Manuell geprüft 😀 $219.99')
     updated=copy.deepcopy(detail); updated['localization']['body_de']='Manuell geprüft 😀 $219.99';updated['text']['de_human']='Manuell geprüft 😀 $219.99';updated['status']='edited'
     ui.overrides[('PUT',f'/api/tasks/{task_id}/localization')]=(200,updated)
-    page.get_by_role('button',name='保存',exact=True).click()
+    page.get_by_role('button',name='保存修改',exact=True).click()
     expect(page.get_by_role('textbox',name='德语正文')).to_have_count(0)
     saved=[r for r in ui.requests if r['method']=='PUT'][-1]['body']
     assert set(saved)=={'body_de','tags','hashtags_confirmed','links_confirmed','links','ig_cta','source_text_sha256','human_revision','review_revision','localization_revision'}
+    page.get_by_role('button',name='编辑德语',exact=True).click()
+    page.get_by_role('textbox',name='德语正文').fill('Über den Dialog gespeichert')
     page.get_by_role('link',name='返回列表',exact=True).click()
-    expect(page.locator(f'tr[data-task-id="{task_id}"]')).to_contain_text('Manuell geprüft')
+    ui.overrides[('PUT',f'/api/tasks/{task_id}/localization')]=(409,{'detail':'conflict'})
+    page.get_by_role('button',name='保存并离开').click()
+    expect(page.get_by_text('尚未保存，修改仍在当前页面，请重试',exact=True)).to_be_visible()
+    expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Über den Dialog gespeichert')
+    newer=copy.deepcopy(updated);newer['localization']['body_de']='Über den Dialog gespeichert';newer['text']['de_human']='Über den Dialog gespeichert'
+    ui.overrides[('PUT',f'/api/tasks/{task_id}/localization')]=(200,newer)
+    page.get_by_role('button',name='保存并离开').click()
+    expect(page).to_have_url(re.compile('/review/facebook'))
+    page.locator(f'tr[data-task-id="{task_id}"] a').first.click()
+    page.get_by_role('button',name='编辑德语',exact=True).click()
+    page.get_by_role('textbox',name='德语正文').fill('Nicht speichern')
+    writes=len([r for r in ui.requests if r['method']=='PUT' and r['path'].endswith('/localization')])
+    page.get_by_role('link',name='返回列表',exact=True).click()
+    page.get_by_role('button',name='放弃修改并离开').click()
+    expect(page).to_have_url(re.compile('/review/facebook'))
+    assert len([r for r in ui.requests if r['method']=='PUT' and r['path'].endswith('/localization')])==writes
+    expect(page.locator(f'tr[data-task-id="{task_id}"]')).to_contain_text('Über den Dialog gespeichert')
     assert ui.count_list_gets()==1
-    return {'D1':'PASS','check_full_localization':True,'dirty_guard':True,'save_conflict_preserves_draft':True,'B23_GET_list_count':1}
+    return {'D1':'PASS','check_full_localization':True,'dirty_guard':True,'save_conflict_preserves_draft':True,'save_or_discard_on_leave':True,'B23_GET_list_count':1}
 
 
 def stage_d2(page, ui):
@@ -189,16 +210,16 @@ def stage_d2(page, ui):
     page.get_by_role('button',name='编辑德语',exact=True).click()
     field=page.get_by_role('textbox',name='德语正文'); field.fill('Anfang Ende')
     field.evaluate('(el) => el.setSelectionRange(7,7)')
-    page.get_by_role('tab',name='话题标签与链接',exact=True).click()
-    page.get_by_role('textbox',name='本篇语义标签').fill('#Katzen #Katzen Haustiere，#Tierpflege')
-    page.get_by_role('button',name='将链接 1 插入正文光标处').click()
+    page.get_by_role('button',name=re.compile('标签与链接')).click()
+    page.get_by_role('textbox',name='本篇拟发布标签').fill('#Katzen #Katzen Haustiere，#Tierpflege')
+    page.get_by_role('button',name='插入链接 1').click()
     expect(field).to_have_value('Anfang 〔链接 1〕Ende')
     assert '{{link' not in page.locator('main').inner_text()
     page.wait_for_timeout(400)
     body=[r['body'] for r in ui.requests if r['path'].endswith('/check')][-1]
     assert body['text_de']=='Anfang {{link1}}Ende'
-    assert body['localization']['tags']==list(dict.fromkeys(detail['localization']['protected_tags']+['#Katzen','#Haustiere','#Tierpflege']))
-    page.get_by_role('button',name='放弃修改').click()
+    assert body['localization']['tags']==['#Katzen','#Haustiere','#Tierpflege']
+    page.get_by_role('button',name='放弃修改',exact=True).click()
     page.get_by_role('button',name='编辑分类').click()
     page.get_by_role('textbox',name='产品分类',exact=True).fill('Riko，促销')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(200,{**detail,'tags':['Riko','促销']})
@@ -206,7 +227,7 @@ def stage_d2(page, ui):
     expect(page.get_by_role('dialog')).to_have_count(0)
     body=[r['body'] for r in ui.requests if r['path'].endswith('/tags')][-1]
     assert body=={'tags':['Riko','促销'],'tags_revision':detail['tags_revision'],'source_text_sha256':detail['text']['source_text_sha256']}
-    return {'D2':'PASS','cursor_insertion_and_storage_token':True,'protected_deduplicated_tags':True,'independent_category_CAS':True}
+    return {'D2':'PASS','cursor_insertion_and_storage_token':True,'all_tags_editable_and_deduplicated':True,'independent_category_CAS':True}
 
 
 def stage_d3(page, ui):
@@ -214,27 +235,35 @@ def stage_d3(page, ui):
     task_id=row['id']; detail=ui.fx.detail(task_id); detail['images'][1]['de_present']=False
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('button',name=f"图片 1/{len(detail['images'])}",exact=True).click()
-    expect(page.get_by_role('button',name='第 1 张（看过）',exact=True)).to_be_visible()
-    page.get_by_role('button',name='第 2 张（未看）',exact=True).click()
-    expect(page.get_by_text('这一张缺少德语图，当前展示原图，请人工核对',exact=True)).to_be_visible()
-    expect(page.get_by_role('button',name=f"图片 2/{len(detail['images'])}",exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    expect(page.get_by_role('button',name='第 1 张（待确认）',exact=True)).to_be_visible()
+    page.get_by_role('button',name='第 2 张（待确认）',exact=True).click()
+    expect(page.get_by_text(re.compile('第 2 张尚无可用的拟发布图片'))).to_be_visible()
+    expect(page.get_by_text(f"第 2 / {len(detail['images'])} 张",exact=True)).to_be_visible()
     page.get_by_role('button',name='放大对照').click()
     expect(page.get_by_role('dialog')).to_be_visible()
     page.keyboard.press('Escape')
     expect(page.get_by_role('dialog')).to_have_count(0)
     expect(page.get_by_role('button',name='放大对照')).to_be_focused()
+    source_path=urlparse(detail['images'][0]['original_url']).path
+    ui.overrides[('GET',source_path)]=(404,{'detail':'missing fixture image'})
+    page.reload(wait_until='networkidle')
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    expect(page.get_by_text(re.compile('第 1 张原图无法读取'))).to_be_visible()
+    ui.overrides.pop(('GET',source_path))
     other=next(item for item in ui.list_data['tasks'] if item['image_count']>=2 and item['id']!=task_id)
     page.goto(ui.fx.base_url+'/review/'+other['id'],wait_until='networkidle')
-    expect(page.get_by_role('button',name=f"图片 1/{other['image_count']}",exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    expect(page.get_by_text(f"第 1 / {other['image_count']} 张",exact=True)).to_be_visible()
 
     # 改动占比为 0 是"模型没干活"和"图里本来没英文"共用的信号，必须自己冒出来。
     zero=ui.fx.detail(task_id)
     zero['images'][0]['metrics']=dict(zero['images'][0].get('metrics') or {},changed_pixel_ratio=0)
+    zero['images'][0].update(ready=True,selection='original_confirmed')
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,zero)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('button',name=f"图片 1/{len(zero['images'])}",exact=True).click()
-    expect(page.get_by_text('未检测到明显像素变化',exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    expect(page.get_by_text(re.compile('第 1 张未见明显改动'))).to_be_visible()
     expect(page.get_by_role('button',name=re.compile('上传图片替换第 1 张'))).to_be_visible()
 
     # 历史版本不折叠：换回上一版是动作，折起来她就不知道有这条路。
@@ -250,12 +279,17 @@ def stage_d3(page, ui):
         'max_refine_per_media':3,'image_attempts':{'0':2},'estimated_image_usd':0.211,
         'estimate_basis':'本地 usage 样本中位数','estimate_samples':4,'jobs':[],'image_versions':{'0':versions}})
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('button',name=f"图片 1/{len(zero['images'])}",exact=True).click()
-    expect(page.get_by_text('这一张生成过 2 版',exact=True)).to_be_visible()
-    expect(page.get_by_text('指令：把 CTA 换成更短的说法',exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    page.get_by_role('button',name='比较其他版本').click()
+    expect(page.get_by_text(re.compile('把 CTA 换成更短的说法'))).to_be_visible()
     expect(page.get_by_role('button',name='采用这一版')).to_have_count(1)
+    empty=copy.deepcopy(zero);empty['images']=[]
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,empty)
+    page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=images',wait_until='networkidle')
+    expect(page.get_by_text('本篇无需审核图片',exact=True)).to_be_visible()
     return {'D3':'PASS','initial_seen_zero':True,'fallback_visible':True,'reset_on_task_change':True,
-            'zoom_escape_focus_return':True,'zero_change_alert':True,'upload_entry':True,'versions_not_collapsed':True}
+            'zoom_escape_focus_return':True,'missing_source_bytes':True,'no_images':True,
+            'zero_change_alert':True,'upload_entry':True,'versions_not_collapsed':True}
 
 
 def stage_d4(page, ui):
@@ -298,7 +332,7 @@ def stage_d4(page, ui):
     scheduled=copy.deepcopy(detail);scheduled['status']='scheduled';scheduled['schedule']={'at':'2026-09-15T11:30:00+08:00','channel':detail['platform']}
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,scheduled)
     page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
-    expect(page.get_by_text(re.compile('排期已确认。'))).to_be_visible(timeout=15000)
+    expect(page.get_by_text('定时排期已确认；公开发布仍待观测',exact=True)).to_be_visible(timeout=15000)
     assert ui.count_list_gets()==1
     return {'D4':'PASS','strict_receipt':True,'exact_five_body_fields':True,'no_offset_submission':True,'clickable_409_suggestion':True,'polled_operation':True,'list_GET_count':1}
 
@@ -324,33 +358,37 @@ def stage_d5(page, ui):
     ui.overrides[('GET','/api/initial-translation/jobs/fixture-initial')]=result('initial',initial_job)
     ui.overrides[('GET','/api/refinements/jobs/fixture-refine')]=result('refine',refine_job)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    initial_button=page.locator('[data-paid-action="翻译这篇"]')
-    expect(initial_button).to_be_disabled()
-    page.get_by_role('checkbox',name='我已确认可以处理这篇内容，开始本篇模型处理。').check();initial_button.click()
+    initial_button=page.locator('[data-paid-action="生成德语初稿"]')
+    expect(initial_button).to_be_enabled()
+    initial_button.click()
+    page.get_by_role('checkbox',name='我已核对来源并确认可以处理这篇内容').check()
+    page.get_by_role('button',name='确认并开始').click()
     expect(page.get_by_text('本轮处理完成',exact=True)).to_be_visible(timeout=8000)
     initial_body=[r['body'] for r in ui.requests if r['method']=='POST' and r['path']==initial_path][-1]
     assert initial_body=={'consent':True,'source_fingerprint':'a'*64,'source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision']}
-    page.get_by_text('单篇优化（可选）',exact=True).click()
-    page.get_by_role('textbox',name='这一次希望怎样调整').fill('保持事实，缩短开头')
+    page.get_by_text('调整德语文案（可选）',exact=True).click()
+    page.get_by_role('textbox',name='希望怎样调整文案').fill('保持事实，缩短开头')
     page.locator('[data-paid-action="生成文案候选"]').click()
+    page.get_by_role('checkbox',name='我已核对来源并确认可以处理这篇内容').check()
+    page.get_by_role('button',name='确认并开始').click()
     page.get_by_role('button',name='采用到正文编辑区',exact=True).wait_for(state='visible',timeout=8000)
     stopped=dict(polls);page.wait_for_timeout(1650);assert polls==stopped,polls
     page.get_by_role('button',name='编辑德语',exact=True).click();page.get_by_role('textbox',name='德语正文').fill('保留这段人工修改')
     page.get_by_role('button',name='采用到正文编辑区',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible()
     page.get_by_role('button',name='采用候选',exact=True).click();expect(page.get_by_role('textbox',name='德语正文')).to_have_value('Neue Kandidatin 😀')
-    page.get_by_role('button',name='放弃修改').click()
+    page.get_by_role('button',name='放弃修改',exact=True).click()
     for expired in (dict(refine_job, status='succeeded', body_de='Neue Kandidatin 😀', prompt_current=False),
                     {key: value for key, value in dict(refine_job, status='succeeded', body_de='Neue Kandidatin 😀').items() if key != 'prompt_current'}):
         ui.overrides[('GET','/api/refinements/jobs/fixture-refine')] = (200, expired)
-        page.get_by_role('button', name='刷新任务状态', exact=True).click()
+        page.get_by_role('button', name='刷新处理状态', exact=True).last.click()
         expect(page.get_by_role('button', name='采用到正文编辑区', exact=True)).to_be_disabled()
-        expect(page.get_by_text(re.compile('提示词已更新或任务缺少版本依据'))).to_be_visible()
-    page.get_by_role('button',name='处理记录',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape')
-    expect(page.get_by_role('button',name='处理记录',exact=True)).to_be_focused()
+    page.get_by_role('button',name='更多处理动作',exact=True).click()
+    page.get_by_role('menuitem',name='处理记录').click();expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape')
+    expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_be_focused()
     interrupted={**initial_job,'status':'interrupted'};cap['job']=interrupted
     ui.overrides[('GET','/api/initial-translation/jobs/fixture-initial')]=(200,interrupted)
     ui.overrides[('POST','/api/content-jobs/fixture-initial/recover')]=(200,{**interrupted,'status':'failed'})
-    page.reload(wait_until='networkidle');page.get_by_role('button',name='核对并恢复本地状态（不重新生成）',exact=True).click()
+    page.reload(wait_until='networkidle');page.get_by_role('button',name='核对并恢复处理状态',exact=True).click()
     page.wait_for_timeout(300)
     recovery=[r for r in ui.requests if r['path'].endswith('/recover')][-1]
     assert recovery['body']=={'expected_updated_at':initial_job['recorded_at']}
@@ -371,11 +409,12 @@ def stage_d(page, ui):
     for status in ['not_ready','pending_review','edited','content_locked','snoozed','approved','scheduled','skipped','handed_off']:
         detail=copy.deepcopy(original);detail['status']=status;detail['review']['status']=status
         ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
-        page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
+        page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=text',wait_until='networkidle')
         # 冻结之后不能再编辑；这正是「编辑确认无误」要挡住的误触。
         editable=status in ['not_ready','pending_review','edited','snoozed']
         expect(page.get_by_role('button',name='编辑德语',exact=True)).to_have_count(int(editable))
-        expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_have_count(int(editable or status=='handed_off'))
+        expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_have_count(1)
+        page.get_by_role('button',name=re.compile('最终确认与排期')).click()
         freeze=page.get_by_role('button',name='编辑确认无误',exact=True)
         schedule=page.get_by_role('button',name='确认发布时间并排期',exact=True)
         if status in ['pending_review','edited']:
@@ -383,13 +422,14 @@ def stage_d(page, ui):
         elif status=='content_locked':
             expect(freeze).to_have_count(0);expect(schedule).to_be_enabled()
         else:
-            expect(schedule).to_have_count(0);expect(freeze).to_be_disabled()
+            expect(schedule).to_have_count(0);expect(freeze).to_have_count(0)
         states[status]='PASS'
     detail=copy.deepcopy(original);detail['read_only']=True
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
     page.goto(ui.fx.base_url+'/history/'+task_id,wait_until='networkidle')
-    for label in ['编辑德语','更多处理动作','编辑确认无误','确认发布时间并排期','编辑分类','翻译这篇','生成文案候选']:
+    for label in ['编辑德语','编辑确认无误','确认发布时间并排期','编辑分类','翻译这篇','生成文案候选']:
         expect(page.get_by_role('button',name=label,exact=True)).to_have_count(0)
+    expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_be_visible()
     detail=copy.deepcopy(original)
     prose='🚀 Anfang\n'+'Eine lange Zeile zum Prüfen.\n'*65+'$219.99 Ende'
     start=prose.index('$219.99');span=[start,start+7]
@@ -403,7 +443,8 @@ def stage_d(page, ui):
     geometry=page.locator('[data-testid="english-prose"]').evaluate('(el)=>{const m=el.querySelector("mark");return {scroll:el.scrollTop,top:m.getBoundingClientRect().top,bottom:m.getBoundingClientRect().bottom,paneTop:el.getBoundingClientRect().top,paneBottom:el.getBoundingClientRect().bottom}}')
     assert geometry['scroll']>0 and geometry['top']>=geometry['paneTop'] and geometry['bottom']<=geometry['paneBottom'],geometry
     assert page.evaluate('getComputedStyle(document.documentElement).scrollBehavior')=='auto'
-    expect(page.get_by_role('button',name=f"图片 1/{len(detail['images'])}",exact=True)).to_be_visible()
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    expect(page.get_by_role('button',name='下一张',exact=True)).to_be_visible()
     # 这一段验的是界面怎么显示 DST 报错。北京没有夏令时，所以临时把业务时区切到柏林
     # 才谈得上「不存在/出现两次」——不能因为当前时区没这问题就把这条删掉。
     locked=copy.deepcopy(detail);locked['status']='content_locked'
@@ -432,11 +473,30 @@ def stage_d(page, ui):
     page.get_by_role('button',name='下一篇',exact=True).click()
     expect(page).to_have_url(re.compile(re.escape(filtered[1]['id'])))
     page.get_by_role('button',name='编辑德语',exact=True).click();page.get_by_role('textbox',name='德语正文').fill('dirty back')
-    page.evaluate('history.back()');expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='留在本页').click()
+    page.evaluate('history.back()');expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='继续编辑').click()
     expect(page.get_by_role('textbox',name='德语正文')).to_have_value('dirty back')
-    page.get_by_role('button',name='放弃修改').click();page.get_by_role('link',name='返回列表',exact=True).click()
+    page.get_by_role('button',name='放弃修改',exact=True).click();page.get_by_role('link',name='返回列表',exact=True).click()
     assert parse_qs(urlparse(page.url).query)=={'queue':['review'],'platform':['facebook'],'tag':['Riko']}
-    return {'B5':states,'B9':'PASS','B10':'PASS','B11':'PASS','B12_DST':'PASS','B15':'PASS','B17':'PASS','B23_refresh_neighbors':'PASS','B4_browser_back':'PASS','mark_geometry':geometry}
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
+    layouts={}
+    for width,height in ((1366,768),(827,730),(390,844)):
+        page.set_viewport_size({'width':width,'height':height})
+        page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=text',wait_until='networkidle')
+        if width<=760:
+            assert page.locator('main').evaluate('(el)=>el.getBoundingClientRect().width')>=width-4
+            expect(page.get_by_role('button',name='展开导航')).to_be_visible()
+        for step in ('text','images','localization','final'):
+            if width<=760: page.locator('nav[aria-label="审核步骤"] select').select_option(step)
+            else: page.get_by_role('navigation',name='审核步骤').get_by_role('button',name=re.compile({'text':'德语正文','images':'逐张图片','localization':'标签与链接','final':'最终确认与排期'}[step])).click()
+            metric=page.evaluate('''() => ({width:document.documentElement.scrollWidth,viewport:innerWidth,
+                outside:[...document.querySelectorAll('main *')].filter(el=>el.getBoundingClientRect().right>innerWidth+2 && el.getBoundingClientRect().width>0)
+                    .slice(0,8).map(el=>({tag:el.tagName,cls:String(el.className).slice(0,100),right:Math.round(el.getBoundingClientRect().right),width:Math.round(el.getBoundingClientRect().width)}))})''')
+            assert metric['width']<=metric['viewport']+2,(width,step,metric)
+            layouts[f'{width}/{step}']=metric
+        visible=page.locator('main').inner_text()
+        assert not any(term in visible for term in ('费用估计','技术诊断','归档位置','飞书云盘','上海时间','柏林'))
+        page.screenshot(path=str(EVIDENCE/f'review-detail-{width}.png'))
+    return {'B5':states,'B9':'PASS','B10':'PASS','B11':'PASS','B12_DST':'PASS','B15':'PASS','B17':'PASS','B23_refresh_neighbors':'PASS','B4_browser_back':'PASS','mark_geometry':geometry,'layouts':layouts}
 
 
 def stage_f(page, ui):
@@ -651,7 +711,7 @@ def stage_review_menu(page, ui):
                 expect(item).to_be_in_viewport(ratio=1)
                 item.hover()
                 page.screenshot(path=str(EVIDENCE / 'review-menu-reduced-motion.png'))
-                page.get_by_role('heading', level=1).click()
+                page.keyboard.press('Escape')
     assert not [r for r in ui.requests if r['method'] not in {'GET', 'HEAD'}], ui.requests
     return {'review_menu': 'PASS', 'measurements': measurements, 'cancel_without_mutation': True}
 

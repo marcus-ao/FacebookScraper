@@ -21,7 +21,8 @@ import { ImageWorkspace } from '@/features/images/ImageWorkspace'
 import { ApprovalAction, DecisionPanel } from '@/features/approval/DecisionPanel'
 import { useApproval } from '@/hooks/useApproval'
 import { ContentJobs } from '@/features/content-jobs/ContentJobs'
-import { DetailDrawers } from '@/features/diagnostics/DetailDrawers'
+import { registerReviewDraftActions } from '@/app/review-draft-actions'
+import type { ReviewDraftActions } from '@/app/review-draft-actions'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { PlatformLabel } from '@/components/PlatformLabel'
@@ -54,6 +55,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const total = source === 'review' ? rows.length : history.data?.pagination.total ?? 0
   const position = !listLoaded ? '正在核对位置' : index < 0 ? '不在当前筛选' : `${index + 1 + (source === 'history' ? (historyFilters.page - 1) * historyFilters.limit : 0)} / ${total}`
   const loc = useLocalization(detail, apply, refresh)
+  const draftActions = useRef<ReviewDraftActions>({ save: () => loc.save(), discard: () => loc.discard(), canSave: () => loc.dirty })
+  draftActions.current.save = () => loc.save()
+  draftActions.current.discard = () => loc.discard()
+  draftActions.current.canSave = () => loc.dirty
+  useEffect(() => registerReviewDraftActions(detail.id, draftActions.current), [detail.id])
   const approval = useApproval(detail, loc.editing || loc.saving, refresh)
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
@@ -73,7 +79,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   opened.current.add(tab)
   const steps = deriveSteps(detail)
   const todos = steps.flatMap(step => step.todos)
-  const finished = ['scheduled', 'approved', 'skipped', 'handed_off'].includes(detail.status)
+  const finished = ['scheduled', 'approved', 'skipped', 'handed_off', 'snoozed'].includes(detail.status)
 
   const adoptCandidate = (job: ContentJob) => {
     const adopt = () => {
@@ -115,19 +121,19 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     <header className={styles.bar}>
       <h1 className={styles.screenReaderOnly}>单篇审核</h1>
       <Space size="small"><Link to={back}>返回列表</Link><span className={styles.position}>{position}</span>
-        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '上一篇'}><Button aria-label="上一篇" icon={<LeftOutlined />} disabled={loc.editing || !listLoaded || index <= 0} onClick={() => adjacent(-1)} /></Tooltip>
-        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '下一篇'}><Button aria-label="下一篇" icon={<RightOutlined />} disabled={loc.editing || !listLoaded || index < 0 || index >= rows.length - 1} onClick={() => adjacent(1)} /></Tooltip></Space>
+        <Tooltip title="上一篇"><Button aria-label="上一篇" icon={<LeftOutlined />} disabled={!listLoaded || index <= 0} onClick={() => adjacent(-1)} /></Tooltip>
+        <Tooltip title="下一篇"><Button aria-label="下一篇" icon={<RightOutlined />} disabled={!listLoaded || index < 0 || index >= rows.length - 1} onClick={() => adjacent(1)} /></Tooltip></Space>
       <Space className={styles.center ?? ''} size="small"><PlatformLabel platform={detail.platform} /><span className={styles.account}>{detail.meta.account}</span><StatusTag status={detail.status} />
         {detail.text.stale && <Typography.Text type="danger">原文已变更，请复核</Typography.Text>}
         {!['skipped', 'handed_off', 'snoozed'].includes(detail.status) && <span className={styles.position}>步骤 {steps.filter(step => step.status === 'complete' || step.status === 'not_required').length} / 4</span>}
       </Space>
-      <Space size="small" className={styles.actions ?? ''}>{!detail.read_only && !loc.saving && <ReviewActions detail={detail} onChanged={apply} />}</Space>
+      <Space size="small" className={styles.actions ?? ''}><ReviewActions detail={detail} onChanged={apply} /></Space>
     </header>
     <div className={styles.body}>
       <SourceStrip detail={detail} />
       <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
       {listLoaded && index < 0 && <p className={styles.filterNotice}>这篇不在当前筛选结果中。<Link to={back}>返回原筛选列表</Link></p>}
-      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} description={loc.error instanceof Error ? loc.error.message : undefined} /> : null}
+      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
       {tab !== 'final' && !finished && <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />}
       <ReviewStepNav steps={steps} active={tab} onChange={changeTab} />
@@ -172,7 +178,6 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         </section>}
         <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />
         {!detail.read_only && !loc.editing && !loc.saving && (approval.lockable || approval.locked) && <div className={styles.stepActions}><ApprovalAction controller={approval} /></div>}
-        <DetailDrawers detail={detail} />
       </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}

@@ -134,3 +134,10 @@
   font-size: var(--rc-font-secondary);
   overflow-wrap: anywhere;
 }
+
+@media (max-width: 760px) {
+  .sider { position: fixed !important; left: 0; z-index: 31; box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+  .sider:global(.ant-layout-sider-collapsed) { visibility: hidden; pointer-events: none; }
+  .content { width: 100%; padding: var(--rc-space-3); }
+  .mobileScrim { position: fixed; inset: var(--rc-topbar-h) 0 0; z-index: 30; border: 0; background: rgb(0 0 0 / 18%); }
+}

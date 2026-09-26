@@ -1,14 +1,27 @@
-import { useState } from 'react'
-import { Button, Drawer, Empty, Space, Timeline } from 'antd'
-import type { TaskDetail } from '@/types/domain'
+import { Drawer, Empty, Timeline } from 'antd'
+import type { OperationRecord, TaskDetail } from '@/types/domain'
 import { ShanghaiTime } from '@/components/Time'
 import { ACTION_LABEL as TRAIL_ACTION_LABEL } from '@/lib/format'
 
-export function DetailDrawers({ detail }: { detail: TaskDetail }) {
-  const [open, setOpen] = useState(false)
-  return <Space><Button type="text" size="small" onClick={() => setOpen(true)}>处理记录</Button>
-    <Drawer title="处理记录" open={open} onClose={() => setOpen(false)} size="large">
-      {detail.trail.length ? <Timeline items={detail.trail.map(record => ({ content: <><ShanghaiTime at={record.at} /><p>{TRAIL_ACTION_LABEL[record.action] ?? '处理记录'} {record.note}</p>{record.wake_at && <p>恢复审校：<ShanghaiTime at={record.wake_at} /></p>}</> }))} /> : <Empty description="尚无人工处理记录" />}
-    </Drawer>
-  </Space>
+const businessActions = new Set<OperationRecord['action']>([
+  'snoozed', 'woke', 'skipped', 'handed_off', 'handoff_link', 'approved', 'scheduled', 'submit_failed', 'unscheduled',
+])
+const reasonActions = new Set<OperationRecord['action']>(['snoozed', 'skipped', 'handed_off'])
+
+export function businessTrail(trail: readonly OperationRecord[]): OperationRecord[] {
+  return trail.filter(record => businessActions.has(record.action))
+    .map(record => ({ ...record, note: reasonActions.has(record.action) ? record.note ?? null : null }))
+}
+
+export function DetailDrawers({ detail, open, onClose, onAfterClose }: {
+  detail: TaskDetail; open: boolean; onClose: () => void; onAfterClose?: () => void;
+}) {
+  const records = businessTrail(detail.trail)
+  return <Drawer title="处理记录" open={open} onClose={onClose} afterOpenChange={visible => { if (!visible) onAfterClose?.() }} width={480}>
+    {records.length ? <Timeline items={records.map(record => ({ content: <>
+      <strong>{TRAIL_ACTION_LABEL[record.action]}</strong> · <ShanghaiTime at={record.at} />
+      {record.note && <p>理由：{record.note}</p>}
+      {record.action === 'snoozed' && record.wake_at && <p>恢复审校：<ShanghaiTime at={record.wake_at} /></p>}
+    </> }))} /> : <Empty description="尚无需要回看的处理决定" />}
+  </Drawer>
 }

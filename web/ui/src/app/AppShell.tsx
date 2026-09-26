@@ -19,25 +19,31 @@ const { Header, Sider, Content } = Layout
 
 export function AppShell() {
   useDialogTabLoop()
-  useUnsavedChangesGuard()
+  const unsavedGuard = useUnsavedChangesGuard()
   const location = useLocation()
   const matches = useMatches()
   const [search] = useSearchParams()
   const meta = resolvePageMeta(matches)
 
   // 挂载后读取折叠偏好，存储不可用时保留默认值。
-  const [collapsed, setCollapsed] = useState(false)
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 760px)').matches)
+  const [collapsed, setCollapsed] = useState(narrow)
   useEffect(() => {
-    setCollapsed(readSiderCollapsed(browserStore()))
+    const media = window.matchMedia('(max-width: 760px)')
+    const sync = () => { setNarrow(media.matches); setCollapsed(media.matches || readSiderCollapsed(browserStore())) }
+    sync()
+    media.addEventListener('change', sync)
+    return () => media.removeEventListener('change', sync)
   }, [])
+  useEffect(() => { if (narrow) setCollapsed(true) }, [narrow, location.pathname])
 
   const toggle = useCallback(() => {
     setCollapsed((previous) => {
       const next = !previous
-      writeSiderCollapsed(browserStore(), next)
+      if (!narrow) writeSiderCollapsed(browserStore(), next)
       return next
     })
-  }, [])
+  }, [narrow])
 
   return (
     <Layout className={cx(styles.shell)}>
@@ -67,7 +73,7 @@ export function AppShell() {
         />
 
         <div className={cx(styles.headerRight)}>
-          <RuntimeIndicator />
+          {!/^\/(review|history)\/[^/]+\/[^/]+$/.test(location.pathname) && <RuntimeIndicator />}
         </div>
       </Header>
 
@@ -80,15 +86,18 @@ export function AppShell() {
           collapsed={collapsed}
           trigger={null}
           width={tokens.layout.sidebarWidth}
-          collapsedWidth={tokens.layout.sidebarCollapsedWidth}
+          collapsedWidth={narrow ? 0 : tokens.layout.sidebarCollapsedWidth}
         >
           <Navigation />
         </Sider>
+        {narrow && !collapsed && <button type="button" className={styles.mobileScrim}
+          aria-label="关闭导航" onClick={() => setCollapsed(true)} />}
 
         <Content className={cx(styles.content)}>
           <Outlet key={location.pathname} />
         </Content>
       </Layout>
+      {unsavedGuard}
     </Layout>
   )
 }

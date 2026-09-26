@@ -10,7 +10,7 @@ const at = (pathname: string) => ({ pathname })
 
 describe('确认文案', () => {
   it('详情', () => {
-    expect(UNSAVED_MESSAGES.detail).toBe('修改尚未保存，确定离开并放弃当前草稿？')
+    expect(UNSAVED_MESSAGES.detail).toBe('这篇内容有未保存的修改')
   })
 
   it('只有这一句，没有自己发明的第二句', () => {

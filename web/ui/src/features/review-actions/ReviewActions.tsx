@@ -9,6 +9,7 @@ import type { DecisionAction, DecisionForm, ReviewContext } from '@/services/rev
 import type { TaskDetail } from '@/types/domain'
 import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
 import { deploymentStore } from '@/app/deployment-store'
+import { DetailDrawers } from '@/features/diagnostics/DetailDrawers'
 
 const titles: Record<DecisionAction, string> = {
   snoozed: '稍后再审', woke: '恢复审校', skipped: '这篇不发',
@@ -20,6 +21,7 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
   detail: ReviewContext; compact?: boolean; onChanged?: (detail: TaskDetail) => void
 }) {
   const [form, setForm] = useState<DecisionForm | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   useDeploymentDraft(form !== null)
   const [fresh, setFresh] = useState<TaskDetail | null>(null)
   const [refreshError, setRefreshError] = useState('')
@@ -28,13 +30,17 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
   const { message } = App.useApp()
   const context = fresh ?? detail
   const active = activeStatuses.includes(detail.status)
-  const actions: DecisionAction[] = active
+  const actions: DecisionAction[] = ('read_only' in detail && detail.read_only) ? [] : active
     ? [detail.status === 'snoozed' ? 'woke' : 'snoozed', ...(!compact ? ['export', 'handed_off'] as const : []), 'skipped']
     : detail.status === 'handed_off' && !compact ? ['export', 'handoff_link'] : []
-  if (('read_only' in detail && detail.read_only) || actions.length === 0) return null
+  const hasHistory = !compact && 'trail' in detail
+  if (actions.length === 0 && !hasHistory) return null
   const labels = { ...titles, export: detail.status === 'handed_off' ? '重新下载资源' : '下载并由我处理',
     handed_off: '我已自行处理', handoff_link: '补充发布链接' }
-  const items: MenuProps['items'] = actions.map(action => ({ key: action, label: labels[action], danger: action === 'skipped' }))
+  const items: MenuProps['items'] = [
+    ...actions.map(action => ({ key: action, label: labels[action], danger: action === 'skipped' })),
+    ...(hasHistory ? [{ key: 'history', label: '处理记录' }] : []),
+  ]
   function open(action: DecisionAction) {
     if (!deploymentStore.canStartEditing()) return
     mutation.reset(); setFresh(null); setRefreshError('')
@@ -50,9 +56,11 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
     } catch { /* 错误与恢复入口留在当前对话框，填写内容不丢。 */ }
   }
   return <span data-row-control>
-    <Dropdown menu={{ items, onClick: ({ key }) => open(key as DecisionAction) }} trigger={['click']}>
-      <Button ref={trigger} type="text" size="small" aria-label="更多处理动作" icon={<MoreOutlined />} />
+    <Dropdown menu={{ items, onClick: ({ key }) => key === 'history' ? setHistoryOpen(true) : open(key as DecisionAction) }} trigger={['click']}>
+      <Button ref={trigger} type="text" size="small" aria-label="更多处理动作" icon={<MoreOutlined />}>{compact ? null : '更多'}</Button>
     </Dropdown>
+    {hasHistory && <DetailDrawers detail={detail as TaskDetail} open={historyOpen}
+      onClose={() => setHistoryOpen(false)} onAfterClose={() => trigger.current?.focus()} />}
     <Modal open={form !== null} title={form ? titles[form.action] : ''} onCancel={close} onOk={() => void confirm()}
       afterClose={() => trigger.current?.focus()} confirmLoading={mutation.isPending}
       okText={form?.action === 'export' ? '下载并交给我' : '确认'} cancelText="取消"

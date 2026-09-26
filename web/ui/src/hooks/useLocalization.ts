@@ -11,6 +11,8 @@ import { deploymentStore } from '@/app/deployment-store'
 export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) => void, refresh: () => Promise<TaskDetail>) {
   const { message } = App.useApp()
   const [draft, setDraft] = useState<LocalizationDraft | null>(null)
+  const draftRef = useRef<LocalizationDraft | null>(null)
+  draftRef.current = draft
   const [validation, setValidation] = useState<{ signature: string; result: CheckResult } | null>(null)
   const [checking, setChecking] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -40,19 +42,23 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
     return () => { current = false; window.clearTimeout(timer) }
   }, [detail.id, signature, editing])
   const discard = () => { setDraft(null); setError(null); setValidation(null); setActive(-1) }
-  const save = async (completed?: LocalizationDraft) => {
-    if (!draft || saving) return
+  const save = async (completed?: LocalizationDraft): Promise<'saved' | 'still_dirty' | 'failed'> => {
+    if (!draft || saving) return 'still_dirty'
+    const submitted = completed ?? draft
     setSaving(true); setError(null)
     try {
-      const saved = await saveLocalization(detail, completed ?? draft)
+      const saved = await saveLocalization(detail, submitted)
+      const current = draftRef.current
+      const changedWhileSaving = !!current && JSON.stringify(editableFields(current)) !== JSON.stringify(editableFields(draft))
       apply(saved)
       // 保存只确认点击时的版本；等待响应期间的新输入仍需留在编辑区。
       setDraft(current => current && JSON.stringify(editableFields(current)) !== JSON.stringify(editableFields(draft))
         ? recoverDraft(detail, saved, current) : null)
       setValidation(null); setActive(-1)
       void message.success('本次提交已保存')
+      return changedWhileSaving ? 'still_dirty' : 'saved'
     }
-    catch (cause) { setError(cause) } finally { setSaving(false) }
+    catch (cause) { setError(cause); return 'failed' } finally { setSaving(false) }
   }
   const recover = async () => {
     setRecovering(true)
