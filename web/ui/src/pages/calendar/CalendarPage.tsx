@@ -10,7 +10,7 @@ import type { CalendarCard, CalendarPayload, Platform } from '@/types/domain'
 import { BusinessTime } from '@/components/Time'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { DisabledReason } from '@/components/DisabledReason'
-import { zonedInput, businessToday, calendarDays } from '@/lib/format'
+import { businessToday, calendarDays, formatBusinessHour, formatDate } from '@/lib/format'
 import { cx } from '@/lib/css'
 import styles from './CalendarPage.module.css'
 
@@ -52,7 +52,7 @@ export function CardDetail({ card }: { card: CalendarCard }) {
   const account = accountNames(card)
   return <div className={styles.caption}>
     <p className={styles.facts}>
-      <span>{card.at_business.slice(0, 16).replace('T', ' ')}</span>
+      <span><BusinessTime at={card.at_business} /></span>
       {account && <span>{account}</span>}
       <CardLinks card={card} />
     </p>
@@ -81,19 +81,19 @@ export function CalendarPage() {
     <div className={styles.heading}><PageTitle />{data?.refresh_available
       ? <Tooltip title="会打开发布浏览器读取后台，通常需要数十秒"><Button loading={busy} onClick={() => void refresh()}>刷新月历</Button></Tooltip>
       : <DisabledReason label="刷新月历" reason="发布日历读取条件尚未满足"><Button loading={busy} disabled>刷新月历</Button></DisabledReason>}</div>
-    <Typography.Text type="secondary">{data?.month_ui} · 数据截至 <BusinessTime at={observedAt ? zonedInput(observedAt) : null} fallback="尚未读取" />{data?.stale && <Tag>数据可能已过期</Tag>}</Typography.Text>
+    <Typography.Text type="secondary">{data?.month_ui} · 数据截至 <BusinessTime at={observedAt} fallback="尚未读取" />{data?.stale && <Tag>数据可能已过期</Tag>}</Typography.Text>
     {(failed || query.error || data?.error) && <Alert type="warning" title="本次月历未完整更新" description={data?.error || '读取失败，已保留此前完整数据。'} />}
     <Spin spinning={busy || query.isPending}>
       {show && data ? <div className={styles.grid}>
         {['周一','周二','周三','周四','周五','周六','周日'].map(day => <div key={day} className={styles.weekday}>{day}</div>)}
         {calendarDays(data.display_start, data.display_end_exclusive).map((day, index) => <div key={day ?? `pad-${index}`} className={cx(styles.day, day === today && styles.today, day != null && day.slice(0, 7) !== data.month_ui && styles.outside)} {...(day ? { 'data-day': day } : {})} {...(day === today ? { 'data-today': '' } : {})}>
           {day && <><div className={styles.date}>{day.slice(5).replace('-', '/')} {day === today && <span className={styles.todayMark}>今天</span>}</div>
-            {visibleCards.filter(card => card.at_business.slice(0, 10) === day).map((card, i) => <Popover key={`${card.card_sha256}-${i}`} trigger={['click']} content={<CardDetail card={card} />}>
-              <button type="button" className={styles.card}><strong>{card.at_business.slice(11, 16)}</strong>{card.channels.map(channel => <PlatformLabel key={channel} platform={channel} />)}{cardTags(card)}</button>
+            {visibleCards.filter(card => formatDate(card.at_business) === day).map((card, i) => <Popover key={`${card.card_sha256}-${i}`} trigger={['click']} content={<CardDetail card={card} />}>
+              <button type="button" className={styles.card}><strong>{formatBusinessHour(card.at_business)}</strong>{card.channels.map(channel => <PlatformLabel key={channel} platform={channel} />)}{cardTags(card)}</button>
             </Popover>)}
             {/* 本地图层：系统自己知道的，还没从后台读回来 */}
-            {data.local.filter(item => item.at_business?.slice(0, 10) === day).map(item => <Link key={item.task_id} to={`/review/${idPath(item.task_id)}?platform=${item.platform}`} className={cx(styles.card, styles.localCard)}>
-              <strong>{item.at_business?.slice(11, 16)}</strong>
+            {data.local.filter(item => formatDate(item.at_business) === day).map(item => <Link key={item.task_id} to={`/review/${idPath(item.task_id)}?platform=${item.platform}`} className={cx(styles.card, styles.localCard)}>
+              <strong>{formatBusinessHour(item.at_business)}</strong>
               <span>{item.platform === 'facebook' ? 'Facebook' : 'Instagram'}</span>
               <Tag>{({ scheduled: '本地', submitting: '待回读', content_locked: '待提交' } as const)[item.kind]}</Tag></Link>)}
           </>}

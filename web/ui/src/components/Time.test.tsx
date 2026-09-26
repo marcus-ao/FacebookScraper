@@ -8,26 +8,27 @@ import { BusinessTime, ShanghaiTime } from './Time'
 const text = (node: React.ReactElement) =>
   renderToStaticMarkup(node).replace(/<[^>]+>/g, '').trim()
 
-describe('BusinessTime：排期时刻不被本地时区改写', () => {
-  it('夏令时 +02:00 的 17:00 就显示 17:00', () => {
-    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).toBe('9/13 周日 17:00')
+describe('BusinessTime：排期时刻统一按业务时钟显示', () => {
+  it('夏令时 +02:00 的 17:00 是业务时钟 23:00', () => {
+    expect(text(<BusinessTime at="2026-09-13T17:00:00+02:00" />)).toBe('9/13 周日 23:00')
   })
 
-  it('冬令时 +01:00 的 10:00 就显示 10:00', () => {
-    expect(text(<BusinessTime at="2026-01-05T10:00:00+01:00" />)).toBe('1/5 周一 10:00')
+  it('冬令时 +01:00 的 10:00 是业务时钟 17:00', () => {
+    expect(text(<BusinessTime at="2026-01-05T10:00:00+01:00" />)).toBe('1/5 周一 17:00')
   })
 
-  it('同一天里 +02:00 与 +01:00 都只看墙上时刻（DST 切换日 10/25）', () => {
-    expect(text(<BusinessTime at="2026-10-25T02:30:00+02:00" />)).toBe('10/25 周日 02:30')
-    expect(text(<BusinessTime at="2026-10-25T02:30:00+01:00" />)).toBe('10/25 周日 02:30')
+  it('夏令时重复钟点由各自偏移转换为不同瞬间', () => {
+    expect(text(<BusinessTime at="2026-10-25T02:30:00+02:00" />)).toBe('10/25 周日 08:30')
+    expect(text(<BusinessTime at="2026-10-25T02:30:00+01:00" />)).toBe('10/25 周日 09:30')
   })
 
-  it('春季切换日 3/29 同理', () => {
-    expect(text(<BusinessTime at="2026-03-29T03:30:00+02:00" />)).toBe('3/29 周日 03:30')
+  it('春季切换日也按绝对时刻转换', () => {
+    expect(text(<BusinessTime at="2026-03-29T03:30:00+02:00" />)).toBe('3/29 周日 09:30')
   })
 
-  it('UTC 字符串也按字面读，不换算', () => {
-    expect(text(<BusinessTime at="2026-09-13T17:00:00Z" />)).toBe('9/13 周日 17:00')
+  it('UTC 字符串换算，无偏移的输入保留原值', () => {
+    expect(text(<BusinessTime at="2026-09-13T17:00:00Z" />)).toBe('9/14 周一 01:00')
+    expect(text(<BusinessTime at="2026-09-25T04:30" />)).toBe('9/25 周五 04:30')
   })
 
   it('全站统一业务墙上时刻，不再附时区词', () => {
@@ -63,6 +64,10 @@ describe('ShanghaiTime：明确按 Asia/Shanghai', () => {
     expect(text(<ShanghaiTime at="2026-09-13T20:00:00Z" />)).toBe('2026/09/14 04:00')
   })
 
+  it('无偏移的业务时钟输入保持原样，不按浏览器本地时区解释', () => {
+    expect(text(<ShanghaiTime at="2026-09-25T04:30" />)).toBe('2026/09/25 04:30')
+  })
+
   it('上海没有夏令时，冬夏两个日期都是 UTC+8', () => {
     expect(text(<ShanghaiTime at="2026-01-15T00:00:00Z" />)).toBe('2026/01/15 08:00')
     expect(text(<ShanghaiTime at="2026-07-15T00:00:00Z" />)).toBe('2026/07/15 08:00')
@@ -83,10 +88,10 @@ describe('ShanghaiTime：明确按 Asia/Shanghai', () => {
   })
 })
 
-describe('两套语义不会互相污染', () => {
-  it('同一个瞬间，柏林与上海显示不同的小时', () => {
+describe('两个时间组件使用同一业务钟点', () => {
+  it('同一个绝对瞬间显示相同小时，格式可不同', () => {
     const at = '2026-09-13T17:00:00+02:00'
-    expect(text(<BusinessTime at={at} />)).toContain('17:00')
+    expect(text(<BusinessTime at={at} />)).toContain('23:00')
     expect(text(<ShanghaiTime at={at} />)).toContain('23:00')
   })
 })

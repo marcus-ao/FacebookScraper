@@ -12,6 +12,7 @@ import { ListFilters } from '@/features/post-list/ListFilters'
 import { PostTable } from '@/features/post-list/PostTable'
 import type { HistoryListItem } from '@/types/domain'
 import { idPath } from '@/services/http'
+import { formatDate } from '@/lib/format'
 import styles from '@/features/post-list/PostTable.module.css'
 
 export function HistoryPage() {
@@ -28,7 +29,7 @@ export function HistoryPage() {
   // 按键插入历史专有列，避免共用列变化后下标错位。
   const columns: TableColumnsType<HistoryListItem> = [
     { key:'date', title:'日期', width:tokens.layout.platformColumnWidth,
-      render: (_:unknown,row:HistoryListItem) => <time dateTime={row.created_at}>{row.created_at?.slice(0,10) || '—'}</time> },
+      render: (_:unknown,row:HistoryListItem) => <time dateTime={row.created_at}>{formatDate(row.created_at)}</time> },
     ...createPostColumns<HistoryListItem>({ columns:['thumbnail','summary','status','platform'],summaryHref:href }),
     { key:'account', title:'账号', width:tokens.layout.accountColumnWidth,
       render: (_:unknown,row:HistoryListItem) => <span className={styles.account} title={row.account}>

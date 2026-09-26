@@ -15,53 +15,25 @@ import {
 
 // 使用第三时区运行，避免宿主时区掩盖错误。
 
-describe('formatSchedule：业务时刻必须按字符串里带的偏移显示，不经本地时区', () => {
-  it('夏令时期间（+02:00）显示字符串里的墙上时刻', () => {
-    expect(formatSchedule('2026-07-01T10:00:00+02:00')).toBe('7/1 周三 10:00')
+describe('formatSchedule：带偏移的绝对时刻统一转换到业务时钟', () => {
+  it('Z、+02:00 与 +08:00 同一瞬间显示相同钟点', () => {
+    for (const iso of ['2026-09-24T14:30:00Z', '2026-09-24T16:30:00+02:00', '2026-09-24T22:30:00+08:00']) {
+      expect(formatSchedule(iso)).toBe('9/24 周四 22:30')
+    }
   })
 
-  it('本地时区换算会给出别的小时 —— 证明上面那条不是巧合', () => {
-    const localHour = new Date('2026-07-01T10:00:00+02:00').getHours()
-    expect(localHour).not.toBe(10)
-    expect(formatSchedule('2026-07-01T10:00:00+02:00')).toContain('10:00')
+  it('跨日时日期和星期一并转换', () => {
+    expect(formatSchedule('2026-09-24T20:30:00Z')).toBe('9/25 周五 04:30')
+    expect(formatSchedule('2026-12-02T17:30:00+01:00')).toBe('12/3 周四 00:30')
   })
 
-  it('冬令时期间（+01:00）同样按字符串显示', () => {
-    expect(formatSchedule('2026-12-02T17:30:00+01:00')).toBe('12/2 周三 17:30')
+  it('有夏令时偏移的两个不同瞬间显示为不同业务钟点', () => {
+    expect(formatSchedule('2026-10-25T02:30:00+02:00')).toBe('10/25 周日 08:30')
+    expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 09:30')
   })
 
-  it('UTC 后缀的字符串也按字面时分显示（不做偏移换算）', () => {
-    expect(formatSchedule('2026-07-01T10:00:00Z')).toBe('7/1 周三 10:00')
-  })
-
-  describe('夏令时边界', () => {
-    it('切换日当天（3/29，+02:00）', () => {
-      expect(formatSchedule('2026-03-29T03:00:00+02:00')).toBe('3/29 周日 03:00')
-    })
-
-    it('切换日当天（10/25，+01:00）', () => {
-      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30')
-    })
-
-    it('同一天里 +02:00 与 +01:00 都只看墙上时刻 —— 这正是不能换算的原因', () => {
-      // 柏林重复时刻由后端消歧，前端显示返回的偏移。
-      expect(formatSchedule('2026-10-25T02:30:00+02:00')).toBe('10/25 周日 02:30')
-      expect(formatSchedule('2026-10-25T02:30:00+01:00')).toBe('10/25 周日 02:30')
-    })
-  })
-
-  it('星期用 UTC 算，不受本地时区影响', () => {
-    expect(formatSchedule('2026-09-13T17:00:00+02:00')).toBe('9/13 周日 17:00')
-    expect(formatSchedule('2026-09-13T00:05:00+02:00')).toContain('周日')
-    expect(formatSchedule('2026-09-13T23:55:00+02:00')).toContain('周日')
-  })
-
-  it('月与日不补零（9/1 不是 09/01）', () => {
-    expect(formatSchedule('2026-09-01T08:00:00+02:00')).toBe('9/1 周二 08:00')
-  })
-
-  it('时与分补零', () => {
-    expect(formatSchedule('2026-09-01T08:05:00+02:00')).toContain('08:05')
+  it('无偏移的 datetime-local 保留用户输入的墙上时刻', () => {
+    expect(formatSchedule('2026-09-25T04:30')).toBe('9/25 周五 04:30')
   })
 
   it('null / 空 / 格式不对时返回 null，由调用方显示「暂无建议时刻」', () => {
@@ -106,8 +78,9 @@ describe('formatTrailTime：操作记录时刻', () => {
 })
 
 describe('formatDate', () => {
-  it('只取前十位', () => {
-    expect(formatDate('2026-07-01T14:00:34Z')).toBe('2026-07-01')
+  it('来源时间跨业务日期时按实际时刻换日，纯日期保持不变', () => {
+    expect(formatDate('2026-09-24T20:30:00Z')).toBe('2026-09-25')
+    expect(formatDate('2026-09-25')).toBe('2026-09-25')
   })
 
   it('空值给破折号', () => {
@@ -147,8 +120,10 @@ describe('文案表', () => {
     expect(PLATFORM_LABEL).toEqual({ facebook: 'Facebook', instagram: 'Instagram' })
     expect(Object.keys(AUTHOR_KIND_LABEL)).toHaveLength(3)
     expect(Object.keys(RISK_KIND_LABEL)).toHaveLength(3)
-    expect(Object.keys(ACTION_LABEL)).toHaveLength(13)
+    expect(Object.keys(ACTION_LABEL)).toHaveLength(15)
     expect(ACTION_LABEL.text_edited).toBe('修改了德语译文')
+    expect(ACTION_LABEL.body_reviewed).toBe('更新了正文核对结果')
+    expect(ACTION_LABEL.image_reviewed).toBe('更新了图片核对结果')
   })
 })
 

@@ -37,10 +37,17 @@ export function calendarDays(start: string, end: string): (string | null)[] {
   return days
 }
 
-// 显示字符串携带的业务墙上时刻（当前是北京），不转换为浏览器本地时区。
+/** 带偏移值代表绝对时刻；无偏移值是页面输入的业务墙上时刻。 */
+function businessWall(iso: string | null | undefined): string {
+  if (!iso) return ''
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(iso)) return zonedInput(iso, BUSINESS_TIMEZONE)
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(iso)) return ''
+  return Number.isNaN(Date.parse(`${iso.slice(0, 16)}:00Z`)) ? '' : iso.slice(0, 16)
+}
+
+// 日期、星期和钟点都取同一业务墙上时刻，不使用浏览器本地时区。
 export function formatSchedule(iso: string | null | undefined): string | null {
-  if (!iso) return null
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso)
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(businessWall(iso))
   if (!match) return null
   const [, y, mo, d, h, mi] = match
   if (y === undefined || mo === undefined || d === undefined || h === undefined || mi === undefined) {
@@ -52,22 +59,17 @@ export function formatSchedule(iso: string | null | undefined): string | null {
 
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return String(iso).slice(0, 10)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
+  return businessWall(iso).slice(0, 10) || '—'
+}
+
+export function formatBusinessHour(iso: string | null | undefined): string {
+  return businessWall(iso).slice(11, 16) || '—'
 }
 
 export function formatTrailTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const value = new Date(iso)
-  if (Number.isNaN(value.getTime())) return ''
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(value)
+  const wall = businessWall(iso)
+  return wall ? `${wall.slice(0, 10).replaceAll('-', '/')} ${wall.slice(11, 16)}` : ''
 }
 
 export const PLATFORM_LABEL: Record<Platform, string> = {

@@ -8,7 +8,7 @@ interface TimeProps {
   readonly fallback?: string
 }
 
-/** 排期按字符串携带的业务墙上时刻显示，不转为宿主时区。 */
+/** 带偏移的排期按同一业务时钟显示；无偏移的输入保持原墙上时刻。 */
 export function BusinessTime({ at, fallback = '—' }: TimeProps) {
   const text = formatSchedule(at)
   if (text === null) {

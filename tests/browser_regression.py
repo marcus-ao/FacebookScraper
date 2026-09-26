@@ -122,7 +122,7 @@ def stage_e(page, ui):
     assert parse_qs(last['query'])=={'scope':['history'],**params}
     # 隔离响应覆盖三类无图行，并用真实 404 验证 React 的 onError 回退。
     payload = ui.fx.client.get('/api/tasks?scope=history&limit=50').json()
-    image_row = next(row for row in payload['tasks'] if row['thumbnail_url'])
+    image_row = dict(next(row for row in payload['tasks'] if row['thumbnail_url']), created_at='2026-09-24T20:30:00Z')
     payload['tasks'] = [image_row] + [
         dict(image_row, id='in_fixture/' + kind, thumbnail_url='', preview_kind=kind,
              image_count=1 if kind == 'image_pending' else 0, text_de_excerpt=label)
@@ -131,6 +131,7 @@ def stage_e(page, ui):
     payload['summary']['total'] = 4
     ui.overrides[('GET', '/api/tasks')] = (200, payload)
     page.goto(ui.fx.base_url + '/history', wait_until='networkidle')
+    expect(page.locator(f'tr[data-task-id="{image_row["id"]}"] td').first).to_have_text('2026-09-25')
     for label in ('视频帖', '纯文字帖', '图片待补齐'):
         expect(page.get_by_role('img', name=label, exact=True)).to_have_count(1)
     page.screenshot(path=str(EVIDENCE/'history-media-placeholders.png'))
@@ -561,13 +562,13 @@ def stage_f(page, ui):
 def stage_g(page, ui):
     # 未保存守卫的载体从已下线的设置页换成详情页草稿。
     page.goto(ui.fx.base_url+'/review/facebook',wait_until='networkidle')
-    page.goto(ui.fx.base_url+'/review/'+ui.fx.fb_id,wait_until='networkidle')
+    page.locator(f'tr[data-task-id="{ui.fx.fb_id}"] a').first.click()
     page.get_by_role('button',name='编辑德语',exact=True).click()
     field=page.get_by_role('textbox',name='德语正文');field.fill('Entwurf: ungespeichert')
     assert page.evaluate("()=>{const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented}")
-    page.locator('aside').get_by_role('link',name='历史归档',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='留在本页').click()
+    page.locator('aside').get_by_role('link',name='历史归档',exact=True).click();expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='继续编辑').click()
     expect(page.get_by_role('dialog')).to_have_count(0)
-    page.evaluate('history.back()');expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='留在本页').click()
+    page.evaluate('history.back()');expect(page.get_by_role('dialog')).to_be_visible();page.get_by_role('button',name='继续编辑').click()
     expect(page.get_by_role('dialog')).to_have_count(0)
     expect(field).to_have_value('Entwurf: ungespeichert')
     return {'B20':'PASS','unsaved_guard_three_paths':True,'draft_kept':True}

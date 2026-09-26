@@ -27,12 +27,19 @@ describe('点击后的详情', () => {
   it('时刻、账号和已发布帖链接并列，正文在下面', () => {
     const text = detailText({ ...card(), accounts: { instagram: 'neakasa.global' },
       permalinks: { instagram: 'https://www.instagram.com/p/AbCdEf' } })
-    expect(text).toContain('2026-09-04 18:39')
+    expect(text).toContain('9/4 周五 18:39')
     expect(text).toContain('neakasa.global')
     expect(text).toContain('查看已发布帖子')
     expect(text).not.toContain('查看原帖')
     expect(text).toContain(card().rendered)
     expect(text).not.toContain('系统观测到的后台记录')
+  })
+
+  it('卡片明细按业务时钟显示带其他偏移的绝对时刻', () => {
+    const text = detailText({ ...card(), at_business: '2026-09-24T16:30:00+02:00' })
+    expect(text).toContain('9/24 周四 22:30')
+    expect(text).not.toContain('上海')
+    expect(text).not.toContain('柏林')
   })
 
   it('两个渠道各给一条已发布帖子链接', () => {

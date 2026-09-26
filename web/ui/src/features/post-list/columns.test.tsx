@@ -154,7 +154,7 @@ describe('时刻列按各自的时区语义', () => {
   it('队列用业务时刻', () => {
     const markup = cell(reviewColumns(), 'time', reviewRow)
     expect(markup).toContain('data-zone="business"')
-    expect(markup).toContain('17:00')
+    expect(markup).toContain('23:00')
   })
 
   it('历史用操作记录时刻', () => {
