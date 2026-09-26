@@ -62,10 +62,11 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const previewMissing = locked && !!options.data && !options.data.preview
   const reason = approvalDisabledReason({ editing, busy, fetching: options.isFetching, eligible, status: detail.status,
     optionsFailed: options.isError, available: !!options.data?.available, when })
+    || (operation?.status === 'uncertain' ? '请先核对已有提交结果' : '')
     || (previewMissing ? (options.data?.reason || '冻结内容无法读取，请重新确认') : '')
 
   const lock = async () => {
-    if (!options.data?.fingerprint || busy) return
+    if (!options.data?.fingerprint || !lockable || editing || busy) return
     setBusy(true); setError(null)
     try {
       await lockContent(detail.id, { source_text_sha256: detail.text.source_text_sha256,

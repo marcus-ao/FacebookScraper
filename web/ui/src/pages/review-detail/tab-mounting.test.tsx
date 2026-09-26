@@ -71,6 +71,14 @@ describe('详情步骤按需挂载', () => {
     expect(renderDetail('text', undefined, confirmed)).toContain('当前正文已确认')
   })
 
+  it('最终步骤给可回跳的审核事项，未满足冻结条件时不显示灰色冻结按钮', () => {
+    const markup = renderDetail('final')
+    expect(markup).toContain('发布前审核情况')
+    expect(markup).toContain('去处理')
+    expect(markup).toContain('查看完整发布文案')
+    expect(markup).not.toContain('aria-label="编辑确认无误"')
+  })
+
   it('归档、索引和云盘事实不进入业务审核画布', () => {
     const markup = renderDetail('text', {
       classified_by: 'manual', account_dir: 'fa_neakasaofficial', folder: 'posts/2026-09/S10/post',

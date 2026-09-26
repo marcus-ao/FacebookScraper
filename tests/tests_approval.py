@@ -30,6 +30,7 @@ class ApprovalTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
         self.account, self.source = self.fixture.account, self.fixture.source
         self.fixture.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        self.fixture.confirm_ready_localization()
         c = verified_probe_config(config.cfg(), self.fixture.root / 'state')
         patch.object(config, '_cfg', c).start()
         record = {'schema_version': 1, 'capture_origin': 'playwright_live', 'channels': {
@@ -41,8 +42,11 @@ class ApprovalTests(unittest.TestCase):
         fixture_activate(engine, c.state_dir, g8_verified=True, now=NOW - timedelta(days=2))
         self.post = compose.compose_post(self.source['post_id'], TARGET, archive_root=config.cfg().archive_dir,
             account=self.account.name, now=NOW, require_verified_ui_constraints=True, warning_sink=None)
+        current_detail = self.fixture.client.get(self.fixture.url).json()
         self.params = {'scheduled_at': TARGET, 'source_text_sha256': translated.source_text_sha256(self.source['text']),
-            'human_revision': None, 'review_revision': None, 'content_fingerprint': engine._publish_fingerprint(self.post),
+            'human_revision': current_detail['text']['human_revision'],
+            'review_revision': current_detail['review']['revision'],
+            'content_fingerprint': engine._publish_fingerprint(self.post),
             'publish_target': manual_run.load(self.source['platform']).target(), 'now': NOW}
         self.inventory = bs.RemoteSlotInventory((), 'America/Los_Angeles', date(2026, 9, 1), date(2026, 9, 30),
                                                 cards=(), cards_loaded=True)
@@ -90,7 +94,7 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaisesRegex(review.ReviewConflict, '确认'):
             approval.lock(self.account, self.source, now=NOW,
                 source_text_sha256=self.params['source_text_sha256'],
-                review_revision=None, content_fingerprint=self.params['content_fingerprint'])
+                review_revision=self.params['review_revision'], content_fingerprint=self.params['content_fingerprint'])
         self.assertFalse((config.cfg().state_dir / 'publish_snapshots').exists())
 
     def test_legacy_frozen_snapshot_requires_unlock_and_new_decisions_before_submit(self):
@@ -98,7 +102,7 @@ class ApprovalTests(unittest.TestCase):
         _, _, snapshot = snapshots.freeze(self.post, self.source, scheduled_at=None,
                                            expected_fingerprint=self.params['content_fingerprint'])
         locked = review.transition(self.account, self.source, 'content_locked',
-            expected_revision=None, expected_source_sha256=self.params['source_text_sha256'],
+            expected_revision=self.params['review_revision'], expected_source_sha256=self.params['source_text_sha256'],
             snapshot_id=snapshot.name, now=NOW)
         metadata, _, files, _ = snapshots.load(snapshot.name)
         self.assertEqual(metadata['status'], 'frozen')

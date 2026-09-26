@@ -24,7 +24,6 @@ import { ContentJobs } from '@/features/content-jobs/ContentJobs'
 import { DetailDrawers } from '@/features/diagnostics/DetailDrawers'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
-import { CopyButton } from '@/components/CopyButton'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
@@ -74,6 +73,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   opened.current.add(tab)
   const steps = deriveSteps(detail)
   const todos = steps.flatMap(step => step.todos)
+  const finished = ['scheduled', 'approved', 'skipped', 'handed_off'].includes(detail.status)
 
   const adoptCandidate = (job: ContentJob) => {
     const adopt = () => {
@@ -129,7 +129,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       {listLoaded && index < 0 && <p className={styles.filterNotice}>这篇不在当前筛选结果中。<Link to={back}>返回原筛选列表</Link></p>}
       {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} description={loc.error instanceof Error ? loc.error.message : undefined} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
-      <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />
+      {tab !== 'final' && !finished && <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />}
       <ReviewStepNav steps={steps} active={tab} onChange={changeTab} />
       <ReviewStepPanel id="text" active={tab} opened>
         <div ref={setInitialContainer} />
@@ -163,14 +163,15 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       </ReviewStepPanel>
       <ReviewStepPanel id="final" active={tab} opened={opened.current.has('final')}>
         {bioTargetWarning(loc.shown) && <Alert type="warning" showIcon title={bioTargetWarning(loc.shown)} />}
-        {todos.length > 0 && !approval.locked && <p className={styles.todoEmpty}>先处理上方待办，再核对最终发布内容。</p>}
+        {!finished && <section className={styles.finalSummary} aria-label="发布前审核情况"><h2>发布前审核情况</h2>
+          <ul>{steps.filter(step => step.id !== 'final').map(step => <li key={step.id}>
+            <span>{step.label}</span><span>{step.status === 'complete' ? '已完成' : step.status === 'not_required' ? '无需审核' : step.todos[0]?.text ?? '待核对'}</span>
+            <button type="button" onClick={() => changeTab(step.id)}>{step.status === 'pending' ? '去处理' : '查看'} ↗</button>
+          </li>)}</ul>
+          {approval.locked && <p>内容已冻结，请在下方选择发布时间。</p>}
+        </section>}
+        <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />
         {!detail.read_only && !loc.editing && !loc.saving && (approval.lockable || approval.locked) && <div className={styles.stepActions}><ApprovalAction controller={approval} /></div>}
-        {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />}
-        <div className={styles.counter}>
-          <span>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</span>
-          <CopyButton text={loc.caption} label="复制发布文案"
-            {...(loc.approximate ? { disabledReason: '正在校验，请稍候取准确文案' } : {})} />
-        </div>
         <DetailDrawers detail={detail} />
       </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
