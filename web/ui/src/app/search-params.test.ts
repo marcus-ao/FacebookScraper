@@ -16,6 +16,7 @@ import {
   parseHistoryListQuery,
   parseQueue,
   parseReviewListQuery,
+  parseDetailStep,
   pickContext,
 } from './search-params'
 import type { DisplayStatus } from '@/types/domain'
@@ -132,6 +133,13 @@ describe('详情 URL 携带来源列表上下文', () => {
     const parsed = new URLSearchParams(search)
     expect(parsed.get('tab')).toBe('images')
     expect(parsed.get('queue')).toBe('processed')
+  })
+
+  it('四步深链只接受真实步骤，最终确认可以直接打开', () => {
+    expect(parseDetailStep(new URLSearchParams('tab=final'))).toBe('final')
+    expect(parseDetailStep(new URLSearchParams('tab=images'))).toBe('images')
+    expect(parseDetailStep(new URLSearchParams('tab=unknown'))).toBeNull()
+    expect(parseDetailStep(new URLSearchParams())).toBeNull()
   })
 
   it('buildListSearch 把 tab 摘掉，其余原样带回 —— 这就是「返回列表恢复筛选」', () => {

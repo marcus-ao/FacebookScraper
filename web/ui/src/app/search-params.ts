@@ -68,6 +68,13 @@ export function bucketOf(status: DisplayStatus): QueueBucket {
 export const REVIEW_CONTEXT_KEYS = ['queue', 'platform', 'month', 'tag', 'alerts'] as const
 export const HISTORY_CONTEXT_KEYS = ['platform', 'month', 'tag', 'page', 'limit'] as const
 export const DETAIL_OWN_KEYS = ['tab'] as const
+export const DETAIL_STEPS = ['text', 'images', 'localization', 'final'] as const
+export type DetailStepId = (typeof DETAIL_STEPS)[number]
+
+export function parseDetailStep(params: URLSearchParams): DetailStepId | null {
+  const value = params.get('tab')
+  return DETAIL_STEPS.find(step => step === value) ?? null
+}
 
 export type ReviewContextKey = (typeof REVIEW_CONTEXT_KEYS)[number]
 export type HistoryContextKey = (typeof HISTORY_CONTEXT_KEYS)[number]

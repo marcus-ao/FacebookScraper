@@ -11,8 +11,9 @@ import { antdComponents, antdToken } from '@/app/theme'
 import { taskKey } from '@/hooks/useTasks'
 import type { TaskDetail } from '@/types/domain'
 import detailFixture from '@/types/__fixtures__/task-detail-active.json'
+import { deriveSteps } from './step-model'
+import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from './ReviewShellParts'
 
-/** SSR 检查首次挂载；打开后保留内容由浏览器测试覆盖。 */
 const detail = detailFixture as unknown as TaskDetail
 const [account, postId] = detail.id.split('/') as [string, string]
 
@@ -24,16 +25,9 @@ function renderDetail(tab: string, storage?: Record<string, unknown>): string {
     initialEntries: [`/review/${account}/${encodeURIComponent(postId)}?tab=${tab}`],
   })
   return renderToStaticMarkup(
-    <ConfigProvider
-      locale={zhCN}
-      button={{ autoInsertSpace: false }}
-      theme={{ token: antdToken, components: antdComponents, hashed: false }}
-    >
-      <QueryClientProvider client={client}>
-        <AntdApp>
-          <RouterProvider router={router} />
-        </AntdApp>
-      </QueryClientProvider>
+    <ConfigProvider locale={zhCN} button={{ autoInsertSpace: false }}
+      theme={{ token: antdToken, components: antdComponents, hashed: false }}>
+      <QueryClientProvider client={client}><AntdApp><RouterProvider router={router} /></AntdApp></QueryClientProvider>
     </ConfigProvider>,
   )
 }
@@ -41,7 +35,7 @@ function renderDetail(tab: string, storage?: Record<string, unknown>): string {
 const IMAGE_WORKSPACE = 'aria-label="图片对照"'
 const TAG_WORKSPACE = 'aria-label="话题标签选择"'
 
-describe('详情标签页按需挂载', () => {
+describe('详情步骤按需挂载', () => {
   it('只看正文时不挂载图片工作区，也就不会提前请求原图/德语图', () => {
     const markup = renderDetail('text')
     expect(markup).toContain('aria-label="正文对照"')
@@ -62,7 +56,14 @@ describe('详情标签页按需挂载', () => {
     expect(renderDetail('localization')).toContain(TAG_WORKSPACE)
   })
 
-  it('展示本地、索引和飞书各自的存储事实，不把待核对媒体当作完整', () => {
+  it('打开最终确认深链，不提前挂载图片和标签编辑区', () => {
+    const markup = renderDetail('final')
+    expect(markup).toContain('最终确认与排期')
+    expect(markup).not.toContain(IMAGE_WORKSPACE)
+    expect(markup).not.toContain(TAG_WORKSPACE)
+  })
+
+  it('归档、索引和云盘事实不进入业务审核画布', () => {
     const markup = renderDetail('text', {
       classified_by: 'manual', account_dir: 'fa_neakasaofficial', folder: 'posts/2026-09/S10/post',
       first_archived_at: '2026-09-14T08:20:00+00:00',
@@ -71,11 +72,42 @@ describe('详情标签页按需挂载', () => {
       feishu: { enabled: true, status: 'uncertain', counts: { pending: 0, completed: 0, uncertain: 1, blocked: 0 }, last_success_at: null, operations: [], incomplete_source: true, missing_media: [1, 2] },
       media: [],
     })
-    expect(markup).toContain('归档位置')
-    expect(markup).toContain('人工分类')
-    expect(markup).toContain('本地媒体：已保存 1 张，历史记录未提供校验证据，原帖媒体列表待核对')
-    expect(markup).toContain('展示索引：需要刷新后核对')
-    expect(markup).toContain('飞书云盘：有 1 项结果待人工核对')
-    expect(markup).toContain('源内容待补齐，缺少 2 个媒体')
+    expect(markup).not.toContain('归档位置')
+    expect(markup).not.toContain('展示索引')
+    expect(markup).not.toContain('飞书云盘')
+    expect(markup).not.toContain('源内容待补齐')
+  })
+
+  it('访问过的步骤隐藏时保留草稿节点，未访问步骤不挂载', () => {
+    expect(renderToStaticMarkup(<ReviewStepPanel id="text" active="images" opened><p>未保存草稿</p></ReviewStepPanel>))
+      .toContain('未保存草稿')
+    expect(renderToStaticMarkup(<ReviewStepPanel id="final" active="images" opened={false}><p>排期</p></ReviewStepPanel>))
+      .not.toContain('排期')
+  })
+})
+
+describe('审核页紧凑外壳', () => {
+  it('四步状态有文字说明；待办默认最多三项，展开才展示全部', () => {
+    const steps = deriveSteps(detail)
+    const nav = renderToStaticMarkup(<ReviewStepNav steps={steps} active="text" onChange={() => {}} />)
+    for (const label of ['德语正文', '逐张图片', '标签与链接', '最终确认与排期', '待处理']) expect(nav).toContain(label)
+    const todos = [...steps.flatMap(step => step.todos), { step: 'final' as const, text: '第四项' }]
+    const collapsed = renderToStaticMarkup(<ReviewTodoSummary todos={todos} expanded={false} onExpand={() => {}} onNavigate={() => {}} />)
+    const expanded = renderToStaticMarkup(<ReviewTodoSummary todos={todos} expanded onExpand={() => {}} onNavigate={() => {}} />)
+    expect(collapsed).not.toContain('第四项')
+    expect(expanded).toContain('第四项')
+  })
+
+  it('来源区显示真实作者、来源发布时间和原帖链接，不泄露归档路径或发布目标', () => {
+    const source = renderToStaticMarkup(<SourceStrip detail={{ ...detail, meta: {
+      ...detail.meta, account: 'source.account', owner: 'third.party', author_kind: 'third_party',
+      created_at: '2026-09-21T16:00:00Z', permalink: 'https://example.invalid/post',
+    } }} />)
+    expect(source).toContain('source.account')
+    expect(source).toContain('third.party')
+    expect(source).toContain('9/22')
+    expect(source).toContain('https://example.invalid/post')
+    expect(source).not.toContain('archive')
+    expect(source).not.toContain('Neakasa Deutschland')
   })
 })

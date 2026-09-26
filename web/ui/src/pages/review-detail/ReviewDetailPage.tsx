@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, App, Button, Space, Spin, Tabs, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Space, Spin, Tooltip, Typography } from 'antd'
 import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useQuery } from '@tanstack/react-query'
 import { PageTitle } from '@/app/PageTitle'
-import { buildDetailSearch, buildListSearch, parseHistoryListQuery, parseReviewListQuery } from '@/app/search-params'
+import { buildDetailSearch, buildListSearch, parseDetailStep, parseHistoryListQuery, parseReviewListQuery } from '@/app/search-params'
+import type { DetailStepId, ListSource } from '@/app/search-params'
 import { reviewPath } from '@/app/nav-model'
-import type { ListSource } from '@/app/search-params'
 import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { historyListOptions, reviewListOptions } from '@/hooks/useTasks'
 import { useLocalization } from '@/hooks/useLocalization'
@@ -29,8 +29,9 @@ import { PlatformLabel } from '@/components/PlatformLabel'
 import { StatusTag } from '@/components/StatusTag'
 import { idPath, isConflict } from '@/services/http'
 import { refinementCapabilities } from '@/services/jobs'
-import { AUTHOR_KIND_LABEL, formatDate, formatTrailTime } from '@/lib/format'
-import type { ContentJob, MirrorStatus, TaskDetail, TaskStorage } from '@/types/domain'
+import type { ContentJob, TaskDetail } from '@/types/domain'
+import { defaultStep, deriveSteps } from './step-model'
+import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from './ReviewShellParts'
 import styles from './ReviewDetailPage.module.css'
 
 export function ReviewDetailPage({ source }: { source: ListSource }) {
@@ -49,24 +50,27 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const historyFilters = parseHistoryListQuery(search)
   const history = useQuery({ ...historyListOptions(historyFilters), enabled: source === 'history' })
   const rows = source === 'review' ? filterReviewRows(review.data?.tasks ?? [], parseReviewListQuery(search)) : history.data?.tasks ?? []
+  const listLoaded = source === 'review' ? !!review.data : !!history.data
   const index = rows.findIndex(row => row.id === detail.id)
   const total = source === 'review' ? rows.length : history.data?.pagination.total ?? 0
-  const position = index < 0 ? '已移出当前筛选' : `${index + 1 + (source === 'history' ? (historyFilters.page - 1) * historyFilters.limit : 0)} / ${total}`
+  const position = !listLoaded ? '正在核对位置' : index < 0 ? '不在当前筛选' : `${index + 1 + (source === 'history' ? (historyFilters.page - 1) * historyFilters.limit : 0)} / ${total}`
   const loc = useLocalization(detail, apply, refresh)
   const approval = useApproval(detail, loc.editing || loc.saving, refresh)
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
-  const [unseen, setUnseen] = useState(Math.max(0, detail.images.length - 1))
-  // 历史版本随图片页一起用；只读查询，不触发模型也不产生费用。
+  const [todosExpanded, setTodosExpanded] = useState(false)
   const imageVersions = useQuery({
     queryKey: ['refinement-capabilities', detail.id],
     queryFn: () => refinementCapabilities(detail.id),
   })
-  const tab = ['text', 'images', 'localization'].includes(search.get('tab') ?? '') ? search.get('tab')! : 'text'
-  const changeTab = (value: string) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
-  // 标签页首次打开才挂载，之后保留结果；切换任务时由 Outlet key 重建。
-  const opened = useRef(new Set([tab]))
+  const initialStep = useRef<DetailStepId>(defaultStep(detail))
+  const tab = parseDetailStep(search) ?? initialStep.current
+  const changeTab = (value: DetailStepId) => setSearch(buildDetailSearch(search, source, { tab: value }), { replace: true })
+  const opened = useRef(new Set<DetailStepId>([tab]))
   opened.current.add(tab)
+  const steps = deriveSteps(detail)
+  const todos = steps.flatMap(step => step.todos)
+
   const adoptCandidate = (job: ContentJob) => {
     const adopt = () => {
       let body = job.body_de ?? ''
@@ -77,18 +81,19 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     if (loc.dirty) modal.confirm({ title: '采用候选将替换编辑区中的正文，继续吗？', okText: '采用候选', cancelText: '保留修改', onOk: adopt })
     else adopt()
   }
-  // 审校台按平台分了入口，返回要回到这一篇所属的那个，不能一律回 Facebook。
   const back = source === 'review'
     ? `${reviewPath(detail.platform)}?${buildListSearch(search, source)}`
     : `/${source}?${buildListSearch(search, source)}`
   useEffect(() => {
-    // 旧飞书卡片、书签和 ?task= 跳转都不带平台。这里补回去，导航选中项与面包屑才落对入口。
     if (source !== 'review' || search.get('platform') === detail.platform) return
     const next = new URLSearchParams(search)
     next.set('platform', detail.platform)
     setSearch(next, { replace: true })
   }, [source, detail.platform, search.get('platform')])
-  const adjacent = (delta: number) => { const row = rows[index + delta]; if (index >= 0 && row) void navigate(`/${source}/${idPath(row.id)}?${buildDetailSearch(search, source, { tab })}`) }
+  const adjacent = (delta: number) => {
+    const row = rows[index + delta]
+    if (listLoaded && index >= 0 && row) void navigate(`/${source}/${idPath(row.id)}?${buildDetailSearch(search, source, { tab })}`)
+  }
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const overlay = [...document.querySelectorAll<HTMLElement>('[role="dialog"], .ant-select-dropdown, .ant-dropdown')]
@@ -101,96 +106,64 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
   }, [loc.editing, loc.shownMarks.length, back, navigate])
+
   return <article className={styles.page}>
     <header className={styles.bar}>
+      <h1 className={styles.screenReaderOnly}>单篇审核</h1>
       <Space size="small"><Link to={back}>返回列表</Link><span className={styles.position}>{position}</span>
-        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '上一篇'}><Button aria-label="上一篇" icon={<LeftOutlined />} disabled={loc.editing || index <= 0} onClick={() => adjacent(-1)} /></Tooltip>
-        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '下一篇'}><Button aria-label="下一篇" icon={<RightOutlined />} disabled={loc.editing || index < 0 || index >= rows.length - 1} onClick={() => adjacent(1)} /></Tooltip></Space>
-      <Space className={styles.center ?? ''} size="small"><PlatformLabel platform={detail.platform} /><StatusTag status={detail.status} />
+        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '上一篇'}><Button aria-label="上一篇" icon={<LeftOutlined />} disabled={loc.editing || !listLoaded || index <= 0} onClick={() => adjacent(-1)} /></Tooltip>
+        <Tooltip title={loc.editing ? '请先保存或放弃修改' : '下一篇'}><Button aria-label="下一篇" icon={<RightOutlined />} disabled={loc.editing || !listLoaded || index < 0 || index >= rows.length - 1} onClick={() => adjacent(1)} /></Tooltip></Space>
+      <Space className={styles.center ?? ''} size="small"><PlatformLabel platform={detail.platform} /><span className={styles.account}>{detail.meta.account}</span><StatusTag status={detail.status} />
         {detail.text.stale && <Typography.Text type="danger">原文已变更，请复核</Typography.Text>}
-        <span className={styles.markCount}>{loc.shownMarks.filter(mark => mark.type === 'error').length} 错 · {loc.shownMarks.filter(mark => mark.type === 'warn').length} 待确认 · {loc.shownMarks.filter(mark => mark.type === 'risk').length} 注意</span>
-        {detail.images.length > 0 && <Tooltip title={unseen ? `还有 ${unseen} 张图片没查看，点击逐张核对；此提示不阻止排期` : '图片都看过了'}><Button type="text" size="small" onClick={() => changeTab('images')}>图片 {detail.images.length - unseen}/{detail.images.length}</Button></Tooltip>}
+        {!['skipped', 'handed_off', 'snoozed'].includes(detail.status) && <span className={styles.position}>步骤 {steps.filter(step => step.status === 'complete' || step.status === 'not_required').length} / 4</span>}
       </Space>
-      <Space size="small" className={styles.actions ?? ''}>{loc.editing ? <><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存</Button></> : <>
-        {canEditTask(detail) && <Button disabled={loc.saving || loc.recovering} onClick={loc.start}>编辑德语</Button>}
-        {!detail.read_only && !loc.saving && <ApprovalAction controller={approval} />}
-        {!detail.read_only && !loc.saving && <ReviewActions detail={detail} onChanged={apply} />}
-      </>}</Space>
+      <Space size="small" className={styles.actions ?? ''}>{!detail.read_only && !loc.saving && <ReviewActions detail={detail} onChanged={apply} />}</Space>
     </header>
     <div className={styles.body}>
-      <div className={styles.title}><PageTitle /><Typography.Text type="secondary">{detail.read_only ? '冻结账号的历史归档 · 仅供查阅' : '对照原文，完成这篇内容的人工审核'}</Typography.Text></div>
-      {detail.read_only && <div className={styles.source}><span>作者：{AUTHOR_KIND_LABEL[detail.meta.author_kind]} {detail.meta.owner}</span><span>原帖发布：{formatDate(detail.meta.created_at)}</span>{detail.meta.permalink && <a href={detail.meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}</div>}
-      {detail.storage && <StorageFacts storage={detail.storage} />}
-      <div ref={setInitialContainer} />
+      <SourceStrip detail={detail} />
+      <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
+      {listLoaded && index < 0 && <p className={styles.filterNotice}>这篇不在当前筛选结果中。<Link to={back}>返回原筛选列表</Link></p>}
       {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} description={loc.error instanceof Error ? loc.error.message : undefined} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
-      <Tabs activeKey={tab} onChange={changeTab} items={[{ key: 'text', label: '正文对照' }, { key: 'images', label: `图片 ${detail.images.length}` }, { key: 'localization', label: '话题标签与链接' }]} />
-      <div hidden={tab !== 'text'}><TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
-        active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
-        onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
+      <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />
+      <ReviewStepNav steps={steps} active={tab} onChange={changeTab} />
+      <ReviewStepPanel id="text" active={tab} opened>
+        <div ref={setInitialContainer} />
+        <TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
+          active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
+          onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
         <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
-          onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} /></div>
-      {opened.current.has('localization') && <div hidden={tab !== 'localization'}><LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} saving={loc.saving || loc.recovering} onChange={loc.setDraft} onConfirm={next => void loc.confirm(next)} onInsert={index => {
-        changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
-      }} /></div>}
-      {opened.current.has('images') && <div hidden={tab !== 'images'}><ImageWorkspace key={detail.id} images={detail.images}
-        detail={detail} versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing || loc.saving}
-        maxImageCount={imageVersions.data?.max_image_count ?? null} imageModel={imageVersions.data?.image_model ?? ''}
-        onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={setUnseen} /></div>}
-      <div className={styles.counter}>
-        <span>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</span>
-        <CopyButton text={loc.caption} label="复制发布文案"
-          {...(loc.approximate ? { disabledReason: '正在校验，请稍候取准确文案' } : {})} />
-      </div>
+          onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} />
+        {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate} initialContainer={initialContainer} />}
+        {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button onClick={loc.start}>编辑德语</Button></div>}
+      </ReviewStepPanel>
+      <ReviewStepPanel id="images" active={tab} opened={opened.current.has('images')}>
+        <ImageWorkspace key={detail.id} images={detail.images} detail={detail}
+          versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing || loc.saving}
+          maxImageCount={imageVersions.data?.max_image_count ?? null} imageModel={imageVersions.data?.image_model ?? ''}
+          onChanged={async () => { await refresh(); await imageVersions.refetch() }} onProgress={() => {}} />
+      </ReviewStepPanel>
+      <ReviewStepPanel id="localization" active={tab} opened={opened.current.has('localization')}>
+        <LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} saving={loc.saving || loc.recovering}
+          onChange={loc.setDraft} onConfirm={next => void loc.confirm(next)} onInsert={index => {
+            changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
+          }} />
+        {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button onClick={loc.start}>编辑标签与链接</Button></div>}
+      </ReviewStepPanel>
+      <ReviewStepPanel id="final" active={tab} opened={opened.current.has('final')}>
+        {todos.length > 0 && !approval.locked && <p className={styles.todoEmpty}>先处理上方待办，再核对最终发布内容。</p>}
+        {!detail.read_only && !loc.editing && !loc.saving && (approval.lockable || approval.locked) && <div className={styles.stepActions}><ApprovalAction controller={approval} /></div>}
+        {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />}
+        <div className={styles.counter}>
+          <span>发布文案 {loc.approximate ? '约 ' : ''}{loc.count}{detail.platform === 'instagram' ? ' / 2,200' : ''} 字符（含话题标签与链接或引导话术）</span>
+          <CopyButton text={loc.caption} label="复制发布文案"
+            {...(loc.approximate ? { disabledReason: '正在校验，请稍候取准确文案' } : {})} />
+        </div>
+        <DetailDrawers detail={detail} />
+      </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
-      <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
-      {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />}
-      {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate} initialContainer={initialContainer} />}
-      <DetailDrawers detail={detail} />
+      {loc.editing && <div className={styles.stepActions}><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存修改</Button></div>}
     </div>
   </article>
-}
-
-function StorageFacts({ storage }: { storage: TaskStorage }) {
-  return <section className={styles.storage} aria-label="归档存储情况">
-    <span>归档位置：{storage.account_dir}{storage.folder ? ` / ${storage.folder}` : ''}</span>
-    <span>{({ auto: '自动分类', manual: '人工分类', legacy: '历史记录，分类来源未知' } as const)[storage.classified_by]}</span>
-    {storage.first_archived_at && <span>首次归档：{formatTrailTime(storage.first_archived_at)}</span>}
-    <span>{localStorageCopy(storage)}</span><span>{databaseCopy(storage)}</span><span>{feishuCopy(storage.feishu)}</span>
-  </section>
-}
-
-function localStorageCopy(storage: TaskStorage): string {
-  const count = storage.local.verified_images === undefined
-    ? `已保存 ${storage.local.saved_images} 张，历史记录未提供校验证据`
-    : `已保存并校验 ${storage.local.verified_images} / ${storage.local.source_media_count ?? '总数待确认'} 张`
-  if (storage.local.source_media_complete !== true) return `本地媒体：${count}，原帖媒体列表待核对`
-  if (storage.local.status === 'complete') return `本地媒体：${count}，文件完整`
-  if (storage.local.status === 'partial') return `本地媒体：${count}，仍有待补齐内容`
-  if (storage.local.status === 'corrupt') return `本地媒体：${count}，发现损坏文件，请人工核对`
-  return `本地媒体：${count}，状态待核对`
-}
-
-function databaseCopy(storage: TaskStorage): string {
-  if (storage.database.status === 'unbuilt') return '展示索引：尚未建立'
-  if (storage.database.status === 'stale') return '展示索引：需要刷新后核对'
-  if (storage.database.status === 'verified') return `展示索引：已于 ${formatTrailTime(storage.database.verified_at)} 核对`
-  return '展示索引：状态待核对'
-}
-
-function feishuCopy(feishu: MirrorStatus): string {
-  let message = '飞书云盘：状态待核对'
-  if (feishu.status === 'disabled') message = '飞书云盘：未启用'
-  else if (feishu.status === 'pending') message = `飞书云盘：有 ${feishu.counts.pending} 项等待同步`
-  else if (feishu.status === 'uncertain') message = `飞书云盘：有 ${feishu.counts.uncertain} 项结果待人工核对`
-  else if (feishu.status === 'blocked') message = `飞书云盘：有 ${feishu.counts.blocked} 项已暂停，请由维护人员核对`
-  else if (feishu.status === 'completed') message = '飞书云盘：本地记录已有完成项，未再次向云端确认'
-  else if (feishu.status === 'idle') message = '飞书云盘：尚无待同步内容'
-
-  const details = [
-    feishu.incomplete_source ? '源内容待补齐' : '',
-    feishu.missing_media?.length ? `缺少 ${feishu.missing_media.length} 个媒体` : '',
-  ].filter(Boolean).join('，')
-  return details ? `${message}；${details}` : message
 }
