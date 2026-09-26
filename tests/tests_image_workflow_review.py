@@ -100,6 +100,25 @@ class ImageWorkflowReviewTests(unittest.TestCase):
         self.assertTrue(second["images"][0]["replaced_at"])
         self.assertTrue(second["images"][0]["warnings"])
 
+    def test_upload_requires_new_confirmation_of_selected_image(self):
+        self.fx.write_generated_image(self.text)
+        self.assertEqual(self.fx.confirm_content('images/0').status_code, 200)
+        uploaded = self.fx.upload()
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        self.assertFalse(uploaded.json()['content_review']['images'][0]['confirmed'])
+        self.assertTrue(uploaded.json()['images'][0]['manual'])
+
+    def test_adopting_another_version_requires_new_image_confirmation(self):
+        self.fx.write_generated_image(self.text)
+        self.fx.write_refined_image(self.text, 'f' * 32)
+        self.assertEqual(self.fx.confirm_content('images/0').status_code, 200)
+        old_version = self.fx.versions()[0]['out_path']
+        selected = self.fx.select(old_version)
+        self.assertEqual(selected.status_code, 200, selected.text)
+        current = self.fx.client.get(self.fx.url).json()
+        self.assertFalse(current['content_review']['images'][0]['confirmed'])
+        self.assertTrue(current['images'][0]['ready'])
+
     def test_upload_of_a_paid_version_is_still_a_manual_choice(self):
         first = self.fx.write_generated_image(self.text)
         self.fx.write_refined_image(self.text, "f" * 32)
@@ -108,6 +127,7 @@ class ImageWorkflowReviewTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertTrue(result.json()["images"][0]["manual"])
         self.assertEqual(self.fx.client.get(result.json()["images"][0]["de_url"]).content, first)
+        self.fx.confirm_ready_localization()
         from publish import compose
         post = compose.compose_post(self.fx.post_id, datetime.now(timezone.utc),
             archive_root=cfg().archive_dir, account=self.account.name, warning_sink=None)

@@ -22,11 +22,17 @@ const IMAGE_PRESETS: readonly { readonly text: string; readonly why: string }[] 
   { text: '保持原图不动，只把 CTA 按钮上的文字换成德语。', why: '限定改动范围，避免模型顺手重画别处' },
   { text: '型号 / 优惠码被改了，请逐字符还原成「__」。', why: '这类字符串长得像单词，最容易被当成文案翻掉' },
 ]
-export function ContentJobs({ detail, editing, refresh, onCandidate, initialContainer }: { detail: TaskDetail; editing: boolean; refresh: () => Promise<TaskDetail>; onCandidate: (job: ContentJob) => void; initialContainer: HTMLDivElement | null }) {
+export function ContentJobs({ detail, editing, refresh, onCandidate, initialContainer, imageGenerationRequest }: { detail: TaskDetail; editing: boolean; refresh: () => Promise<TaskDetail>; onCandidate: (job: ContentJob) => void; initialContainer: HTMLDivElement | null; imageGenerationRequest?: { index: number; serial: number } | null }) {
   const initial = useQuery({ queryKey: ['initial-capabilities', detail.id, detail.text.source_text_sha256, detail.review.revision], queryFn: () => initialCapabilities(detail.id) })
   const capabilities = useQuery({ queryKey: ['refinement-capabilities', detail.id], queryFn: () => refinementCapabilities(detail.id) })
   const [consent, setConsent] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null)
   const [kind, setKind] = useState<'text' | 'image'>('text'), [media, setMedia] = useState(0), [instruction, setInstruction] = useState('')
+  const [refineOpen, setRefineOpen] = useState(false)
+  useEffect(() => {
+    if (!imageGenerationRequest) return
+    setKind('image'); setMedia(imageGenerationRequest.index); setRefineOpen(true)
+    requestAnimationFrame(() => document.querySelector('[data-content-jobs]')?.scrollIntoView({ block: 'center' }))
+  }, [imageGenerationRequest?.serial])
   const [submittedInstruction, setSubmittedInstruction] = useState('')
   useDeploymentDraft(instruction !== submittedInstruction)
   const [templateOpen, setTemplateOpen] = useState(false)
@@ -85,7 +91,7 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     {!initialFlow && flow.job.kind === 'image' && flow.job.status === 'succeeded' && <p>新版图片已生成；已有人工图片时继续优先使用人工图片。</p>}
     <Collapse ghost items={[{ key: 'job', label: '查看处理依据', children: <pre className={styles.diagnostic}>{JSON.stringify(flow.job, null, 2)}</pre> }]} />
   </div>
-  return <div className={styles.wrap}>
+  return <div className={styles.wrap} data-content-jobs>
     {initialContainer && (initial.data?.third_party || !detail.localization.body_de.trim()) && createPortal(<section className={styles.initial} data-initial-translation>
       <Alert type={initial.data?.third_party ? 'warning' : 'info'} showIcon title={initial.data?.third_party ? '这篇来自第三方作者，请先查看原帖并确认可用于德国站。' : '生成德语初稿'} description={initial.data ? <Space wrap>
         {initial.data.third_party && initial.data.available && !jobRunning(first.job) && <Checkbox checked={consent} disabled={editing || busy} onChange={event => setConsent(event.target.checked)}>我已确认可以处理这篇内容，开始本篇模型处理。</Checkbox>}
@@ -96,7 +102,7 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     {currentError ? <Alert type="warning" showIcon
       title={isApiError(currentError) ? currentError.message : '本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对'}
       description={isApiError(currentError) ? '已保留输入。请按提示处理后刷新任务状态，再决定是否重新生成。' : undefined} /> : null}
-    <Collapse items={[{ key: 'refine', label: '单篇优化（可选）', children: <>
+    <Collapse activeKey={refineOpen ? ['refine'] : []} onChange={keys => setRefineOpen(keys.includes('refine'))} items={[{ key: 'refine', label: '单篇优化（可选）', children: <>
       <Space><label>优化内容 <Select aria-label="优化内容" value={kind} disabled={busy || jobRunning(next.job)} onChange={setKind} options={[{ value: 'text', label: '文案' }, { value: 'image', label: '图片' }]} /></label>
         {kind === 'image' && <Select aria-label="选择图片" value={media} disabled={busy || jobRunning(next.job)} onChange={setMedia} options={detail.images.map((_, index) => ({ value: index, label: `第 ${index + 1} 张` }))} />}
         <Button type="text" onClick={() => setTemplateOpen(true)}>查看模板（只读）</Button></Space>
