@@ -7,10 +7,12 @@ import asyncio
 import calendar
 import hashlib
 import json
+import os
 import re
 import time
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
+from uuid import uuid4
 
 from playwright.async_api import expect, TimeoutError as BrowserTimeout, Error as BrowserError
 
@@ -29,10 +31,20 @@ FILENAME = 'planner_controls.json'
 # Release a heavy insights page before opening the next; UI readiness still
 # governs clicks and no background/parallel history readers are started.
 DETAIL_RELEASE_SECONDS = 1.0
+DIAGNOSTIC_TIMEOUT = 3.0
 
 
 class BrowserReadInterrupted(bs.PublishStepError):
     """Stop a month read when its browser/page disappears; never resume submitting."""
+
+
+class CalendarTitleUnavailable(bs.PublishStepError):
+    """Missing titles can recover on a fresh read; conflicting titles cannot."""
+    def __init__(self, months, years, headings):
+        self.retryable = len(months) <= 1 and len(years) <= 1 and (not months or not years)
+        self.diagnostic = {'phase': 'grid', 'month_candidates': len(months),
+                           'year_candidates': len(years), 'headings': headings}
+        super().__init__(f'月历的月份与年份尚未唯一识别（月份候选 {len(months)}，年份候选 {len(years)}）')
 
 
 # Click 225 in the bound 2026-09-20 recording targets a time-only link; the
@@ -77,7 +89,8 @@ async def visible_month(page):
     months, years = set(), set()
     # Snapshot the visible headings together; English UI labels do not depend
     # on the Windows Python locale. Both split and combined titles are valid.
-    for raw in await page.get_by_role('heading').all_inner_texts():
+    headings = await page.get_by_role('heading').all_inner_texts()
+    for raw in headings:
         text = ' '.join(raw.split()).lower()
         parts = text.split()
         if text in bs._ENGLISH_MONTHS:
@@ -88,11 +101,11 @@ async def visible_month(page):
             months.add(bs._ENGLISH_MONTHS[parts[0]])
             years.add(int(parts[1]))
     if len(months) != 1 or len(years) != 1:
-        raise bs.PublishStepError(f'月历的月份与年份尚未唯一识别（月份候选 {len(months)}，年份候选 {len(years)}）')
+        raise CalendarTitleUnavailable(months, years, headings)
     return date(next(iter(years)), next(iter(months)), 1)
 
 
-async def ready_grid(page, *, timeout):
+async def ready_grid(page, *, timeout, phase='grid'):
     """Wait for a coherent title and complete cells, even when Meta shows no loader."""
     deadline = time.monotonic() + max(0, timeout)
     while True:
@@ -105,8 +118,10 @@ async def ready_grid(page, *, timeout):
               const label=copy.textContent.trim(); return /^\d{1,2}$/.test(label) ? Number(label) : null;
             })''')
             return month, dates_for_cells(month, numbers)
-        except bs.PublishStepError:
+        except bs.PublishStepError as exc:
             if time.monotonic() >= deadline:
+                if isinstance(exc, CalendarTitleUnavailable):
+                    exc.diagnostic['phase'] = phase
                 raise
         await asyncio.sleep(min(.1, max(0, deadline - time.monotonic())))
 
@@ -119,12 +134,12 @@ async def settled(page, timeout):
         raise bs.PublishStepError('月历仍在加载，未确认空档') from exc
 
 
-async def read_grid(page, *, timeout=30):
+async def read_grid(page, *, timeout=30, phase='grid'):
     """Sweep every day twice, waiting for loaders and newly mounted cards; read labels from DOM copies."""
     deadline = time.monotonic() + timeout
     previous = None
     while True:
-        month, dates = await ready_grid(page, timeout=deadline - time.monotonic())
+        month, dates = await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase)
         cells = page.locator(DAY_SELECTOR)
         result = []
         for index, day in enumerate(dates):
@@ -163,7 +178,7 @@ async def read_grid(page, *, timeout=30):
                     raise bs.PublishStepError('月历条目时刻无法唯一读取，保留现场待探查')
                 item['time'] = ' '.join(values[0].split())
             result.append({'date': day, 'cell_index': index, 'items': items})
-        if await ready_grid(page, timeout=deadline - time.monotonic()) != (month, dates):
+        if await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase) != (month, dates):
             raise bs.PublishStepError('读取过程中月份已变化，请重试')
         if result == previous:
             return result
@@ -491,6 +506,9 @@ async def read_scheduled_target(page, card, *, ui_timezone, observe_detail, time
 async def open_calendar(page, asset_context, *, timeout=30):
     """打开指定业务资产的月历。调用方负责提供资产，这里不读录证文件。"""
     url = selectors.CONTENT_CALENDAR_URL + '?' + urlencode(asset_context)
+    # This is the caller-owned Planner tab, never the composer or a human tab.
+    # Readiness must not depend on an inactive tab being rendered in the background.
+    await page.bring_to_front()
     await page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
     await bs.assert_page_usable(page)
     if context_ids(page.url) != asset_context:
@@ -517,7 +535,83 @@ def moments(day, clock, ui_zone, business_zone):
     return tuple(at.astimezone(business_zone) for at in ((first, second) if first.utcoffset() != second.utcoffset() else (first,)))
 
 
+async def calendar_failure_snapshot(page, error):
+    """Capture the failing tab before cleanup, without input values or URL parameters."""
+    snapshot = dict(error.diagnostic, observed_at=datetime.now(timezone.utc).isoformat())
+
+    async def collect():
+        snapshot.update(await page.evaluate('''selector => ({
+          document: {ready: document.readyState, visibility: document.visibilityState,
+                     lang: document.documentElement.lang},
+          day_cells: document.querySelectorAll(selector).length,
+          raw_heading_nodes: [...document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')]
+            .slice(0,32).map(n=>({tag:n.tagName, role:n.getAttribute('role'),
+              aria_hidden:!!n.closest('[aria-hidden="true"]'), inert:!!n.closest('[inert]'),
+              css_visible:!!(n.getClientRects().length && getComputedStyle(n).visibility==='visible'),
+              text_length:n.textContent.length}))
+        })''', DAY_SELECTOR))
+        snapshot['including_hidden'] = await page.get_by_role('heading', include_hidden=True).all_text_contents()
+        snapshot['dialogs'] = await page.get_by_role('dialog').count()
+        parsed = urlsplit(page.url)
+        snapshot['surface'] = ('calendar' if parsed.hostname == 'business.facebook.com'
+            and parsed.path.rstrip('/') == urlsplit(selectors.CONTENT_CALENDAR_URL).path.rstrip('/') else 'other')
+
+    try:
+        await asyncio.wait_for(collect(), DIAGNOSTIC_TIMEOUT)
+    except Exception as exc:
+        snapshot['capture_error'] = type(exc).__name__
+    for key in ('headings', 'including_hidden'):
+        labels = []
+        for text in snapshot.get(key, [])[:16]:
+            text = ' '.join(text.split())
+            parts = text.lower().split()
+            known = (text.lower() in {'planner', 'goals', *bs._ENGLISH_MONTHS}
+                or re.fullmatch(r'[1-9]\d{3}', text)
+                or len(parts) == 2 and parts[0] in bs._ENGLISH_MONTHS and re.fullmatch(r'[1-9]\d{3}', parts[1]))
+            labels.append(text if known else {'length': len(text), 'sha256': hashlib.sha256(text.encode()).hexdigest()})
+        snapshot[key] = labels
+    return snapshot
+
+
+def save_calendar_diagnostic(name, data):
+    """A diagnostic write failure must not replace the original browser failure."""
+    try:
+        state = cfg().state_dir
+        folder = assert_physical_direct_path(state, state / 'planner_diagnostics',
+                                             kind='directory', label='月历诊断目录')
+        path = assert_physical_direct_path(folder, folder / name, kind='file', label='月历诊断文件')
+        atomic_write_json(path, data, indent=2)
+        return str(path)
+    except Exception as exc:
+        print('月历诊断未能保存：' + type(exc).__name__)
+        return ''
+
+
 async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, detail_range=None):
+    """Read a fresh inventory; recover a missing title once without replaying a submission."""
+    data = {'schema_version': 1, 'process_id': os.getpid(), 'recovered': False, 'failures': []}
+    name = uuid4().hex + '.json'
+    try:
+        for read_index in range(2):
+            try:
+                result = await _read_once(page, ui_timezone=ui_timezone, business_timezone=business_timezone,
+                                         timeout=timeout, run=run, detail_range=detail_range)
+                data['recovered'] = bool(data['failures'])
+                return result
+            except CalendarTitleUnavailable as exc:
+                data['failures'].append(await calendar_failure_snapshot(page, exc))
+                saved = save_calendar_diagnostic(name, data)
+                if read_index or not exc.retryable:
+                    if saved:
+                        exc.args = (str(exc) + '；诊断已保存：' + saved,)
+                    raise
+                print('月历标题未就绪；仅重新读取一次同一资产的月历，不重复提交。')
+    finally:
+        if data['failures']:
+            save_calendar_diagnostic(name, data)
+
+
+async def _read_once(page, *, ui_timezone, business_timezone, timeout=30, run=None, detail_range=None):
     """Check the whole grid; optionally expand only complete UI days needed by one decision.
 
     Never select individual cards by the outer clock: aggregate channel times
@@ -538,7 +632,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, de
     else:
         await open_calendar(page, run.asset_context, timeout=timeout)
         card_spec = run.planner_card
-    rows = await read_grid(page, timeout=timeout)
+    rows = await read_grid(page, timeout=timeout, phase='before_details')
     detail_rows = rows if selected_dates is None else [row for row in rows
         if selected_dates[0] <= row['date'] <= selected_dates[1]]
     cards, occupied, diagnostics = [], {}, []
@@ -584,7 +678,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, de
                         source_content_id=variant.get('source_content_id',''),
                         permalinks=tuple(sorted((variant.get('permalinks') or {}).items()))))
     # Verify a final sweep so edits/late rendering during detail reads invalidate the inventory.
-    if rows != await read_grid(page, timeout=timeout):
+    if rows != await read_grid(page, timeout=timeout, phase='after_details'):
         raise bs.PublishStepError('核对详情期间远端月历已更新，请重新读取')
     return bs.RemoteSlotInventory(tuple(occupied[key] for key in sorted(occupied)), ui_timezone,
         detail_rows[0]['date'] if detail_rows else None, detail_rows[-1]['date'] if detail_rows else None,

@@ -1447,6 +1447,23 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 .\scripts\run_python.bat -m tools.test_offline --only tests_month_inventory --only tests_calendar_api --only tests_planner_cache --only tests_planning
 ```
 
+**若进一步出现“月份候选 0，年份候选 0”。** 新版会激活本次临时月历标签；标题仍缺失时保存失败现场，然后仅重读同一资产一次，完整重查后才继续业务。先结束旧 Web 进程，再用原启动入口启动；只 `git pull` 或刷新网页不能替换长期存活的 Python 模块。可先运行 `tests_calendar_recovery`、`tests_manual_schedule`、`tests_final_form` 的定向离线验证，再执行下面原有的只读空档检查。若正式流程再次失败，不要连续点确认；取得页面显示的诊断 JSON，或执行以下命令输出最新现场：
+
+```powershell
+@'
+from core.config import cfg
+files = list((cfg().state_dir / 'planner_diagnostics').glob('*.json'))
+if files:
+    latest = max(files, key=lambda p: p.stat().st_mtime_ns)
+    print(latest.name)
+    print(latest.read_text(encoding='utf-8'))
+else:
+    print('尚无月历标题失败诊断；请确认 Web 已重启并加载最新代码。')
+'@ | .\scripts\run_python.bat -
+```
+
+`before_details` 表示打开月历后的初始读取，`after_details` 表示读完条目后的最终复扫。`recovered=true` 只表示月历重读成功，不是帖子已经排期。该诊断不包含登录凭据、正文或 URL 参数；不需要提供整个浏览器目录。只有此次记录明确为提交前失败且没有未决/已排期回执时，才回到原稿检查冻结预览、人工确认一次；已经确认的 Facebook 两帖保持原回执。
+
 页面 `Ctrl+F5` 后点一次“刷新月历”。9 月 30 日两条已确认 Facebook 排期应各只有一张远端卡，点击后仍可进入审校详情；本地账本没有删除。原 9 月 27 日未识别的“00:00 定时”不再显示为任务，若尚无推荐的正向证据，只显示待核对数量；真正识别为推荐时段后不计帖子或占用。未知项仍不可当空档，不能只靠页面无卡保证可排。正常读取通过后再按原冻结内容确认 IG 一次；若已有成功信号/未决回执，走原记录核对，不重复提交。
 
 本次默认间隔为 1 分钟；同渠道相邻整分钟允许，同刻仍冲突，跨渠道独立。保持原 9223 窗口登录、没有发布任务运行时，再执行一次只读核对。它临时打开月历、读取这一天已有详情并关闭自己的标签，不创建或修改排期、不发送飞书消息：
