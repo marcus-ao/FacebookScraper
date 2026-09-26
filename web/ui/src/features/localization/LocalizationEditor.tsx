@@ -3,15 +3,14 @@ import { Alert, Button, Checkbox, Collapse, Input, Select, Space, Tag, Typograph
 import type { LocalizationDraft, TaskDetail } from '@/types/domain'
 import { suggestHashtags } from '@/services/hashtags'
 import type { HashtagSuggestions } from '@/services/hashtags'
-import { ShanghaiTime } from '@/components/Time'
 import { PaidActionButton } from '@/components/PaidActionButton'
+import { SourceConsentDialog, sourceConsentRequired } from '@/components/SourceConsentDialog'
 import { bioTargetWarning, canEditTask, completeTagAndLinkReview } from './model'
 import styles from './LocalizationEditor.module.css'
 
 export function parsePublicationTags(value: string) {
   return [...new Set(value.split(/[\s,，]+/u).filter(Boolean).map(tag => tag.startsWith('#') ? tag : '#' + tag))]
 }
-const metrics = { trend_score: 'Google Trends 德国组内指数', media_count: 'Instagram 全球累计帖子数', peer_uses_14d: '德国同类账号近 14 天使用次数' } as const
 const canOpen = (value: string) => /^https?:\/\/[^\s]+$/i.test(value)
 
 export function LocalizationEditor({ detail, draft, editing, saving, onChange, onComplete, onSave, onDiscard, onInsert }: { detail: TaskDetail; draft: LocalizationDraft; editing: boolean; saving: boolean; onChange: (draft: LocalizationDraft) => void; onComplete: (draft: LocalizationDraft) => void; onSave: () => void; onDiscard: () => void; onInsert: (index: number) => void }) {
@@ -22,6 +21,7 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(false)
+  const [consentOpen, setConsentOpen] = useState(false)
   useEffect(() => { setInput(chosen.join(' ')) }, [editing])
   const update = (fields: Partial<LocalizationDraft>) => onChange({ ...draft, ...fields })
   const needsTagDecision = source.length > 0 || chosen.length > 0
@@ -43,19 +43,18 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
         event.preventDefault(); const tags = chosen.filter(value => value !== tag); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false })
       }}>{tag}</Tag>) : '本篇不使用话题标签'}</Space>
       {source.some(tag => !chosen.includes(tag)) || chosen.some(tag => !source.includes(tag)) ? <div className={styles.difference}>与原帖不同：{source.filter(tag => !chosen.includes(tag)).map(tag => <Tag key={tag}>未采用 {tag}</Tag>)}{chosen.filter(tag => !source.includes(tag)).map(tag => <Tag key={tag}>新增 {tag}</Tag>)}</div> : null}
-      {source.length > 0 && !detail.read_only && detail.hashtag_suggestions_enabled !== false && <p><PaidActionButton label="生成德语标签建议" amount="按实际用量计费" {...(!editing ? { disabledReason: '请先进入编辑德语' } : {})} loading={busy} onClick={() => void suggest()} /></p>}
+      {source.length > 0 && !detail.read_only && detail.hashtag_suggestions_enabled !== false && <p><PaidActionButton label="生成德语标签建议" {...(!editing ? { disabledReason: '请先进入编辑' } : {})} loading={busy}
+        onClick={() => sourceConsentRequired(detail) ? setConsentOpen(true) : void suggest()} /></p>}
       {error && <Alert type="warning" title="建议暂时不可用，仍可手动编辑" />}
-      {suggestion && <Collapse items={[{ key: 'suggestions', label: '德语标签建议与采样依据', children: <>
-        <p>{suggestion.notice}</p><p>候选生成：<ShanghaiTime at={suggestion.generated_at} />（不是热度采样时间）</p>
-        {suggestion.sampling?.status !== 'sampled' && <p>采样未完整取得：{suggestion.sampling?.reason || '可继续按语义手动选择'}</p>}
-        {suggestion.groups.filter(group => !group.protected).map(group => <div key={group.source_tag}><h3>{group.source_tag}</h3>{group.candidates.map(candidate => <div key={candidate.tag} className={styles.candidate}>
-          <Checkbox disabled={!editing} checked={selected.includes(candidate.tag)} onChange={event => setSelected(event.target.checked ? [...new Set([...selected, candidate.tag])] : selected.filter(tag => tag !== candidate.tag))}>{candidate.tag}</Checkbox>
-          {Object.entries(metrics).map(([metric, label]) => { const signal = candidate.signals[metric]; return <div key={metric} className={styles.help}>{label}：{signal ? <>{signal.value} · {signal.geo === 'DE' ? '德国' : '全球'} · <ShanghaiTime at={signal.sampled_at} /> · {signal.source}
-            {metric === 'trend_score' && <> · 比较组 {signal.comparison_group ?? '未提供'} · 采样批次 {signal.sample_batch ?? '未提供'} · 时段 {signal.time_range ?? '未提供'}</>}
-            {!candidate.current_signals?.[metric] && '（已过期或不可跨批比较）'}</> : '未采样，不能当作 0'}</div> })}
-        </div>)}</div>)}
-        <Button disabled={!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256} onClick={() => { const tags = parsePublicationTags(selected.join(' ')); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false }) }}>采用勾选到编辑区</Button>
-        <span className={styles.help}> 勾选不会自动生效，按这个按钮才替换编辑区的标签。</span>
+      {suggestion && <Collapse items={[{ key: 'suggestions', label: '德语标签建议（可选）', children: <>
+        {suggestion.groups.filter(group => !group.protected).map(group => <div key={group.source_tag}>
+          <h3>原帖 {group.source_tag} 的德语候选</h3>
+          {group.candidates.map(candidate => <div key={candidate.tag} className={styles.candidate}>
+            <Checkbox disabled={!editing} checked={selected.includes(candidate.tag)} onChange={event => setSelected(event.target.checked ? [...new Set([...selected, candidate.tag])] : selected.filter(tag => tag !== candidate.tag))}>{candidate.tag}</Checkbox>
+          </div>)}
+        </div>)}
+        <Button disabled={!editing || suggestion.source_text_sha256 !== detail.text.source_text_sha256} onClick={() => { const tags = parsePublicationTags(selected.join(' ')); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false }) }}>采用所选建议</Button>
+        <span className={styles.help}> 建议只供参考，采用后仍可任意修改或删除标签。</span>
       </> }]} />}
       {draft.platform === 'instagram' && draft.tags.length >= 27 && <p className={styles.help}>接近 30 个上限。保存不会替你删标签，超出的部分要自己取舍。</p>}
     </section>
@@ -85,5 +84,7 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
       {canEditTask(detail) && (!decisionsSaved || editing) && <Button type="primary" disabled={saving} loading={saving}
         onClick={() => onComplete(completeTagAndLinkReview(draft))}>完成标签与链接审核</Button>}
     </div>
+    <SourceConsentDialog detail={detail} open={consentOpen} busy={busy} onClose={() => setConsentOpen(false)}
+      onAccept={() => { setConsentOpen(false); void suggest() }} />
   </div>
 }

@@ -15,13 +15,14 @@ const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
   reader.readAsDataURL(file)
 })
 
-export function ImageWorkspace({ images, detail, versions, editing, onChanged, onGenerate }: {
+export function ImageWorkspace({ images, detail, versions, editing, onChanged, onGenerate, onCurrentChange }: {
   images: readonly ImageAsset[]
   detail: TaskDetail
   versions: Readonly<Record<string, readonly ImageVersion[]>>
   editing: boolean
   onChanged: () => void | Promise<unknown>
   onGenerate?: (index: number) => void
+  onCurrentChange?: (index: number) => void
 }) {
   const [current, setCurrent] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -37,6 +38,7 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
   if (!image) return <Empty description="本篇无需审核图片" />
 
   const number = current + 1
+  const choose = (index: number) => { setCurrent(index); onCurrentChange?.(index) }
   const history = versions[String(image.index)] ?? []
   const confirmed = detail.content_review.images.find(item => item.index === image.index)?.confirmed === true
   const sourceReadable = !!image.source_image_sha256 && !sourceFailed
@@ -66,8 +68,8 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
   </div>
   return <section aria-label="图片对照">
     <div className={styles.controls}><strong>第 {number} / {images.length} 张</strong><Space>
-      {images.length > 1 && <><Button disabled={current === 0} onClick={() => setCurrent(current - 1)}>上一张</Button>
-        <Button disabled={current >= images.length - 1} onClick={() => setCurrent(current + 1)}>下一张</Button></>}
+      {images.length > 1 && <><Button disabled={current === 0} onClick={() => choose(current - 1)}>上一张</Button>
+        <Button disabled={current >= images.length - 1} onClick={() => choose(current + 1)}>下一张</Button></>}
       <Button onClick={() => setZoom(true)}>放大对照</Button>
     </Space></div>
     {!sourceReadable && <Alert type="warning" showIcon title={`第 ${number} 张原图无法读取，请核对归档素材后刷新`}
@@ -85,7 +87,7 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
       const itemConfirmed = detail.content_review.images.find(decision => decision.index === item.index)?.confirmed === true
       return <button type="button" key={item.index} className={styles.thumb}
         aria-label={`第 ${index + 1} 张（${itemConfirmed ? '已确认' : '待确认'}）`} aria-current={current === index}
-        onClick={() => setCurrent(index)}>
+        onClick={() => choose(index)}>
         {item.ready ? <img src={item.de_url || item.original_url} alt="" loading="lazy" /> : <span className={styles.thumbEmpty}>暂无图</span>}
         <span>{index + 1} · {itemConfirmed ? '已确认' : '待确认'}</span>
       </button>

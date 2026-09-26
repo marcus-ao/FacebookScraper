@@ -3,7 +3,7 @@
 .head { display: flex; align-items: center; justify-content: space-between; gap: var(--rc-space-3);
   margin-bottom: var(--rc-space-3); }
 .head h2 { display: flex; align-items: baseline; gap: var(--rc-space-2); margin: 0; }
-.meta { font-size: var(--rc-font-meta); color: var(--rc-fg-muted); margin-bottom: var(--rc-space-3); }
+.help { font-size: var(--rc-font-secondary); color: var(--rc-fg-muted); margin: 0; }
 .item { padding-block: var(--rc-space-3); border-top: 1px solid var(--rc-border); }
 .diff { margin: var(--rc-space-2) 0; overflow-wrap: anywhere; }
 /* 删改用颜色 + 删除线/下划线两重编码，不只靠颜色区分。 */

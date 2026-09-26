@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { Alert, Button, Empty, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Collapse, Empty, Space, Tag, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import type { TaskDetail, TextSuggestion, TextSuggestions } from '@/types/domain'
 import { refine, jobRunning, refinementCapabilities } from '@/services/jobs'
 import { useContentJob } from '@/hooks/useContentJob'
 import { PaidActionButton } from '@/components/PaidActionButton'
-import { ShanghaiTime } from '@/components/Time'
+import { SourceConsentDialog, sourceConsentRequired } from '@/components/SourceConsentDialog'
 import styles from './SuggestionPanel.module.css'
 
 const KIND_LABEL = { grammar: '语法', wording: '用词', register: '语域', terminology: '术语', fluency: '流畅度' } as const
@@ -35,6 +35,8 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
   const stored = detail.text_suggestions ?? null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const [open, setOpen] = useState(!!stored?.items.length)
+  const [consentOpen, setConsentOpen] = useState(false)
   const [dismissed, setDismissed] = useState<{ jobId: string; quotes: readonly string[] } | null>(null)
   const ignored = dismissed?.jobId === stored?.job_id ? dismissed?.quotes ?? [] : []
   const ignore = (quote: string) => { if (stored) setDismissed({ jobId: stored.job_id, quotes: [...ignored, quote] }) }
@@ -58,27 +60,21 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
   const current = stored ? suggestionsCurrent(stored, detail.text.source_text_sha256, body) : false
   const items = (stored?.items ?? []).filter(item => !ignored.includes(item.quote))
   return <section className={styles.wrap} aria-label="德语文案优化建议">
-    <div className={styles.head}>
-      <h2>优化建议 <Typography.Text type="secondary">模型给意见，改不改你定</Typography.Text></h2>
-      <PaidActionButton label={stored ? '重新生成建议' : '让模型挑毛病'} amount="按实际用量计费"
-        {...(reason ? { disabledReason: reason } : {})} loading={running} onClick={() => void ask()} />
-    </div>
-    {error || flow.error ? <Alert type="warning" showIcon title="暂时无法确认建议状态，文案仍保留。请刷新状态并核对费用后再决定是否重试。" /> : null}
-    {flow.job?.kind === 'suggest' && flow.job.status === 'failed' && <Alert type="warning" showIcon
-      title={flow.job.message ?? '建议未完成，请核对模型配置与费用后再决定是否重试。'} />}
-    {!stored && !flow.job && <Empty description="还没有生成过建议。这一步是可选的，不影响保存或通过。" />}
-    {stored && <>
-      <p className={styles.meta}>
-        生成于 <ShanghaiTime at={stored.generated_at} />
-        {stored.prompt_version !== stored.current_prompt_version && ` · 按旧版模板（v${stored.prompt_version}）生成`}
-      </p>
+    <Collapse activeKey={open ? ['suggestions'] : []} onChange={keys => setOpen(keys.includes('suggestions'))}
+      items={[{ key: 'suggestions', label: '文案优化建议（可选）', children: <>
+      <div className={styles.head}><p className={styles.help}>候选只供参考，采用后请保存正文。</p>
+        <PaidActionButton label={stored ? '重新生成建议' : '生成文案建议'}
+          {...(reason ? { disabledReason: reason } : {})} loading={running}
+          onClick={() => sourceConsentRequired(detail) ? setConsentOpen(true) : void ask()} />
+      </div>
+      {error || flow.error ? <Alert type="warning" showIcon title="建议状态暂不可读，请刷新核对后再决定是否重试。" /> : null}
+      {flow.job?.kind === 'suggest' && flow.job.status === 'failed' && <Alert type="warning" showIcon title="建议未完成，请核对状态后再决定是否重试。" />}
+      {!stored && !flow.job && <p className={styles.help}>暂无建议；可继续人工审校。</p>}
+      {stored && <>
       {!current && <Alert type="warning" showIcon
         title="文案或原文在这之后改过了，下面的建议可能已经对不上，「采用」已停用。需要的话重新生成。" />}
-      {stored.dropped.length > 0 && <Typography.Paragraph type="secondary">
-        另有 {stored.dropped.length} 条建议被丢弃：{[...new Set(stored.dropped)].join('；')}。
-      </Typography.Paragraph>}
       {items.length === 0
-        ? <Empty description={stored.items.length ? '这一轮的建议都处理完了。' : '模型这一轮没挑出值得改的地方。'} />
+        ? <Empty description={stored.items.length ? '这一轮的建议都处理完了。' : '这一轮没有建议；仍需人工审校。'} />
         : items.map(item => {
           const next = adopt(body, item)
           return <article key={item.quote} className={styles.item}>
@@ -97,6 +93,9 @@ export function SuggestionPanel({ detail, body, editing, onAdopt, onRefreshed }:
             </Space>
           </article>
         })}
-    </>}
+      </>}
+    </> }]} />
+    <SourceConsentDialog detail={detail} open={consentOpen} busy={busy} onClose={() => setConsentOpen(false)}
+      onAccept={() => { setConsentOpen(false); void ask() }} />
   </section>
 }

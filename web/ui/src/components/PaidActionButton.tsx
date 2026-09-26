@@ -4,12 +4,10 @@ import { cx } from '@/lib/css'
 import { DisabledReason } from './DisabledReason'
 import styles from './PaidActionButton.module.css'
 
-/** 显示费用的次要动作；禁用必须提供原因。 */
+/** 使用模型额度的次要动作；禁用必须提供原因。 */
 
 export interface PaidActionButtonProps {
   readonly label: string
-  /** 金额由调用方格式化，此处不做货币运算。 */
-  readonly amount: string
   readonly disabledReason?: string
   readonly remaining?: number
   readonly loading?: boolean
@@ -18,14 +16,13 @@ export interface PaidActionButtonProps {
 
 export function PaidActionButton({
   label,
-  amount,
   disabledReason,
   remaining,
   loading = false,
   onClick,
 }: PaidActionButtonProps) {
   const disabled = disabledReason !== undefined
-  const text = `${label} · ${amount}`
+  const text = label
 
   const button = (
     <Button

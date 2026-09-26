@@ -59,7 +59,10 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
   const [todosExpanded, setTodosExpanded] = useState(false)
+  const [imageContainer, setImageContainer] = useState<HTMLDivElement | null>(null)
+  const [imageIndex, setImageIndex] = useState(0)
   const [imageGenerationRequest, setImageGenerationRequest] = useState<{ index: number; serial: number } | null>(null)
+  useEffect(() => { setImageIndex(0); setImageGenerationRequest(null) }, [detail.id])
   const imageVersions = useQuery({
     queryKey: ['refinement-capabilities', detail.id],
     queryFn: () => refinementCapabilities(detail.id),
@@ -134,10 +137,10 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
           active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
           onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump}
           {...(canEditTask(detail) ? { onStartEdit: loc.start, onGenerateDraft: () => initialContainer?.scrollIntoView({ block: 'center' }) } : {})} />
-        <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
+        <SuggestionPanel key={detail.id} detail={detail} body={loc.shown.body_de} editing={loc.editing}
           onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} />
-        {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate}
-          initialContainer={initialContainer} imageGenerationRequest={imageGenerationRequest} />}
+        {!detail.read_only && <ContentJobs key={detail.id} detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate}
+          initialContainer={initialContainer} imageContainer={imageContainer} imageIndex={imageIndex} imageGenerationRequest={imageGenerationRequest} />}
         <BodyReviewActions canEdit={canEditTask(detail)} hasBody={!!detail.localization.body_de.trim()}
           editing={loc.editing} saving={loc.saving || loc.recovering} confirming={loc.bodyConfirming}
           confirmed={detail.content_review.body.confirmed} onEdit={loc.start} onSave={() => void loc.save()}
@@ -147,7 +150,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         <ImageWorkspace key={detail.id} images={detail.images} detail={detail}
           versions={imageVersions.data?.image_versions ?? {}} editing={loc.editing || loc.saving}
           onChanged={async () => { await refresh(); await imageVersions.refetch() }}
-          onGenerate={index => { setImageGenerationRequest(old => ({ index, serial: (old?.serial ?? 0) + 1 })); changeTab('text') }} />
+          onCurrentChange={setImageIndex}
+          onGenerate={index => { setImageGenerationRequest(old => ({ index, serial: (old?.serial ?? 0) + 1 })) }} />
+        <div ref={setImageContainer} />
       </ReviewStepPanel>
       <ReviewStepPanel id="localization" active={tab} opened={opened.current.has('localization')}>
         <LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} saving={loc.saving || loc.recovering}
