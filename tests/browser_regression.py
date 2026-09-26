@@ -84,7 +84,8 @@ def stage_c(page, ui):
 
 def stage_e(page, ui):
     page.goto(ui.fx.base_url + '/history',wait_until='networkidle')
-    expect(page.locator('tr[data-task-id]')).to_have_count(50)
+    # 63 条夹具首次重建派生索引在 Windows 上实测约 17 秒。
+    expect(page.locator('tr[data-task-id]')).to_have_count(50,timeout=30000)
     assert parse_qs(urlparse(page.url).query)['limit'] == ['50']
     measurements={}
     for width,height,target in [(1366,768,12),(1920,1080,18)]:
@@ -99,13 +100,15 @@ def stage_e(page, ui):
     page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter(has_text=re.compile('^20')).click()
     expect(page.locator('tr[data-task-id]')).to_have_count(20)
     choose(page,'筛选平台','Instagram')
+    expect(page).to_have_url(re.compile('platform=instagram'))
     choose(page,'筛选月份','2021-01')
     choose(page,'筛选分类','OfflineFixture')
+    choose(page,'筛选帖子类型','纯文字')
     expect(page.get_by_text('共 31 篇',exact=True)).to_be_visible()
     page.locator('.ant-pagination-item-2').click()
     expect(page.locator('tr[data-task-id]')).to_have_count(11)
     params=parse_qs(urlparse(page.url).query)
-    assert params=={'page':['2'],'limit':['20'],'platform':['instagram'],'month':['2021-01'],'tag':['OfflineFixture']},params
+    assert params=={'page':['2'],'limit':['20'],'platform':['instagram'],'month':['2021-01'],'tag':['OfflineFixture'],'post_type':['text_only']},params
     first=page.locator('tr[data-task-id]').first.get_attribute('data-task-id')
     # E′ 核对历史 API 无年龄上限；D 接入后同一条路径再验证完整只读详情。
     detail=ui.fx.detail(first)
@@ -120,26 +123,39 @@ def stage_e(page, ui):
     assert parse_qs(urlparse(page.url).query)['limit']==['20']
     last=[entry for entry in ui.requests if entry['path']=='/api/tasks'][-1]
     assert parse_qs(last['query'])=={'scope':['history'],**params}
-    # 隔离响应覆盖三类无图行，并用真实 404 验证 React 的 onError 回退。
+    # 隔离响应覆盖六类来源类型和无图插画，并用真实 404 验证回退不改变类型。
     payload = ui.fx.client.get('/api/tasks?scope=history&limit=50').json()
-    image_row = dict(next(row for row in payload['tasks'] if row['thumbnail_url']), created_at='2026-09-24T20:30:00Z')
+    image_row = dict(next(row for row in payload['tasks'] if row['thumbnail_url']),
+                     created_at='2026-09-24T20:30:00Z', post_type='image_video')
+    cases = [('video','video','视频'), ('text_only','text','纯文字'),
+             ('image_video','video','图片＋视频'), ('pending','text','类型待核对'),
+             ('image_only','image_pending','纯图片'),
+             ('static_image_text','image_pending','静态图文')]
     payload['tasks'] = [image_row] + [
-        dict(image_row, id='in_fixture/' + kind, thumbnail_url='', preview_kind=kind,
-             image_count=1 if kind == 'image_pending' else 0, text_de_excerpt=label)
-        for kind, label in [('video', '视频帖'), ('text', '纯文字帖'), ('image_pending', '图片待补齐')]]
-    payload['pagination'].update(total=4, page=1)
-    payload['summary']['total'] = 4
+        dict(image_row, id='in_fixture/' + post_type, thumbnail_url='', post_type=post_type,
+             preview_kind=kind, image_count=1 if kind == 'image_pending' else 0,
+             text_de_excerpt=label)
+        for post_type, kind, label in cases]
+    payload['pagination'].update(total=len(payload['tasks']), page=1)
+    payload['summary']['total'] = len(payload['tasks'])
     ui.overrides[('GET', '/api/tasks')] = (200, payload)
     page.goto(ui.fx.base_url + '/history', wait_until='networkidle')
     expect(page.locator(f'tr[data-task-id="{image_row["id"]}"] td').first).to_have_text('2026-09-25')
-    for label in ('视频帖', '纯文字帖', '图片待补齐'):
-        expect(page.get_by_role('img', name=label, exact=True)).to_have_count(1)
+    for post_type, _kind, label in cases:
+        expect(page.locator(f'tr[data-task-id="in_fixture/{post_type}"]').get_by_role('img',name=re.compile('^'+label))).to_have_count(1)
+    expect(page.locator(f'tr[data-task-id="{image_row["id"]}"] img')).to_have_count(1)
+    expect(page.locator(f'tr[data-task-id="{image_row["id"]}"] [data-play-cue]')).to_have_count(1)
+    for width,height in ((1366,768),(827,730)):
+        page.set_viewport_size({'width':width,'height':height})
+        sizes=page.locator('tr[data-task-id]').evaluate_all('(rows)=>[...new Set(rows.map(row=>Math.round(row.getBoundingClientRect().height)))]')
+        assert sizes==[48],(width,sizes)
     page.screenshot(path=str(EVIDENCE/'history-media-placeholders.png'))
     ui.overrides[('GET', urlparse(image_row['thumbnail_url']).path)] = (404, {'detail': 'missing fixture image'})
     ui.requests.clear()
     page.reload(wait_until='networkidle')
     expect(page.locator('tr[data-task-id] td:first-child img')).to_have_count(0)
-    expect(page.get_by_role('img', name='图片待补齐', exact=True)).to_have_count(2)
+    expect(page.locator(f'tr[data-task-id="{image_row["id"]}"]').get_by_role('img',name='图片＋视频，图片不可预览')).to_be_visible()
+    expect(page.locator(f'tr[data-task-id="{image_row["id"]}"] [data-artwork="image"]')).to_have_count(1)
     assert sum('/image/' in row['path'] for row in ui.requests) == 1, ui.requests
     return {'B19_list':'PASS','B19_old_detail_api':'PASS','B19_full_detail':'PASS','B24':'PASS',
             'density':measurements, 'media_placeholders':'PASS', 'thumbnail_error_fallback':'PASS'}

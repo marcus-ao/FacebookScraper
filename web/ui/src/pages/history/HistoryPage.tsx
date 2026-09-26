@@ -38,9 +38,12 @@ export function HistoryPage() {
     ...createPostColumns<HistoryListItem>({ columns:['tags'] }),
   ]
   function change(key: 'platform'|'month'|'tag'|'post_type', value: string|undefined) {
-    const next=new URLSearchParams(search)
-    if(value) next.set(key,value); else next.delete(key)
-    next.set('page','1'); setSearch(next)
+    setSearch(current => {
+      const next = new URLSearchParams(current)
+      if (value) next.set(key, value); else next.delete(key)
+      next.set('page', '1')
+      return next
+    })
   }
   return <section className={styles.page}>
     <div className={styles.head}>

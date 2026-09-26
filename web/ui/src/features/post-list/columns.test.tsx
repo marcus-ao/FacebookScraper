@@ -5,6 +5,7 @@ import type { TableColumnsType } from 'antd'
 import reviewList from '@/types/__fixtures__/review-list.json'
 import historyList from '@/types/__fixtures__/history-list.json'
 import type { TaskId } from '@/types/brands'
+import type { HistoryListItem } from '@/types/domain'
 import {
   POST_COLUMN_KEYS,
   POST_ROW_HEIGHT,
@@ -20,11 +21,7 @@ interface ReviewRow extends PostRowBase {
   readonly schedule: { at: string | null } | null
 }
 
-interface HistoryRow extends PostRowBase {
-  readonly created_at?: string
-  readonly account: string
-  readonly read_only: boolean
-}
+type HistoryRow = HistoryListItem
 
 const reviewRow: ReviewRow = {
   id: 'fa_x/1' as TaskId,
@@ -44,6 +41,7 @@ const reviewRow: ReviewRow = {
 const historyRow: HistoryRow = {
   id: 'in_y/2' as TaskId,
   platform: 'instagram',
+  month: '2026-08',
   thumbnail_url: '/api/tasks/in_y/2/image/0?variant=de',
   preview_kind: 'image',
   text_de_excerpt: '',
@@ -53,6 +51,7 @@ const historyRow: HistoryRow = {
   created_at: '2026-08-31T02:10:58Z',
   account: 'in_y',
   read_only: true,
+  post_type: 'static_image_text',
 }
 
 const reviewColumns = () =>
@@ -248,6 +247,30 @@ describe('对真实载荷跑一遍', () => {
 })
 
 describe('单元格细节', () => {
+  it.each([
+    ['video', 'video', '视频', 'video'],
+    ['text_only', 'text', '纯文字', 'text'],
+    ['image_video', 'video', '图片＋视频', 'mixed'],
+    ['pending', 'text', '类型待核对', 'pending'],
+    ['image_only', 'image_pending', '纯图片', 'image'],
+    ['static_image_text', 'image_pending', '静态图文', 'image'],
+  ] as const)('历史 %s 无真实缩略图时有独立插画和类型名称', (post_type, preview_kind, label, artwork) => {
+    const markup = cell<HistoryRow>(historyColumns(), 'thumbnail', {
+      ...historyRow, post_type, preview_kind, thumbnail_url: '', image_count: 0,
+    })
+    expect(markup).not.toContain('<img')
+    expect(markup).toContain(`aria-label="${label}`)
+    expect(markup).toContain(`data-artwork="${artwork}"`)
+    expect(markup).toContain('aria-hidden="true"')
+  })
+
+  it('混合帖有真实图片时保留原图并叠加播放提示', () => {
+    const markup = cell<HistoryRow>(historyColumns(), 'thumbnail', { ...historyRow, post_type: 'image_video' })
+    expect(markup).toContain('<img')
+    expect(markup).toContain('alt=""')
+    expect(markup).toContain('aria-label="图片＋视频"')
+    expect(markup).toContain('data-play-cue="true"')
+  })
   it('缩略图带张数角标，只有一张时不带', () => {
     expect(cell(reviewColumns(), 'thumbnail', reviewRow)).toContain('aria-label="3 张图"')
     expect(cell(reviewColumns(), 'thumbnail', { ...reviewRow, image_count: 1 })).not.toContain(

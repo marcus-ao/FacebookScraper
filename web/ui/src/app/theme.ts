@@ -33,6 +33,15 @@ const primary = {
   fg: '#ffffff',
 } as const
 
+const preview = {
+  videoBg: '#EAF2FD', videoInk: '#285B8B',
+  textBg: '#F7F0E8', textInk: '#805840',
+  imageBg: '#E8F4F1', imageInk: '#367568',
+  mixedBg: '#EEEDF9', mixedInk: '#575293',
+  pendingBg: '#F1F4F8', pendingInk: '#526477',
+  paper: '#FFFFFF',
+} as const
+
 const space = { s1: 4, s2: 8, s3: 12, s4: 16, s5: 24, s6: 32 } as const
 
 const typography = {
@@ -99,6 +108,7 @@ export const tokens = {
   neutral,
   status,
   primary,
+  preview,
   space,
   typography,
   layout,
@@ -221,6 +231,18 @@ export const cssVariables: Readonly<Record<string, string>> = {
   '--rc-primary-soft': primary.soft,
   '--rc-primary-on-soft': primary.onSoft,
   '--rc-primary-fg': primary.fg,
+
+  '--rc-preview-video-bg': preview.videoBg,
+  '--rc-preview-video-ink': preview.videoInk,
+  '--rc-preview-text-bg': preview.textBg,
+  '--rc-preview-text-ink': preview.textInk,
+  '--rc-preview-image-bg': preview.imageBg,
+  '--rc-preview-image-ink': preview.imageInk,
+  '--rc-preview-mixed-bg': preview.mixedBg,
+  '--rc-preview-mixed-ink': preview.mixedInk,
+  '--rc-preview-pending-bg': preview.pendingBg,
+  '--rc-preview-pending-ink': preview.pendingInk,
+  '--rc-preview-paper': preview.paper,
 
   '--rc-error': status.error,
   '--rc-error-soft': status.errorSoft,
