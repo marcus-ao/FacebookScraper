@@ -777,6 +777,27 @@ class WebReviewTests(unittest.TestCase):
         self.write_machine("Maschine darf die Auswahl nicht ersetzen. #Neakasa #CatLover")
         self.assertTrue(self.client.get(self.url).json()["localization_validation"]["ready"])
 
+    def test_tag_and_link_completion_saves_two_independent_choices(self):
+        self.source['text'] += ' https://us.example/product #CatLover'
+        self.write_source()
+        self.write_machine('Ein sauberes Zuhause. #Neakasa #CatLover')
+        first = self.save_localization(tags=['#MeineWahl'], hashtags_confirmed=True,
+            links_confirmed=True, links=[{'source_url': 'https://us.example/product',
+                'target_url': 'https://de.example/product', 'confirmed': True}])
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertTrue(first.json()['localization']['hashtags_confirmed'])
+        self.assertTrue(first.json()['localization']['links_confirmed'])
+        changed_tags = self.save_localization(tags=[], hashtags_confirmed=False)
+        self.assertEqual(changed_tags.status_code, 200, changed_tags.text)
+        self.assertFalse(changed_tags.json()['localization']['hashtags_confirmed'])
+        self.assertTrue(changed_tags.json()['localization']['links_confirmed'])
+        changed_link = self.save_localization(hashtags_confirmed=True, links_confirmed=False,
+            links=[{'source_url': 'https://us.example/product',
+                'target_url': 'https://de.example/other', 'confirmed': False}])
+        self.assertEqual(changed_link.status_code, 200, changed_link.text)
+        self.assertTrue(changed_link.json()['localization']['hashtags_confirmed'])
+        self.assertFalse(changed_link.json()['localization']['links_confirmed'])
+
     def test_localization_conflict_does_not_append_any_new_human_version(self):
         old = self.localization_body()
         response = self.save_localization(body_de="First human choice.")

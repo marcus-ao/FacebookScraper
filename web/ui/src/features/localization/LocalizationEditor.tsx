@@ -5,7 +5,7 @@ import { suggestHashtags } from '@/services/hashtags'
 import type { HashtagSuggestions } from '@/services/hashtags'
 import { ShanghaiTime } from '@/components/Time'
 import { PaidActionButton } from '@/components/PaidActionButton'
-import { canEditTask } from './model'
+import { bioTargetWarning, canEditTask, completeTagAndLinkReview } from './model'
 import styles from './LocalizationEditor.module.css'
 
 export function parsePublicationTags(value: string) {
@@ -14,7 +14,7 @@ export function parsePublicationTags(value: string) {
 const metrics = { trend_score: 'Google Trends 德国组内指数', media_count: 'Instagram 全球累计帖子数', peer_uses_14d: '德国同类账号近 14 天使用次数' } as const
 const canOpen = (value: string) => /^https?:\/\/[^\s]+$/i.test(value)
 
-export function LocalizationEditor({ detail, draft, editing, saving, onChange, onConfirm, onInsert }: { detail: TaskDetail; draft: LocalizationDraft; editing: boolean; saving: boolean; onChange: (draft: LocalizationDraft) => void; onConfirm: (draft: LocalizationDraft) => void; onInsert: (index: number) => void }) {
+export function LocalizationEditor({ detail, draft, editing, saving, onChange, onComplete, onSave, onDiscard, onInsert }: { detail: TaskDetail; draft: LocalizationDraft; editing: boolean; saving: boolean; onChange: (draft: LocalizationDraft) => void; onComplete: (draft: LocalizationDraft) => void; onSave: () => void; onDiscard: () => void; onInsert: (index: number) => void }) {
   const chosen = draft.tags
   const source = draft.source_tags
   const [input, setInput] = useState(chosen.join(' '))
@@ -24,8 +24,10 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
   const [error, setError] = useState(false)
   useEffect(() => { setInput(chosen.join(' ')) }, [editing])
   const update = (fields: Partial<LocalizationDraft>) => onChange({ ...draft, ...fields })
-  const confirm = (fields: Partial<LocalizationDraft>) => editing ? update(fields) : onConfirm({ ...draft, ...fields })
-  const confirmationDisabled = (!editing && saving) || !canEditTask(detail)
+  const needsTagDecision = source.length > 0 || chosen.length > 0
+  const needsLinkDecision = draft.links.length > 0 || !!draft.ig_cta.trim()
+  const decisionsSaved = (!needsTagDecision || draft.hashtags_confirmed) && (!needsLinkDecision || draft.links_confirmed)
+  const missingTarget = draft.platform === 'facebook' && draft.links.some(link => !canOpen(link.target_url))
   const suggest = async () => {
     setBusy(true); setError(false)
     try { const result = await suggestHashtags(detail); setSuggestion(result); setSelected(result.selected) }
@@ -41,8 +43,6 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
         event.preventDefault(); const tags = chosen.filter(value => value !== tag); setInput(tags.join(' ')); update({ tags, hashtags_confirmed: false })
       }}>{tag}</Tag>) : '本篇不使用话题标签'}</Space>
       {source.some(tag => !chosen.includes(tag)) || chosen.some(tag => !source.includes(tag)) ? <div className={styles.difference}>与原帖不同：{source.filter(tag => !chosen.includes(tag)).map(tag => <Tag key={tag}>未采用 {tag}</Tag>)}{chosen.filter(tag => !source.includes(tag)).map(tag => <Tag key={tag}>新增 {tag}</Tag>)}</div> : null}
-      <Checkbox disabled={confirmationDisabled} checked={draft.hashtags_confirmed} onChange={event => confirm({ hashtags_confirmed: event.target.checked })}>我已确认本篇使用的话题标签</Checkbox>
-      {canEditTask(detail) && <p className={styles.help}>{editing ? '确认随本次编辑一起保存。' : saving ? '正在保存确认…' : '勾选或取消后自动保存。'}</p>}
       {source.length > 0 && !detail.read_only && detail.hashtag_suggestions_enabled !== false && <p><PaidActionButton label="生成德语标签建议" amount="按实际用量计费" {...(!editing ? { disabledReason: '请先进入编辑德语' } : {})} loading={busy} onClick={() => void suggest()} /></p>}
       {error && <Alert type="warning" title="建议暂时不可用，仍可手动编辑" />}
       {suggestion && <Collapse items={[{ key: 'suggestions', label: '德语标签建议与采样依据', children: <>
@@ -64,20 +64,26 @@ export function LocalizationEditor({ detail, draft, editing, saving, onChange, o
       {draft.links.map((link, index) => <div key={index} className={styles.link}>
         <p>链接 {index + 1} · 原文：{link.source_url ? <a href={link.source_url.startsWith('www.') ? 'https://' + link.source_url : link.source_url} target="_blank" rel="noopener noreferrer">{link.source_url}</a> : '人工添加'}</p>
         {draft.platform === 'facebook' && <>
-          {link.mapped_url && <p className={styles.help}>已配置的映射（只读）：{link.mapped_url}</p>}
           {editing ? <label className={styles.field}>本篇德语落地页<Input aria-label={`链接 ${index + 1} 德语落地页`} type="url" value={link.target_url} onChange={event => linkUpdate(index, { target_url: event.target.value, confirmed: false })} /></label> : <p>{link.target_url || '尚未填写德语落地页'}</p>}
-          <Space wrap>{canOpen(link.target_url) && <a href={link.target_url} target="_blank" rel="noopener noreferrer">打开检查 ↗</a>}<span>{link.confirmed ? '本篇链接已确认' : '待人工确认'}</span></Space>
-          {editing && <p><Button onMouseDown={event => event.preventDefault()} onClick={() => onInsert(index)}>将链接 {index + 1} 插入正文光标处</Button></p>}
+          {!canOpen(link.target_url) && <p className={styles.help}>链接 {index + 1} 尚未填写德语落地页</p>}
+          <Space wrap>{canOpen(link.target_url) && <a href={link.target_url} target="_blank" rel="noopener noreferrer">打开德语落地页 ↗</a>}<span>{link.confirmed ? '本篇链接已确认' : '待人工确认'}</span></Space>
+          {editing && <p><Button onMouseDown={event => event.preventDefault()} onClick={() => onInsert(index)}>插入链接 {index + 1}</Button></p>}
         </>}
       </div>)}
       {draft.platform === 'instagram' ? <>
         <p className={styles.help}>原文链接从发布文案中移除，使用引导话术前往主页。</p>
         {editing ? <><label className={styles.field}>常用引导话术<Select aria-label="常用引导话术" value={draft.cta_presets.includes(draft.ig_cta) ? draft.ig_cta : draft.ig_cta ? '__custom__' : ''} onChange={value => { if (value !== '__custom__') update({ ig_cta: value, links_confirmed: false }) }} options={[{ value: '', label: '不添加' }, ...draft.cta_presets.map(value => ({ value, label: value })), { value: '__custom__', label: '自定义（下方输入）' }]} /></label><label className={styles.field}>自定义 bio 引导<Input value={draft.ig_cta} onChange={event => update({ ig_cta: event.target.value, links_confirmed: false })} aria-label="自定义 bio 引导" /></label></> : <p>{draft.ig_cta || '未添加引导话术'}</p>}
         <p className={styles.help}>当前 bio（只读）：{canOpen(draft.ig_bio_url) ? <a href={draft.ig_bio_url} target="_blank" rel="noopener noreferrer">{draft.ig_bio_url}</a> : '未配置'}</p>
+        {bioTargetWarning(draft) && <Alert type="warning" showIcon title={bioTargetWarning(draft)} />}
       </> : draft.links.length > 0 ? <p className={styles.help}>没有插入正文的链接会放在文末。</p> : null}
-      <Checkbox disabled={confirmationDisabled} checked={draft.links_confirmed} onChange={event => confirm({ links_confirmed: event.target.checked,
-        ...(draft.platform === 'facebook' ? { links: draft.links.map(link => ({ ...link, confirmed: event.target.checked })) } : {}) })}>我已确认本篇的链接与主页引导</Checkbox>
-      {canEditTask(detail) && <p className={styles.help}>{draft.platform === 'facebook' && draft.links.length > 0 ? '请打开检查所有落地页，确认适用于德国站。' : '无链接或不添加引导语，也可直接确认。'}{editing ? '确认随本次编辑一起保存。' : saving ? '正在保存确认…' : '勾选或取消后自动保存。'}</p>}
+      {draft.platform === 'facebook' && draft.links.length > 0 && <p className={styles.help}>请打开核对每个目标页面；未放入正文的有效链接会在发布文案末尾出现一次。</p>}
     </section>
+    <div className={styles.actions}>
+      {decisionsSaved && !editing && <span role="status">{missingTarget ? '审核选择已保存，请补全德语落地页' : '标签与链接已审核'}</span>}
+      {editing && <><Button disabled={saving} onClick={onDiscard}>放弃修改</Button>
+        <Button disabled={saving} onClick={onSave}>仅保存修改</Button></>}
+      {canEditTask(detail) && (!decisionsSaved || editing) && <Button type="primary" disabled={saving} loading={saving}
+        onClick={() => onComplete(completeTagAndLinkReview(draft))}>完成标签与链接审核</Button>}
+    </div>
   </div>
 }

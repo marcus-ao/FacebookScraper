@@ -11,7 +11,7 @@ import { useTaskDetail } from '@/hooks/useTaskDetail'
 import { historyListOptions, reviewListOptions } from '@/hooks/useTasks'
 import { useLocalization } from '@/hooks/useLocalization'
 import { filterReviewRows } from '@/features/post-list/model'
-import { canEditTask } from '@/features/localization/model'
+import { bioTargetWarning, canEditTask } from '@/features/localization/model'
 import { BodyReviewActions, TextWorkspace } from '@/features/localization/TextWorkspace'
 import type { TextWorkspaceHandle } from '@/features/localization/TextWorkspace'
 import { LocalizationEditor } from '@/features/localization/LocalizationEditor'
@@ -151,12 +151,13 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       </ReviewStepPanel>
       <ReviewStepPanel id="localization" active={tab} opened={opened.current.has('localization')}>
         <LocalizationEditor detail={detail} draft={loc.shown} editing={loc.editing} saving={loc.saving || loc.recovering}
-          onChange={loc.setDraft} onConfirm={next => void loc.confirm(next)} onInsert={index => {
+          onChange={loc.setDraft} onComplete={next => void loc.completeLocalization(next)} onSave={() => void loc.save()} onDiscard={loc.discard} onInsert={index => {
             changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
           }} />
         {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button onClick={loc.start}>编辑标签与链接</Button></div>}
       </ReviewStepPanel>
       <ReviewStepPanel id="final" active={tab} opened={opened.current.has('final')}>
+        {bioTargetWarning(loc.shown) && <Alert type="warning" showIcon title={bioTargetWarning(loc.shown)} />}
         {todos.length > 0 && !approval.locked && <p className={styles.todoEmpty}>先处理上方待办，再核对最终发布内容。</p>}
         {!detail.read_only && !loc.editing && !loc.saving && (approval.lockable || approval.locked) && <div className={styles.stepActions}><ApprovalAction controller={approval} /></div>}
         {!detail.read_only && <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />}
@@ -169,7 +170,6 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
-      {loc.editing && tab !== 'text' && <div className={styles.stepActions}><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存修改</Button></div>}
     </div>
   </article>
 }

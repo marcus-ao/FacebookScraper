@@ -40,11 +40,11 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
     return () => { current = false; window.clearTimeout(timer) }
   }, [detail.id, signature, editing])
   const discard = () => { setDraft(null); setError(null); setValidation(null); setActive(-1) }
-  const save = async () => {
+  const save = async (completed?: LocalizationDraft) => {
     if (!draft || saving) return
     setSaving(true); setError(null)
     try {
-      const saved = await saveLocalization(detail, draft)
+      const saved = await saveLocalization(detail, completed ?? draft)
       apply(saved)
       // 保存只确认点击时的版本；等待响应期间的新输入仍需留在编辑区。
       setDraft(current => current && JSON.stringify(editableFields(current)) !== JSON.stringify(editableFields(draft))
@@ -81,6 +81,10 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
     } catch (cause) { setError(cause) }
     finally { bodyConfirmingRef.current = false; setBodyConfirming(false) }
   }
+  const completeLocalization = async (next: LocalizationDraft) => {
+    if (editing) await save(next)
+    else await confirm(next)
+  }
   const tail = shown.platform === 'instagram' ? shown.ig_cta : shown.links.map(link => link.target_url).filter(url => /^https?:\/\//.test(url)).join('\n')
   const count = !editing ? detail.localization_validation.char_count : live?.caption_length
     ?? charLength([shown.body_de.trim(), tail.trim(), shown.tags.join(' ')].filter(Boolean).join('\n\n'))
@@ -88,7 +92,7 @@ export function useLocalization(detail: TaskDetail, apply: (detail: TaskDetail) 
   // 会被直接贴进 Business Suite——和实际发布内容不一致比没有这个按钮更糟。
   const caption = editing ? live?.caption : detail.localization_validation.caption
   return { draft, shown, editing, dirty, checking, saving, bodyConfirming, error, recovering, marks, shownMarks, active, setActive,
-    setDraft, start: () => { if (!saving && !recovering && deploymentStore.canStartEditing()) { setDraft(structuredClone(detail.localization)); setActive(-1) } }, discard, save, recover, confirm, confirmCurrentBody,
+    setDraft, start: () => { if (!saving && !recovering && deploymentStore.canStartEditing()) { setDraft(structuredClone(detail.localization)); setActive(-1) } }, discard, save, recover, confirm, confirmCurrentBody, completeLocalization,
     jump: (delta: number) => { if (shownMarks.length) setActive(old => (old + delta + shownMarks.length) % shownMarks.length) },
     count, caption, approximate: editing && !live, issues: live?.issues ?? detail.localization_validation.issues,
     warnings: live?.warnings ?? detail.localization_validation.warnings }

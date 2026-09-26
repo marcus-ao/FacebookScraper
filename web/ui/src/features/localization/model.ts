@@ -5,6 +5,23 @@ export function editableFields(draft: LocalizationDraft) {
     links: draft.links, ig_cta: draft.ig_cta, links_confirmed: draft.links_confirmed }
 }
 
+export function completeTagAndLinkReview(draft: LocalizationDraft): LocalizationDraft {
+  const needsTagDecision = draft.source_tags.length > 0 || draft.tags.length > 0
+  const needsLinkDecision = draft.links.length > 0 || draft.ig_cta.trim().length > 0
+  return { ...draft,
+    hashtags_confirmed: needsTagDecision ? true : draft.hashtags_confirmed,
+    links_confirmed: needsLinkDecision ? true : draft.links_confirmed,
+    links: draft.platform === 'facebook' ? draft.links.map(link => ({ ...link,
+      confirmed: /^https?:\/\/[^\s]+$/i.test(link.target_url.trim()) })) : draft.links,
+  }
+}
+
+export function bioTargetWarning(draft: LocalizationDraft): string | null {
+  if (draft.platform !== 'instagram' || !draft.ig_cta.trim()
+    || /^https?:\/\/[^\s]+$/i.test(draft.ig_bio_url)) return null
+  return '主页目标尚未配置，请核对主页链接后再发布。'
+}
+
 export function localizationBody(detail: TaskDetail, draft: LocalizationDraft) {
   return { ...editableFields(draft), source_text_sha256: detail.text.source_text_sha256,
     human_revision: detail.text.human_revision, review_revision: detail.review.revision,
