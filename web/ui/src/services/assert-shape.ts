@@ -1,5 +1,7 @@
 /** 仅开发构建检查响应形状；发现差异记录错误，仍返回原数据。 */
 
+import { POST_TYPES } from '@/types/domain'
+
 type Checker = (value: unknown) => boolean
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -107,6 +109,7 @@ export const HISTORY_LIST_ITEM_SHAPE: ShapeSpec = {
   image_count: shape.number,
   thumbnail_url: shape.string,
   preview_kind: PREVIEW_KIND,
+  post_type: shape.oneOf(...POST_TYPES),
 }
 
 export const HISTORY_LIST_SHAPE: ShapeSpec = {

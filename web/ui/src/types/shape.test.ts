@@ -111,6 +111,7 @@ describe('GET /api/tasks?scope=history（历史归档）', () => {
     expect(historyList.tasks.length).toBeGreaterThan(0)
     historyList.tasks.forEach((row, index) => {
       ok(row, HISTORY_LIST_ITEM_SHAPE, `tasks[${index}]`)
+      expect(row).toHaveProperty('post_type')
     })
   })
 

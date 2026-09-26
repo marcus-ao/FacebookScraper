@@ -12,7 +12,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3975547640610092585/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3973112941198515773",
@@ -26,7 +27,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3973112941198515773/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3973012230169803390",
@@ -40,7 +42,8 @@
    "status": "scheduled",
    "image_count": 5,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3973012230169803390/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122123185335379375",
@@ -54,7 +57,8 @@
    "status": "not_ready",
    "image_count": 5,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122123185335379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3971567775902695553",
@@ -68,7 +72,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3971567775902695553/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122122725243379375",
@@ -82,7 +87,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122122725243379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122122467843379375",
@@ -96,7 +102,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122122467843379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3970856510175738446",
@@ -110,7 +117,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3970856510175738446/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3968665879781437680",
@@ -124,7 +132,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3968665879781437680/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122121806289379375",
@@ -138,7 +147,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122121806289379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3966558238826612509",
@@ -152,7 +162,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3966558238826612509/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3966482767584278586",
@@ -166,7 +177,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3966482767584278586/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122120942949379375",
@@ -180,7 +192,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122120942949379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3965754897052123866",
@@ -194,7 +207,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3965754897052123866/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122120722845379375",
@@ -208,7 +222,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122120722845379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3965632138057097233",
@@ -222,7 +237,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3965632138057097233/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3965025107383038890",
@@ -236,7 +252,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3965025107383038890/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122120460231379375",
@@ -250,7 +267,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122120460231379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3964515273636367812",
@@ -264,7 +282,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3964515273636367812/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3964294639648208330",
@@ -278,7 +297,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3964294639648208330/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122120053587379375",
@@ -292,7 +312,8 @@
    "status": "not_ready",
    "image_count": 8,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122120053587379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3963241258617863608",
@@ -306,7 +327,8 @@
    "status": "not_ready",
    "image_count": 4,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3963241258617863608/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3962120880369087367",
@@ -320,7 +342,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3962120880369087367/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122119527345379375",
@@ -334,7 +357,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122119527345379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3959209300227916701",
@@ -348,7 +372,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3959209300227916701/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3957785800896948692",
@@ -362,7 +387,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3957785800896948692/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122118265353379375",
@@ -376,7 +402,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122118265353379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3957439893476122361",
@@ -390,7 +417,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3957439893476122361/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "fa_neakasaofficial/122118136581379375",
@@ -404,7 +432,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/fa_neakasaofficial/122118136581379375/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   },
   {
    "id": "in_neakasa.tech/3956335867291287423",
@@ -418,7 +447,8 @@
    "status": "not_ready",
    "image_count": 1,
    "thumbnail_url": "/api/tasks/in_neakasa.tech/3956335867291287423/image/0?variant=de",
-   "preview_kind": "image"
+   "preview_kind": "image",
+   "post_type": "static_image_text"
   }
  ],
  "index": {

@@ -82,6 +82,9 @@ describe('formatDate', () => {
     expect(formatDate('2026-09-24T20:30:00Z')).toBe('2026-09-25')
     expect(formatDate('2026-09-25')).toBe('2026-09-25')
   })
+  it('跨月的来源绝对时刻按业务显示日期归月', () => {
+    expect(formatDate('2021-01-31T20:30:00Z')).toBe('2021-02-01')
+  })
 
   it('空值给破折号', () => {
     expect(formatDate(null)).toBe('—')

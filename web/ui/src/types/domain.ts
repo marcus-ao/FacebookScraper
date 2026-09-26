@@ -4,6 +4,10 @@ import type { Revision, Sha256, TaskId } from './brands'
 
 
 export type Platform = 'facebook' | 'instagram'
+export const POST_TYPES = [
+  'static_image_text', 'image_only', 'video', 'image_video', 'text_only', 'pending',
+] as const
+export type PostType = (typeof POST_TYPES)[number]
 
 export type ReviewStatus =
   | 'pending_review'
@@ -194,6 +198,7 @@ export interface HistoryListItem {
   readonly image_count: number
   readonly thumbnail_url: string
   readonly preview_kind: PreviewKind
+  readonly post_type: PostType
 }
 
 export interface HistoryListResponse {

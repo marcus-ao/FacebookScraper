@@ -37,7 +37,7 @@ export function HistoryPage() {
       </span> },
     ...createPostColumns<HistoryListItem>({ columns:['tags'] }),
   ]
-  function change(key: 'platform'|'month'|'tag', value: string|undefined) {
+  function change(key: 'platform'|'month'|'tag'|'post_type', value: string|undefined) {
     const next=new URLSearchParams(search)
     if(value) next.set(key,value); else next.delete(key)
     next.set('page','1'); setSearch(next)
@@ -50,7 +50,7 @@ export function HistoryPage() {
           onChange={(page,limit)=>{const next=new URLSearchParams(search);next.set('page',String(limit===filters.limit?page:1));next.set('limit',String(limit));setSearch(next)}} />
       </div>
       <div className={styles.toolbar}><ListFilters filters={filters} months={query.data?.summary.months ?? []}
-        tags={query.data?.summary.tags ?? []} onChange={change} /></div>
+        tags={query.data?.summary.tags ?? []} onChange={change} postTypeFilter /></div>
     </div>
     {query.error && <Alert type="error" showIcon title="暂时无法读取历史归档" description={query.error.message}
       action={<Button onClick={()=>void query.refetch()}>重试</Button>} />}

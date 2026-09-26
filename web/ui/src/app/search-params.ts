@@ -1,6 +1,7 @@
 /** 列表与详情共用 URL 参数，刷新后仍能恢复筛选、页码和相邻帖子。 */
 
-import type { DisplayStatus, Platform, QueueBucket } from '@/types/domain'
+import { POST_TYPES } from '@/types/domain'
+import type { DisplayStatus, Platform, PostType, QueueBucket } from '@/types/domain'
 
 export const QUEUE_BUCKETS = ['review', 'not_ready', 'snoozed', 'processed'] as const
 
@@ -41,6 +42,10 @@ export function parsePlatform(value: string | null | undefined): Platform | null
   return PLATFORMS.find(platform => platform === value) ?? null
 }
 
+export function parsePostType(value: string | null | undefined): PostType | null {
+  return POST_TYPES.find(type => type === value) ?? null
+}
+
 export function parseMonth(value: string | null | undefined): string | null {
   if (!value) return null
   return MONTH.test(value) || value === 'undated' ? value : null
@@ -55,6 +60,7 @@ const SANITIZERS: Readonly<Record<string, (value: string) => string | null>> = {
   platform: parsePlatform,
   month: parseMonth,
   tag: parseTag,
+  post_type: parsePostType,
 }
 
 export function bucketOf(status: DisplayStatus): QueueBucket {
@@ -66,7 +72,7 @@ export function bucketOf(status: DisplayStatus): QueueBucket {
 }
 
 export const REVIEW_CONTEXT_KEYS = ['queue', 'platform', 'month', 'tag', 'alerts'] as const
-export const HISTORY_CONTEXT_KEYS = ['platform', 'month', 'tag', 'page', 'limit'] as const
+export const HISTORY_CONTEXT_KEYS = ['platform', 'month', 'tag', 'post_type', 'page', 'limit'] as const
 export const DETAIL_OWN_KEYS = ['tab'] as const
 export const DETAIL_STEPS = ['text', 'images', 'localization', 'final'] as const
 export type DetailStepId = (typeof DETAIL_STEPS)[number]
@@ -144,6 +150,7 @@ export interface HistoryListQuery {
   readonly platform: Platform | null
   readonly month: string | null
   readonly tag: string | null
+  readonly post_type: PostType | null
   readonly page: number
   readonly limit: number
 }
@@ -156,6 +163,7 @@ export function parseHistoryListQuery(params: ParamsLike): HistoryListQuery {
     platform: parsePlatform(read(params, 'platform')),
     month: parseMonth(read(params, 'month')),
     tag: parseTag(read(params, 'tag')),
+    post_type: parsePostType(read(params, 'post_type')),
     page: Number.isInteger(rawPage) && rawPage >= 1 ? rawPage : 1,
     limit: allowed.includes(rawLimit) ? rawLimit : DEFAULT_HISTORY_LIMIT,
   }

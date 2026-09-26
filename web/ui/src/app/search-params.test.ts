@@ -12,6 +12,7 @@ import {
   legacyRedirect,
   parseMonth,
   parsePlatform,
+  parsePostType,
   parseTag,
   parseHistoryListQuery,
   parseQueue,
@@ -152,11 +153,14 @@ describe('详情 URL 携带来源列表上下文', () => {
   })
 
   it('历史往返保住 page 与 limit', () => {
-    const list = new URLSearchParams({ platform: 'instagram', page: '3', limit: '100' })
+    const list = new URLSearchParams({ platform: 'instagram', month: '2026-09', tag: 'M1', post_type: 'image_video', page: '3', limit: '100' })
     const detail = new URLSearchParams(buildDetailSearch(list, 'history', { tab: 'text' }))
     const back = new URLSearchParams(buildListSearch(detail, 'history'))
     expect(back.get('page')).toBe('3')
     expect(back.get('limit')).toBe('100')
+    expect(back.get('post_type')).toBe('image_video')
+    expect(back.get('month')).toBe('2026-09')
+    expect(back.get('tag')).toBe('M1')
   })
 
   it('往返是幂等的 —— 来回切换不会丢参数也不会长出参数', () => {
@@ -198,6 +202,18 @@ describe('列表查询参数解析（详情页要用同一份来算 n / N）', (
     expect(parseHistoryListQuery(new URLSearchParams()).limit).toBe(DEFAULT_HISTORY_LIMIT)
     expect(parseHistoryListQuery(new URLSearchParams({ limit: '20' })).limit).toBe(20)
     expect(parseHistoryListQuery(new URLSearchParams({ limit: '100' })).limit).toBe(100)
+  })
+
+  it('历史：来源类型只接受六种值并保留当前页', () => {
+    expect(parsePostType('video')).toBe('video')
+    expect(parsePostType('bogus')).toBeNull()
+    expect(parseHistoryListQuery(new URLSearchParams('post_type=video&page=3')).post_type).toBe('video')
+    expect(parseHistoryListQuery(new URLSearchParams('post_type=video&page=3')).page).toBe(3)
+    expect(parseHistoryListQuery(new URLSearchParams('post_type=bogus')).post_type).toBeNull()
+    expect(buildListSearch(new URLSearchParams('post_type=image_video&page=2'), 'history'))
+      .toContain('post_type=image_video')
+    expect(buildListSearch(new URLSearchParams('post_type=bogus&page=2'), 'history'))
+      .not.toContain('post_type')
   })
 
   it('历史：不在白名单里的 limit 回落 50', () => {
