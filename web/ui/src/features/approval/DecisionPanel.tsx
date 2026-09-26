@@ -27,7 +27,8 @@ export function ApprovalAction({ controller: c }: { controller: ApprovalControll
 /** 提交跑在请求之外：关掉页面再回来，这块还在。 */
 function SubmissionProgress({ controller: c, detail }: { controller: ApprovalController; detail: TaskDetail }) {
   const op = c.operation
-  if (detail.publication?.status === 'scheduled') return <Alert type="success" title="排期已确认" />
+  const projection = op?.result?.projection
+  if (detail.publication?.status === 'scheduled') return <Alert type="success" title="排期已确认" description={projection?.notification_notice} />
   if (c.pendingReceipt && op?.status !== 'running') {
     const at = typeof detail.publication?.scheduled_at === 'string' ? detail.publication.scheduled_at : op?.scheduled_at
     const accepted = detail.publication?.status === 'submitted_unverified'

@@ -1,15 +1,17 @@
 """Project confirmed publication facts into review, snapshots, mirror and notifications."""
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from contextvars import copy_context
 from dataclasses import asdict
 from datetime import datetime, timezone
 
 from core import maintenance, notify, review, store, translated
 from core.chrome import attach, close_owned_page
 from core.config import cfg
-from core.feishu import FeishuSettings, Outbox
+from core.feishu import FeishuSettings, Outbox, WebhookBot
 from core.mirror import MirrorSettings, MirrorService
 from core.paid_model import atomic_write_json
 from core.process_identity import worker_alive
@@ -50,6 +52,68 @@ def queue_approved(snapshot_id, *, now=None):
     except Exception:
         notify.notify('批准版镜像待补送', '冻结快照已保留，请从发布恢复入口补送。', popup=False)
         return False
+
+
+def deliver_notification(attempt, now):
+    """Deliver only this confirmed receipt using the existing durable outbox."""
+    settings = FeishuSettings.load()
+    if not settings.enabled:
+        return {'status': 'disabled'}
+    outbox = Outbox(cfg().state_dir / 'feishu_outbox.json', settings)
+    event_id = 'scheduled:' + attempt['attempt_id']
+    status = outbox.event_status(event_id)
+    if status['status'] in {'sent', 'uncertain', 'cancelled', 'missing'}:
+        return status
+    # Validate configuration before Outbox writes send intent. Missing credentials
+    # are retryable setup failures, not evidence of a possibly delivered request.
+    client = WebhookBot.from_environment()
+    try:
+        outbox.dispatch(now, client.send, allowed_kinds={'scheduled'}, event_ids={event_id})
+    finally:
+        client.close()
+    return outbox.event_status(event_id)
+
+
+def retry_notification_enqueues(now):
+    """Repair explicit failed enqueue intents, not historical or disabled notices."""
+    c = cfg()
+    settings = FeishuSettings.load()
+    if not settings.enabled:
+        return
+    with journal.PublishOperationLock(c.state_dir / 'publish.lock', allow_reentrant=True):
+        data = Outbox(c.state_dir / 'feishu_outbox.json', settings)._load()
+        known = set(data['events']) | set(data['archived_events'])
+        latest = {row['attempt_id']: row for row in journal.load(c.state_dir)}
+        for row in latest.values():
+            if (row['status'] != journal.STATUS_SCHEDULED or not row.get('snapshot_id')
+                    or 'scheduled:' + row['attempt_id'] in known):
+                continue
+            path = snapshots.folder(row['snapshot_id']) / 'projection.json'
+            progress = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            done = progress.get(row['attempt_id'] + ':scheduled', {})
+            if not (done.get('errors') or {}).get('notification'):
+                continue
+            metadata, source, _, _ = snapshots.load_for_attempt(row)
+            queue_notification(c.archive_dir / metadata['account'], source, row, now)
+
+
+async def project_async(attempt) -> dict:
+    # The worker inherits the caller's reentrant publish lock. Cancellation must
+    # wait for it to finish before the caller releases the actual OS lock.
+    worker = asyncio.get_running_loop().run_in_executor(None, copy_context().run, project, attempt)
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()
+        raise
 
 
 def project(attempt, *, now=None) -> dict:
@@ -102,9 +166,27 @@ def project(attempt, *, now=None) -> dict:
                 done['notification'] = queue_notification(account, source, row, moment) is not False
             except Exception as exc:
                 errors['notification'] = type(exc).__name__
+        if row['status'] == journal.STATUS_SCHEDULED and done.get('notification'):
+            try:
+                done['notification_delivery'] = deliver_notification(row, moment)
+            except Exception as exc:
+                done['notification_delivery'] = {'status': 'pending'}
+                errors['notification_delivery'] = type(exc).__name__
+        elif row['status'] == journal.STATUS_SCHEDULED:
+            done['notification_delivery'] = {'status': 'pending' if 'notification' in errors else 'disabled'}
         done['errors'] = errors
         atomic_write_json(progress_path, progress)
-        return {'status': row['status'], 'snapshot_id': row['snapshot_id'], 'projection': done}
+        delivery_status = (done.get('notification_delivery') or {}).get('status')
+        notice = {
+            'pending': '排期已确认，飞书通知仍待发送；请查看运行状态中的机器人配置和发件箱。',
+            'missing': '排期已确认，但未找到对应飞书通知事件；请保留发件箱并核对。',
+            'uncertain': '排期已确认，飞书通知的送达结果不明确；请先到群里核对，再在运行状态中登记，系统不会自动重发。',
+            'retry': '排期已确认，飞书明确拒绝了通知；已保留原消息等待退避重试，请查看运行状态中的原因。',
+            'disabled': '排期已确认，飞书通知当前未启用。',
+            'cancelled': '排期已确认，对应飞书通知已取消，请查看发件箱记录。',
+        }.get(delivery_status, '')
+        return {'status': row['status'], 'snapshot_id': row['snapshot_id'], 'projection': done,
+                'notification_notice': notice}
 
 
 async def unschedule(account, indexed, *, reason: str, inventory_reader=None, now=None) -> dict:
@@ -235,6 +317,8 @@ async def reconcile(account, indexed, *, timeout=30) -> dict:
         result = {'status': row['status'], 'publication': row, 'message': '已核实已有排期并补齐回执。'}
         try:
             result['projection'] = project(row)
+            if result['projection'].get('notification_notice'):
+                result['projection_error'] = result['projection']['notification_notice']
         except Exception:
             result['projection_error'] = '远端排期已记录，本地显示待补齐；可再次核对，不要重新提交。'
         operation = operations.for_task(account.name + '/' + source['post_id'], row['snapshot_id'])

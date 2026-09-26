@@ -376,7 +376,7 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
             target_channels=target_channels, report=report, run=run,
             opening_inventory=opening_inventory)
         try:
-            records.project(outcome.attempt)
+            await records.project_async(outcome.attempt)
         except Exception:
             notify.notify('发布回执留档待补齐', '发布账本保留结果；请核对快照后恢复本地状态，勿重复提交。', popup=False)
         return outcome

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from core.config import MonitorSchedule, cfg
 from core import maintenance
 from core.capture_state import CaptureState, CaptureStateError
-from core.feishu import FeishuSettings, Outbox, WebhookBot
+from core.feishu import ALWAYS_DELIVERED, FeishuSettings, Outbox, WebhookBot
 from core.heartbeat import Heartbeat, HeartbeatSettings
 from core.integrity import parse_ts
 from core.mirror import DriveClient, MirrorService, MirrorSettings
@@ -20,7 +20,7 @@ from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
 from core.translated import source_text_sha256
 from pipeline import engine, notifications
-from publish import journal, observations, planner_cache
+from publish import journal, observations, planner_cache, records
 
 
 class Runtime:
@@ -344,6 +344,10 @@ class Runtime:
         if not self.settings.enabled:
             return
         try:
+            records.retry_notification_enqueues(now)
+        except Exception as exc:
+            notify.notify('排期通知等待补入队', type(exc).__name__ + '；原排期状态保留。', popup=False)
+        try:
             self.enqueue_capture_results(now)
             if self.process:
                 self.collect(engine.active_account_dirs(account_dirs(self.c.archive_dir)), now)
@@ -354,7 +358,7 @@ class Runtime:
             if self.client is None:
                 self.client = WebhookBot.from_environment()
             self.outbox.dispatch(now, self.client.send, prepare_payload=self.prepare_preview,
-                                 allowed_kinds=None if self.process else {'monitor_found', 'monitor_saved', 'system'})
+                                 allowed_kinds=None if self.process else ALWAYS_DELIVERED)
         except Exception as exc:
             notify.notify('审校提醒暂未投递', type(exc).__name__ + '；请检查飞书配置与发件箱。', popup=False)
 

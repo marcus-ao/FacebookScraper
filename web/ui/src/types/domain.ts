@@ -637,7 +637,10 @@ export interface PublishOperation {
   readonly step_total: number
   readonly step: string
   readonly message: string
-  readonly result: { readonly suggestions?: readonly string[] } | null
+  readonly result: {
+    readonly suggestions?: readonly string[]
+    readonly projection?: { readonly notification_notice?: string }
+  } | null
   readonly started_at: string
   readonly updated_at: string
 }

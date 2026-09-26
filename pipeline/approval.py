@@ -243,7 +243,7 @@ async def approve(account_dir: Path, indexed: dict, *, scheduled_at, source_text
             raise
         success = attempt['status'] == journal.STATUS_SCHEDULED
         try:
-            projection = records.project(attempt)
+            projection = await records.project_async(attempt)
         except Exception as exc:
             projection = {'status': 'pending', 'error': type(exc).__name__}
             notify.notify('发布回执留档待补齐', '发布账本已保留结果，请在恢复入口补齐记录。', popup=False)

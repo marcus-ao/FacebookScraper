@@ -375,7 +375,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
         material = None
 
         async def prepare_dialog(dialog):
-            await scheduled_details.expand(dialog, timeout=timeout)
+            await scheduled_details.expand(dialog, timeout=timeout, owner=accounts()['facebook'])
 
         async def observe_dialog(dialog, ids):
             nonlocal material

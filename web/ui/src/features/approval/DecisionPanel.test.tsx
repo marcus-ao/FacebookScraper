@@ -42,4 +42,12 @@ describe('existing submission receipt', () => {
     expect(html).not.toContain('old failed readback')
     expect(html).not.toContain('这次提交结果不明确')
   })
+  it('shows delayed notification separately from the confirmed schedule', () => {
+    const html = render({ operation: { status: 'succeeded', result: {
+      projection: { notification_notice: '飞书通知的送达结果不明确' },
+    } } as unknown as ApprovalController['operation'] }, true)
+    expect(html).toContain('排期已确认')
+    expect(html).toContain('飞书通知的送达结果不明确')
+    expect(html).not.toContain('这次提交结果不明确')
+  })
 })

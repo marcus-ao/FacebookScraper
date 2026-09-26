@@ -43,6 +43,17 @@ class NotificationTests(unittest.TestCase):
     def events(self):
         return json.loads(self.runtime.outbox.path.read_text('utf-8'))['events']
 
+    def test_monitor_only_runtime_delivers_confirmed_receipts_without_content_processing(self):
+        night = self.now.replace(hour=15)
+        self.assertFalse(self.runtime.process)
+        self.runtime.outbox.enqueue('scheduled:original', 'scheduled', {'text': 'confirmed'}, night)
+        self.runtime.outbox.enqueue('ready:other', 'ready', {'text': 'not approved'}, night)
+        self.runtime._deliver(night)
+        self.runtime.client.send.assert_called_once()
+        self.assertEqual(self.runtime.client.send.call_args.args[0], 'publish')
+        delivered = self.runtime.outbox._load()['deliveries']
+        self.assertEqual([d['kind'] for d in delivered.values()], ['scheduled'])
+
     def test_one_post_with_several_issues_is_one_ready_and_one_backlog(self):
         self.event('one')
         self.event('two', 'human_translation_stale')

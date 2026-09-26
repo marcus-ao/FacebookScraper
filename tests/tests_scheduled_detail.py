@@ -88,6 +88,34 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.cards[0].at, self.when)
         self.assertEqual(await self.page.evaluate('writes'), [])
 
+    async def test_two_time_only_posts_on_one_day_keep_separate_details_and_identity(self):
+        await self.mount_time_only()
+        await self.page.evaluate('''() => {
+          const dialog=document.querySelector('[role=dialog]');
+          const template=dialog.innerHTML;
+          const first=document.querySelector('[draggable=false] a');
+          const second=first.cloneNode(true); second.textContent='11:00\\u202fPM';
+          first.parentElement.append(second);
+          window.opened=[];
+          [first,second].forEach((entry,index)=>entry.onclick=()=>{
+            opened.push(index);
+            dialog.innerHTML=template.replace('ID: 123456789', 'ID: '+(index ? '987654321' : '123456789'));
+            dialog.querySelector('article a[href="/987654321"]').textContent=
+              'September 30 at '+(index ? '11:00' : '5:30')+' PM';
+            dialog.hidden=false;
+            dialog.querySelector('#expand').onclick=()=>{
+              dialog.querySelector('#body').innerHTML=index ? 'Other scheduled post' :
+                'This is a manual test.<img alt="😊"> #SmartPetFeeder #CatLovers #NeakasaRiko';
+            };
+          });
+        }''')
+        result = await self.time_only_inventory()
+        self.assertFalse(result.diagnostics)
+        self.assertEqual(await self.page.evaluate('opened'), [0, 1])
+        self.assertEqual([dict(c.remote_ids)['facebook'] for c in result.cards], ['123456789', '987654321'])
+        self.assertEqual([c.at.hour for c in result.cards], [17, 23])
+        self.assertEqual(result.cards_in_range('facebook', self.when, self.when), (result.cards[0],))
+
     async def test_time_only_wrong_preview_time_or_unexpanded_text_stays_incomplete(self):
         for changes in ({'changed_clock': True}, {'truncate': True}):
             await self.mount()
@@ -95,6 +123,23 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             result = await self.time_only_inventory()
             self.assertFalse(result.decision_complete)
             self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_time_only_caption_arriving_after_header_is_expanded_before_read(self):
+        await self.mount_time_only()
+        await self.page.locator('[draggable=false] a').evaluate('''entry => {
+          entry.onclick=()=>{
+            const dialog=document.querySelector('[role=dialog]'); dialog.hidden=false;
+            const body=document.getElementById('body'); body.textContent='';
+            setTimeout(()=>{
+              body.innerHTML='This is a manual… <button id="expand">See more</button>';
+              document.getElementById('expand').onclick=()=>body.innerHTML=
+                'This is a manual test.<img alt="😊"> #SmartPetFeeder #CatLovers #NeakasaRiko';
+            },800);
+          };
+        }''')
+        result = await self.time_only_inventory()
+        self.assertFalse(result.diagnostics, result.diagnostics)
+        self.assertEqual(result.cards[0].rendered, CAPTION)
 
     async def test_time_only_existing_object_can_be_reacquired_for_read_only_media(self):
         await self.mount_time_only()
