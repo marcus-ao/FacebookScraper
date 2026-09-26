@@ -133,6 +133,79 @@ class WebReviewTests(unittest.TestCase):
             json.dumps(row) + "\n", encoding="utf-8")
         return generated
 
+    def confirm_content(self, section, *, confirmed=True, detail=None):
+        detail = detail or self.client.get(self.url).json()
+        return self.client.put(self.url + '/review-confirmations/' + section, json={
+            'confirmed': confirmed,
+            'source_text_sha256': detail['text']['source_text_sha256'],
+            'review_revision': detail['review']['revision'],
+        })
+
+    def test_machine_body_can_be_confirmed_without_an_edit_and_body_change_invalidates_it(self):
+        initial = self.client.get(self.url).json()
+        self.assertFalse(initial['content_review']['body']['confirmed'])
+        confirmed = self.confirm_content('body')
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertTrue(confirmed.json()['content_review']['body']['confirmed'])
+        self.assertIsNone(confirmed.json()['review']['actor'])
+        self.assertFalse(confirmed.json()['content_review']['images'][0]['confirmed'])
+        self.assertEqual(self.save('Eine neue Fassung. #Neakasa').status_code, 200)
+        self.assertFalse(self.client.get(self.url).json()['content_review']['body']['confirmed'])
+
+    def test_image_confirmation_requires_readable_selected_image(self):
+        self.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        detail = self.client.get(self.url).json()
+        self.assertTrue(detail['images'][0]['ready'])
+        self.assertEqual(self.confirm_content('images/0', detail=detail).status_code, 200)
+        (self.post_dir / 'media_de' / '01.jpg').unlink()
+        current = self.client.get(self.url).json()
+        self.assertFalse(current['content_review']['images'][0]['confirmed'])
+        rejected = self.confirm_content('images/0', detail=current)
+        self.assertEqual(rejected.status_code, 409, rejected.text)
+
+    def test_body_and_each_image_confirmation_follow_only_their_current_content(self):
+        Image.new('RGB', (1080, 1080), 'red').save(self.post_dir / '02.jpg')
+        self.source['media'].append({
+            'kind': 'image', 'local_path': self.source['media'][0]['local_path'].replace('01.jpg', '02.jpg'),
+            'source_media_id': 'second',
+        })
+        self.source['media'][0]['source_media_id'] = 'first'
+        self.write_source()
+        self.assertEqual(self.confirm_content('body').status_code, 200)
+        for index in (0, 1):
+            detail = self.client.get(self.url).json()
+            selected = self.client.post(self.url + f'/image/{index}/selection', json={
+                'choice': 'original', 'confirm': True,
+                'source_image_sha256': detail['images'][index]['source_image_sha256'],
+                'source_text_sha256': detail['text']['source_text_sha256'],
+                'review_revision': detail['review']['revision'],
+            })
+            self.assertEqual(selected.status_code, 200, selected.text)
+        current = self.client.get(self.url).json()['content_review']
+        self.assertTrue(current['body']['confirmed'])
+        self.assertEqual([item['confirmed'] for item in current['images']], [True, True])
+
+        self.assertEqual(self.save('Neue deutsche Fassung.').status_code, 200)
+        changed_body = self.client.get(self.url).json()['content_review']
+        self.assertFalse(changed_body['body']['confirmed'])
+        self.assertEqual([item['confirmed'] for item in changed_body['images']], [True, True])
+
+        Image.new('RGB', (1080, 1080), 'yellow').save(self.post_dir / '02.jpg')
+        changed_second = self.client.get(self.url).json()['content_review']
+        self.assertEqual([item['confirmed'] for item in changed_second['images']], [True, False])
+        detail = self.client.get(self.url).json()
+        reselected = self.client.post(self.url + '/image/1/selection', json={
+            'choice': 'original', 'confirm': True,
+            'source_image_sha256': detail['images'][1]['source_image_sha256'],
+            'source_text_sha256': detail['text']['source_text_sha256'],
+            'review_revision': detail['review']['revision'],
+        })
+        self.assertEqual(reselected.status_code, 200, reselected.text)
+        self.source['media'].reverse()
+        self.write_source()
+        reordered = self.client.get(self.url).json()['content_review']
+        self.assertEqual([item['confirmed'] for item in reordered['images']], [False, False])
+
     def assert_localized_image_visible(self, generated):
         detail = self.client.get(self.url).json()
         self.assertTrue(detail["images"][0]["de_present"])

@@ -126,6 +126,11 @@ export const TASK_DETAIL_SHAPE: ShapeSpec = {
   platform: PLATFORM,
   status: DISPLAY_STATUS,
   review: shape.object,
+  content_review: (value) => isObject(value) && isObject(value.body)
+    && shape.boolean(value.body.confirmed) && shape.nullable(shape.string)(value.body.confirmed_at)
+    && Array.isArray(value.images) && value.images.every((item: unknown) => isObject(item)
+      && shape.number(item.index) && shape.boolean(item.confirmed)
+      && shape.nullable(shape.string)(item.confirmed_at)),
   tags: shape.array,
   tags_revision: shape.string,
   localization: shape.object,

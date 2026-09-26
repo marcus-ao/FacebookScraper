@@ -1,12 +1,15 @@
 """审校台的真实人工文案保存；付费处理与发布不从这里触发。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from fastapi import HTTPException
 
-from core import review, store, translated, localization
+from core import content_confirmation as confirmation_model, review, store, translated, localization
 from core.config import cfg
 from localize import images
 from pipeline import approval
+from pipeline import content_confirmation
 from web.api import exporter, reader
 
 
@@ -131,7 +134,10 @@ def replace_image(task_id: str, index: int, data: bytes, filename: str, *,
 
 
 def select_image(task_id: str, index: int, *, choice: str, source_image_sha256: str,
-                 source_text_sha256: str, review_revision: str | None) -> dict:
+                 source_text_sha256: str, review_revision: str | None,
+                 confirm: bool = False) -> dict:
+    if type(confirm) is not bool or (confirm and choice != 'original'):
+        raise review.ReviewValidationError('只能在确认使用原图时同时完成图片审校')
     source = _source(task_id)
     with images.FileLock(cfg().state_dir / 'images.lock',
             busy_message='图片正在生成，请完成后再更改选择'), review.transaction(source.account_dir) as session:
@@ -145,8 +151,54 @@ def select_image(task_id: str, index: int, *, choice: str, source_image_sha256: 
             raise
         except (OSError, ValueError) as exc:
             raise review.ReviewValidationError('图片选择未保存：%s' % exc) from exc
-        session.change(truth, 'image_selected', expected_revision=review_revision,
+        selected = session.change(truth, 'image_selected', expected_revision=review_revision,
             expected_source_sha256=source_text_sha256, image_selection=selection)
+        if confirm:
+            _record_content_confirmation(session, source.account_dir, truth, 'image', index,
+                True, source_text_sha256, selected['revision'])
+    return _detail(task_id)
+
+
+def _record_content_confirmation(session: review.transaction, account_dir, truth: dict,
+                                 section: str, index: int | None, confirmed: bool,
+                                 source_text_sha256: str, review_revision: str | None) -> dict:
+    tokens = content_confirmation.current_tokens(account_dir, truth)
+    if section == 'body':
+        current = tokens['body']
+        action = 'body_reviewed'
+        payload = {'confirmed': confirmed,
+                   'content_token': current or confirmation_model.token('body-unavailable', source_text_sha256)}
+    elif section == 'image' and type(index) is int and 0 <= index < len(tokens['images']):
+        image = tokens['images'][index]
+        current = image['token']
+        action = 'image_reviewed'
+        payload = {'confirmed': confirmed,
+                   'content_token': current or confirmation_model.token('image-unavailable', index),
+                   'media_index': image['media_index']}
+    else:
+        raise review.ReviewValidationError('图片序号无效')
+    if confirmed and current is None:
+        raise review.ReviewConflict('当前内容尚不能读取，请核对后再确认')
+    return session.change(truth, action, expected_revision=review_revision,
+                          expected_source_sha256=source_text_sha256,
+                          content_confirmation=payload)
+
+
+def confirm_content(task_id: str, section: str, *, index: int | None = None,
+                    confirmed: bool, source_text_sha256: str,
+                    review_revision: str | None) -> dict:
+    if type(confirmed) is not bool:
+        raise review.ReviewValidationError('请明确是否确认当前内容')
+    source = _source(task_id)
+    image_lock = (images.FileLock(cfg().state_dir / 'images.lock',
+                  busy_message='图片正在更新，请稍后确认') if section == 'image' else nullcontext())
+    with image_lock, review.transaction(source.account_dir) as session:
+        truth, state = session.validate(dict(source.row), expected_revision=review_revision,
+            expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
+        if state['status'] in review.TERMINAL | review.LOCKED:
+            raise review.ReviewConflict('这篇内容已冻结或结束审校，请先解除冻结')
+        _record_content_confirmation(session, source.account_dir, truth, section, index,
+            confirmed, source_text_sha256, review_revision)
     return _detail(task_id)
 
 

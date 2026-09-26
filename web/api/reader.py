@@ -629,6 +629,8 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
                       "revision": human["revision"]})
     tags = list(source.row.get("tags") or [])
     localized = localization.effective_draft(source.account_dir, dict(source.row), effective)
+    from pipeline import content_confirmation
+    content_review = content_confirmation.current_state(source.account_dir, dict(source.row), events=events)
     publications = journal.history_for(ctx.state_dir, source.post_id, platform=source.platform)
     publication = publications[-1] if publications else None
     from publish.observations import status as delivery_status
@@ -656,6 +658,7 @@ def task_detail(task_id: str, *, days: int = DEFAULT_DAYS,
         "platform": source.platform,
         "status": state["status"],
         "review": state,
+        "content_review": content_review,
         "hard_alerts": alerts,
         "tags": tags,
         "tags_revision": tags_revision(tags),

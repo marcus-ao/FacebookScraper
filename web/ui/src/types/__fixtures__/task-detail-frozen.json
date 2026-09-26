@@ -61,6 +61,7 @@
  },
  "platform": "instagram",
  "status": "not_ready",
+ "content_review": {"body": {"confirmed": false, "confirmed_at": null}, "images": [{"index": 0, "confirmed": false, "confirmed_at": null}]},
  "review": {
   "status": "not_ready",
   "revision": null,

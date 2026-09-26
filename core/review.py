@@ -12,13 +12,15 @@ from zoneinfo import ZoneInfo
 from core.paid_model import FileLock, FileLockBusy, append_jsonl
 from core.store import Archive, assert_physical_direct_path, read_post_truth
 from core.translated import source_text_sha256
+from core import content_confirmation as confirmation_model
 
 STATUSES = frozenset({"pending_review", "edited", "content_locked", "snoozed",
                       "approved", "scheduled", "skipped", "handed_off"})
 TERMINAL = frozenset({"skipped", "handed_off", "scheduled"})
 ACTIONS = frozenset({"edited", "content_locked", "unlocked", "snoozed", "woke",
                      "skipped", "handed_off", "handoff_link", "approved",
-                     "scheduled", "submit_failed", "unscheduled", "image_selected"})
+                     "scheduled", "submit_failed", "unscheduled", "image_selected",
+                     "body_reviewed", "image_reviewed"})
 # 内容已冻结但尚未提交：四个编辑入口共用这个集合判闸。
 LOCKED = frozenset({"content_locked", "approved"})
 
@@ -86,6 +88,8 @@ def history(account_dir: Path, post_id: str | None = None) -> list[dict]:
                 UUID(event["revision"])
                 if event['action'] == 'image_selected':
                     _validate_image_selection(event.get('image_selection'))
+                if event['action'] in {'body_reviewed', 'image_reviewed'}:
+                    confirmation_model.validate(event['action'], event.get('content_confirmation'))
                 _moment(event["recorded_at"])
                 if event["status"] == "snoozed":
                     if not event.get("wake_at"):
@@ -176,7 +180,8 @@ class transaction:
                expected_source_sha256: str, reason: str = "", wake_at=None,
                handoff_url: str = "", now=None, scheduled: bool = False,
                snooze_days: int = 3, default_status: str = "pending_review", snapshot_id: str = '',
-               image_selection: dict | None = None) -> dict:
+               image_selection: dict | None = None,
+               content_confirmation: dict | None = None) -> dict:
         if not isinstance(action, str) or action not in ACTIONS:
             raise ReviewValidationError("未知的审校动作")
         if snapshot_id and not re.fullmatch(r'[0-9a-f]{32}', snapshot_id):
@@ -185,6 +190,13 @@ class transaction:
             _validate_image_selection(image_selection)
         elif image_selection is not None:
             raise ReviewValidationError('图片选择必须使用对应审校动作')
+        if action in {'body_reviewed', 'image_reviewed'}:
+            try:
+                confirmation_model.validate(action, content_confirmation)
+            except ValueError as exc:
+                raise ReviewValidationError(str(exc)) from exc
+        elif content_confirmation is not None:
+            raise ReviewValidationError('内容确认必须使用对应审校动作')
         source, current = self.validate(
             indexed, expected_revision=expected_revision, expected_source_sha256=expected_source_sha256,
             default_status=default_status, scheduled=scheduled)
@@ -236,13 +248,14 @@ class transaction:
                 raise ReviewValidationError("请填写 http 或 https 开头的帖子链接")
         status = {"woke": "pending_review", "submit_failed": "pending_review",
                   "unscheduled": "pending_review", "unlocked": "edited",
-                  "handoff_link": "handed_off", "image_selected": "edited"}.get(action, action)
+                  "handoff_link": "handed_off", "image_selected": "edited",
+                  "body_reviewed": previous, "image_reviewed": previous}.get(action, action)
         deadline = None
         if action == "snoozed":
             deadline = _moment(wake_at) if wake_at is not None else business_day_wakeup(moment, snooze_days)
             if deadline <= moment:
                 raise ReviewValidationError("挂起到期时间须晚于当前时间")
-        elif action in {"edited", "image_selected"} and previous == "snoozed":
+        elif action in {"edited", "image_selected", "body_reviewed", "image_reviewed"} and previous == "snoozed":
             status, deadline = "snoozed", _moment(current["wake_at"])
             reason = current["reason"]
         event = {
@@ -258,6 +271,8 @@ class transaction:
         }
         if image_selection is not None:
             event['image_selection'] = dict(image_selection)
+        if content_confirmation is not None:
+            event['content_confirmation'] = dict(content_confirmation)
         append_jsonl(_path(self.account_dir), event, guard=lambda path: _path(path.parent))
         return event
 

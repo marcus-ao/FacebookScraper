@@ -213,7 +213,24 @@ async def post_image_selection(task_id: str, index: int, request: Request) -> JS
         raise HTTPException(status_code=400, detail='原图版本无效，请刷新后重试')
     return JSONResponse(await run_in_threadpool(writer.select_image, task_id, index,
         choice=body.get('choice'), source_image_sha256=digest,
-        source_text_sha256=_source_digest(body), review_revision=_state_revision(body)))
+        source_text_sha256=_source_digest(body), review_revision=_state_revision(body),
+        confirm=body.get('confirm', False)))
+
+
+@app.put('/api/tasks/{task_id:path}/review-confirmations/body')
+async def put_body_confirmation(task_id: str, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    return JSONResponse(await run_in_threadpool(writer.confirm_content, task_id, 'body',
+        confirmed=body.get('confirmed'), source_text_sha256=_source_digest(body),
+        review_revision=_state_revision(body)))
+
+
+@app.put('/api/tasks/{task_id:path}/review-confirmations/images/{index}')
+async def put_image_confirmation(task_id: str, index: int, request: Request) -> JSONResponse:
+    body = await _json_body(request)
+    return JSONResponse(await run_in_threadpool(writer.confirm_content, task_id, 'image',
+        index=index, confirmed=body.get('confirmed'), source_text_sha256=_source_digest(body),
+        review_revision=_state_revision(body)))
 
 
 @app.put("/api/tasks/{task_id:path}/tags")

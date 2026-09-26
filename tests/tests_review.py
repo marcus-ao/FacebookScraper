@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core import review, translated  # noqa: E402
+from core import content_confirmation, review, translated  # noqa: E402
 from core.store import post_dirname  # noqa: E402
 
 
@@ -38,6 +38,48 @@ class ReviewTests(unittest.TestCase):
             expected_revision=kwargs.pop("expected_revision", current["revision"]),
             expected_source_sha256=kwargs.pop("expected_source_sha256",
                 translated.source_text_sha256(self.source["text"])), now=self.now, **kwargs)
+
+    def test_content_decisions_preserve_status_and_reject_corrupt_payload(self):
+        body = self.change('body_reviewed', content_confirmation={
+            'confirmed': True, 'content_token': 'a' * 64})
+        self.assertEqual(body['status'], 'pending_review')
+        self.assertIsNone(body['actor'])
+        image = self.change('image_reviewed', content_confirmation={
+            'confirmed': False, 'content_token': 'b' * 64, 'media_index': 0})
+        self.assertEqual(image['status'], 'pending_review')
+        self.assertEqual(len(review.history(self.account, self.source['post_id'])), 2)
+        path = self.account / 'review_items.jsonl'
+        with path.open('a', encoding='utf-8', newline='') as handle:
+            broken = dict(image, revision='00000000-0000-4000-8000-000000000000',
+                          content_confirmation={'confirmed': 'yes', 'content_token': 'b' * 64,
+                                                'media_index': 0})
+            handle.write(json.dumps(broken) + '\n')
+        with self.assertRaises(review.ReviewConflict):
+            review.history(self.account)
+
+    def test_content_decisions_project_independently_by_current_token(self):
+        self.change('body_reviewed', content_confirmation={
+            'confirmed': True, 'content_token': 'a' * 64})
+        for index, digest in enumerate(('b', 'c')):
+            self.change('image_reviewed', content_confirmation={
+                'confirmed': True, 'content_token': digest * 64, 'media_index': index})
+        events = review.history(self.account, self.source['post_id'])
+        tokens = {'body': 'a' * 64, 'images': [
+            {'index': index, 'media_index': index, 'token': digest * 64}
+            for index, digest in enumerate(('b', 'c'))]}
+        current = content_confirmation.project(events, tokens)
+        self.assertTrue(current['body']['confirmed'])
+        self.assertEqual([item['confirmed'] for item in current['images']], [True, True])
+        tokens['body'] = 'd' * 64
+        after_body_edit = content_confirmation.project(events, tokens)
+        self.assertFalse(after_body_edit['body']['confirmed'])
+        self.assertEqual([item['confirmed'] for item in after_body_edit['images']], [True, True])
+        tokens['images'][1]['token'] = 'e' * 64
+        self.assertEqual([item['confirmed'] for item in content_confirmation.project(events, tokens)['images']],
+                         [True, False])
+        tokens['images'][0]['token'] = 'f' * 64
+        self.assertEqual([item['confirmed'] for item in content_confirmation.project(events, tokens)['images']],
+                         [False, False])
 
     def test_snooze_skips_weekend_and_wakes_once(self):
         event = self.change("snoozed")

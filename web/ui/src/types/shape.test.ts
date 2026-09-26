@@ -143,6 +143,12 @@ describe('GET /api/tasks/{id}（详情）', () => {
     expect(taskDetailActive.read_only).toBe(false)
   })
 
+  it('正文与逐图确认只暴露业务决策，不暴露内容指纹', () => {
+    expect(taskDetailActive.content_review.body.confirmed).toBe(false)
+    expect(taskDetailActive.content_review.images).toHaveLength(taskDetailActive.images.length)
+    expect(JSON.stringify(taskDetailActive.content_review)).not.toContain('content_token')
+  })
+
   it('localization 包含两个分区的确认状态', () => {
     ok(taskDetailActive.localization, LOCALIZATION_DRAFT_SHAPE, 'localization')
     expect(taskDetailActive.localization.links_confirmed).toBe(false)

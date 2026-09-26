@@ -409,6 +409,7 @@ outbox 默认保留 30 天终态热数据，完整关联事件/投递组件超�
 
 | 验收单元 | 状态 | 尚需完成 | 证据要求 |
 |---|---|---|---|
+| 正文与逐图确认数据契约 | 离线通过 | `content_review` 只给业务确认状态；正文和各图独立追加决定、按当前内容失效；机器初稿可直接确认；缺图拒绝确认。详情交互与真实提交闸门由后续独立单元验收 | 隔离归档 `tests_review`、`tests_web_review`、前端 shape 单测及构建；无真实账号、模型或发布调用，见 [HANDOFF §1](HANDOFF.md#1-当前工作区事实) |
 | 历史/恢复/风险采样/设置 API | 离线通过 | range/page/total、`detail.meta` 来源指纹/`snapshot_id`、批次与消息恢复、风险/采样元信息和设置说明已接 | 现有接口/版本错误与只读回归 |
 | 列表无图类型占位 | 离线通过 | 历史归档与待审行共用 `preview_kind`；无图显示视频、纯文字、图片待补齐图标；加载失败也回退，保持 40px 缩略图与 48px 行高。服务机视觉效果待联调 | `tests_history`、前端列/shape/样式测试、stage E 两种宽度与 HTTP 404 回退、`history_thumbnail_cost.py` 无空图请求；证据位置见 [HANDOFF §1](HANDOFF.md#1-当前工作区事实) |
 | Web/CLI 五阶段只读状态 | 离线通过 | 共用 snapshot，含批次 `operation_id`/费用/版本、处理时效、Trends blocked 和独立投递状态 | `tests_runtime_status` + 浏览器 UI 夹具；只读 GET 零外部操作 |

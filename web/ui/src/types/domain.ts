@@ -21,6 +21,8 @@ export type DisplayStatus = ReviewStatus | 'not_ready'
 export type ReviewAction =
   | 'edited'
   | 'image_selected'
+  | 'body_reviewed'
+  | 'image_reviewed'
   | 'content_locked'
   | 'unlocked'
   | 'snoozed'
@@ -370,6 +372,16 @@ export interface TaskDetailText {
   readonly current_prompt_version: number
 }
 
+export interface ContentReviewDecision {
+  readonly confirmed: boolean
+  readonly confirmed_at: string | null
+}
+
+export interface ReviewContentState {
+  readonly body: ContentReviewDecision
+  readonly images: readonly (ContentReviewDecision & { readonly index: number })[]
+}
+
 export interface StorageMedia {
   readonly ordinal: number
   readonly kind: string
@@ -409,6 +421,7 @@ export interface TaskDetail {
   readonly platform: Platform
   readonly status: DisplayStatus
   readonly review: ReviewStateRecord
+  readonly content_review: ReviewContentState
   readonly tags: readonly string[]
   readonly tags_revision: Sha256
   readonly hard_alerts?: readonly HardAlert[]
