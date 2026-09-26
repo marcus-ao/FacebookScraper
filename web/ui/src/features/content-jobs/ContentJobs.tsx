@@ -42,7 +42,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   const eligible = ['pending_review', 'edited', 'not_ready'].includes(detail.status) && !detail.text.stale
   const remaining = Math.max(0, (capabilities.data?.max_refine_per_media ?? 0) - (capabilities.data?.image_attempts[String(media)] ?? 0))
   const firstReason = initialTranslationDisabledReason({ editing, busy, running: jobRunning(first.job),
-    interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: consent })
+    interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available,
+    consented: !initial.data?.third_party || consent })
   const nextReason = refinementDisabledReason({ editing, busy, eligible, running: jobRunning(next.job),
     interrupted: next.job?.status === 'interrupted', instruction, capabilitiesLoaded: !!capabilities.data, kind, remaining,
     manualImage: !!detail.images[media]?.manual, originalConfirmed: detail.images[media]?.selection === 'original_confirmed' })
@@ -85,12 +86,12 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
     <Collapse ghost items={[{ key: 'job', label: '查看处理依据', children: <pre className={styles.diagnostic}>{JSON.stringify(flow.job, null, 2)}</pre> }]} />
   </div>
   return <div className={styles.wrap}>
-    {initial.data?.third_party && initialContainer && createPortal(<section className={styles.initial} data-initial-translation>
-      <Alert type="warning" showIcon title="这篇来自第三方作者，请先查看原帖，确认可用于德国站内容运营。" description={<Space wrap>
-        {initial.data.available && !jobRunning(first.job) ? <><Checkbox checked={consent} disabled={editing || busy} onChange={event => setConsent(event.target.checked)}>我已确认可以处理这篇内容，开始本篇模型处理。</Checkbox>
-          <PaidActionButton label="翻译这篇" amount="按实际用量计费" {...(firstReason ? { disabledReason: firstReason } : {})} loading={busy} onClick={() => void act('initial')} /></> : <span>{first.job ? '请查看本篇处理进度。' : '请继续审校；若仍缺正文或德语图，可刷新处理状态。'}</span>}
+    {initialContainer && (initial.data?.third_party || !detail.localization.body_de.trim()) && createPortal(<section className={styles.initial} data-initial-translation>
+      <Alert type={initial.data?.third_party ? 'warning' : 'info'} showIcon title={initial.data?.third_party ? '这篇来自第三方作者，请先查看原帖并确认可用于德国站。' : '生成德语初稿'} description={initial.data ? <Space wrap>
+        {initial.data.third_party && initial.data.available && !jobRunning(first.job) && <Checkbox checked={consent} disabled={editing || busy} onChange={event => setConsent(event.target.checked)}>我已确认可以处理这篇内容，开始本篇模型处理。</Checkbox>}
+        {!jobRunning(first.job) ? <PaidActionButton label="翻译这篇" amount="按实际用量计费" {...(firstReason ? { disabledReason: firstReason } : {})} loading={busy} onClick={() => void act('initial')} /> : <span>请查看本篇处理进度。</span>}
         <Button size="small" disabled={busy} onClick={() => void refreshStatus('initial')}>刷新处理状态</Button>
-      </Space>} />{status(first, true)}
+      </Space> : '正在核对初稿生成条件…'} />{status(first, true)}
     </section>, initialContainer)}
     {currentError ? <Alert type="warning" showIcon
       title={isApiError(currentError) ? currentError.message : '本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对'}

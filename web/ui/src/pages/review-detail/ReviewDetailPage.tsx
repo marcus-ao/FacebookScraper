@@ -12,7 +12,7 @@ import { historyListOptions, reviewListOptions } from '@/hooks/useTasks'
 import { useLocalization } from '@/hooks/useLocalization'
 import { filterReviewRows } from '@/features/post-list/model'
 import { canEditTask } from '@/features/localization/model'
-import { TextWorkspace } from '@/features/localization/TextWorkspace'
+import { BodyReviewActions, TextWorkspace } from '@/features/localization/TextWorkspace'
 import type { TextWorkspaceHandle } from '@/features/localization/TextWorkspace'
 import { LocalizationEditor } from '@/features/localization/LocalizationEditor'
 import { SuggestionPanel } from '@/features/localization/SuggestionPanel'
@@ -131,11 +131,15 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         <div ref={setInitialContainer} />
         <TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
           active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
-          onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump} />
+          onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump}
+          {...(canEditTask(detail) ? { onStartEdit: loc.start, onGenerateDraft: () => initialContainer?.scrollIntoView({ block: 'center' }) } : {})} />
         <SuggestionPanel detail={detail} body={loc.shown.body_de} editing={loc.editing}
           onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} />
         {!detail.read_only && <ContentJobs detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate} initialContainer={initialContainer} />}
-        {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button onClick={loc.start}>编辑德语</Button></div>}
+        <BodyReviewActions canEdit={canEditTask(detail)} hasBody={!!detail.localization.body_de.trim()}
+          editing={loc.editing} saving={loc.saving || loc.recovering} confirming={loc.bodyConfirming}
+          confirmed={detail.content_review.body.confirmed} onEdit={loc.start} onSave={() => void loc.save()}
+          onDiscard={loc.discard} onConfirm={confirmed => void loc.confirmCurrentBody(confirmed)} />
       </ReviewStepPanel>
       <ReviewStepPanel id="images" active={tab} opened={opened.current.has('images')}>
         <ImageWorkspace key={detail.id} images={detail.images} detail={detail}
@@ -163,7 +167,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}
       {loc.warnings.length > 0 && <Typography.Paragraph type="secondary">{loc.warnings.map(item => item.message).join('；')}</Typography.Paragraph>}
-      {loc.editing && <div className={styles.stepActions}><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存修改</Button></div>}
+      {loc.editing && tab !== 'text' && <div className={styles.stepActions}><Button disabled={loc.saving || loc.recovering} onClick={loc.discard}>放弃修改</Button><Button aria-label="保存" type="primary" loading={loc.saving} disabled={loc.recovering} onClick={() => void loc.save()}>保存修改</Button></div>}
     </div>
   </article>
 }

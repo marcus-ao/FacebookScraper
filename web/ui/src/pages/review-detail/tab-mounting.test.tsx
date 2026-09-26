@@ -17,8 +17,8 @@ import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from '
 const detail = detailFixture as unknown as TaskDetail
 const [account, postId] = detail.id.split('/') as [string, string]
 
-function renderDetail(tab: string, storage?: Record<string, unknown>): string {
-  const current = storage ? { ...detail, storage } : detail
+function renderDetail(tab: string, storage?: Record<string, unknown>, currentDetail: TaskDetail = detail): string {
+  const current = storage ? { ...currentDetail, storage } : currentDetail
   const client = createQueryClient()
   client.setQueryData(taskKey(current.id), current)
   const router = createMemoryRouter(routes, {
@@ -61,6 +61,14 @@ describe('详情步骤按需挂载', () => {
     expect(markup).toContain('最终确认与排期')
     expect(markup).not.toContain(IMAGE_WORKSPACE)
     expect(markup).not.toContain(TAG_WORKSPACE)
+  })
+
+  it('已有机器正文但未确认时，在正文步骤提供独立确认动作', () => {
+    const machine = { ...detail, localization: { ...detail.localization, body_de: 'Maschinenentwurf' } }
+    expect(renderDetail('text', undefined, machine)).toContain('确认当前德语正文')
+    const confirmed = { ...machine, content_review: { ...machine.content_review,
+      body: { confirmed: true, confirmed_at: '2026-09-25T00:00:00Z' } } }
+    expect(renderDetail('text', undefined, confirmed)).toContain('当前正文已确认')
   })
 
   it('归档、索引和云盘事实不进入业务审核画布', () => {
