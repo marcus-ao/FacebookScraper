@@ -1277,6 +1277,43 @@ async def _settle_detail_open_location(page, entry, before, *, timeout, restore_
     raise first
 
 
+async def _click_isolated_day_card(entry, *, timeout):
+    # The week card and its outer day both have React onClick handlers. A normal
+    # card click opened Post details, then the day handler navigated to composer.
+    # Suppress only that outer handler for this one verified card click.
+    mode = await entry.evaluate('''node => {
+      const day = node.closest('[role="link"][draggable="false"]');
+      if (!day || node.getAttribute('role') !== 'link') return 'unsafe';
+      const keys = element => Object.keys(element).filter(key => key.startsWith('__reactProps$'));
+      const childKeys = keys(node), dayKeys = keys(day);
+      if (!childKeys.length && !dayKeys.length)
+        return day.onclick ? 'unsafe' : 'plain';
+      if (childKeys.length !== 1 || dayKeys.length !== 1 ||
+          typeof node[childKeys[0]].onClick !== 'function' ||
+          typeof day[dayKeys[0]].onClick !== 'function' ||
+          day.__receiptReadClick) return 'unsafe';
+      const props = day[dayKeys[0]], original = props.onClick;
+      const isolated = event => event.stopPropagation();
+      day.__receiptReadClick = {key: dayKeys[0], original, isolated};
+      props.onClick = isolated;
+      return 'isolated';
+    }''')
+    if mode == 'unsafe':
+        raise PublishStepError('周视图条目点击结构已变化，本次详情读取停止')
+    try:
+        await entry.click(timeout=_ms(timeout))
+    finally:
+        if mode == 'isolated':
+            await entry.evaluate('''node => {
+              const day = node.closest('[role="link"][draggable="false"]');
+              const saved = day && day.__receiptReadClick;
+              if (!saved) return;
+              if (day[saved.key] && day[saved.key].onClick === saved.isolated)
+                day[saved.key].onClick = saved.original;
+              delete day.__receiptReadClick;
+            }''')
+
+
 async def _open_channel_dialogs(
         page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
         restore_calendar=None, allow_preview_text_change=False, activation='pointer'
@@ -1295,6 +1332,8 @@ async def _open_channel_dialogs(
     try:
         if activation == 'keyboard':
             await entry.press('Enter', timeout=_ms(timeout))
+        elif activation == 'isolated_pointer':
+            await _click_isolated_day_card(entry, timeout=timeout)
         else:
             await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
