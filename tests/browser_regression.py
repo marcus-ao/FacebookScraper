@@ -560,7 +560,8 @@ def stage_f(page, ui):
         'href','https://www.facebook.com/neakasa.de/posts/9876543210')
     page.screenshot(path=str(EVIDENCE/'calendar-source-links.png'))
     page.get_by_role('link',name='审校详情',exact=True).click()
-    expect(page.get_by_role('link',name='查看原帖 ↗',exact=True)).to_be_visible()
+    # 详情页的跳转箭头只作装饰，读屏不念，链接名就是“查看原帖”。
+    expect(page.get_by_role('link',name='查看原帖',exact=True)).to_be_visible()
     assert '/review/'+ui.fx.fb_id in page.url, page.url
     page.goto(ui.fx.base_url+'/calendar',wait_until='networkidle')
     page.get_by_role('heading',name='发布月历',exact=True).click()
