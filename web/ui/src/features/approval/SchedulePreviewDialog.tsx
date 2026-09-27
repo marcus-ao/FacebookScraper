@@ -4,6 +4,7 @@ import { Button, Modal } from 'antd'
 import type { ApprovalController } from '@/hooks/useApproval'
 import type { FrozenPreview } from '@/types/domain'
 import { PlatformLabel } from '@/components/PlatformLabel'
+import { BusinessTime } from '@/components/Time'
 import { PLATFORM_LABEL } from '@/lib/format'
 import { cx } from '@/lib/css'
 import styles from './SchedulePreviewDialog.module.css'
@@ -60,7 +61,7 @@ export function SchedulePreviewDialog({ snapshot, busy, onCancel, onConfirm }: S
           <span className={styles.platformMark}><PlatformLabel platform={preview.target.channel} iconOnly /></span>
           <div className={styles.account}><strong>{preview.target.account}</strong><span>{PLATFORM_LABEL[preview.target.channel]}</span></div>
         </div>
-        <div className={styles.schedule}><span>发布时间</span><time dateTime={snapshot.body.scheduled_at}>{snapshot.body.scheduled_at.replace('T', ' ')}</time></div>
+        <div className={styles.schedule}><span>发布时间</span><BusinessTime at={snapshot.body.scheduled_at} /></div>
       </div>
       <div className={styles.post} data-has-images={preview.images.length > 0}>
         {preview.images.length > 0 && <PreviewGallery key={preview.snapshot_id} images={preview.images} />}

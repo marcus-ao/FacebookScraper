@@ -32,7 +32,7 @@ import { idPath, isConflict } from '@/services/http'
 import { refinementCapabilities } from '@/services/jobs'
 import type { ContentJob, TaskDetail } from '@/types/domain'
 import { defaultStep, deriveSteps } from './step-model'
-import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from './ReviewShellParts'
+import { Arrow, ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from './ReviewShellParts'
 import styles from './ReviewDetailPage.module.css'
 
 export function ReviewDetailPage({ source }: { source: ListSource }) {
@@ -139,7 +139,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <SourceStrip detail={detail} />
       <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
       {listLoaded && index < 0 && <p className={styles.filterNotice}>这篇不在当前筛选结果中。<Link to={back}>返回原筛选列表</Link></p>}
-      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重新勾选重试'} /> : null}
+      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重试'} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
       {tab !== 'final' && !finished && <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />}
       <ReviewStepNav steps={steps} active={tab} onChange={changeTab} />
@@ -178,7 +178,8 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         {!finished && <section className={styles.finalSummary} aria-label="发布前审核情况"><h2>发布前审核情况</h2>
           <ul>{steps.filter(step => step.id !== 'final').map(step => <li key={step.id}>
             <span>{step.label}</span><span>{step.status === 'complete' ? '已完成' : step.status === 'not_required' ? '无需审核' : step.todos[0]?.text ?? '待核对'}</span>
-            <button type="button" onClick={() => changeTab(step.id)}>{step.status === 'pending' ? '去处理' : '查看'} ↗</button>
+            <button type="button" aria-label={`${step.label}：${step.status === 'pending' ? '去处理' : '查看'}`}
+              onClick={() => changeTab(step.id)}>{step.status === 'pending' ? '去处理' : '查看'}<Arrow /></button>
           </li>)}</ul>
           {approval.locked && <p>内容已冻结，请在下方选择发布时间。</p>}
         </section>}

@@ -10,6 +10,9 @@ const statusCopy: Record<StepStatus, string> = {
   complete: '已完成', pending: '待处理', not_required: '无需审核', view_only: '可查看',
 }
 
+/** 箭头只提示“会跳转”，读屏时不念出来。 */
+export const Arrow = () => <span aria-hidden="true"> ↗</span>
+
 export function SourceStrip({ detail }: { detail: TaskDetail }) {
   const { meta } = detail
   return <div className={styles.source} aria-label="原帖来源">
@@ -17,7 +20,7 @@ export function SourceStrip({ detail }: { detail: TaskDetail }) {
     <span>{AUTHOR_KIND_LABEL[meta.author_kind]}：{meta.owner || '作者待核对'}</span>
     {meta.coauthors.length > 0 && <span>合作方：{meta.coauthors.join('、')}</span>}
     <span>原帖发布：<ShanghaiTime at={meta.created_at} /></span>
-    {meta.permalink && <a href={meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖 ↗</a>}
+    {meta.permalink && <a href={meta.permalink} target="_blank" rel="noopener noreferrer">查看原帖<Arrow /></a>}
   </div>
 }
 
@@ -29,7 +32,7 @@ export function ReviewTodoSummary({ todos, expanded, onExpand, onNavigate }: {
   return <section className={styles.todoSummary} aria-label="审核待办">
     <strong>待处理 {todos.length} 项</strong>
     <ul>{shown.map((item, index) => <li key={`${item.step}-${item.text}-${index}`}>
-      <button type="button" onClick={() => onNavigate(item.step)}>{item.text} ↗</button>
+      <button type="button" onClick={() => onNavigate(item.step)}>{item.text}<Arrow /></button>
     </li>)}</ul>
     {todos.length > 3 && <button type="button" className={styles.moreTodos} onClick={onExpand}>
       {expanded ? '收起' : `查看全部 ${todos.length} 项`}

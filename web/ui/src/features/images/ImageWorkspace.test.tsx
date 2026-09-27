@@ -126,7 +126,8 @@ describe('上传替换：是换素材，不是转交人工', () => {
     const markup = html([asset()])
     expect(markup).toContain('上传图片替换第 1 张')
     expect(markup).toContain('仍由系统继续排期发布')
-    expect(markup).toContain('下载本篇素材')
+    // 纯下载是次要动作，收在页头「更多」里，不占逐张审核区。
+    expect(markup).not.toContain('下载本篇素材')
   })
 
   it('人工选择及画幅提示在当前图片旁显示', () => {
@@ -136,6 +137,12 @@ describe('上传替换：是换素材，不是转交人工', () => {
     expect(markup).not.toContain('替换于')
     expect(markup).toContain('请核对第 1 张图片的画幅')
     expect(markup).not.toContain('20%')
+  })
+
+  it('认不出的后台提示不把数值或文件名带上页面', () => {
+    const markup = html([asset({ warnings: ['dHash 距离 12，scale_ratio 2.35（01.jpg）'] })])
+    expect(markup).toContain('请核对第 1 张图片后再确认')
+    for (const hidden of ['dHash', '2.35', '01.jpg']) expect(markup).not.toContain(hidden)
   })
 })
 

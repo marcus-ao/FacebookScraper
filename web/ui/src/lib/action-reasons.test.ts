@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   approvalBlockNotice,
   approvalDisabledReason,
+  businessNotice,
+  receiptCheckNotice,
   initialTranslationDisabledReason,
   refinementDisabledReason,
   textCandidateDisabledReason,
@@ -28,6 +30,31 @@ describe('冻结与选时的阻断原因只给业务下一步', () => {
     expect(approvalBlockNotice('本月已经没有可选择的发布时间')).toBe('本月已经没有可选择的发布时间')
     expect(approvalBlockNotice('排期早于 G1 实测 UI 下限（state/probe.json）')).not.toContain('probe')
     expect(approvalBlockNotice('')).toBe('')
+  })
+})
+
+describe('后端原因只在不带技术痕迹时原样给业务看', () => {
+  const fallback = '请稍后再试'
+  it('中文业务句子与平台名原样显示', () => {
+    expect(businessNotice('发布浏览器未启动', fallback)).toBe('发布浏览器未启动')
+    expect(businessNotice('Instagram 渠道暂不可用，请稍后再试', fallback)).toBe('Instagram 渠道暂不可用，请稍后再试')
+  })
+  it.each([
+    'TimeoutError: Locator.click',
+    '原排期缺少确切的单渠道回读或 remote ID 绑定',
+    '请连接 9223 端口的 Chrome：127.0.0.1:92230',
+    '读取 state/planner.json 失败',
+  ])('%s → 通用说明', message => {
+    expect(businessNotice(message, fallback)).toBe(fallback)
+  })
+  it('核对回执：没读到排期时不带读取细节，通知提示照常显示', () => {
+    expect(receiptCheckNotice({ status: 'submit_ambiguous', message: '尚未补齐远端回执：TimeoutError；请勿重新提交。' }))
+      .toContain('不要重新提交')
+    expect(receiptCheckNotice({ status: 'submit_ambiguous', message: '尚未补齐远端回执：TimeoutError；请勿重新提交。' }))
+      .not.toContain('Timeout')
+    expect(receiptCheckNotice({ status: 'scheduled', projection_error: '排期已确认，飞书通知当前未启用。' }))
+      .toBe('排期已确认，飞书通知当前未启用。')
+    expect(receiptCheckNotice({ status: 'scheduled' })).toBe('')
   })
 })
 

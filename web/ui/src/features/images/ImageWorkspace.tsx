@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react'
 import { Alert, Button, Empty, Modal, Space, Upload } from 'antd'
-import { DownloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { UploadOutlined } from '@ant-design/icons'
 import type { ImageAsset, ImageVersion, TaskDetail } from '@/types/domain'
 import { selectImageVersion, selectOriginalImage, uploadImage } from '@/services/jobs'
-import { confirmImage, downloadPost } from '@/services/review'
+import { confirmImage } from '@/services/review'
+import { isConflict } from '@/services/http'
+import { businessNotice } from '@/lib/action-reasons'
 import { canEditTask } from '@/features/localization/model'
 import styles from './ImageWorkspace.module.css'
+
+/** 版本不可采用的原因写给业务看：说清哪样东西过时了，不提提示词或文件路径。 */
+const UNUSABLE_COPY: readonly (readonly [RegExp, string])[] = [
+  [/文件已不在归档/, '图片文件已不可用'],
+  [/提示词/, '按旧的生成要求制作'],
+  [/更早版本的原图/, '对应的是更早的原图'],
+  [/更早版本的德语正文/, '对应的是更早的德语正文'],
+  [/人工图片/, '这一张已采用人工图片，旧版本仅供查看'],
+  [/原路径已被替换/, '已被新图片替换，仅供查看'],
+]
+const unusableCopy = (reason: string) => UNUSABLE_COPY.find(([pattern]) => pattern.test(reason))?.[1] ?? '这一版已过时，仅供查看'
 
 /** 浏览器读成 data URL；后端复用既有的 base64 图片入口，不引入 multipart 依赖。 */
 const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
@@ -60,7 +73,14 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
     if (busy) return
     setBusy(true); setError(null)
     try { await run(); await onChanged() }
-    catch (cause) { setError(cause instanceof Error ? cause.message : '这一步没有完成，请刷新后重试') }
+    catch (cause) {
+      // 后台出图或换版后，旧页面的确认会被拒；载入最新图片，让人看过再确认。
+      // 先载入再提示：图片地址变化会清空旧提示。
+      if (isConflict(cause)) {
+        try { await onChanged(); setError('这张图片已有更新，已载入最新内容，请核对后再确认') }
+        catch { setError('这张图片已有更新，请刷新后核对再确认') }
+      } else setError(businessNotice(cause instanceof Error ? cause.message : '', '这一步没有完成，请刷新后重试'))
+    }
     finally { setBusy(false) }
   }
   const upload = (file: File) => act(async () => {
@@ -91,7 +111,8 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
     {image.metrics?.changed_pixel_ratio === 0 && proposedUrl && <p className={styles.note}>第 {number} 张未见明显改动；可能无需修改，也可能未按要求生成，请核对图中文字。</p>}
     {image.warnings?.map((warning, index) => <p className={styles.note} key={index}>
       {warning.includes('宽高比') || warning.includes('画幅') ? `请核对第 ${number} 张图片的画幅是否适合发布。`
-        : warning.includes('多个人工图片候选') ? `第 ${number} 张有多个待选图片，请核对归档素材并保留一张。` : warning}
+        : warning.includes('多个人工图片候选') ? `第 ${number} 张有多个待选图片，请核对归档素材并保留一张。`
+        : businessNotice(warning, `请核对第 ${number} 张图片后再确认。`)}
     </p>)}
     {error && <Alert type="warning" showIcon title={error} />}
     {pair()}
@@ -131,13 +152,11 @@ export function ImageWorkspace({ images, detail, versions, editing, onChanged, o
             {version.preview_url && <Button size="small" onClick={() => setPreview(version)}>对比画面</Button>}
             {!version.current && (version.usable ? <Button size="small" disabled={disabled}
               onClick={() => void act(async () => { await selectImageVersion(detail, image.index, version.out_path); setVersionsOpen(false) })}>采用这一版</Button>
-              : <span className={styles.note}>此版不可采用：{version.unusable_reasons.join('；')}</span>)}
+              : <span className={styles.note}>此版不可采用：{[...new Set(version.unusable_reasons.map(unusableCopy))].join('；')}</span>)}
           </Space>
         </li>)}</ul>
       </Modal>
     </>}
-    {!detail.read_only && <Button type="link" icon={<DownloadOutlined />} disabled={busy || editing}
-      onClick={() => void act(() => downloadPost(detail))}>下载本篇素材</Button>}
     <Modal title={`图片放大对照 · ${number} / ${images.length}`} open={zoom} onCancel={() => setZoom(false)} footer={null} width="90vw">{pair(true)}</Modal>
     <Modal title="版本画面对比" open={!!preview} onCancel={() => setPreview(null)} footer={null} width="90vw">
       {preview?.preview_url && <div className={`${styles.pair} ${styles.large}`}>

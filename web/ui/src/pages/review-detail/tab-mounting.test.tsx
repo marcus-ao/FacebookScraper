@@ -82,6 +82,9 @@ describe('详情步骤按需挂载', () => {
     const markup = renderDetail('final')
     expect(markup).toContain('发布前审核情况')
     expect(markup).toContain('去处理')
+    // 每行按钮的可访问名称带上步骤名，读屏时分得清是哪一步；跳转箭头不念出来。
+    expect(markup).toContain('aria-label="德语正文：去处理"')
+    expect(markup).toContain('<span aria-hidden="true"> ↗</span>')
     expect(markup).toContain('查看完整发布文案')
     expect(markup).not.toContain('aria-label="编辑确认无误"')
   })

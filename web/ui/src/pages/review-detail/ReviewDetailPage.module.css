@@ -38,5 +38,6 @@
 .finalSummary li span:nth-child(2), .finalSummary p { color: var(--rc-fg-muted); }
 .finalSummary button { border: 0; background: none; color: var(--rc-primary); cursor: pointer; font: inherit; white-space: nowrap; }
 .finalSummary button:focus-visible { outline: 2px solid var(--rc-primary); outline-offset: 3px; }
-@media (max-width: 1050px) { .bar { flex-wrap: wrap; } .center { justify-content: flex-start; order: 3; flex-basis: 100%; } .stepButtons small { display: none; } }
+/* 中等宽度把状态折到步骤名下方；状态文字不能因为窄就消失，只靠下划线分不清哪步完成。 */
+@media (max-width: 1050px) { .bar { flex-wrap: wrap; } .center { justify-content: flex-start; order: 3; flex-basis: 100%; } .stepButtons button { flex-wrap: wrap; row-gap: 0; } .stepButtons small { flex-basis: 100%; margin-left: calc(1.45rem + var(--rc-space-2)); } }
 @media (max-width: 760px) { .page { margin: calc(-1 * var(--rc-space-3)); } .body { padding: var(--rc-space-3); } .stepButtons { display: none; } .stepSelect { display: grid; gap: var(--rc-space-1); padding-bottom: var(--rc-space-2); color: var(--rc-fg-muted); font-size: var(--rc-font-meta); } .stepSelect select { width: 100%; min-height: 2.5rem; padding: var(--rc-space-2); color: var(--rc-fg); background: var(--rc-surface); border: 1px solid var(--rc-border); border-radius: var(--rc-radius); font: inherit; } .todoSummary ul { flex-basis: 100%; } .finalSummary li { grid-template-columns: minmax(0, 1fr) auto; } .finalSummary li span:nth-child(2) { grid-column: 1 / -1; grid-row: 2; } }

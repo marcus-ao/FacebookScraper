@@ -5,6 +5,7 @@ import { MoreOutlined } from '@ant-design/icons'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
 import { useReviewDecision } from '@/hooks/useTasks'
 import { isConflict } from '@/services/http'
+import { downloadPost } from '@/services/review'
 import type { DecisionAction, DecisionForm, ReviewContext } from '@/services/review'
 import type { TaskDetail } from '@/types/domain'
 import { useDeploymentDraft } from '@/hooks/useDeploymentDraft'
@@ -34,17 +35,24 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
     ? [detail.status === 'snoozed' ? 'woke' : 'snoozed', ...(!compact ? ['export', 'handed_off'] as const : []), 'skipped']
     : detail.status === 'handed_off' && !compact ? ['export', 'handoff_link'] : []
   const hasHistory = !compact && 'trail' in detail
+  // 只下载当前已保存的素材，不改变审核状态；与「下载并由我处理」分开。
+  const canDownload = hasHistory && !('read_only' in detail && detail.read_only)
   if (actions.length === 0 && !hasHistory) return null
   const labels = { ...titles, export: detail.status === 'handed_off' ? '重新下载资源' : '下载并由我处理',
     handed_off: '我已自行处理', handoff_link: '补充发布链接' }
   const items: MenuProps['items'] = [
     ...actions.map(action => ({ key: action, label: labels[action], danger: action === 'skipped' })),
+    ...(canDownload ? [{ key: 'download', label: '下载本篇素材' }] : []),
     ...(hasHistory ? [{ key: 'history', label: '处理记录' }] : []),
   ]
   function open(action: DecisionAction) {
     if (!deploymentStore.canStartEditing()) return
     mutation.reset(); setFresh(null); setRefreshError('')
     setForm({ action, reason: '', wakeAt: '', handoffUrl: detail.review.handoff_url || '' })
+  }
+  async function download() {
+    try { await downloadPost(detail as TaskDetail) }
+    catch { void message.error('素材下载未完成，请稍后重试') }
   }
   function close() { if (!mutation.isPending) setForm(null) }
   async function confirm() {
@@ -56,7 +64,8 @@ export function ReviewActions({ detail, compact = false, onChanged }: {
     } catch { /* 错误与恢复入口留在当前对话框，填写内容不丢。 */ }
   }
   return <span data-row-control>
-    <Dropdown menu={{ items, onClick: ({ key }) => key === 'history' ? setHistoryOpen(true) : open(key as DecisionAction) }} trigger={['click']}>
+    <Dropdown menu={{ items, onClick: ({ key }) => key === 'history' ? setHistoryOpen(true)
+      : key === 'download' ? void download() : open(key as DecisionAction) }} trigger={['click']}>
       <Button ref={trigger} type="text" size="small" aria-label="更多处理动作" icon={<MoreOutlined />}>{compact ? null : '更多'}</Button>
     </Dropdown>
     {hasHistory && <DetailDrawers detail={detail as TaskDetail} open={historyOpen}
