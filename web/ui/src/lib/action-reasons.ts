@@ -41,6 +41,26 @@ export function approvalDisabledReason(gate: ApprovalGate): string {
   return ''
 }
 
+/** 服务端的冻结/选时阻断原因可能带命令、路径或录证术语，页面只给业务下一步。 */
+const BLOCK_NOTICES: readonly (readonly [RegExp, string])[] = [
+  [/金额/, '德语正文里的金额与原帖不一致，请回到德语正文核对金额写法。'],
+  [/缺少德语图/, '仍有图片没有可发布的版本，请回到逐张图片处理。'],
+  [/没有译文|译文缺失或为空/, '尚无德语正文，请先在德语正文步骤补充。'],
+  [/源帖已变更|指纹已过期|提示词版本已过期/, '原帖或德语初稿已更新，请回到德语正文重新复核并保存。'],
+  [/平台文案尚未确认/, '标签或链接尚未确认，请回到标签与链接步骤处理。'],
+  [/owner|coauthors|归属/, '原帖作者信息不完整，暂不能发布，请联系维护人员核对。'],
+]
+
+export function approvalBlockNotice(reason: string | null | undefined): string {
+  const text = (reason ?? '').trim()
+  if (!text) return ''
+  const known = BLOCK_NOTICES.find(([pattern]) => pattern.test(text))
+  if (known) return known[1]
+  // 服务端已写成业务话术的原因（缺确认、需解除冻结、本月无可选时间）原样显示。
+  if (/^(请|本月|这份冻结|这篇)/.test(text) && !/[\\/]|python|--|G\d/i.test(text)) return text
+  return '发布条件暂未满足，请刷新核对；仍无法继续时请联系维护人员。'
+}
+
 function contentJobCommon(gate: { readonly editing: boolean; readonly busy: boolean }): string {
   if (gate.editing) return '请先保存或放弃当前编辑'
   if (gate.busy) return '正在处理，请等待'
@@ -88,7 +108,7 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   if (gate.running) return '当前优化仍在生成'
   if (gate.interrupted) return '请先核对中断的处理'
   if (!gate.instruction.trim()) return '请填写本次希望怎样调整'
-  if (!gate.capabilitiesLoaded) return '正在读取可用次数与费用'
+  if (!gate.capabilitiesLoaded) return '正在读取可用次数'
   // 人工图优先于程序产出，所以模型再生成一版也不会被采用——那笔钱是白花的。
   if (gate.kind === 'image' && gate.manualImage) return '这一张已换成人工图片，模型优化不会被采用'
   if (gate.kind === 'image' && gate.originalConfirmed) return '这一张已确认使用原图，需要出图时请先撤销原图确认'

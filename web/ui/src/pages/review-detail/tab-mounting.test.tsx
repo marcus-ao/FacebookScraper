@@ -9,7 +9,7 @@ import { createQueryClient } from '@/app/queryClient'
 import { routes } from '@/app/router'
 import { antdComponents, antdToken } from '@/app/theme'
 import { taskKey } from '@/hooks/useTasks'
-import type { TaskDetail } from '@/types/domain'
+import type { ApprovalOptions, TaskDetail } from '@/types/domain'
 import detailFixture from '@/types/__fixtures__/task-detail-active.json'
 import { deriveSteps } from './step-model'
 import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from './ReviewShellParts'
@@ -17,10 +17,17 @@ import { ReviewStepNav, ReviewStepPanel, ReviewTodoSummary, SourceStrip } from '
 const detail = detailFixture as unknown as TaskDetail
 const [account, postId] = detail.id.split('/') as [string, string]
 
-function renderDetail(tab: string, storage?: Record<string, unknown>, currentDetail: TaskDetail = detail): string {
+function renderDetail(tab: string, storage?: Record<string, unknown>, currentDetail: TaskDetail = detail,
+  options?: ApprovalOptions): string {
   const current = storage ? { ...currentDetail, storage } : currentDetail
   const client = createQueryClient()
   client.setQueryData(taskKey(current.id), current)
+  if (options) {
+    // 视为刚读到的条件；否则挂载时会重新读取，页面按「正在核对」处理。
+    client.setQueryDefaults(['approval-options'], { staleTime: Infinity })
+    client.setQueryData(['approval-options', current.id, current.text.source_text_sha256,
+      current.text.human_revision, current.review.revision, current.localization.revision], options)
+  }
   const router = createMemoryRouter(routes, {
     initialEntries: [`/review/${account}/${encodeURIComponent(postId)}?tab=${tab}`],
   })
@@ -77,6 +84,29 @@ describe('详情步骤按需挂载', () => {
     expect(markup).toContain('去处理')
     expect(markup).toContain('查看完整发布文案')
     expect(markup).not.toContain('aria-label="编辑确认无误"')
+  })
+
+  it('前三步都完成但服务端不许冻结时，说明业务原因，不暴露命令或内部术语', () => {
+    const ready: TaskDetail = { ...detail, status: 'pending_review',
+      localization: { ...detail.localization, body_de: 'Geprüfter Text', hashtags_confirmed: true, links_confirmed: true,
+        links: detail.localization.links.map(link => ({ ...link, target_url: 'https://de.example/p', confirmed: true })) },
+      images: detail.images.map(image => ({ ...image, ready: true })),
+      content_review: {
+        body: { confirmed: true, confirmed_at: '2026-09-25T00:00:00Z', version: 'b'.repeat(64) },
+        images: detail.images.map(image => ({ index: image.index, confirmed: true,
+          confirmed_at: '2026-09-25T00:00:00Z', version: 'c'.repeat(64) })),
+      } }
+    const options: ApprovalOptions = { available: false, reason: '', fingerprint: 'f'.repeat(64), lockable: false,
+      lock_reason: '帖子 fixture：金额硬闸未通过：$10\npython -m localize.images --account "fa_x"', preview: null,
+      platform: 'facebook', business_timezone: 'Asia/Shanghai', audience_timezone: 'Europe/Berlin',
+      audience_quiet_hours: [0, 7], default_times: ['10:00'], earliest: '2026-09-28T10:00:00+08:00',
+      latest: '2026-09-30T23:00:00+08:00', ui_timezone: 'Asia/Shanghai' }
+    const markup = renderDetail('final', undefined, ready, options)
+    expect(markup).toContain('暂时不能冻结内容')
+    expect(markup).toContain('金额与原帖不一致')
+    for (const hidden of ['python', '硬闸', 'aria-label="编辑确认无误"']) expect(markup).not.toContain(hidden)
+    expect(renderDetail('final', undefined, ready, { ...options, lockable: true, lock_reason: '' }))
+      .not.toContain('暂时不能冻结内容')
   })
 
   it('归档、索引和云盘事实不进入业务审核画布', () => {

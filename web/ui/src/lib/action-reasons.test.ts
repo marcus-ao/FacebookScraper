@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  approvalBlockNotice,
   approvalDisabledReason,
   initialTranslationDisabledReason,
   refinementDisabledReason,
@@ -9,6 +10,26 @@ import {
 } from './action-reasons'
 import type { ContentJob } from '@/types/domain'
 import type { Sha256 } from '@/types/brands'
+
+describe('冻结与选时的阻断原因只给业务下一步', () => {
+  it.each([
+    ['帖子 123：金额硬闸未通过：$10', '金额与原帖不一致'],
+    ['帖子 123：第 1 张缺少德语图；已在浏览器操作前停止。补图后再提交：\npython -m localize.images --account "fa_x"', '逐张图片'],
+    ['帖子 123：人工译文依据的源帖已变更或无法确认；请在审校台复核并保存', '重新复核并保存'],
+    ['帖子 123：平台文案尚未确认：请确认本篇使用的话题标签', '标签与链接'],
+    ['帖子 123：owner=partner 与目标账号不同，但 coauthors 没有 x；归属证据不完整，禁止发布', '联系维护人员'],
+  ])('%s', (reason, expected) => {
+    const notice = approvalBlockNotice(reason)
+    expect(notice).toContain(expected)
+    for (const hidden of ['python', '硬闸', 'owner=', '帖子 123']) expect(notice).not.toContain(hidden)
+  })
+  it('服务端已是业务话术时原样显示；技术原因换成通用说明', () => {
+    expect(approvalBlockNotice('请先核对并确认第 2 张图片')).toBe('请先核对并确认第 2 张图片')
+    expect(approvalBlockNotice('本月已经没有可选择的发布时间')).toBe('本月已经没有可选择的发布时间')
+    expect(approvalBlockNotice('排期早于 G1 实测 UI 下限（state/probe.json）')).not.toContain('probe')
+    expect(approvalBlockNotice('')).toBe('')
+  })
+})
 
 describe('文案候选采用资格', () => {
   const sourceHash = 'a'.repeat(64) as Sha256
@@ -128,7 +149,7 @@ describe('单篇优化：七条原因，次数用完排在最后', () => {
     [{ running: true }, '当前优化仍在生成'],
     [{ interrupted: true }, '请先核对中断的处理'],
     [{ instruction: '   ' }, '请填写本次希望怎样调整'],
-    [{ capabilitiesLoaded: false }, '正在读取可用次数与费用'],
+    [{ capabilitiesLoaded: false }, '正在读取可用次数'],
     [{ kind: 'image' as const, remaining: 0 }, '这张图片的优化次数已用完'],
   ])('%o → %s', (patch, expected) => {
     expect(refinementDisabledReason({ ...refineOk, ...patch })).toBe(expected)

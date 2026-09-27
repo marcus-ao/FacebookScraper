@@ -20,6 +20,7 @@ import { CategoryEditor } from '@/features/localization/CategoryEditor'
 import { ImageWorkspace } from '@/features/images/ImageWorkspace'
 import { ApprovalAction, DecisionPanel } from '@/features/approval/DecisionPanel'
 import { useApproval } from '@/hooks/useApproval'
+import { approvalBlockNotice } from '@/lib/action-reasons'
 import { ContentJobs } from '@/features/content-jobs/ContentJobs'
 import { registerReviewDraftActions } from '@/app/review-draft-actions'
 import type { ReviewDraftActions } from '@/app/review-draft-actions'
@@ -80,6 +81,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const steps = deriveSteps(detail)
   const todos = steps.flatMap(step => step.todos)
   const finished = ['scheduled', 'approved', 'skipped', 'handed_off', 'snoozed'].includes(detail.status)
+  // 前三步都完成、服务端仍不许冻结时（如金额不一致），必须说明原因，不能只留一个不出现的按钮。
+  const freezeBlocked = canEditTask(detail) && ['pending_review', 'edited'].includes(detail.status)
+    && !loc.editing && !loc.saving && !approval.options.isFetching
+    && steps.every(step => step.id === 'final' || step.status === 'complete' || step.status === 'not_required')
+    && (approval.options.isError || (!!approval.options.data && !approval.options.data.lockable))
 
   const adoptCandidate = (job: ContentJob) => {
     const adopt = () => {
@@ -177,6 +183,9 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
           {approval.locked && <p>内容已冻结，请在下方选择发布时间。</p>}
         </section>}
         <DecisionPanel detail={detail} controller={approval} editing={loc.editing || loc.saving} />
+        {freezeBlocked && <Alert type="warning" showIcon title="暂时不能冻结内容"
+          description={approval.options.isError ? '发布条件读取失败，请刷新后重试。' : approvalBlockNotice(approval.options.data?.lock_reason)}
+          action={<Button size="small" onClick={() => void approval.options.refetch()}>重新核对</Button>} />}
         {!detail.read_only && !loc.editing && !loc.saving && (approval.lockable || approval.locked) && <div className={styles.stepActions}><ApprovalAction controller={approval} /></div>}
       </ReviewStepPanel>
       {loc.issues.length > 0 && <Alert type="warning" title={loc.issues.map(item => item.message).join('；')} />}

@@ -10,6 +10,7 @@ import { DisabledReason } from '@/components/DisabledReason'
 import { nearbyOccupancy } from './occupancy'
 import { SchedulePreviewDialog } from './SchedulePreviewDialog'
 import { PLATFORM_LABEL, wallMinutesApart, zonedInput } from '@/lib/format'
+import { approvalBlockNotice } from '@/lib/action-reasons'
 import { isConflict } from '@/services/http'
 import { checkLocalization } from '@/services/localization'
 import styles from './DecisionPanel.module.css'
@@ -122,7 +123,8 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     {c.eligible && <div className={styles.row}><label>发布时间<Input aria-label="发布时间" type="datetime-local"
       value={c.when} min={min} max={max} disabled={editing || c.busy || !data?.available}
       onChange={event => c.setWhen(event.target.value)} /></label></div>}
-    {c.locked && c.reason && c.operation?.status !== 'uncertain' && <p className={styles.help}>{c.reason}</p>}
+    {c.locked && c.reason && c.operation?.status !== 'uncertain' && <p className={styles.help}>
+      {!data?.available && data?.reason ? approvalBlockNotice(data.reason) : c.reason}</p>}
     {c.eligible && min && max && <p className={styles.help}>可选时间：{min.replace('T', ' ')} 至 {max.replace('T', ' ')}</p>}
     {c.eligible && c.when && (near ? <Alert type="warning" showIcon title="所选时刻附近已有同渠道排期"
       description={nearCards.map((card, index) => <span key={index}><BusinessTime at={card.at_business} />{index < nearCards.length - 1 && '、'}</span>)} />

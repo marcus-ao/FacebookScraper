@@ -70,4 +70,13 @@ describe('最终审核区', () => {
     expect(markup).not.toContain('依据缓存')
     expect(markup).not.toContain('前后一天')
   })
+  it('旧冻结帖缺人工确认时说明解除冻结重审，而不是指向不存在的下方提示', () => {
+    const legacy = { ...controller, locked: true, eligible: true, reason: '发布条件尚未满足，请查看下方提示',
+      options: { data: { business_timezone: 'Asia/Shanghai', available: false, lockable: false,
+        reason: '请解除冻结、重新核对并确认当前正文和每张图片，然后再次冻结',
+        preview: { target: { account: 'Neakasa Deutschland', channel: 'facebook' }, text: 'Frozen' } } } }
+    const markup = html({ ...detail, status: 'content_locked' }, legacy as ApprovalController)
+    expect(markup).toContain('请解除冻结、重新核对并确认当前正文和每张图片')
+    expect(markup).not.toContain('请查看下方提示')
+  })
 })
