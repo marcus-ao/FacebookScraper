@@ -63,6 +63,11 @@ export function businessNotice(message: string | null | undefined, fallback: str
   return text && !technical(text) ? text : fallback
 }
 
+/** 保存或确认失败：“先编辑德语”“标签格式”这类能照做的提示要给人看，只说“请重试”会让人一直重试。 */
+export function failureNotice(cause: unknown, fallback = '请重试；仍不行请刷新页面后核对。'): string {
+  return businessNotice(cause instanceof Error ? cause.message : '', fallback)
+}
+
 export function approvalBlockNotice(reason: string | null | undefined): string {
   const text = (reason ?? '').trim()
   if (!text) return ''

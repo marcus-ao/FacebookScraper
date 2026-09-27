@@ -20,7 +20,7 @@ import { CategoryEditor } from '@/features/localization/CategoryEditor'
 import { ImageWorkspace } from '@/features/images/ImageWorkspace'
 import { ApprovalAction, DecisionPanel } from '@/features/approval/DecisionPanel'
 import { useApproval } from '@/hooks/useApproval'
-import { approvalBlockNotice } from '@/lib/action-reasons'
+import { approvalBlockNotice, failureNotice } from '@/lib/action-reasons'
 import { ContentJobs } from '@/features/content-jobs/ContentJobs'
 import { registerReviewDraftActions } from '@/app/review-draft-actions'
 import type { ReviewDraftActions } from '@/app/review-draft-actions'
@@ -141,7 +141,8 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
       <SourceStrip detail={detail} />
       <CategoryEditor detail={detail} disabled={loc.editing || loc.saving} apply={apply} refresh={refresh} />
       {listLoaded && index < 0 && <p className={styles.filterNotice}>这篇不在当前筛选结果中。<Link to={back}>返回原筛选列表</Link></p>}
-      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区，请重试' : '确认未保存，请重试'} /> : null}
+      {loc.error ? isConflict(loc.error) ? <ConflictRecovery kind="draft" onRecover={() => void loc.recover()} recovering={loc.recovering} /> : <Alert type="error" title={loc.editing ? '保存未完成，你的修改仍在编辑区' : '确认未保存'}
+        description={failureNotice(loc.error)} /> : null}
       {!detail.text.stale && detail.text.de_machine && !detail.text.machine_current && !detail.text.de_human && <Alert type="warning" title="旧版机器译文，请重新翻译或保存人工复核后的文案" />}
       {tab !== 'final' && !finished && <ReviewTodoSummary todos={todos} expanded={todosExpanded} onExpand={() => setTodosExpanded(value => !value)} onNavigate={changeTab} />}
       <ReviewStepNav steps={steps} active={tab} onChange={changeTab} />
@@ -173,7 +174,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
           onChange={loc.setDraft} onComplete={next => void loc.completeLocalization(next)} onSave={() => void loc.save()} onDiscard={loc.discard} onInsert={index => {
             changeTab('text'); requestAnimationFrame(() => textRef.current?.insertAtCursor(`{{link${index + 1}}}`))
           }} />
-        {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button onClick={loc.start}>编辑标签与链接</Button></div>}
+        {!loc.editing && canEditTask(detail) && <div className={styles.stepActions}><Button disabled={loc.saving || loc.recovering} onClick={loc.start}>编辑标签与链接</Button></div>}
       </ReviewStepPanel>
       <ReviewStepPanel id="final" active={tab} opened={opened.current.has('final')}>
         {bioTargetWarning(loc.shown) && <Alert type="warning" showIcon title={bioTargetWarning(loc.shown)} />}

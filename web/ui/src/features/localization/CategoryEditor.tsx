@@ -3,6 +3,7 @@ import { Alert, App, Button, Input, Modal, Space, Tag } from 'antd'
 import type { TaskDetail } from '@/types/domain'
 import { idPath, isConflict, putBody, request } from '@/services/http'
 import { ConflictRecovery } from '@/components/ConflictRecovery'
+import { failureNotice } from '@/lib/action-reasons'
 
 export function CategoryEditor({ detail, disabled, apply, refresh }: { detail: TaskDetail; disabled: boolean; apply: (detail: TaskDetail) => void; refresh: () => Promise<TaskDetail> }) {
   const [open, setOpen] = useState(false), [input, setInput] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null)
@@ -17,7 +18,7 @@ export function CategoryEditor({ detail, disabled, apply, refresh }: { detail: T
   return <Space wrap><span>产品分类</span>{detail.tags.length ? detail.tags.map(tag => <Tag key={tag}>{tag}</Tag>) : <span>未分类</span>}{!detail.read_only && <Button type="text" size="small" disabled={disabled} onClick={() => { setInput(detail.tags.join('，')); setError(null); setOpen(true) }}>编辑分类</Button>}
     <Modal title="编辑产品分类" open={open} onCancel={() => { if (!busy && !recovering) setOpen(false) }} okText="保存分类" cancelText="取消" confirmLoading={busy} okButtonProps={{ disabled: recovering }} onOk={() => void save()}>
       <label>多个分类用逗号隔开；清空后归为未分类。<Input.TextArea aria-label="产品分类" value={input} onChange={event => setInput(event.target.value)} disabled={busy || recovering} rows={2} /></label>
-      {error ? isConflict(error) ? <ConflictRecovery kind="tags" recovering={recovering} onRecover={() => { setRecovering(true); void refresh().then(() => setError(null)).catch(setError).finally(() => setRecovering(false)) }} /> : <Alert type="error" title="分类未保存，请重试" /> : null}
+      {error ? isConflict(error) ? <ConflictRecovery kind="tags" recovering={recovering} onRecover={() => { setRecovering(true); void refresh().then(() => setError(null)).catch(setError).finally(() => setRecovering(false)) }} /> : <Alert type="error" title="分类未保存" description={failureNotice(error)} /> : null}
     </Modal>
   </Space>
 }

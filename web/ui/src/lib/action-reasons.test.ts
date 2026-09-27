@@ -4,6 +4,7 @@ import {
   approvalBlockNotice,
   approvalDisabledReason,
   businessNotice,
+  failureNotice,
   receiptCheckNotice,
   initialTranslationDisabledReason,
   refinementDisabledReason,
@@ -12,6 +13,7 @@ import {
 } from './action-reasons'
 import type { ContentJob } from '@/types/domain'
 import type { Sha256 } from '@/types/brands'
+import { ApiError } from '@/services/http'
 
 describe('冻结与选时的阻断原因只给业务下一步', () => {
   it.each([
@@ -46,6 +48,15 @@ describe('后端原因只在不带技术痕迹时原样给业务看', () => {
     '读取 state/planner.json 失败',
   ])('%s → 通用说明', message => {
     expect(businessNotice(message, fallback)).toBe(fallback)
+  })
+  it('保存失败时给出能照做的服务端提示，其余只说请重试', () => {
+    for (const message of ['正文版本已过期，请先编辑德语并复核保存，再确认分区',
+      '每个话题标签应为 # 开头的完整词，不含空格或标点', '原帖链接不应删除或替换，请在对应行填写德语落地页']) {
+      expect(failureNotice(new ApiError(message, 400, null))).toBe(message)
+    }
+    for (const cause of [new ApiError('temporary failure', 503, null), new TypeError('Failed to fetch'), null]) {
+      expect(failureNotice(cause)).toBe('请重试；仍不行请刷新页面后核对。')
+    }
   })
   it('核对回执：没读到排期时不带读取细节，通知提示照常显示', () => {
     expect(receiptCheckNotice({ status: 'submit_ambiguous', message: '尚未补齐远端回执：TimeoutError；请勿重新提交。' }))
