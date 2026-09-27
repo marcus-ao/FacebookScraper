@@ -656,7 +656,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.get_by_text("生成或调整第 1 张图片（可选）", exact=True).click()
         self.page.get_by_role("textbox", name="希望怎样调整这张图片").fill("请把 CTA 改短")
         expect(self.page.get_by_role("button", name=re.compile("生成图片"))).to_be_disabled()
-        self.page.get_by_role("note", name=re.compile("生成图片.*人工图片")).hover()
+        # 用键盘聚焦触发原因提示：折叠面板展开动画期间悬停会落空，聚焦也覆盖了键盘用户。
+        self.page.get_by_role("note", name=re.compile("生成图片.*人工图片")).focus()
         expect(self.page.get_by_text("这一张已换成人工图片，模型优化不会被采用", exact=True)).to_be_visible()
         self.assertFalse((self.fixtures.root / "state/paid_requests.jsonl").exists())
 
