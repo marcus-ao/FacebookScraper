@@ -163,6 +163,31 @@ class NotificationTests(unittest.TestCase):
         self.assertIn('未执行兜底 2 次', rendered)
         self.assertEqual(card['header']['template'], 'orange')
 
+    def gate(self, identifier, reason):
+        engine.append_human_item(cfg().state_dir, engine.HumanItem(identifier, 'offline_gate',
+            ('facebook:' + self.f.post_id,), '付费阶段后离线硬闸失败：帖子 %s：%s' % (self.f.post_id, reason)), self.now)
+
+    def test_unconfirmed_tags_are_listed_once_from_the_current_draft(self):
+        # 标签全由人定后几乎每篇都这样进待审；卡片只按当前稿说一次，不再贴硬闸原文。
+        self.gate('tags', '平台文案尚未确认：请确认本篇使用的话题标签')
+        self.runtime.collect([self.f.account], self.now)
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
+        self.assertEqual(payload['processing_notes'], [])
+        self.runtime.prepare_preview(payload)
+        rendered = json.dumps(notification_card('ready', [payload], self.runtime.settings), ensure_ascii=False)
+        self.assertEqual(rendered.count('请确认本篇使用的话题标签'), 1)
+        self.assertNotIn('硬闸', rendered)
+        self.assertNotIn(self.f.post_id + '：', rendered)
+        self.assertIn('待审核素材需处理', rendered)
+
+    def test_other_gate_reasons_still_reach_the_card(self):
+        self.gate('tags', '平台文案尚未确认：请确认本篇使用的话题标签')
+        self.gate('money', '金额硬闸未通过：€19,99 未出现在德语稿')
+        self.runtime.collect([self.f.account], self.now)
+        payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
+        self.assertEqual(len(payload['processing_notes']), 1)
+        self.assertIn('€19,99', payload['risk'])
+
     def test_unreadable_lead_image_degrades_its_card_instead_of_the_round(self):
         # 首图读不出只降级这一张图；德语正文已经完成，丢掉整张卡等于白等一轮审校。
         self.event('one')

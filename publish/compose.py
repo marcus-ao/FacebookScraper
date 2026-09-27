@@ -38,6 +38,14 @@ class ComposeError(ValueError):
     """待发帖未通过离线硬闸。"""
 
 
+PLATFORM_TEXT_UNREADY = "平台文案尚未确认"
+
+
+def platform_text_unready(message: object) -> bool:
+    """只因标签、链接或正文分区未过人工校验而停下；逐项原因由当前稿实时校验给出。"""
+    return PLATFORM_TEXT_UNREADY in str(message)
+
+
 @dataclass(frozen=True)
 class InstagramConstraints:
     """可选的实测限制；未测量的项目交给当次 Business Suite UI 校验。"""
@@ -454,7 +462,7 @@ def _load_current_translation(arc: Archive, source: dict) -> str:
     draft = localization.effective_draft(arc.base, source, entry)
     check = localization.validate(draft)
     if not check['ready']:
-        raise _fail(post_id, "平台文案尚未确认：%s" % "；".join(item['message'] for item in check['issues']))
+        raise _fail(post_id, PLATFORM_TEXT_UNREADY + "：%s" % "；".join(item['message'] for item in check['issues']))
     return (localization.render(draft) if draft.get('has_record') or draft.get('links')
             or localization.extract_urls(text_de) else text_de)
 
