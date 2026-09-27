@@ -175,7 +175,7 @@ def run(page, ui, workflow, original):
             modal.get_by_role("button", name="确认", exact=True).click()
     elif workflow == "tags":
         page.get_by_role("button", name="编辑分类", exact=True).click()
-        page.get_by_role("textbox", name="产品分类", exact=True).fill("Riko，促销")
+        page.get_by_role("textbox", name="商品分类", exact=True).fill("Riko，促销")
         page.get_by_role("button", name="保存分类", exact=True).click()
     elif workflow == "approve":
         page.get_by_role("textbox", name="发布时间", exact=True).fill("2026-09-15T10:30")
