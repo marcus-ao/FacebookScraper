@@ -634,7 +634,7 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 旧缓存若没有 `time_verified`，按时刻未核实，不能用来排除占用。
 仍在 2026 年 9 月时，日期格范围应为 `2026-08-30` 至 `2026-10-03`；核对 9 月 4 日 Story、
 9 月 30 日 17:30 手工帖子和其它实际类型，逐渠道对照账号、时间与 ID，不预设两渠道相同。
-同渠道且时刻已核实的内容继续遵循 90 分钟规则。渠道未知落在目标前后 90 分钟内，或时刻没有独立证据时，不能判为空档。
+同渠道且时刻已核实的内容继续遵循 1 分钟规则。渠道未知落在目标前后 1 分钟内，或时刻没有独立证据时，不能判为空档。
 保留旧数据或 `decision_complete=false` 均不算本次完整读取通过。
 全程不得新增、修改、删除或重新提交真实内容；开发机隔离测试不能代替服务机结果。
 
@@ -647,14 +647,14 @@ G1 和真实提交验收分别记录。`channel_controls.json`、`planner_contro
 - 每张最终图片及哈希；
 - 唯一渠道和目标账号；
 - 北京时刻（2026-09-23 起界面不再并排显示德国受众当地时刻，联调包仍须自行核对受众侧钟点）；
-- Planner 当前覆盖与同渠道前后 90 分钟冲突结果；
+- Planner 当前覆盖与同渠道前后 1 分钟冲突结果；
 - 本次冻结快照位置和预算状态。
 
 两个联调包都不存在：清库把归档和此前准备的 FB 待制作包一起删了。要重新走到这一步，得先回填出有正文和图片的新帖，再逐篇准备。
 
 用户确认后才执行一次提交。提交前后都不要编辑冻结目录。只有 Planner 回读确认目标渠道、时刻和 remote ID 后才能写 `scheduled`。`scheduled` 不代表到时已经公开。
 
-两篇合起来须分别覆盖长正文完整回读、多图字节/数量/顺序、FB 德国链接、IG CTA；人工选时若同渠道 90 分钟内冲突，拒绝并给建议，不自动顺延。提交前再读完整远端 Planner，不能用未加载完的月历判空档。公开状态仅只读观察，未证实写 unknown。
+两篇合起来须分别覆盖长正文完整回读、多图字节/数量/顺序、FB 德国链接、IG CTA；人工选时若同渠道 1 分钟内冲突，拒绝并给建议，不自动顺延。提交前再读完整远端 Planner，不能用未加载完的月历判空档。公开状态仅只读观察，未证实写 unknown。
 
 月历显示 partial 时仍保留异常和旧缓存时间；是否可以排期由当次实时读取按目标渠道、相关时段判断。已核实在范围外的详情异常不阻塞该时段，可能影响的未知条目仍会拒绝。最后一次读取完成后系统再次只读核对表单；等待期间不要修改正文、图片或时刻，发现变化会停止，请重新打开当前审校结果确认。远端删除登记仍须完整读取证明目标确实消失。
 
@@ -1423,6 +1423,107 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 本帖账本若明确为 `failed_pre_submit`，且没有同来源的 scheduled 或未决提交，可回到审校台沿用已有最终图片和正文，重新点“编辑确认无误”并确认具体排期。该失败恢复为待审核是现有流程；无需重跑加工任务、删除旧快照或清账本。旧失败编辑器不用于手动补点 Publish。若为 `submit_ambiguous` / `submitted_unverified`，先核对原回执。新版本仍报告少图、多图、上传未完成或按钮禁用时，提供本次操作与页面提示，不反复提交；G8 图片证据不足本身不阻断单篇排期。
 
 正常提交后确认月历中的账号、渠道、完整正文、时刻和远端编号，即可得到“已排期”；不会自动为图片证据重开详情、下载或比较图片。看到“图片未做额外远端核验”无需再创建排期。下面的图片只读复验用于补充 G8 证据，可按需另行执行。
+
+**后台已成功、审校台仍待回执。** 2026-09-25 的 FB attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 已出现成功提示；9 月 30 日 23:00 的卡片只显示时间，正文在 `Post details` 的文章预览中折叠。原版本在打开详情前拒绝，旧恢复入口又只补本地投影，所以反复返回 409。修复后会打开该条详情并展开 `See more`，读取完整正文、独立账号、时刻与详情 ID；不会等待图片下方的评论加载条。
+
+**同日第三条 Instagram 已成功、月历出现 `+ 1 more`。** 2026-09-26 服务机已从周视图读到 09-30 的 FB 17:30、IG 20:00、FB 23:00，并打开 IG 详情 `1099867215965804`；不要再创建该 IG 排期。新版在原 attempt 的核对中自动读取完整周列表，核实全文、时刻、账号和编号，再恢复月视图复查。推荐卡不是帖子；月历折叠按钮也不是时间卡。部署步骤如下：
+
+若原回执核对报 `Month` 按钮点击超时并显示 `subtree intercepts pointer events`，这是月历视图切换被浮层遮挡，不代表 IG 帖子未创建。更新版用 Month 按钮的键盘操作切换，并确认完整月格已加载；详情弹窗未关闭仍会停止。原 09-30 20:00 Instagram attempt 的首次真实只读补回执已在 2026-09-27 18:11 执行且未通过；目前先部署后做独立只读验真，不另建帖子。只有原 attempt 获得唯一远端 ID 才算补齐。
+
+详情编号和作者可能先于正文预览出现。更新版会在原卡正文片段确实进入详情预览后才关闭弹窗；额外图片诊断还会等待图片候选加载稳定。若预览在限时内始终未加载，本地仍是未核验并保留诊断；这不表示后台排期消失，继续保留原 attempt，勿重新提交。
+
+1. 按 §13 拉取源码并从原 Web 启动脚本重启，保持 9223 的原发布会话。
+2. 在启动 Web 的源码目录用 `git rev-parse HEAD` 核对交付版本；只拉取源码或刷新网页不能替换仍在运行的 Python 模块。开发机定向验证及证据见 [HANDOFF §1.34](HANDOFF.md#134-g8-远端图片与原排期补验2026-09-23)，离线通过不代表真实回执已恢复。
+3. 原 Instagram attempt 已完成这一步的首次点击，结果仍未决。修复后先用独立只读探针核验 `2026-09-30 20:00 +08:00` 原对象；只有完整回读且再次核对已获授权，才从原审校页触发回执补齐。预期远端 ID 为 `instagram=1099867215965804`，以实际完整回读为准；既有通知链沿原 attempt 幂等发送。
+4. 点一次“刷新月历”，确认同日三张真实排期各一条，原 Facebook 回执仍在。若读取失败，保留具体错误及 `state/planner_diagnostics/` 中本次诊断；不要解除冻结、手改账本或再次提交。
+
+若旧版诊断在 `after_detail_close` 显示 `surface=composer`，即使 `day_cells=8`、仍见 Planner 标题，也表示地址已离开月历；这不是帖子未排期的证据。修复版会在关闭已有帖详情后，恢复自己的临时标签并复核原月/周完整列表；恢复不成仍停止且保持原 attempt 未决。核对成功才沿原 attempt 写入 `scheduled` 和原通知事件，失败保留本次诊断。原 Instagram attempt 已执行过一次真实核对，后续先独立只读验真；不要为测试重新创建 09-30 20:00 帖子。
+
+若诊断在 `opening_detail` 显示 `surface=composer`，失败发生在详情预览加载以前，单纯增加预览等待不能修复。新版将已核对的卡片固定到原 DOM 节点；打开时若地址短暂变为 composer，先有限等待同一资产月历和原卡恢复，再继续读取已有详情。地址持续不回月历才恢复本次临时月历标签、复核原月/周完整列表，再用 Enter 对原卡重试一次。二次误跳会停止并在诊断中记录目标日期、时刻、序号与视图。原 09-30 20:00 Instagram attempt 的首次核对已失败；不要点新的“确认发布时间并排期”。`recovered=true` 仅表示月历列表恢复；本次结构化 `inventory_evidence` 可区分覆盖、占用完整性、诊断索引及目标卡时刻/渠道。只有审校台显示原 attempt 已确认并有唯一远端 ID，才算回执补齐；失败继续保留诊断。
+
+2026-09-27 18:11 +08:00 对原 IG attempt 的核对在 IG 20:00 `reading_detail` 离开月历；19:23 再次核对在同日 FB 23:00 的 `reading_detail` 离开月历，原回执仍未补齐。前一修复只隔离 IG 卡，没覆盖必须读到的另一张 FB 卡。周视图全部排期卡现共用同一次点击隔离，仍须核对三张真实卡与完整冻结正文，并由服务机独立只读验真。**在新版部署和独立验真前，不要再点原 attempt 的核对按钮，也不要另建排期。**
+
+**周标题报错与错页恢复。** 2026-09-27 的正式只读探针确认，原错误发生在 `/latest/composer/`，当时没有月历日期格；正常标签中的七个日期与换行没有异常。新版在详情打开/关闭和网格读取处核对页面，已读详情后意外跳转时自动重开原资产月历并比较整月及原周，成功才继续；不会操作新建编辑器或重提排期。诊断的 `phase` 标明发生阶段，`surface` 区分 calendar/composer/other，`recovered` 表示是否通过原列表比对。恢复后列表变化仍停止核验；将本次诊断与错误一并保留即可，不必另开正常月历反复抓标题。
+
+新移动应用推广弹窗不一定匹配旧成功标题，提交后仍会进行一次只读核对；仅弹窗文字或截图不足以写入 `scheduled`。这次流程不核验远端图片顺序，也不升级 G8。
+
+**以下步骤仅用于此前尚未恢复的 Facebook 原回执；已确认记录无需再验。**
+
+1. 按 §13 拉取源码并用 `scripts\run_web_lan.bat` 重新构建和启动，确认旧 Web 已退出；9223 保持原发布账号登录。
+2. 运行 `scripts\run_python.bat -m tools.test_offline --only tests_receipt_reconcile --only tests_scheduled_detail --only tests_month_readback`。检查使用隔离数据和临时浏览器，不创建真实排期。
+3. 回到原帖审校页刷新，点一次“核对并补齐本地回执”。入口会查询已有未决提交，核实后沿**原 attempt** 追加 `scheduled`，补齐本地显示和原操作结果；已确认记录再次核对只补本地投影。
+4. 本帖提交时刻为 `2026-09-30 23:00 / Asia/Shanghai`，对应柏林 `17:00`；预期详情 ID 为 `facebook=1084557747316275`，以实际回读为准。缺少匹配、重复卡片、时刻/账号/正文不符或冻结目标变化时，继续保留未决与防重，按具体原因处理。
+
+核对时不要解除冻结、手改账本或再次创建排期。待回执页面显示的是“本次提交时刻”，不会将其标成已经回读确认。成功信号、正文和编号不代替 G8 图片证据。
+
+**同日两条 Facebook 原回执已确认。** 2026-09-26 用户输出确认 `122125865115379375` 的 17:30 原 attempt `2d85e661-8bb9-429a-a1e6-ce6cf9686d67`、`122128135023379375` 的 23:00 原 attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 均为 `scheduled`，前者通知已送达。不要为验证读取再次创建这两条排期。后者若仍 `pending / deliveries=[]`，从“Facebook 待审 → 已处理”打开该帖，点一次“核对并补齐本地回执”即可沿原事件补送；不需要重新创建排期或输入任何资产 ID。
+
+**Instagram 选时被同日 Facebook 卡点击超时阻断。** 服务机只读诊断确认读完 17:30 后，23:00 卡点击超时并变成未知渠道。新版关闭详情时等待它消失，再点下一条；不能用减小间隔代替这项修复。按 §13 更新源码、重启原 Web 入口后，先跑定向隔离验证：
+
+```powershell
+.\scripts\run_python.bat -m tools.test_offline --only tests_scheduled_detail --only tests_planning --only tests_occupancy_range --only tests_manual_schedule
+```
+
+**若只读空档检查已通过，正式排期仍报“月历的月份与年份无法唯一识别”。** 2026-09-26 的事后结构是正常拆分标题与 35 格；新版对无进度条的标题/日期格延迟共同等待，不要求改时间或重录资产。按 §13 更新并重启原 Web 入口，保持 9223 原账号登录，用下面的直接相关测试验证：
+
+```powershell
+.\scripts\run_python.bat -m tools.test_offline --only tests_month_inventory --only tests_calendar_api --only tests_planner_cache --only tests_planning
+```
+
+**若进一步出现“月份候选 0，年份候选 0”。** 新版会激活本次临时月历标签；标题仍缺失时保存失败现场，然后仅重读同一资产一次，完整重查后才继续业务。先结束旧 Web 进程，再用原启动入口启动；只 `git pull` 或刷新网页不能替换长期存活的 Python 模块。可先运行 `tests_calendar_recovery`、`tests_manual_schedule`、`tests_final_form` 的定向离线验证，再执行下面原有的只读空档检查。若正式流程再次失败，不要连续点确认；取得页面显示的诊断 JSON，或执行以下命令输出最新现场：
+
+```powershell
+@'
+from core.config import cfg
+files = list((cfg().state_dir / 'planner_diagnostics').glob('*.json'))
+if files:
+    latest = max(files, key=lambda p: p.stat().st_mtime_ns)
+    print(latest.name)
+    print(latest.read_text(encoding='utf-8'))
+else:
+    print('尚无月历标题失败诊断；请确认 Web 已重启并加载最新代码。')
+'@ | .\scripts\run_python.bat -
+```
+
+`before_details` 表示打开月历后的初始读取，`after_details` 表示读完条目后的最终复扫。`recovered=true` 只表示月历重读成功，不是帖子已经排期。该诊断不包含登录凭据、正文或 URL 参数；不需要提供整个浏览器目录。只有此次记录明确为提交前失败且没有未决/已排期回执时，才回到原稿检查冻结预览、人工确认一次；已经确认的 Facebook 两帖保持原回执。
+
+页面 `Ctrl+F5` 后点一次“刷新月历”。9 月 30 日两条已确认 Facebook 排期应各只有一张远端卡，点击后仍可进入审校详情；本地账本没有删除。原 9 月 27 日未识别的“00:00 定时”不再显示为任务，若尚无推荐的正向证据，只显示待核对数量；真正识别为推荐时段后不计帖子或占用。未知项仍不可当空档，不能只靠页面无卡保证可排。正常读取通过后再按原冻结内容确认 IG 一次；若已有成功信号/未决回执，走原记录核对，不重复提交。
+
+本次默认间隔为 1 分钟；同渠道相邻整分钟允许，同刻仍冲突，跨渠道独立。保持原 9223 窗口登录、没有发布任务运行时，再执行一次只读核对。它临时打开月历、读取这一天已有详情并关闭自己的标签，不创建或修改排期、不发送飞书消息：
+
+```powershell
+@'
+import asyncio, json
+from datetime import datetime, timezone
+from core.config import cfg
+from publish import journal, manual_run, planner_cache, planning
+
+async def main():
+    c = cfg()
+    target = datetime.fromisoformat('2026-09-30T20:00:00+08:00')
+    with journal.PublishOperationLock(c.state_dir / 'publish.lock'):
+        inv = await planner_cache.read_live_inventory(
+            run=manual_run.load('instagram'), detail_range=planning.slot_range(target))
+        decision = planning.evaluate_slot(target, 'instagram', inv,
+            now=datetime.now(timezone.utc), window=planning.config_window())
+    print(json.dumps({
+        'gap_minutes': c.get('publish', 'min_channel_gap_min', 1),
+        'allowed': decision.allowed, 'reason': decision.reason,
+        'diagnostics': list(inv.diagnostics),
+        'cards': [{'at': x.at.isoformat(), 'channels': x.channels,
+                   'time_verified': x.time_verified, 'read_status': x.read_status}
+                  for x in inv.cards]
+    }, ensure_ascii=False, indent=2))
+
+asyncio.run(main())
+'@ | .\scripts\run_python.bat -
+```
+
+现有两条 Facebook 详情读全且没有其它未知/冲突条目时，应显示 `gap_minutes=1`、`allowed=true`、`reason=available`、`diagnostics=[]`。这是只读空档判断，不是创建成功。若关不掉详情或再次超时，保留完整错误，不为取证提交帖子。通过后回到原 Instagram 稿件，沿用冻结内容，重新展示最终正文、三张有序图片、`neakasa.de`、唯一 Instagram 渠道和实际选定时刻，人工确认后仅提交一次；已有 scheduled/未决记录则走原回执核对。
+
+**排期已确认但飞书未通知。** 新版在确认或补齐 `scheduled` 后立即向原发布机器人投递该 attempt 的回执，沿用四机器人配置；普通监测模式也发送已入队排期回执，不需为此开启 `--process`。待审静默规则不变，已确认排期回执即时发送。更新并重启 Web 后，对已成功的帖子点一次“核对并补齐本地回执”，会检查原通知是否真正送达；已发送不会重发，入队失败或已入队但尚未尝试发送时沿原事件补齐。若常驻监测进程仍运行旧代码，在它空闲时正常停止并用原命令重启，保持原有参数。
+
+通知与排期状态分开：通知配置错误、待发送、明确拒绝或结果未知都不撤销 `scheduled`。入队锁竞争的失败会由普通监测维护补入队；缺配置应修正现有 `.env` 后重启，不新增资产 ID。明确拒绝沿原消息等待退避；`uncertain` 必须先到群里核对，再从运行状态登记，不能删除发件箱后重发。可用 `tests_publish_notifications`、`tests_review_notifications` 和 `tests_feishu_routes` 做隔离检查，它们不向真实群发送消息。
 
 **旧版本提示“提交前日期已变化；未提交”时，先更新并重启服务。** 已确认一例：填写回执为 `9/30/2026`，后续截图显示 `Sep 30, 2026`，实际日期相同。新版按年月日比较，并在错误中同时列出期望日期、UI 时区及实际值；时间字段的补零和显示空白也按含义比较。无需为了该显示变化修改 Windows 时区、排期配置或重做图文。回执明确为提交前失败时，沿用上面的重新冻结与单次确认步骤；未知结果仍先核对原回执。新版本仍拒绝时，提供这条包含期望值和实际值的完整提示及排期区截图。
 

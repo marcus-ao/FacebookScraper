@@ -8,12 +8,24 @@ from publish import business_suite as bs, month_inventory, scheduled_media, snap
 from publish.channel_evidence import accounts
 
 
-def matching(inventory, when, final_text, target_channels):
-    # 网格对齐不证明目标卡片详情；按目标时刻核验，范围外的详情缺口不参与本次回读。
+def matching(inventory, when, final_text, target_channels, *, confirm_existing=False):
     if len(target_channels) != 1:
         raise bs.PublishStepError('排期回读必须且只能有一个目标渠道')
     try:
-        relevant = inventory.cards_in_range(target_channels[0], when, when)
+        if confirm_existing:
+            # A verified object's existence is positive evidence. It must not
+            # borrow the stronger "no unseen occupancy" rule used before submit.
+            # Keep unrelated failures in diagnostics; this never certifies a free slot.
+            if (not inventory.occupancy_complete or not inventory.covers((when,))
+                    or not set(range(len(inventory.diagnostics))).issubset(
+                        {card.diagnostic_index for card in inventory.cards})):
+                raise bs.ProbeRequired('月历覆盖或条目证据不完整')
+            relevant = tuple(card for card in inventory.cards if card.at.timestamp() == when.timestamp())
+            if any(not card.time_verified or not card.channels for card in relevant):
+                raise bs.ProbeRequired('目标时刻的详情时刻或渠道尚未核实')
+            relevant = tuple(card for card in relevant if target_channels[0] in card.channels)
+        else:
+            relevant = inventory.cards_in_range(target_channels[0], when, when)
     except bs.ProbeRequired as exc:
         raise bs.PublishStepError('月历范围或相关条目未读完整，不能核验本次排期') from exc
     if any(card.read_status != 'complete' or card.placement == 'unknown'
@@ -48,6 +60,48 @@ def baseline_from_inventory(inventory, when, final_text, target_channels):
                                 tuple(card.card_sha256 for card in cards))
 
 
+def _inventory_evidence(inventory, when, requested_ui_timezone):
+    """Bounded, caption-free evidence for the four existing receipt guards."""
+    target_stamp = when.timestamp()
+    occupied = {at.timestamp(): at.isoformat() for at in inventory.occupied}
+    card_times = {card.at.timestamp(): card.at.isoformat() for card in inventory.cards}
+    index_counts = {index: sum(card.diagnostic_index == index for card in inventory.cards)
+                    for index in range(len(inventory.diagnostics))}
+    missing = [index for index, count in index_counts.items() if not count]
+    target_cards = [card for card in inventory.cards if card.at.timestamp() == target_stamp]
+
+    def times(values):
+        ordered = [value for _, value in sorted(values.items())]
+        return {'count': len(ordered), 'values': ordered[:60], 'truncated': len(ordered) > 60}
+
+    def ids(card):
+        return {channel: value if value.isdecimal() and 6 <= len(value) <= 30 else 'invalid'
+                for channel, value in card.remote_ids}
+
+    return {'target_at': when.isoformat(), 'target_ui_at': when.astimezone(
+                bs.resolve_ui_timezone(inventory.ui_timezone)).isoformat(),
+            'ui_timezone': inventory.ui_timezone, 'requested_ui_timezone': requested_ui_timezone,
+            'visible_start': inventory.visible_start.isoformat() if inventory.visible_start else None,
+            'visible_end': inventory.visible_end.isoformat() if inventory.visible_end else None,
+            'cards_loaded': inventory.cards_loaded, 'details_scoped': inventory.details_scoped,
+            'occupancy_complete': inventory.occupancy_complete,
+            'covers_target': inventory.covers((when,)),
+            'diagnostics_mapped': not missing,
+            'diagnostic_count': len(inventory.diagnostics),
+            'diagnostic_card_counts': [{'index': index, 'cards': count}
+                                       for index, count in list(index_counts.items())[:20]],
+            'missing_diagnostic_count': len(missing), 'missing_diagnostic_indices': missing[:20],
+            'occupied_times': times(occupied), 'card_times': times(card_times),
+            'target_cards_verified': all(card.time_verified and card.channels for card in target_cards),
+            'target_card_count': len(target_cards),
+            'target_cards': [{'at': card.at.isoformat(), 'channels': list(card.channels),
+                              'time_verified': card.time_verified, 'read_status': card.read_status,
+                              'caption_status': card.caption_status, 'delivery': card.delivery,
+                              'placement': card.placement, 'diagnostic_index': card.diagnostic_index,
+                              'remote_ids': ids(card)} for card in target_cards[:12]],
+            'target_cards_truncated': len(target_cards) > 12}
+
+
 async def baseline(page, when, final_text, *, ui_timezone, target_channels, timeout=30, run=None):
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
                                           business_timezone=bs.business_timezone(), timeout=timeout, run=run,
@@ -73,7 +127,9 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
                                               business_timezone=bs.business_timezone(), timeout=timeout, run=run,
                                               detail_range=(when, when))
+        diagnostics['inventory_evidence'] = _inventory_evidence(inventory, when, ui_timezone)
         diagnostics.update(inventory_cards=len(inventory.cards),
+                           inventory_diagnostics=list(inventory.diagnostics),
                            complete_month=inventory.decision_complete and inventory.covers((when,)),
                            failure_stage='matching', caption_mismatch=0, time_mismatch=0,
                            channel_mismatch=0, delivery_mismatch=0)
@@ -91,7 +147,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
                             'text_preview': candidate.rendered[:200], 'caption_matches': text_equal,
                             'time_matches': time_equal, 'channel_matches': channel_equal})
         diagnostics['samples'] = sorted(samples, key=lambda row: not (row['time_matches'] or row['caption_matches']))[:20]
-        cards = matching(inventory, when, final_text, target_channels)
+        cards = matching(inventory, when, final_text, target_channels, confirm_existing=True)
         diagnostics['matched_entries'] = len(cards)
         if len(cards) != 1:
             raise bs.PublishStepError('目标时刻未找到唯一的同渠道、同时间、完整正文排期详情')
@@ -144,7 +200,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         return bs.ScheduledReadback(found=True, **base, channels=card.channels,
             remote_id=identity, card_sha256=card.card_sha256, screenshot=shot,
             image_count=diagnostics['remote_media'].get('image_count'),
-            success_signal='planner_target_range_and_scheduled_detail',
+            success_signal='planner_scheduled_object_identity',
             diagnostics=diagnostics)
     except Exception as exc:
         shot = await bs._readback_screenshot(page, screenshot_path, timeout)

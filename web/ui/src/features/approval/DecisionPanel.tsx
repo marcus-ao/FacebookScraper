@@ -10,7 +10,7 @@ import { DisabledReason } from '@/components/DisabledReason'
 import { nearbyOccupancy } from './occupancy'
 import { SchedulePreviewDialog } from './SchedulePreviewDialog'
 import { PLATFORM_LABEL, wallMinutesApart, zonedInput } from '@/lib/format'
-import { approvalBlockNotice } from '@/lib/action-reasons'
+import { approvalBlockNotice, businessNotice } from '@/lib/action-reasons'
 import { isConflict } from '@/services/http'
 import { checkLocalization } from '@/services/localization'
 import styles from './DecisionPanel.module.css'
@@ -30,15 +30,26 @@ export function ApprovalAction({ controller: c }: { controller: ApprovalControll
 }
 
 /** 提交跑在请求之外：关掉页面再回来，这块还在。 */
-function SubmissionProgress({ controller: c }: { controller: ApprovalController }) {
+function SubmissionProgress({ controller: c, detail }: { controller: ApprovalController; detail: TaskDetail }) {
   const op = c.operation
+  // 账本已确认排期时，旧的失败或待核对操作不能再盖过它；确认本身由上方状态行说明。
+  if (detail.publication?.status === 'scheduled' || detail.status === 'scheduled' || op?.status === 'succeeded') {
+    const notice = op?.result?.projection?.notification_notice
+    return notice ? <Alert type="info" showIcon title={businessNotice(notice, '排期结果通知暂未确认送达。')} /> : null
+  }
+  if (c.pendingReceipt && op?.status !== 'running') {
+    const at = typeof detail.publication?.scheduled_at === 'string' ? detail.publication.scheduled_at : op?.scheduled_at
+    const accepted = detail.publication?.status === 'submitted_unverified'
+    return <Alert type="warning" title={accepted ? '已收到排期成功信号，待补齐回执' : '这次提交结果待核对'}
+      description={<><p>本次提交时刻：<BusinessTime at={at} /></p>
+        <p>{accepted ? '后台已返回成功提示，本地尚未读全排期详情。' : '本地尚未确认后台是否收下。'}请用下方按钮核对已有排期，勿重新提交。</p></>} />
+  }
   if (!op) return null
   if (op.status === 'running') {
     return <Alert type="info" title="正在创建排期"
       description={<><Progress percent={Math.round((op.step_index / op.step_total) * 100)} size="small" />
         <Typography.Text type="secondary">浏览器正在后台操作，通常需要几十秒到几分钟。可以离开这个页面，回来还能看到进度。</Typography.Text></>} />
   }
-  if (op.status === 'succeeded') return <Alert type="success" title="定时排期已确认；公开发布仍待观测" />
   if (op.status === 'uncertain') {
     return <Alert type="warning" title="提交结果待核对"
       description="请先核对已有提交尝试是否被接收，确认结果前不要再次提交。" />
@@ -110,7 +121,7 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     <div className={styles.heading}><h2>{detail.status === 'scheduled' ? '排期结果' : detail.status === 'approved' ? '提交结果' : c.locked ? '选择发布时间' : '发布前核对'}</h2>
       {c.locked && <Button type="text" size="small" disabled={c.busy} onClick={() => void c.refresh()}>刷新排期条件</Button>}</div>
     {(detail.status === 'scheduled' || c.confirmed) && <p role="status">定时排期已确认 · <BusinessTime at={detail.schedule?.at} />。公开发布仍待观测。</p>}
-    <SubmissionProgress controller={c} />
+    <SubmissionProgress controller={c} detail={detail} />
     {c.locked && <p role="status" className={styles.help}>
       <Tag color="processing">内容已冻结</Tag>如需修改正文或图片，请先解除冻结。
       <Button type="link" size="small" disabled={c.busy || detail.read_only} onClick={() => void c.unlock()}>解除冻结</Button>
@@ -123,7 +134,7 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
     {c.eligible && <div className={styles.row}><label>发布时间<Input aria-label="发布时间" type="datetime-local"
       value={c.when} min={min} max={max} disabled={editing || c.busy || !data?.available}
       onChange={event => c.setWhen(event.target.value)} /></label></div>}
-    {c.locked && c.reason && c.operation?.status !== 'uncertain' && <p className={styles.help}>
+    {c.locked && c.reason && c.operation?.status !== 'uncertain' && !c.pendingReceipt && <p className={styles.help}>
       {!data?.available && data?.reason ? approvalBlockNotice(data.reason) : c.reason}</p>}
     {c.eligible && min && max && <p className={styles.help}>可选时间：{min.replace('T', ' ')} 至 {max.replace('T', ' ')}</p>}
     {c.eligible && c.when && (near ? <Alert type="warning" showIcon title="所选时刻附近已有同渠道排期"
@@ -132,9 +143,10 @@ export function DecisionPanel({ detail, controller: c, editing }: { detail: Task
         : nearCards.length > 0 ? <p className={styles.help}>附近已有同渠道内容，提交前会再次核对。</p> : null)}
     {c.eligible && c.when && near && calendar.data?.stale && <p className={styles.help}>附近排期信息可能已变化；提交前会再次核对。</p>}
     {!!c.error && <Alert type="warning" title={c.errorMessage} />}
+    {!!c.recoveryNotice && <Alert type="warning" title={c.recoveryNotice} />}
     {c.suggestions.length > 0 && <Space wrap><span>可以改选：</span>{c.suggestions.map(value => <Button key={value} onClick={() => c.setWhen(zonedInput(value, zone))}>{zonedInput(value, zone).replace('T', ' ')}</Button>)}</Space>}
-    {isConflict(c.error) && <ConflictRecovery kind="schedule" onRecover={() => void c.refresh()} recovering={c.options.isFetching} />}
-    {(detail.publication || detail.status === 'approved' || c.operation?.status === 'uncertain') && <p><Button disabled={c.busy || editing || detail.read_only} onClick={() => void c.recover()}>核对并补齐本地回执</Button> <Typography.Text type="secondary">只核对已有提交尝试。</Typography.Text></p>}
+    {isConflict(c.error) && !c.recoveryError && <ConflictRecovery kind="schedule" onRecover={() => void c.refresh()} recovering={c.options.isFetching} />}
+    {(detail.publication || detail.status === 'approved' || c.operation?.status === 'uncertain') && <p><Button loading={c.recovering} disabled={c.busy || editing || detail.read_only} onClick={() => void c.recover()}>核对并补齐本地回执</Button> <Typography.Text type="secondary">只查询已有排期并补齐回执，不会再次提交。</Typography.Text></p>}
     {detail.status === 'scheduled' && <p><Button danger disabled={c.busy || detail.read_only} onClick={() => setUndoOpen(true)}>我已在后台删除这条排期</Button> <Typography.Text type="secondary">系统不会替你删远端卡片；删完回来登记，它会重读月历核实。</Typography.Text></p>}
     <SchedulePreviewDialog snapshot={c.snapshot} busy={c.busy} onCancel={() => c.setSnapshot(null)} onConfirm={() => void c.submit()} />
     <Modal title="登记：已在 Business Suite 删除这条排期" open={undoOpen} okText="我已删除，去核实" cancelText="取消"

@@ -19,7 +19,10 @@ router = APIRouter()
 @router.post('/api/tasks/{task_id:path}/publication/reconcile')
 async def reconcile_publication(task_id: str):
     source = _source(task_id)
-    return await run_in_threadpool(records.recover, source.account_dir, dict(source.row))
+    try:
+        return await run_in_threadpool(lambda: asyncio.run(records.reconcile(source.account_dir, dict(source.row))))
+    except (review.ReviewConflict, bs.PublishStepError, bs.ProbeRequired, RuntimeError) as exc:
+        return JSONResponse({'detail': str(exc), 'code': 'publication_reconcile_blocked'}, status_code=409)
 
 
 @router.post('/api/tasks/{task_id:path}/publication/unschedule')

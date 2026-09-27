@@ -17,7 +17,7 @@ from web.api import reader
 router = APIRouter()
 
 # 跨发实测渠道分钟相差 1 分钟（REQUIREMENTS F5-5：7:17/7:18）；
-# 本系统同渠道受 publish.min_channel_gap_min（90 分钟）约束，5 分钟只容纳一篇。
+# 这只是来源关联的候选窗口，不是排期间隔；相邻分钟多帖须唯一匹配，歧义不填。
 SOURCE_MATCH_TOLERANCE = timedelta(minutes=5)
 
 _ERRORS = {
@@ -33,6 +33,14 @@ _DETAIL_ERRORS = {
     'time_mismatch': '日期或时刻不一致', 'navigation_failed': '详情导航失败',
     'load_timeout': '详情业务字段加载超时', 'permission_denied': '详情不可访问或权限不足',
     'structure_unknown': '详情结构尚未识别', 'read_failed': '条目读取失败',
+}
+
+_REFRESH_ERRORS = {
+    'week_button_timeout': '切换周视图时控件超时。',
+    'week_overflow_mismatch': '折叠日的月视图与周视图条目不一致。',
+    'week_still_folded': '周视图仍有折叠条目。',
+    'week_changed_after_details': '详情读取期间周视图条目发生变化。',
+    'month_changed_after_details': '详情读取期间月视图条目发生变化。',
 }
 
 
@@ -135,6 +143,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
         entries, local_layer = [], []
         local_error = str(exc)
     cards = []
+    represented = {}
     remote_cards = data.get('cards', [])
     for card, source in zip(remote_cards, _sources_for(remote_cards, entries)):
         at = datetime.fromisoformat(card["at"])
@@ -153,7 +162,18 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
                           "source_permalink": permalink,
                           "at_business": at.astimezone(business_zone).isoformat(),
                           "audience": planning.audience_local(at)})
+            if source and card.get('time_verified') and card['delivery'] in {'scheduled', 'published'}:
+                # Time-near source links are navigation hints, not identity.
+                # Collapse a receipt only for its exact per-channel remote IDs.
+                exact_channels = {channel for channel, remote_id in card['remote_ids'].items()
+                                  if remote_id and f'{channel}={remote_id}' in source['remote_id'].split(';')}
+                represented.setdefault(source['task_id'], set()).update(exact_channels)
     cards.sort(key=lambda item: item["at"])
+    # Merge only uniquely identified scheduled receipts into their displayed
+    # remote cards. Unmatched/pending receipts remain visible; no ledger edit.
+    local_layer = [entry for entry in local_layer if not (
+        entry['kind'] == local_schedule.SCHEDULED and entry['channels']
+        and set(entry['channels']) <= represented.get(entry['task_id'], set()))]
 
     def coverage(value):
         return {'grid_complete': bool(value and value.cards_loaded),
@@ -170,12 +190,16 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
     unavailable = _readiness()
     diagnostic = snapshot.get('refresh_diagnostic')
     error = _ERRORS.get(snapshot.get('refresh_error'))
-    if error and diagnostic:
+    if error and diagnostic and all(key in diagnostic for key in ('date', 'time', 'stage')):
         stages = {'item_ready': '条目日期与正文', 'scheduled_detail': '排期详情',
                   'published_detail': '已发布详情'}
         error += ' 条目 %s %s，读取阶段：%s。' % (
             diagnostic['date'], diagnostic['time'], stages.get(diagnostic['stage'], '条目读取'))
         error += _DETAIL_ERRORS.get(diagnostic.get('code'), '条目读取失败') + '。'
+    elif error and diagnostic:
+        reason = _REFRESH_ERRORS.get(diagnostic.get('code'))
+        if reason:
+            error += ' ' + reason
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
             "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable"} or
                      snapshot.get('refresh_status')=='failed' or
@@ -185,7 +209,7 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
             "age_seconds": snapshot.get("age_seconds"), "cards": cards,
             "local": local_layer, "local_error": local_error,
             "coverage": coverage(inventory),
-            "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 90),
+            "bounds": bounds, "gap_minutes": config.get("publish", "min_channel_gap_min", 1),
             "refresh_available": unavailable is None, "refresh_unavailable_reason": unavailable,
             "advisory_only": True, "month_ui": local.strftime("%Y-%m"),
             "ui_timezone": ui_timezone, "business_timezone": business_timezone,

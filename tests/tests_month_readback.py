@@ -46,13 +46,60 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
                      self.card(channel='instagram'), self.card(delivery='published')):
             self.assertFalse((await self.readback(self.inventory([card]))).found)
 
-    async def test_success_signal_describes_target_range_when_other_details_are_incomplete(self):
+    async def test_success_signal_describes_confirmed_object_when_other_details_are_incomplete(self):
         outside = replace(self.card(channel='instagram'), at=WHEN.replace(hour=20),
                           read_status='incomplete')
         result = await self.readback(self.inventory([self.card(), outside]))
         self.assertTrue(result.found)
         self.assertFalse(result.diagnostics['complete_month'])
-        self.assertEqual(result.success_signal, 'planner_target_range_and_scheduled_detail')
+        self.assertEqual(result.success_signal, 'planner_scheduled_object_identity')
+
+    async def test_other_time_read_failure_does_not_erase_a_verified_scheduled_object(self):
+        # Service: the 17:30 receipt was blocked by the already scheduled 23:00
+        # card's failed detail read, which lost its independent time evidence.
+        diagnostic = {'date': WHEN.date().isoformat(), 'time': '11:00 PM',
+                      'item_index': 1, 'stage': 'scheduled_detail', 'code': 'read_failed'}
+        unknown = bs.RemotePlannerCard(WHEN.replace(hour=23), delivery='scheduled',
+            read_status='incomplete', diagnostic_index=0, time_verified=False)
+        inventory = replace(self.inventory([self.card(), unknown]), diagnostics=(diagnostic,))
+        result = await self.readback(inventory)
+        self.assertTrue(result.found, result.error)
+        self.assertEqual(result.remote_id, 'facebook=123456789')
+        self.assertEqual(result.diagnostics['inventory_diagnostics'], [diagnostic])
+        self.assertFalse(result.diagnostics['complete_month'])
+        # Confirming existence grants no permission to create another post.
+        with self.assertRaises(bs.PublishStepError):
+            month_readback.baseline_from_inventory(inventory, WHEN, TEXT, ('facebook',))
+        for cards in ([self.card(), replace(unknown, at=WHEN)], [replace(self.card(), time_verified=False)]):
+            blocked = self.inventory(cards)
+            self.assertFalse((await self.readback(blocked)).found)
+
+    async def test_failed_existing_receipt_identifies_each_inventory_guard_without_caption(self):
+        card = self.card()
+        diagnostic = {'date': WHEN.date().isoformat(), 'time': '6:00 PM', 'stage': 'detail'}
+        cases = (
+            (replace(self.inventory([card]), occupied=()), 'occupancy_complete'),
+            (replace(self.inventory([card]), visible_end=WHEN.date().replace(day=14)), 'covers_target'),
+            (replace(self.inventory([card]), diagnostics=(diagnostic,)), 'diagnostics_mapped'),
+            (self.inventory([replace(card, channels=(), time_verified=False)]), 'target_cards_verified'),
+        )
+        for inventory, failed_guard in cases:
+            with self.subTest(failed_guard=failed_guard):
+                result = await self.readback(inventory)
+                self.assertFalse(result.found)
+                evidence = result.diagnostics['inventory_evidence']
+                self.assertEqual(evidence['target_at'], WHEN.isoformat())
+                self.assertEqual(evidence['target_ui_at'], WHEN.isoformat())
+                self.assertEqual(evidence['ui_timezone'], 'UTC')
+                self.assertEqual(evidence['visible_start'], WHEN.date().isoformat())
+                self.assertTrue(evidence['cards_loaded'])
+                self.assertFalse(evidence[failed_guard])
+                self.assertEqual(evidence['card_times']['count'], 1)
+                self.assertEqual(evidence['target_card_count'], 1)
+                self.assertEqual(evidence['target_cards'][0]['remote_ids'], {'facebook': '123456789'})
+                self.assertNotIn(TEXT, str(evidence))
+                if failed_guard == 'diagnostics_mapped':
+                    self.assertEqual(evidence['missing_diagnostic_indices'], [0])
 
     async def test_preexisting_remote_id_or_duplicate_cards_cannot_prove_new_submission(self):
         baseline = bs.ScheduledBaseline('observed', 0, ('facebook=123456789',))

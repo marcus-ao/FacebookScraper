@@ -28,9 +28,9 @@ KIND_ROLES = {'monitor_found': 'detect', 'monitor_saved': 'capture', 'ready': 'p
               'scheduled': 'publish', 'backlog': 'alert', 'schedule_failed': 'alert',
               'morning': 'alert', 'system': 'alert'}
 KINDS = set(KIND_ROLES)
-# 静默窗只压业务待办；监测播报和系统告警是链路存活信号，压住它们等于让沉默继续有歧义。
+# 静默窗只压业务待办；确认排期的回执及时送达，监测播报和系统告警是链路存活信号。
 # 这里只管静默豁免；同一告警机器人接收的不同 kind 仍分别判断静默。
-ALWAYS_DELIVERED = {'system', *MONITOR_KINDS}
+ALWAYS_DELIVERED = {'system', 'scheduled', *MONITOR_KINDS}
 # 发送前重新取当前素材的消息类型。监测卡的内容在入队时已由抓取事实定稿，不参与重取。
 PREVIEWED = {'ready'}
 # selftest 故意只在 TITLES 里、不在 KINDS 里：它能渲染成卡片，但 enqueue 会拒绝它，
@@ -370,6 +370,24 @@ class Outbox:
                 'needs_attention' if any(counts.get(key) for key in ('retry', 'uncertain')) else 'ready',
                 'counts': counts, 'deliveries': deliveries[-100:]}
 
+    def event_status(self, event_id: str) -> dict:
+        """A queued projection is not a receipt; retain each event's delivery outcome."""
+        data = self._load()
+        if event_id in data['archived_events']:
+            data = self._read_archive(data['archived_events'][event_id])
+        event = data['events'].get(event_id)
+        if event is None:
+            return {'status': 'missing'}
+        rows = [row for row in data['deliveries'].values() if event_id in row['events']]
+        received = {row['recipient'] for row in rows if row['status'] == 'sent'}
+        if set(self._event_recipients(event)) <= received:
+            return {'status': 'sent'}
+        for status in ('uncertain', 'retry'):
+            failed = next((row for row in rows if row['status'] == status), None)
+            if failed:
+                return {'status': status, 'error': failed.get('error', '')}
+        return {'status': 'cancelled' if event.get('cancelled_at') else 'pending'}
+
     @staticmethod
     def _version(row):
         return hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -547,7 +565,7 @@ class Outbox:
             atomic_write_json(self.path, data)
 
     def dispatch(self, now: datetime, send: Callable[[str, dict, str], str], *, prepare_payload=None,
-                 allowed_kinds=None) -> int:
+                 allowed_kinds=None, event_ids=None) -> int:
         if not self.settings.enabled:
             return 0
         self.settings.validate()
@@ -569,6 +587,7 @@ class Outbox:
                                 if item['status'] != 'cancelled' and item['recipient'] == recipient for event_id in item['events']}
                     ids = [key for key, item in data['events'].items()
                            if key not in assigned and item['kind'] == kind and not item.get('cancelled_at')
+                           and (event_ids is None or key in event_ids)
                            and recipient in self._event_recipients(item)]
                     # Recipient success never masks another recipient's missing reminder.
                     overnight = [key for key in ids if kind == 'ready' and not self.schedule.is_on_duty(
@@ -601,6 +620,8 @@ class Outbox:
             atomic_write_json(self.path, data)
             for delivery_id, item in data['deliveries'].items():
                 if allowed_kinds is not None and item['kind'] not in allowed_kinds:
+                    continue
+                if event_ids is not None and not set(item['events']) <= event_ids:
                     continue
                 if item['status'] in {'sent', 'uncertain', 'cancelled'} or item['next_at'] > stamp:
                     continue

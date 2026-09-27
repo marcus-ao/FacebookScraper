@@ -62,7 +62,8 @@ class RoutesTests(unittest.TestCase):
             self.outbox.enqueue(kind, kind, {'text': kind}, night)
         self.outbox.dispatch(night, lambda *_: 'receipt')
         sent = {item['kind']: item['recipient'] for item in self.read()['deliveries'].values()}
-        self.assertEqual(sent, {'monitor_found': 'detect', 'monitor_saved': 'capture', 'system': 'alert'})
+        self.assertEqual(sent, {'monitor_found': 'detect', 'monitor_saved': 'capture',
+                                'scheduled': 'publish', 'system': 'alert'})
 
     def legacy(self, status='sent', attempts=1):
         delivery = {'events': ['a'], 'kind': 'monitor_saved', 'recipient': 'ops',

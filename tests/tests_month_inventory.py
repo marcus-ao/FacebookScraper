@@ -75,6 +75,63 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[10]['date'], date(2026, 9, 9))
         self.assertEqual(len(result[10]['items']), 1)
 
+    async def test_combined_month_heading_reads_the_same_complete_grid(self):
+        await self.page.locator('h1').nth(1).evaluate("el=>el.textContent='September 2026'")
+        await self.page.locator('h1').nth(2).evaluate('el=>el.remove()')
+        rows = await month.read_grid(self.page, timeout=3)
+        self.assertEqual(rows[0]['date'], date(2026, 8, 30))
+        self.assertEqual(rows[-1]['date'], date(2026, 10, 3))
+
+    async def test_calendar_waits_for_headings_and_cells_without_a_progressbar(self):
+        await self.page.evaluate('''() => {
+          const markup=document.body.innerHTML;
+          document.body.innerHTML='<button>Month</button>';
+          setTimeout(()=>document.body.innerHTML=markup, 250);
+        }''')
+        rows = await month.read_grid(self.page, timeout=3)
+        self.assertEqual(len(rows), 35)
+
+    async def test_recommendation_tooltip_may_include_an_active_times_title(self):
+        slots = await self.mount_slots(1)
+        await self.page.locator('#tip').evaluate("el=>el.insertAdjacentHTML('afterbegin','<strong>Active times</strong>')")
+        self.assertEqual(await month.recommendation_state(self.page, slots.first), 'shown')
+
+    async def test_positive_recommendation_never_enters_cards_or_occupancy(self):
+        await self.page.locator(month.DAY_SELECTOR).nth(28).evaluate(
+            '(el,html)=>el.insertAdjacentHTML("beforeend",html)', TOOLTIP_SLOT.format(clock='3:00'))
+        await self.page.evaluate('(html)=>document.body.insertAdjacentHTML("beforeend",html)', TOOLTIP)
+        await self.page.locator('#tip').evaluate("el=>el.insertAdjacentHTML('afterbegin','<strong>Active times</strong>')")
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC), \
+                patch.object(month, 'read_item_detail', AsyncMock()) as detail:
+            inv = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai', timeout=5)
+        self.assertEqual(inv.cards, ())
+        self.assertEqual(inv.occupied, ())
+        self.assertEqual(inv.diagnostics, ())
+        detail.assert_not_awaited()
+
+    async def test_unread_time_only_item_is_not_falsely_classified_as_scheduled(self):
+        item = {'index': 0, 'time': '12:00 AM', 'text': '12:00 AM'}
+        row = {'date': date(2026, 9, 27), 'items': [item]}
+        error = month.PlannerItemError(row, item, 'scheduled_detail', PublishStepError('no dialog'))
+        with patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month, 'read_grid', AsyncMock(return_value=[row])), \
+                patch.object(month, 'read_item', AsyncMock(side_effect=error)):
+            inv = await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai')
+        self.assertEqual(inv.cards[0].delivery, 'unknown')
+        self.assertFalse(inv.decision_complete)
+        self.assertEqual(len(inv.occupied), 1)
+
+    async def test_delayed_complete_grid_and_conflicting_headers_are_not_guessed(self):
+        await self.page.evaluate('''() => {
+          const last=document.querySelector('[draggable="false"]:last-child');
+          last.remove(); setTimeout(()=>document.body.append(last), 250);
+        }''')
+        self.assertEqual(len(await month.read_grid(self.page, timeout=3)), 35)
+        await self.page.evaluate("document.body.insertAdjacentHTML('afterbegin','<h1>October 2026</h1>')")
+        with self.assertRaisesRegex(PublishStepError, '月份与年份'):
+            await month.read_grid(self.page, timeout=.3)
+
     async def test_partial_or_loading_calendar_never_proves_empty(self):
         await self.page.locator('[draggable=false]').last.evaluate('el=>el.remove()')
         with self.assertRaises(PublishStepError):
@@ -153,21 +210,16 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         row = {'date': date(2026, 9, 15), 'cell_index': 0}
         await self.page.set_content('<div role="link" draggable="false">15'
                                     '<div role="link">10:00 AM</div></div>')
-        # Refusing to confirm must cost the run an error, never a silently skipped scheduled post.
+        # A stable time-only item now opens details. A missing dialog must stay
+        # an explicit unread post, not become a recommendation or empty slot.
         with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
-                patch.object(month.bs, 'require_readback_evidence', return_value=SimpleNamespace(
-                    attributes={'datetime_regex': r'(?P<date>September \d+, \d{4}), (?P<time>\d+:\d+ [AP]M)',
-                                'date_format': '%B %d, %Y', 'time_format': '%I:%M %p'})):
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
             with self.assertRaises(PublishStepError) as caught:
                 await month.read_item(self.page, row, {'index': 0, 'href': '', 'text': '10:00 AM',
-                                                       'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=.5)
-        # The budget running out is how this ends, but not why: an item left for a
-        # real task because its tooltip never opened has to say so, or every such
-        # slot reads as a browser timeout and the placeholder stays invisible.
-        self.assertEqual(caught.exception.diagnostic['stage'], 'item_ready')
-        self.assertEqual(caught.exception.diagnostic['code'], 'structure_unknown')
-        self.assertEqual(caught.exception.diagnostic['missing_fields'],
-                         ['item_caption', 'recommendation_absent'])
+                                                       'time': '10:00 AM', 'aria': '10:00 AM'}, timeout=1.5)
+        self.assertEqual(caught.exception.diagnostic['stage'], 'scheduled_detail')
+        self.assertEqual(caught.exception.diagnostic['code'], 'load_timeout')
+        self.assertEqual(caught.exception.diagnostic['missing_fields'], [])
 
     async def test_conflict_inventory_contains_unknown_channel_cards(self):
         rows = [{'date': date(2026, 9, 15), 'items': [{'index': 0, 'time': '10:00 AM'}]}]
@@ -217,7 +269,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
           slot.onclick=()=>{
             document.body.insertAdjacentHTML('beforeend', `<div role="dialog" aria-label="Post details">
               Post details ID: 2059528092104126 Facebook's Feed <span id="loading">Loading preview</span></div>`);
-            setTimeout(()=>{document.getElementById('loading').outerHTML='<article>Neakasa Deutschland September 30 at 5:30 PM Preview</article>'},350);
+            setTimeout(()=>{document.getElementById('loading').outerHTML=
+              `<article><h2>Neakasa Deutschland</h2><a>September 30 at 5:30 PM</a><div>${data.caption}</div></article>`},350);
           };
           document.onkeydown=e=>{if(e.key==='Escape')document.querySelector('[role=dialog]')?.remove()};
         }''', {'caption': CAPTION, 'entry': entry, 'delay': delay})
@@ -363,8 +416,9 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
     async def test_scheduled_aggregate_cannot_copy_one_id_into_two_channels(self):
         await self.page.set_content('''<button onclick="document.querySelector('[role=dialog]').hidden=false">Open</button>
           <div role="dialog" aria-label="Post details" hidden>ID: 123456
-          Facebook's Feed Neakasa Deutschland Instagram feed neakasa.de</div>''')
-        value = await month.bs._open_channel_dialogs(self.page,self.page.get_by_role('button'),SPEC,timeout=1)
+          Facebook's Feed Neakasa Deutschland Instagram feed neakasa.de
+          <button onclick="this.parentElement.hidden=true">Close</button></div>''')
+        value = await month.bs._open_channel_dialogs(self.page,self.page.get_by_role('button', name='Open', exact=True),SPEC,timeout=1)
         self.assertEqual(value,{})
 
     async def test_shared_story_and_feed_source_links_do_not_supply_content_identity(self):
@@ -405,8 +459,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.cards),2)
         self.assertEqual([d['code'] for d in result.diagnostics], ['unsupported_type','permission_denied'])
         self.assertNotIn('Private caption', str(result.diagnostics))
-        # 明细没读出来，但格子上的 insights 链接已经说明这两条是后台的已发布内容。
-        self.assertEqual({card.delivery for card in result.cards}, {'published'})
+        # A link alone cannot certify delivery; unresolved objects still block vacancy.
+        self.assertEqual({card.delivery for card in result.cards}, {'unknown'})
         self.assertEqual({card.read_status for card in result.cards}, {'unsupported','unavailable'})
         # 渠道未知：授权不了任何渠道的槽位，也绝不留成空档。
         self.assertEqual(result.occupied_for_channel('facebook'), ())

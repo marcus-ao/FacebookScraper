@@ -11,6 +11,13 @@ const card = (at: string, channels: CalendarCard['channels'] = ['facebook']): Ca
 describe('同渠道占用按真实时间差算，不按"同一个日历日"', () => {
   const gap = 90
 
+  it('1 分钟配置允许相邻整分钟，同刻提示，跨渠道独立', () => {
+    const before = card('2026-09-13T23:59:00+02:00')
+    expect(nearbyOccupancy([before], 'facebook', '2026-09-14T00:00', 1).tooClose).toBe(false)
+    expect(nearbyOccupancy([before], 'facebook', '2026-09-13T23:59', 1).tooClose).toBe(true)
+    expect(nearbyOccupancy([before], 'instagram', '2026-09-13T23:59', 1).tooClose).toBe(false)
+  })
+
   it('23:30 与次日 00:30 只差 60 分钟，必须提醒', () => {
     const result = nearbyOccupancy([card('2026-09-13T23:30:00+02:00')], 'facebook', '2026-09-14T00:30', gap)
     expect(result.tooClose).toBe(true)

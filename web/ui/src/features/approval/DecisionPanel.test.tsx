@@ -4,6 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { createQueryClient } from '@/app/queryClient'
 import type { TaskDetail } from '@/types/domain'
 import type { ApprovalController } from '@/hooks/useApproval'
+import { ApiError } from '@/services/http'
 import fixture from '@/types/__fixtures__/task-detail-active.json'
 import { ApprovalAction, DecisionPanel } from './DecisionPanel'
 
@@ -11,7 +12,8 @@ const detail = fixture as unknown as TaskDetail
 const controller = {
   options: { data: null, isFetching: false }, eligible: false, lockable: false, locked: false,
   busy: false, reason: '请先确认正文', error: null, errorMessage: '', suggestions: [],
-  confirmed: false, snapshot: null, operation: null, when: '',
+  confirmed: false, snapshot: null, operation: null, when: '', pendingReceipt: false,
+  recovering: false, recoveryNotice: '', recoveryError: false,
   setWhen: () => {}, refresh: async () => {}, recover: async () => {},
 } as unknown as ApprovalController
 
@@ -78,5 +80,47 @@ describe('最终审核区', () => {
     const markup = html({ ...detail, status: 'content_locked' }, legacy as ApprovalController)
     expect(markup).toContain('请解除冻结、重新核对并确认当前正文和每张图片')
     expect(markup).not.toContain('请查看下方提示')
+  })
+})
+
+describe('已有提交的回执', () => {
+  const at = '2026-09-30T23:00:00+08:00'
+  const receipt = (scheduled: boolean, overrides: Partial<ApprovalController> = {}) => html(
+    { ...detail, status: scheduled ? 'scheduled' : 'approved',
+      publication: { status: scheduled ? 'scheduled' : 'submitted_unverified', scheduled_at: at },
+      schedule: scheduled ? { at, channel: 'facebook' } : null } as unknown as TaskDetail,
+    { ...controller, options: { data: { available: true, earliest: '2026-09-25T12:00:00+08:00', latest: at }, isFetching: false },
+      operation: { status: 'uncertain', message: 'old failed readback' }, pendingReceipt: !scheduled,
+      reason: '请先核对已有提交结果', ...overrides } as unknown as ApprovalController)
+
+  it('收到成功信号但回执未补齐：给提交时刻，只引导核对，不给可选范围', () => {
+    const markup = receipt(false)
+    expect(markup).toContain('已收到排期成功信号，待补齐回执')
+    expect(markup).toContain(at)
+    expect(markup).toContain('23:00')
+    expect(markup).toContain('不会再次提交')
+    expect(markup).not.toContain('可选时间')
+    expect(markup).not.toContain('old failed readback')
+  })
+  it('核对失败与内容变化分开说明，不弹出「状态在别处变过」的恢复', () => {
+    const markup = receipt(false, { error: new ApiError('发布浏览器未启动', 409, {}),
+      recoveryError: true, errorMessage: '发布浏览器未启动' })
+    expect(markup).toContain('发布浏览器未启动')
+    expect(markup).not.toContain('状态在别处变过')
+    expect(markup).not.toContain('内容或时刻已变化')
+  })
+  it('账本已确认排期时，旧的待核对操作不再显示', () => {
+    const markup = receipt(true)
+    expect(markup).toContain('定时排期已确认')
+    expect(markup).not.toContain('提交结果待核对')
+    expect(markup).not.toContain('old failed readback')
+  })
+  it('排期已确认但通知未送达时，另行说明通知状态', () => {
+    const markup = receipt(true, { operation: { status: 'succeeded', result: {
+      projection: { notification_notice: '排期已确认，飞书通知的送达结果不明确；请先到群里核对。' },
+    } } as unknown as ApprovalController['operation'] })
+    expect(markup).toContain('定时排期已确认')
+    expect(markup).toContain('飞书通知的送达结果不明确')
+    expect(markup).not.toContain('提交结果待核对')
   })
 })

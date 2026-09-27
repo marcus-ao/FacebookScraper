@@ -231,7 +231,7 @@ FB 身份/媒体、访问及调度；[存储/监测等前期 7/7](../state/offli
 | IG 10 图 / 30 标签 / 20 分钟至 29 天提示 | 快照 117/118、108，截图 187、124 | 保留历史事实，不据此构造 FB 窗口或要求补齐其余测量 |
 
 严格组装默认不加载 IG 数量/画幅/正文计数硬限制；平台排期提前量不设猜测上限，交实际 UI 校验。
-仍检查内容/图片版本、当前月历覆盖、未来时刻及同渠道 90 分钟间隔。显式注入旧实测契约的内部调用
+仍检查内容/图片版本、当前月历覆盖、未来时刻及同渠道 1 分钟间隔。显式注入旧实测契约的内部调用
 继续核对其来源和值；常规发布不需要这些注入参数。`ui_constraints_verified` 保留兼容名称，
 表示接受绑定的控件录制，不再表示完成 18 项人工观察。
 
@@ -362,7 +362,7 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 媒体形式缺少结构证据时保留 unknown，不从缩略图猜单图/视频/轮播。已发布详情按元数据与独立渠道证据读取，
 不等待互动统计。无证据的类型/身份继续形成未核实条目，不计为推荐时段或空档。
 当时部分结果单独保存 `partial_inventory/partial_observed_at`；2026-09-23 的缓存迁移见 [§1.33](#133-月历同步与占用分层2026-09-23)。
-槽位判断须证实目标范围空闲；目标排期回读核实相关卡片，远端删除登记仍须整月决策完整。既有同渠道 90 分钟规则不因 Story/Reel 豁免。
+槽位判断须证实目标范围空闲；目标排期回读核实相关卡片，远端删除登记仍须整月决策完整。既有同渠道 1 分钟规则不因 Story/Reel 豁免。
 
 **2026-09-21 服务机现场：9 月 4 日两个渠道已真实通过（`complete=true`），整月仍 partial，7 条未核实。**
 日期格与条目本身读全了（`2026-08-30`–`2026-10-03`、`grid_complete`、`entries_complete` 均 true），缺口按类型分五类：
@@ -829,15 +829,61 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 日历分支 `claude/calendar-data-sync-fix-646a9e` 的功能提交 `3e12010` 已进入本集成线。网格与卡片时刻对齐即可更新主缓存；`status` 只表示同步新鲜度。未读明细留在卡片、`diagnostics` 和 `unresolved_count`。不再保存 `partial_inventory`；读到旧缓存的该字段及 `partial_observed_at` 时丢弃。页面同步可用不等于发布许可。
 
-空档确认使用 `cards_in_range`。同渠道且 `time_verified` 的卡片严格小于 90 分钟才冲突；目标相关范围内渠道未知则拒绝确认，不给出把未知渠道当某一渠道的建议。独立时刻未核实或旧缓存缺 `time_verified` 时，不能借外层卡片时刻证明条目在范围外。聚合变体各自核时；`occupancy_complete` 只说明网格时刻集合对齐，不证明详情或每个变体已读。格子时钟按 `%I:%M %p` 解析，秒和微秒为零；夏令时回拨的两个绝对时刻分别保留。
+空档确认使用 `cards_in_range`。同渠道且 `time_verified` 的卡片严格小于 1 分钟才冲突；目标相关范围内渠道未知则拒绝确认，不给出把未知渠道当某一渠道的建议。独立时刻未核实或旧缓存缺 `time_verified` 时，不能借外层卡片时刻证明条目在范围外。聚合变体各自核时；`occupancy_complete` 只说明网格时刻集合对齐，不证明详情或每个变体已读。格子时钟按 `%I:%M %p` 解析，秒和微秒为零；夏令时回拨的两个绝对时刻分别保留。
 
-`has_href` 只影响未读卡片的展示状态。公开观测仍要求 `delivery=published`、`read_status=complete` 和已绑定远端 ID。提交基线及结果回读按目标时刻核完整正文、账号、唯一渠道、ID 和前后因果；已证明在目标范围外的异常不阻断，相关未知项继续拒绝。远端删除核实仍要求整月 `decision_complete`。提交前的编辑器最终复核也保留，不能用页面图片代替 G8 远端详情。
+详情读取失败时 `delivery=unknown`，`has_href` 不再推导已发布或定时；无渠道的条目只提示待核对数量，不画成任务卡，仍保留在严格占用判定中。公开观测仍要求 `delivery=published`、`read_status=complete` 和已绑定远端 ID。提交基线及结果回读按目标时刻核完整正文、账号、唯一渠道、ID 和前后因果；已证明在目标范围外的异常不阻断，相关未知项继续拒绝。远端删除核实仍要求整月 `decision_complete`。提交前的编辑器最终复核也保留，不能用页面图片代替 G8 远端详情。
 
 **验证状态：离线通过。** 原分支[规划、缓存、接口、公开观测与回读](../state/offline-validation-20260923T033449Z/results.json) 6 个脚本通过，[月份读取](../state/offline-validation-20260923T033459Z/results.json)通过；同次 Story 脚本因 300 秒上限中止，[复跑](../state/offline-validation-20260923T034141Z/results.json)用 343.77 秒通过。该分支合入 main 后的[五脚本复验](../state/offline-validation-20260923T035236Z/results.json)也通过。这四份原分支日志的 18 个文件已按 SHA-256 复制到本树，见 `state/calendar-evidence-copy-20260923.json`。
 
 本树[日历与范围定向](../state/offline-validation-20260923T035901Z/results.json) 7/7、[发布与兼容定向](../state/offline-validation-20260923T040248Z/results.json) 11/11 通过。[Story 修前](../state/offline-validation-20260923T040538Z/results.json)复现旧“正文未知即空匹配”断言错误；保留拒绝把未知目标当空档的实现，改断言后 [Story 复跑](../state/offline-validation-20260923T040929Z/results.json)通过。回读成功标识改为“目标范围”，[回读红测](../state/offline-validation-20260923T040900Z/results.json)及[修后四脚本](../state/offline-validation-20260923T040916Z/results.json)保留。[月历前端单测](../state/final-calendar-ui-test.log) 3/3、[构建](../state/final-calendar-ui-build.log)通过，[隔离浏览器场景 F](../state/publishing-integration-20260923/ui-regression/browser-stage-f.json)通过。原分支 `state/calendar-data-sync-fix/validation.json` 只覆盖 Facebook Story 预览作者，不能当作本节证据。全部写入使用隔离临时目录，未登录、滚历史、付费或发布。服务机完整月份、全部内容类型和新排期仍为 **待真实联调**。
 
+**同日多来源展示（2026-09-27，离线通过）。** [服务机月历截图](../state/calendar-refresh-consistency/calendar-before-refresh.png)中 09-30 的远端 FB 17:30、23:00 后面才画本地已排期 IG 20:00；本地卡也没有平台图标，状态写成“本地”，远端卡写成“定时”。[审校列表](../state/calendar-refresh-consistency/review-scheduled.png)与[详情](../state/calendar-refresh-consistency/review-detail-scheduled.png)当时显示原 IG 已排期；只读旧探针要求 `submit_ambiguous` 因而在浏览器前拒绝，不能用它否定新状态。原因是页面分别渲染 `cards` 和 `local` 两组，后组恒在最后。前端现把两组按同一绝对时刻排序，共用平台图标与“已排期”状态签；本地卡保留虚线边框和来源提示，不冒充新鲜远端回读。`CalendarPage.test.tsx` 的 17:30/20:00/23:00 场景在旧代码按顺序断言失败，修改后 12/12 通过，生产构建通过。三张截图保存在本功能工作树，SHA-256 依次为 `42DCB3CA400F4B679CC467E2130FEE04F74E05D6DF4EAFF5B2FBE1366F582ED9`、`2C651A13D5FE2DAC35480161321A21E5D13695E862534C36B1C2BD009230B0AA`、`7AECDB2BD239EE414891B4AA3DA6FEBA8410A6420C04C26A941C46FF8B77B216`。完整月份刷新 502 与服务机结果仍须另查，不能由展示修复推断同步成功。
+
+**整月刷新 502 的证据缺口（2026-09-27，当时待查）。** 服务机 21:28 截图显示月历保留 09-26 21:23 的旧数据，`POST /api/calendar/refresh` 返回 502；这条状态只证明本次刷新失败，不能从“09-30 折叠日等待较久”直接判定是哪张卡或哪一阶段失败。旧 `refresh_cache` 只保存 `PlannerItemError` 诊断，周视图按钮的 Playwright 超时、折叠数量不符与最终复扫变化都压成无诊断的通用 502。接口现记录有界的操作/阶段/错误码，不输出原始浏览器调用日志、正文或 URL；浏览器超时归入超时提示。隔离 API 测试先复现无诊断的 502，再验证周视图按钮超时与折叠数量失配分别给出安全错误码，旧缓存时间保持不变；`tests_calendar_api` 27/27 通过。此时尚未证明造成现场 502 的具体分支；后续 22:17 的诊断见下段。
+
+**09-27 22:17 刷新失败的具体分支（修复离线通过，真实刷新待复验）。** [页面提示](../state/calendar-refresh-consistency/refresh-week-timeout.png)显示切换周视图超时；[服务机只读诊断](../state/calendar-refresh-consistency/refresh-week-timeout-20260927.json)回传运行源码 `51530c8`、Web 22:11:43 启动晚于源码 22:10:59、`refresh_diagnostic={code:week_button_timeout, operation:Locator.click, pointer_intercept:true}`，旧缓存观测仍是 09-26 21:23。Meta [月视图](../state/calendar-refresh-consistency/meta-month-folded-0930.png)的 09-30 保留 `+ 1 more`，因此完整读取必须切到周视图；本地[三卡展示](../state/calendar-refresh-consistency/calendar-sorted-0930.png)已按 17:30 / 20:00 / 23:00 排序并显示图标和“已排期”，但仍来自旧缓存。缺陷在 `month_inventory.detail_grids` 及错页恢复的 `restore_detail_grid` 用指针点击 Week；工具栏浮层截走事件。两处现统一先确认月历位置、弹窗已关闭、Week 按钮唯一且可见可用，再以 Enter 激活；`select_week` 随后仍核七天日期，`require_expanded_day` 仍核可见卡和折叠数量，最后复扫不放宽。`tests_calendar_overflow.OverflowTests.test_folded_day_switches_to_complete_week_through_toolbar_overlay` 的隔离浏览器先复现 `Locator.click` 和指针拦截，修后读得同日三张卡并返回月历，零写入；相关 5 项溢出/恢复测试、`tests_calendar_api` 27 项与 hygiene 通过。三张截图 SHA-256 依次为 `187B3A4903C34F3D07C8EB06896BA19333C3A7BBD93C50C39FCD7C59A8F86781`、`E849047FCA4AAE5CE3A4E49D976369725A560EA683EBFE428011A2110CA7AA94`、`E69044CF59FD0EA30508CAE313DCC06AE7DBB3D0377AC2C86181103DE5B81CC8`；诊断 JSON 为 `2FF5BFD5E9048C806B602BCA2D82885A8E38C79461E15CF5F83140F75097239F`。服务机更新并真实刷新前，整月仍按旧缓存和待联调判断。
+
 ### 1.34 G8 远端图片与原排期补验（2026-09-23）
+
+**周标题报错实为读取中离开月历（2026-09-27 服务机时间）。** `ad0173c` 后原 IG 回执报“周视图的七个日期标题尚未完整读取”。正常探针的旧整行定位匹配一个可见 flex DIV，原始文本与按换行分隔的显示文本都能通过旧正则，换行不是此次根因。沿正式 `read_live_inventory → ready_week` 路径捕获的失败标签却在 `/latest/composer/`，标题为 Create post / Schedule post，日期格和周标题匹配均为 0，文档已完成且可见。现场证明错页，尚不能确定 Meta 由哪一个事件触发跳转；不将 React portal 冒泡或改用 Enter 写成已证结论。
+
+隔离 Chromium 已复现“详情 ID/账号读取成功 → Close 后跳 composer → 返回 ID → 下次读周标题才失败”的同类链路。缺口是原导航检查仅覆盖详情读取异常，没有覆盖成功关闭后的页面状态。现打开、准备、观察和关闭详情均核对 Planner 与原资产；月/周读取发现错页立即分类为导航中断。资产基线从初次打开固定，Month/Week、筛选器及最终复扫不能按操作后的地址重新绑定。关闭详情后跳到同站 composer 时，只恢复调用方自己的标签，重新核对原资产、整月基线及完整原周列表；全部相等才继续，已有详情及图片观察器不重放。恢复失败或任一列表变化使整轮作废，读取详情中途跳转不接受部分身份。正常路径不增加页面导航，不点 composer 控件。
+
+**详情关闭时的二次跳页（2026-09-27）：离线通过，原 IG 回执待真实联调。** 用户提供的[原始诊断 JSON](../state/calendar-detail-route-20260927/5356374aa711456ab91946fd337eb399.json)在 `after_detail_close` 记录 `surface=composer`，同时仍有 Planner、2026 和 8 个周视图 link（含嵌套推荐）；这证明地址与当时 DOM 不一致，不能据此断言弹窗内部哪个事件引发跳转。旧 `_open_channel_dialogs` 只在观察完整并取得 ID 时调用原网格恢复；若观察阶段出错，`finally` 中的关窗地址检查会把原错误覆盖成导航中断。观察后又要求整个弹窗文本逐字不变，连不涉及 ID、渠道、账号的预览文字变化也会误判。现关窗后无论观察是否完成，均先由原读取者恢复同一临时标签并核对月/周完整列表；观察失败仍保留失败，不把未知帖子当成已确认。仅当完整正文已从独立周卡读取时，弹窗无关文字变化才允许继续，同时重核唯一详情 ID、单渠道标记、独立预览作者与弹窗可见性，末次再复扫完整网格；依赖弹窗正文的路径仍要求弹窗全文稳定。若恢复返回后地址再次变化，最后一次守卫再恢复并重核；无法复核时继续拒绝回执，不重开或重新提交帖子。隔离浏览器复现了“地址变 composer、周历 DOM 尚在、预览无关文字改变”的原报错并验证修复，也覆盖观察失败不被跳页掩盖和稍后改变地址的边界；真实 Meta 页面导致首次观察退出的具体内部事件仍未被日志记录，服务机原 IG attempt 尚须一次只读核对，不能标为 `scheduled`。
+
+**详情打开时误入编辑器（2026-09-27）：离线通过，原 IG 回执待真实联调。** 用户的新诊断 `6ec5faf373fe463a9c6cad9b0ac3a2f7.json` 在 `opening_detail` 已记录 `surface=composer`、8 个周视图 link 和 1 个弹窗；因此上一轮延长预览等待不能触及这次失败。旧读卡用 `.nth(item_index)` Locator 核对后又在点击时重新定位；隔离 Chromium 在核对与点击之间插入一张卡即可稳定复现点击别的入口并离开月历。现将已核对的 DOM 卡固定为 ElementHandle；原节点被替换则停止，不能重新绑定同序号。若打开详情仍进入编辑器，只恢复本次拥有的临时标签并比较原月/周网格，再对同一时刻、渠道与正文的卡片用 Enter 有界重试一次；二次失败停止并记录目标日期、时刻、序号和视图。Enter 是异常后的备用查看动作，不单独证明 Meta 的误跳根因；仍须从详情核对独立 ID、账号、渠道与正文，最后复扫。隔离测试覆盖位置漂移、首次误跳后成功以及二次误跳停止；真实账号尚未复验，不得据此把原 attempt 写成 `scheduled`，也不重新提交。
+
+**Month 按钮被浮层遮挡（2026-09-27）：离线通过，原 IG 回执待真实联调。** 用户的新 Playwright 调用日志明确显示 Month 按钮可见、可用且位置稳定，但另一个 DIV 持续拦截指针事件，旧鼠标 `click` 因此 30 秒超时；截图只显示审校台错误，尚不能确定 Meta 浮层的具体来源。月历初次打开及周视图读完返回月视图的两处切换现改为对唯一可见且可用的 Month 按钮发送 Enter；初次打开由既有首次读取保留缺标题重读，返回月视图立即核对完整日期格，末次仍比较原整月列表。仍有可访问详情弹窗时直接停止，不在弹窗背后切换，也不用强制鼠标点击。隔离 Chromium 用遮挡层先复现两处原超时，再验证切换及零次写入，并覆盖详情弹窗未关时拒绝。初版改动后 `tests_calendar_overflow` 35 项通过；为保留缺标题重读而调整初次打开的核验阶段后，三个遮挡场景、`tests_calendar_recovery` 10 项、两项月份就绪测试、`tests_receipt_reconcile` 7 项及 hygiene 通过。服务机未重跑，不能据此确认原 IG attempt 已取得回执。
+
+**原 IG 回执范围拒绝（2026-09-27）：待真实联调。** 服务机源码干净且 HEAD 为 `d75afd6`；8765 的 Web 进程 16:59:35 启动，晚于 `month_inventory.py` 的 16:58:48 文件时间，17:00 的回读由这一进程处理。原 attempt `5024d9f4-38fe-4b49-9adb-788d2e7054b2` 仍为 `submit_ambiguous`：本次读出 09-30 的三张卡，但 17:30、20:00、23:00 均在 `scheduled_detail` 得到 `load_timeout`；目标 20:00 卡样本是 `channels=[]`、`delivery=unknown`、正文长度 0。因此目标卡的渠道/独立时刻未核实，不能写 scheduled；旧记录没有直接给出覆盖范围和诊断索引布尔值，不能仅从 `complete_month=false` 推断另一分支。服务机对同一 IG 卡的独立只读探针进一步记录：指针打开详情时地址变成 `/latest/composer/`，同时可见一个 `Post details` 弹窗；正式恢复原月/周网格后，键盘 Enter 重试等待 `Post details` 可见超时，最终页面仍是月历且没有弹窗。随后同卡只读点击在弹窗可见时读到日历地址、7 个原周日期格、详情 ID `1099867215965804` 和 Instagram feed 标识；账号当时尚未在弹窗文本出现，不能据此确认身份。悬停后的格外链接不稳定，不能用于绑定原卡。由此可复现的故障是：打开详情时短暂的 composer 地址被立即当作最终跳转，已有弹窗被丢弃，备用 Enter 又未打开详情；Meta 的内部事件机制尚未证实。读取器现在只在原卡点击之后，有限等待地址回到原资产月历且固定的原卡仍在，随后仍须等原详情并核验完整账号、渠道、正文、时刻和 ID；地址不返回或原卡变化仍拒绝。一次月历读取返回后、进入 matching 前的 `inventory_evidence` 记录四项判据，以及目标/UI 时区、覆盖日期、占用/卡片绝对时刻、诊断索引对应数、目标卡渠道、时刻核实、读取状态、交付状态与数字远端 ID；列表有上限，不含正文或签名图片 URL。`details_scoped=true` 使 `decision_complete=false`，本身不拒绝已有对象的正向回执。四种隔离库存的拒绝诊断已用 `tests_month_readback` 逐项复现；隔离 Chromium 的短暂路由场景已先复现旧拒绝、再验证同一次点击可读详情且不写入。服务机仍须部署后只对原 attempt 真正复验，不能因此重提。本次隔离验证：`tests_month_readback` 11 项、`tests_calendar_recovery` 10 项、`tests_receipt_reconcile` 7 项、`tests_scheduled_detail` 20 项和 hygiene 通过，日志在本功能工作树 `state/offline-validation-20260927T094528Z/`；`tests_calendar_overflow` 被该工具的单脚本 300 秒限制截断后，以同一隔离夹具直接运行 36 项全部通过（312 秒），其中包括旧拒绝到新读取的回归。未连接服务机业务数据。
+
+**首次部署实测（2026-09-27 18:11 +08:00）：未通过。** 服务机已拉取 `e596e57`，8765 新 Web PID 27380 的启动时间 18:07:27 晚于修复文件落盘时间，父进程链指向服务机源码，健康检查无错误。只对原 Instagram attempt 点过一次“核对并补齐本地回执”；原账本由 12 增至 13 条，仍为 `submit_ambiguous`，没有 remote ID 或原通知事件。新失败发生在 `reading_detail`，地址为 composer，失败快照仍有 8 个日期格与一个弹窗；月历读取未返回，所以本轮没有新 `inventory_evidence`，不能判定本轮四个 matching 守卫。随后独立只读轨迹显示原卡点击约 0.8 秒后详情 ID 可见、约 1 秒后地址变 composer 且原卡与周格暂留，约 2 秒后原卡、周格和弹窗均消失；全文尚未出现。先前“等待打开时的短暂地址变化”只越过旧失败点，不能完成这条真实详情。悬停的格外链接不稳定且本次未出现。不得对原 attempt 再次点击核对或另建排期，先验证安全的详情入口。
+
+**外层日期格点击已定位（2026-09-27，真实只读探针）：修复待部署。** 原 IG 20:00 时间卡与外层日期格各有一个 React `onClick`。仅在一次临时月历标签中让外层日期格点击处理器停止冒泡，并在点击原卡后恢复，详情在原月历地址持续 6 秒；周格持续为 7 个，详情依次出现 `1099867215965804`、Instagram feed 和 `neakasa.de`。这证实外层日期格的点击处理器引起先前的 composer 跳转；仍未读出或核对完整冻结正文，因此不能据此补本地回执。修复只在已核对的周视图 IG 卡点击期间隔离该外层处理器；处理器结构部分变化或发现未知外层点击时拒绝详情，正常读取仍受原导航与身份守卫约束。隔离浏览器夹具先复现旧版跳 composer 并拒绝，再验证同卡详情与完整回读，不写业务数据。原 attempt 已执行过一次真实核对且仍未决，再次执行须另行确认。
+
+本次外层点击修复的离线验证：`tests_calendar_overflow` 37 项通过，新增夹具先在旧版稳定拒绝、修后确认同卡完整正文与远端 ID，零写入；`tests_month_readback`、`tests_calendar_recovery`、`tests_receipt_reconcile` 三组通过，记录在本功能工作树 `state/offline-validation-20260927T103103Z/`；`tests_month_inventory` 与 `tests_scheduled_detail` 两组通过，记录在 `state/offline-validation-20260927T103235Z/`。另经 hygiene 和 `git diff --check`。均未附着真实服务机发布会话，不能升级为原 attempt 真实通过。
+
+**同次读取的 FB 23:00 仍会误跳（2026-09-27 19:23 +08:00）：原 IG 回执未决。** 用户在部署 `65679df` 后提供的新诊断由 Web PID 5828 保存：`reading_detail`、`surface=composer`、09-30 11:00 PM、`item_index=2`、周视图，仍有 8 个日期格与 1 个弹窗。前一修复仅隔离 IG 20:00 的点击，却仍须读取同日 FB 23:00，整次库存因后者的导航中断；不能把失败继续归给 IG 详情，也不能跳过这张未知渠道/时刻的卡当作空档。首次 FB 单卡探针的临时包装误用了 `setdefault`，没有覆盖正式调用显式传入的普通点击，因此得到的 `load_timeout` 不能判定隔离点击是否有效。更正后的直接隔离点击使原 FB 卡详情在月历与 7 个周格上保持 5 秒；随后以显式 `isolated_pointer` 单独执行正式只读详情读取，取得 Facebook 单渠道、目标账号核实、259 字正文与原周卡一致、远端 ID `1084557747316275`，关闭后仍为原月历且无详情弹窗。隔离 Chromium 已以“FB 详情先出现、正文延迟、外层日期格稍后跳 composer”复现当前错误；把隔离点击用于同一周视图的全部已核对排期卡后，同一夹具三张卡完整读取并核实原 IG 唯一对象，零业务写入。原 IG attempt 的全链路真实回读仍未完成，继续保留未决与防重。
+
+通用周卡点击修复的离线验证：新增 FB 23:00 延迟导航夹具在旧实现报与现场同类的错页中断，扩展到全部周卡后通过；旧 IG 隔离夹具补齐同日 FB 卡的事件结构后也通过。`tests_calendar_overflow` 38/38、`tests_month_readback`、`tests_calendar_recovery`、`tests_receipt_reconcile` 三组、hygiene 与 diff 检查通过。均用隔离数据与浏览器夹具；服务机 FB 单卡只读通过仍不能替代原 IG attempt 的完整冻结正文、唯一对象和最终回执核验。
+
+本轮定向验证：`python -m unittest tests_calendar_overflow tests_month_inventory tests_scheduled_detail` 85 项、`python -m unittest tests_publish_browser_lifecycle tests_scheduled_readback tests_receipt_reconcile tests_scheduled_media_recheck` 33 项及三项新误跳场景复验均通过，`tests_hygiene.py` 与 `git diff --check` 通过。浏览器用隔离 Chromium 与合成页面，未连接服务机 9223、写原回执或发送通知；这只证明读取与失败边界，原 IG attempt 须按 MANUAL_STEPS §16.4 在服务机复验。
+
+[最终月历回归](../state/calendar-detail-route-20260927/offline-validation-20260927T025133Z/results.json)的折叠条目 25 项、月份读取 33 项通过；[详情与模块检查](../state/calendar-detail-route-20260927/offline-validation-20260927T024653Z/results.json)中详情 19 项和 hygiene 通过；[回执相关四组](../state/calendar-detail-route-20260927/offline-validation-20260927T024249Z/results.json)通过。[普通详情正文守卫](../state/calendar-detail-route-20260927/ordinary-caption-guard.log)单项复验通过。均用隔离 runtime 与合成 Chromium 页面，没有附着服务机账号、修改原 attempt、创建排期或发送飞书消息。用户附件已按原文件名保全并核对 SHA-256 相同。
+
+**验证边界：离线通过，真实回执待真实联调。** 三条详情每次关闭都跳转的夹具已全部读取并恢复，ID 各读一次；可见时间或折叠正文变化均拒绝，详情观察中跳转不确认 ID。另逐日读取七个可见日期标题，排除隐藏副本和帖子/弹窗文字，保留顺序、年月、跨月跨年映射。失败/恢复诊断保存在 `state/planner_diagnostics/`，含阶段、页面类型、日期候选与恢复结果，不保存正文、输入值或 URL 参数。服务机仍须对原 09-30 20:00 attempt 完成一次真实补回执，不重复创建排期。
+
+可复核材料保全在主检出 `state/calendar-week-header-20260926/`：[服务机输出](../state/calendar-week-header-20260926/service-observations.json)、[定向验证与边界](../state/calendar-week-header-20260926/validation.json)、[媒体入口独立复审](../state/calendar-week-header-20260926/reviewer-media-check.md)。九个相关离线脚本全部通过，使用隔离 runtime 和浏览器夹具；目录包含旧版失败复现、截图、离线日志与 SHA-256 清单。详情夹具的整月读取预算由 1.5 秒改为 5 秒：新旧实现的两轮 35 格读取均实测超过 1.5 秒，生产等待预算未变；关闭失败等专用短超时测试仍保留。
+
+**同日折叠条目现场（2026-09-26）。** 服务机 09-30 有 FB 17:30、IG 20:00、FB 23:00，月视图只显示前两张和 `<a role="link" href="#">+ 1 more</a>`。原 `read_grid` 把所有链接都按时间卡解析，已用隔离 DOM 复现“月历条目时刻无法唯一读取”；移除该控件并放入第三张真实时间卡后原读取通过。鼠标点击、悬停和 Enter 均未展开该入口。切到下一周后，服务机显示 27、28、29、30、1、2、3 与全部三张卡，各正文在独立 aria-label 包装。原日期选择器匹配 8 项，其中一项是推荐卡内嵌 link；周视图仅取最外层 7 格。现按月历绑定周日期、年月及相邻周切换，核对可见数加折叠数，再读逐卡全文与详情身份，最后复扫周/月视图。三/四卡、嵌套推荐、缺项和变化拒绝均为**离线通过**；服务机原 attempt 的真实补回执仍为**待真实联调**。一次详情探针意外进入空白 `/latest/composer/` 与 `Schedule post` 弹窗，未填写或提交；现在对离开月历的错误单独分类，不再作为月份或正文缺失。现有证据不能确定误跳的事件处理原因，也不能把 Enter 当作修复。
+
+**Instagram 提交后回查（2026-09-26，离线通过）。** 服务机截图已显示新的移动应用推广成功弹窗，但旧信号只匹配 `Your post is scheduled`。现在未识别弹窗也继续一次只读月历核对；保留原 attempt 和提交前基线，核对成功才写 `scheduled`，失败继续未决且不重提。`tests_final_form` 的两个定向用例验证了有回执和无回执两条分支，均只提交一次；没有据截图编造新的弹窗角色或升级 G8。
+
+**Instagram 预览正文（2026-09-26，离线通过）。** 服务机只读详情为 `1099867215965804`，账号 `neakasa.de`，明确显示 `Instagram feed`，正文作者 SPAN 后是折叠正文与 `more` 按钮，没有 Facebook article 或日期链接。已知 IG 时间卡改从周视图的独立正文包装读取，再等详情账号加载并核对实际编号/渠道；不依赖预览中的 more。详情正文适配仍保留为无周正文时的兼容路径，实际展开后的 DOM 尚未取得，该路径只有隔离验证。时刻来自对应日期格与单渠道时间卡，前后复扫检查未变化，不给聚合对象复制时刻；服务机真实补回执仍待部署复验。
+
+**详情预览等待（离线通过，真实补验待联调）。** 服务机用户观察到已有帖详情在预览完成前被关闭；隔离 Chromium 用“编号和作者先出现、正文延迟 1.2 秒”的同日周卡复现了旧读取提前关闭，并分别验证 IG 作者正文与 FB article。又用“正文前段先出现、全文两秒后出现”复现仅检查前缀仍会提前关窗。周卡及有完整悬浮正文的月卡现在等待详情正文的前六个词与全文匹配；预览明确显示 `more` / `See more` 时允许折叠正文，但要求实际文字保持一秒不变。缺失或作者不符保留未核验，不会借周卡正文直接宣布预览已加载。无独立正文的详情仍走原有展开与全文等待。另一个隔离用例复现图片诊断对零图片执行 `all([])` 后约 0.4 秒截图关窗；现须至少出现一张已加载图片候选，并在默认 30 秒预算内保持 2 秒结构稳定，始终未出现则记 `image_not_present`。月/周标题、完整日期格及前后网格复扫仍是页面就绪判据。两项修复只证明等待时序；远端图片容器、总数、顺序与真实服务机回执尚未验收。
+
+**折叠读取验证与证据。** [服务机观测摘要](../state/g8-calendar-overflow-20260926/week-observations.json)保留三条周卡独立正文、嵌套推荐及详情初始 Loading preview 的结构事实；[原错误复现](../state/g8-calendar-overflow-20260926/red-reproduction.json)与截图可复核。[定向验证索引](../state/g8-calendar-overflow-20260926/verification.json)记录分批运行的 10 个相关脚本及已修正的早期失败，新折叠测试 12 项通过，包含二/三/四条、跨月/年、缺项、变化、重复弹窗、正文提及账号和月/周平台冲突。独立复审后无未关闭问题；账号必须来自预览作者节点，月/周比对保留平台图标。全部自动测试使用隔离数据和合成 Chromium 页面，没有访问真实账号或发送通知。折叠原对象的图片观察器调用关系另用本地返回值验证，不证明 G8 图片已验收。
 
 工作树 `.worktrees/g8-remote-images`，分支 `codex/g8-remote-images`，起点 `320f5cd`。接手时本树、主检出干净；只读查询远端 main 同为该提交。开发机没有 `config.local.toml`、归档内容、`published.jsonl`、冻结快照或渠道资产记录，9223 未监听；不能据此推断服务机状态。G1 原文件、379 张截图及 §1.31 的历史验证仍保留，原录制没有完整媒体清单、加载状态与有序远端字节。
 
@@ -920,6 +966,36 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 工作树 `.worktrees/quiet-ctrl-c`，分支 `codex/quiet-ctrl-c`。源码 Web、局域网 Web、调度器、增量命令和前台部署控制器的 Ctrl+C 由各入口收口；有父启动器时只由最外层输出「已停止。」。`run_python.bat` 保留参数中的 `!` 和子进程退出码。启动器等待子进程协作清理，不能为尽快显示提示而强杀：调度器关闭时要排空处理和投递。旧进程在更新重启前仍按旧版本输出；停止前台控制器不等于停止受管 Web 或调度器。
 
 **验证状态：离线通过。** [接入主干后的四脚本](../state/quiet-ctrl-c/offline-validation-20260924T070533Z/results.json)通过：Windows 隔离控制台 9 项覆盖真实 `run_web.bat`/`run_web_lan.bat` 启动链、隔离 ASGI 应用上的实际 Uvicorn 优雅退出与子进程关闭标记、超过八秒的清理、参数保真与控制器直启提示；另有 scheduler、Web launcher 和 hygiene。[部署、运行绑定与地址定向](../state/quiet-ctrl-c/offline-validation-20260924T065210Z/results.json)通过；该较早记录中的 hygiene 与中断夹具失败已由接入主干后的结果替代。测试使用临时目录、合成子进程和隔离 Web 应用，未连接真实账号、模型、飞书或发布服务；服务机真实 PowerShell 停止行为仍为 **待真实联调**。
+
+**2026-09-27 服务机前台调度器停止诊断。** `scripts/run_scheduler.bat --run` 的最后一轮 Facebook 增量在 09-26 11:26:44 UTC 以退出码 0 完成，随后控制台出现「已停止。」并返回 PowerShell。运行源码 `9dffa5f`、工作区干净；只读核对时没有调度器进程，也没有 `FBScraperScheduler` 或 `FBScraperService` 计划任务。`scheduler.json.last_tick` 是最后一次成功 tick 的时刻，**不是停止时刻**；系统事件查询只返回通用异常，不能据此断言重启。手动 `--run` 未传 `stop_event`，也没有按运行时长自动退出的分支；`run_python.bat → tools.runtime.run_foreground` 只在收到 SIGINT 后输出这行，内层调度器受 `FBSCRAPER_STOP_NOTICE` 抑制不重复输出。因此证据支持前台控制台收到 Ctrl+C 类中断，无法区分键盘误触与同控制台进程发出的控制事件，也无法还原具体发送者。当前未安装守护任务，前台退出后不会自动再起；不为诊断自动补跑扫描或改动状态。[脱敏服务机摘要](../state/quiet-ctrl-c/scheduler-stop-20260927.json) SHA-256 `B4066C0546C6F1E28049DECABA75CD854F5C6EE4A64A1C8FECA6DAC8C1F596B7`；隔离 Windows 控制台 `test_batch_launcher_stops_on_one_ctrl_c_without_a_prompt` 复验通过。服务机真实人工按键来源仍未证实。
+
+**已有排期回执恢复（2026-09-25）：待真实联调。** 服务机 attempt `57da3ab1-81a8-41db-90c3-5640edcdb0e5` 已收到 `Your post is scheduled`，目标为 `2026-09-30T23:00:00+08:00`。用户只读取证确认月历只有时间链接、没有 href/aria/父级标签，旧代码在 `item_ready` 以 `item_caption` 拒绝；实际 `Post details` 中的 FB 对象为 `1084557747316275`，文章预览含独立账号、日期和折叠正文。恢复接口之前只调用本地投影函数，未决提交必然 409，前端将它误作内容版本冲突。原服务 API 与脱敏诊断保存在 [本次证据目录](../state/g8-scheduled-reconcile-20260925/)。
+
+时间卡现可直接进入只读详情；已录证 Facebook article 中展开 `See more`，从作者/日期/操作菜单之后、首张媒体之前读取正文，保留 emoji，排除推广与评论区域。IG 时间卡按本节新取得的周视图与详情结构读取，不套用 FB article 适配。`publication/reconcile` 持发布锁核对原快照与资产，用唯一账号/渠道/时刻/全文匹配补齐原 attempt，既有 remote ID 不允许替换；没有匹配或详情不完整继续保留未决，不重放提交、不伪造提交前基线。原 `recover` 函数仍只修本地投影。页面显示实际提交时刻与具体恢复错误，已确认 journal 优先于旧操作提示；不把未决状态说成排期已确认。复验步骤见 [MANUAL_STEPS §16.4](MANUAL_STEPS.md#164-排期详情的图片控件证据)。G8 图片完整性与顺序仍未验收。
+
+**离线验证。** 12 个相关后端脚本的最新结果全部通过，覆盖月历/详情读取、原回执恢复、发布操作、表单/浏览器生命周期和 hygiene；DecisionPanel 三项定向测试与前端生产构建通过。隔离浏览器场景验证具体恢复错误、未决回执和已确认回执的页面转换，记录三次核对请求、零次提交请求。各批次原始日志、早期已修正的夹具断言失败及最新结果索引见 [verification.json](../state/g8-scheduled-reconcile-20260925/verification.json)，浏览器请求记录见 [browser-stage-receipt_reconcile.json](../state/g8-scheduled-reconcile-20260925/browser-stage-receipt_reconcile.json)。这些测试使用隔离数据、合成页面或模拟 API；服务机原对象在修复后的只读回验尚未执行。
+
+**同日多帖的详情读取与排期通知（2026-09-26）：待真实联调。** 最新用户提供的服务机结果确认两条 Facebook 原 attempt 都为 `scheduled`：`122128135023379375` 对应 `57da3ab1-81a8-41db-90c3-5640edcdb0e5`、9 月 30 日 23:00、`facebook=1084557747316275`；`122125865115379375` 对应 `2d85e661-8bb9-429a-a1e6-ce6cf9686d67`、同日 17:30、`facebook=1884787296017457`。后者通知为 `sent`，用户确认群内收到；前者仍为 `pending / deliveries=[]`，未进入发送尝试。时间均为 +08:00。[最新服务机输出](../state/g8-instagram-occupancy-20260926/service-diagnosis.json)与[修复前输出](../state/g8-same-day-notifications-20260926/service-diagnosis.json)均由用户消息转存，非本机直接远端读取，不替代两渠道或 G8 验收。
+
+同日双卡本身可以区分；此前回执连带阻塞发生在正向回执复用了 `cards_in_range` 的空档规则：另一条详情失败便丢失独立时刻证据，导致已经完整读到的目标也不能确认。现只有 `verify()` 使用正向对象匹配，仍要求网格稳定、目标自身时间/账号/渠道/正文/编号完整、已观察到的匹配恰好一个，并保留其它卡片的诊断。它不推断未知聚合成员的真实时刻，不证明其它对象不存在；提交前基线、间隔规划和删除登记仍要求对应完整性。
+
+**Instagram 提交前的连续详情阻塞。** 旧只读探针完整读到 17:30 的 Facebook 对象，下一张 23:00 卡在 `Locator.click` 等待 30 秒后失败，因而留下渠道和独立时刻未知；这才阻断了 IG 20:00 空档判断，并非 Facebook 占用了 Instagram 时段。旧实现只发 Escape，不确认弹窗已关闭。隔离页面已复现 Escape 被忽略/关闭延迟时后续卡被挡；现优先点击已由服务机 ARIA 记录的详情自身 `Close`，兼容无该按钮时的 Escape，并等待详情消失。关不掉则明确中止当轮，不继续把后面的卡逐个写成渠道未知。2026-09-26 用户修后只读结果为两卡 complete/time_verified、diagnostics=[]、gap_minutes=1、IG 20:00 allowed=true：这一轮连续读取和空档判断为真实通过；不证明 IG 已实际提交，也不反推旧故障瞬间一定有遮罩。
+
+**月份就绪、推荐项误标和重复展示（2026-09-26）：离线通过，服务机修后待真实联调。** [服务机原始事实](../state/g8-calendar-readiness-20260926/service-diagnosis.json)记录事后标题仍是 `Planner / September / 2026 / Goals`、35 格；故障瞬间 DOM 未取得。旧读取器使用立即返回的 `locator.all()`，不等标题和日期格出现；无进度条的延迟渲染已在隔离浏览器复现同一月份错误。现共同等待唯一年月和完整日序列，兼容合并标题且英文解析不依赖宿主 locale，前后复扫和换月拒绝保留。[Playwright 官方说明](https://playwright.dev/python/docs/api/class-locator#locator-all)只支持等待机制判断，不是 Meta 页面结构证据。
+
+**Instagram 的 0/0 标题再次失败（2026-09-26）：待真实联调。** 用户新记录确认 13:28:19 UTC 的正式操作在“核对所选日期及相邻间隔的远端月历”失败；相同资产、相同目标时刻的独立只读读取随后通过，标题探针未遇到一次异常。不能宣称日期解析、后台节流或弹层已经被证明是实际根因。已确认的实现缺口是失败标签被清理而现场丢失，以及一次标题读取失败直接终止本次读取。共用读取器现激活本次拥有的月历标签；仅标题候选缺失允许重新导航同一资产并完整重读一次，首次部分结果全部丢弃。冲突年月、残缺日期格、资产不符、月历变化和浏览器断开仍停止；不会重复提交、猜测日期或读隐藏标题放行。
+
+失败时在关闭标签之前保存 `state/planner_diagnostics/*.json`，含失败阶段、可访问标题与隐藏标题的区别、原始标题节点可见性/ARIA 状态、日期格数量、页面类别及进程号；仅白名单 UI/年月标题明文，其它标题保存长度/摘要，不保存输入值或 URL 参数。诊断采集限时 3 秒，写盘故障不能掩盖原异常。首次和详情后的复扫都覆盖；有恢复时保留 `recovered=true`，不混入槽位完整性判据。隔离浏览器可复现“标题存在但 ARIA 隐藏”的同文报错；这只是恢复回归，不是服务机结构证据。真实截图与用户输出见 [service-diagnosis.json](../state/g8-calendar-recovery-20260926/service-diagnosis.json)，验证与限制见 [verification.json](../state/g8-calendar-recovery-20260926/verification.json)。不升级 IG 实际排期或 G8 验收。
+
+缓存另有 09-27 12:00 AM、scheduled_detail/read_failed 的未知项，旧代码据“无 href”标为 scheduled，造成页面虚假的 00:00 定时卡。现读取失败不推断发布状态，无渠道旧缓存也只显示待核对数量；已录证推荐说明句允许附加标题，仍须正向悬浮确认才从占用中排除。本次服务机未取得悬浮 tooltip，不能声称已证明其为何未被识别。两条 09-30 回执与远端卡按精确渠道 ID 和独立时刻合并，±5 分钟来源导航不用于隐藏本地记录；未决、未匹配或渠道不全继续保留。不会删缓存来伪装空档，不改业务账本。验证及独立审查见 [verification.json](../state/g8-calendar-readiness-20260926/verification.json)，不升级 G8。
+
+按用户本次业务决定，同渠道间隔从 90 分钟改为 **1 分钟**：相差整整一分钟允许，同刻或不足一分钟冲突；不同渠道独立，重复来源仍防重，未知占用仍须读清。配置、后端默认值、月历 API、页面契约夹具及四文档同步；无新配置项、资产 ID 或数据迁移。离线复现与定向验证见 [verification.json](../state/g8-instagram-occupancy-20260926/verification.json)，服务机只读核对入口见 [MANUAL_STEPS §16.4](MANUAL_STEPS.md#164-排期详情的图片控件证据)。
+
+另已复现标题/日期先出现、正文和 `See more` 延后到达时过早判缺失；现在限时等正文自身稳定并展开，仍核对该卡时刻、账号、独立编号和完整冻结正文，不等待照片后的评论进度条。
+
+通知缺口已复现：`project` 只入队、普通监测模式又不发送 `scheduled`，且静默窗会延迟排期回执。确认/恢复现在只及时投递原 attempt 的回执，普通监测也可补送；旧 notification 位只代表入队。入队锁冲突记录的失败由普通监测补入队，不借启用通知补发无发送意图的历史帖。同步发送在线程中执行；任务取消也须等线程结束后才释放发布锁。发送意图和未知结果由原 Outbox 管理，明确拒绝沿原 ID 退避，已送达/结果未知不重放，通知错误不撤销排期。
+
+通知/正文就绪的离线验证见 [verification.json](../state/g8-same-day-notifications-20260926/verification.json)，回执规则修复见 [receipt-verification.json](../state/g8-same-day-notifications-20260926/receipt-verification.json)。开发机测试均为隔离数据、合成页面或模拟机器人，未发送真实群消息、未重新排期。服务机两条原回执已确认，17:30 通知已收到；23:00 的旧通知可在原帖点“核对并补齐本地回执”补送，只处理原事件，不重新排期。
 
 ## 2. 红线
 
@@ -1066,7 +1142,7 @@ dHash 距离，而 **dHash 越小越"好"**——原样退回的距离正好是 
 | 图片数 | 25 张 Planner 快照没有数量语义 |
 | 渠道详情 | FB/IG 各有独立弹窗和 remote ID |
 
-历史 probe 的 FB remote ID 为 `1887083152480681`，IG 为 `4378984725697354`。这些 ID 只属于那次测试，不能写成配置。Planner 弹窗除 Escape 关闭外不要点击；其中的 `Publish now` 会立即发布。
+历史 probe 的 FB remote ID 为 `1887083152480681`，IG 为 `4378984725697354`。这些 ID 只属于那次测试，不能写成配置。Planner 弹窗只允许正文 `See more` 展开及其自身 `Close`/Escape 关闭；关闭后等弹窗消失。其中的 `Publish now` 会立即发布，Boost 会进入推广，不用于读取。
 
 旧“页面出现月份 heading 就算数据就绪”曾被真实 UI 推翻：外壳先出现，卡片仍在加载。应等到可解析时刻的条目或明确空态。
 

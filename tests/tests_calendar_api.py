@@ -11,10 +11,11 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from playwright.async_api import TimeoutError as BrowserTimeout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config  # noqa: E402
-from publish.business_suite import ProbeRequired, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
+from publish.business_suite import ProbeRequired, PublishStepError, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
 from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
 from publish.journal import PublishOperationLock  # noqa: E402
 from publish import planner_cache  # noqa: E402
@@ -64,6 +65,14 @@ class CalendarApiTests(unittest.TestCase):
         asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=rows),
                                                state_dir=self.state, now=NOW))
 
+    def test_default_gap_and_configured_value_are_reported_to_the_page(self):
+        with patch.object(calendar.local_schedule, 'entries', return_value=[]):
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 1)
+            self.config._d['publish']['min_channel_gap_min'] = 2
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 2)
+            del self.config._d['publish']['min_channel_gap_min']
+            self.assertEqual(self.client.get('/api/calendar').json()['gap_minutes'], 1)
+
     def linked_payload(self, card=PUBLISHED, entries=None, source_url=SOURCE_URL, source_error=None):
         self.populate(card)
         source = SimpleNamespace(row={'permalink': source_url}) if source_url is not None else None
@@ -99,6 +108,48 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(card['source_platform'], 'facebook')
         self.assertEqual(card['source_permalink'], SOURCE_URL)
 
+    def test_two_scheduled_posts_are_two_cards_not_four_local_and_remote_rows(self):
+        cards, entries = [], []
+        for index, hour in enumerate((9, 15)):
+            at = NOW.replace(day=30, hour=hour, minute=30 if index == 0 else 0)
+            remote_id = str(1884787296017457 + index)
+            cards.append(RemotePlannerCard(at, ('facebook',), (('facebook', remote_id),),
+                'Scheduled caption', delivery='scheduled', placement='feed',
+                caption_status='present', read_status='complete', time_verified=True))
+            entries.append(dict(ENTRY, task_id=f'fa_neakasaofficial/post-{index}',
+                channels=['facebook'], remote_id='facebook=' + remote_id, at=at.isoformat()))
+        rows = replace(ROWS, cards=tuple(cards), occupied=tuple(card.at for card in cards))
+        asyncio.run(planner_cache.refresh_cache(self.path, AsyncMock(return_value=rows),
+                                               state_dir=self.state, now=NOW))
+        with patch.object(calendar.local_schedule, 'entries', return_value=entries), \
+                patch.object(reader, 'source_post', return_value=None):
+            data = self.client.get('/api/calendar').json()
+        self.assertEqual(len(data['cards']), 2)
+        self.assertEqual({card['source_task_id'] for card in data['cards']},
+                         {entry['task_id'] for entry in entries})
+        self.assertEqual(data['local'], [])
+
+    def test_time_based_source_navigation_alone_does_not_hide_local_receipts(self):
+        data = self.linked_payload()
+        self.assertEqual(len(data['local']), 1)
+        self.assertEqual(data['cards'][0]['source_task_id'], ENTRY['task_id'])
+        self.assertEqual(data['cards'][0]['source_permalink'], SOURCE_URL)
+
+    def test_unmatched_ambiguous_partial_and_unverified_receipts_remain_visible(self):
+        cases = [
+            (replace(PUBLISHED, delivery='scheduled'), [ENTRY]),
+            (replace(PUBLISHED, at=SLOT + timedelta(minutes=6)), [ENTRY]),
+            (PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/next',
+                remote_id='instagram=999999', at=(SLOT + timedelta(minutes=1)).isoformat())]),
+            (PUBLISHED, [dict(ENTRY, channels=['facebook', 'instagram'])]),
+            (replace(PUBLISHED, time_verified=False), [ENTRY]),
+            (PUBLISHED, [dict(ENTRY, kind='submitting')]),
+        ]
+        for remote, entries in cases:
+            with self.subTest(entries=entries, time_verified=remote.time_verified):
+                data = self.linked_payload(remote, entries)
+                self.assertEqual(len(data['local']), len(entries))
+
     def test_scheduled_remote_id_match_takes_priority_over_the_time_window(self):
         scheduled = replace(PUBLISHED, delivery='scheduled', at=SLOT + timedelta(hours=2),
                             remote_ids=(('instagram', '4378984725697354'),))
@@ -112,6 +163,8 @@ class CalendarApiTests(unittest.TestCase):
             ('outside window', replace(PUBLISHED, at=SLOT + timedelta(minutes=5, seconds=1)), [ENTRY]),
             ('different channel', PUBLISHED, [dict(ENTRY, channels=['facebook'])]),
             ('two tasks', PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/other')]),
+            ('one minute apart', PUBLISHED, [ENTRY, dict(ENTRY, task_id='fa_neakasaofficial/next',
+                at=(SLOT + timedelta(minutes=1)).isoformat(), remote_id='instagram=999999')]),
             ('unknown delivery', replace(PUBLISHED, delivery='unknown'), [ENTRY]),
             ('failed delivery', replace(PUBLISHED, delivery='failed'), [ENTRY]),
             ('submitting only', PUBLISHED, [dict(ENTRY, kind='submitting')]),
@@ -325,6 +378,31 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(response.json()["cached_at"], NOW.isoformat())
         self.assertTrue(reread["error"])
         self.assertNotIn("private failure", response.text)
+
+    def test_failed_week_transition_reports_safe_operation_without_leaking_browser_log(self):
+        self.populate()
+        failure = BrowserTimeout('Locator.click: Timeout 30000ms exceeded.\n'
+            'waiting for get_by_role("button", name="Week", exact=True)\n'
+            'overlay intercepts pointer events; token=private-value')
+        with patch('web.api.calendar.read_live_inventory', AsyncMock(side_effect=failure)):
+            response = self.client.post('/api/calendar/refresh')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()['cached_at'], NOW.isoformat())
+        self.assertEqual(response.json()['refresh_diagnostic'], {
+            'code': 'week_button_timeout', 'operation': 'Locator.click',
+            'pointer_intercept': True})
+        self.assertNotIn('private-value', response.text)
+
+    def test_folded_day_mismatch_returns_a_bounded_failure_code(self):
+        self.populate()
+        failure = PublishStepError('周视图条目与月历可见项及折叠数量不一致，不能确认完整列表；token=private-value')
+        with patch('web.api.calendar.read_live_inventory', AsyncMock(side_effect=failure)):
+            response = self.client.post('/api/calendar/refresh')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()['refresh_diagnostic'], {
+            'code': 'week_overflow_mismatch', 'exception_type': 'PublishStepError'})
+        self.assertIn('折叠日的月视图与周视图条目不一致', response.json()['error'])
+        self.assertNotIn('private-value', response.text)
 
     def test_live_reader_requires_evidence_before_attaching_and_closes_own_page(self):
         with patch("publish.planner_cache.bs.require_readback_evidence", side_effect=ProbeRequired("missing")), \

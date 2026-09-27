@@ -4,7 +4,7 @@ import type { FrozenPreview, PublishOperation, TaskDetail } from '@/types/domain
 import { approvalBody, approvalOptions, approve, lockContent, publishOperation, reconcilePublication, unlockContent, unschedulePublication } from '@/services/approval'
 import type { ApprovalBody } from '@/services/approval'
 import { isApiError, isConflict } from '@/services/http'
-import { approvalDisabledReason, seedScheduleTime } from '@/lib/action-reasons'
+import { approvalBlockNotice, approvalDisabledReason, businessNotice, receiptCheckNotice, seedScheduleTime } from '@/lib/action-reasons'
 import { zonedInput } from '@/lib/format'
 
 /** 提交跑在请求之外，页面每两秒问一次进度；关掉再回来也能接着看。 */
@@ -17,11 +17,13 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   const [when, setWhenState] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null), [confirmed, setConfirmed] = useState(false)
   const [snapshot, setSnapshot] = useState<{ detail: TaskDetail; body: ApprovalBody; preview: FrozenPreview } | null>(null)
   const [operation, setOperation] = useState<PublishOperation | null>(null)
+  const [recovering, setRecovering] = useState(false), [recoveryNotice, setRecoveryNotice] = useState('')
+  const [recoveryError, setRecoveryError] = useState(false)
   // 人工修改或清空后不再自动预填。
   const touched = useRef(false)
   useDeploymentDraft(snapshot !== null || (touched.current && !confirmed))
   const setWhen = (value: string) => { touched.current = true; setWhenState(value) }
-  useEffect(() => { touched.current = false; setWhenState(''); setSnapshot(null); setOperation(null); setBusy(false); setConfirmed(false) }, [detail.id])
+  useEffect(() => { touched.current = false; setWhenState(''); setSnapshot(null); setOperation(null); setBusy(false); setConfirmed(false); setRecoveryNotice(''); setRecoveryError(false) }, [detail.id])
   useEffect(() => {
     const saved = detail.publish_operation ?? null
     setOperation(saved)
@@ -57,13 +59,14 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
   }, [runningId])
 
   const locked = detail.status === 'content_locked'
+  const pendingReceipt = ['submitted_unverified', 'submit_ambiguous'].includes(String(detail.publication?.status))
   const eligible = locked
   const lockable = ['pending_review', 'edited'].includes(detail.status) && !!options.data?.lockable
   const previewMissing = locked && !!options.data && !options.data.preview
   const reason = approvalDisabledReason({ editing, busy, fetching: options.isFetching, eligible, status: detail.status,
     optionsFailed: options.isError, available: !!options.data?.available, when })
-    || (operation?.status === 'uncertain' ? '请先核对已有提交结果' : '')
-    || (previewMissing ? (options.data?.reason || '冻结内容无法读取，请重新确认') : '')
+    || (operation?.status === 'uncertain' || pendingReceipt ? '请先核对已有提交结果' : '')
+    || (previewMissing ? (approvalBlockNotice(options.data?.reason) || '冻结内容无法读取，请重新确认') : '')
 
   const lock = async () => {
     if (!options.data?.fingerprint || !lockable || editing || busy) return
@@ -102,19 +105,30 @@ export function useApproval(detail: TaskDetail, editing: boolean, refresh: () =>
     try { await unschedulePublication(detail.id, reasonText); await refresh(); await options.refetch() }
     catch (cause) { setError(cause) } finally { setBusy(false) }
   }
-  const recover = async () => { setBusy(true); setError(null); try { await reconcilePublication(detail.id); await refresh(); await options.refetch() } catch (cause) { setError(cause) } finally { setBusy(false) } }
+  const recover = async () => {
+    if (busy || recovering) return
+    setBusy(true); setRecovering(true); setError(null); setRecoveryError(false); setRecoveryNotice('')
+    try {
+      setRecoveryNotice(receiptCheckNotice(await reconcilePublication(detail.id)))
+      await refresh(); await options.refetch()
+    } catch (cause) { setError(cause); setRecoveryError(true) }
+    finally { setBusy(false); setRecovering(false) }
+  }
   const payload = isApiError(error) && error.payload && typeof error.payload === 'object' ? error.payload as Record<string, unknown> : null
   const fromError = Array.isArray(payload?.suggestions) ? payload.suggestions : []
   const fromOperation = operation?.status === 'failed' && Array.isArray(operation.result?.suggestions) ? operation.result.suggestions : []
   const suggestions = [...fromError, ...fromOperation].filter((value): value is string => typeof value === 'string')
-  const errorMessage = operation?.status === 'uncertain' ? '提交结果待核对，请先核对已有尝试'
+  // 核对回执失败与内容变化是两件事，不能都说成「内容或时刻已变化」。
+  const errorMessage = recoveryError && isApiError(error)
+    ? businessNotice(error.message, '暂时无法核对后台排期，请稍后再试；仍不行请联系维护人员。不要重新提交。')
+    : operation?.status === 'uncertain' ? '提交结果待核对，请先核对已有尝试'
     : operation?.status === 'failed' ? '排期没有创建成功，请核对这次提交尝试的结果'
     : isApiError(error) && /夏令时/.test(error.message) ? '这个时刻在夏令时切换中不存在或出现两次，请选择其他时刻'
     : isConflict(error) ? '内容或时刻已变化，请重新核对后再确认' : '排期尚未确认，请核对回执后再处理'
   return { options, when, setWhen, eligible, lockable, locked, busy, reason, error, errorMessage, suggestions, confirmed,
-    snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover,
+    snapshot, setSnapshot, operation, submit, lock, unlock, unschedule, recover, recovering, recoveryNotice, recoveryError, pendingReceipt,
     // 确认期间查询可能刷新；展示内容与提交目标必须来自打开时的同一份选项。
     open: () => { if (deploymentStore.canStartEditing() && !reason && options.data?.preview) setSnapshot(structuredClone({ detail, body: approvalBody(detail, when, options.data), preview: options.data.preview })) },
-    refresh: async () => { await refresh(); await options.refetch(); setError(null); setOperation(null) } }
+    refresh: async () => { await refresh(); await options.refetch(); setError(null); setRecoveryNotice(''); setRecoveryError(false) } }
 }
 export type ApprovalController = ReturnType<typeof useApproval>

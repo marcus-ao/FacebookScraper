@@ -60,20 +60,21 @@ class PlanningTests(unittest.TestCase):
 
     def test_another_caption_conflicts_only_with_its_proven_channel(self):
         target = NOW + timedelta(hours=4)
-        rows = inventory((target - timedelta(minutes=5), ("facebook",)))
+        rows = inventory((target - timedelta(seconds=30), ("facebook",)))
         fb = evaluate_slot(target, "facebook", rows, now=NOW, window=WINDOW)
         self.assertFalse(fb.allowed)
         self.assertEqual(fb.reason, "conflict")
-        self.assertEqual(fb.conflicts, (target - timedelta(minutes=5),))
+        self.assertEqual(fb.conflicts, (target - timedelta(seconds=30),))
         self.assertTrue(evaluate_slot(target, "instagram", rows, now=NOW, window=WINDOW).allowed)
 
-    def test_exact_gap_boundary_is_allowed_and_59_seconds_less_is_not(self):
+    def test_default_one_minute_boundary_is_allowed_but_59_seconds_is_not(self):
         occupied = NOW + timedelta(hours=4)
         rows = inventory((occupied, ("facebook",)))
-        self.assertTrue(evaluate_slot(occupied + timedelta(minutes=90), "facebook", rows,
-                                     now=NOW, window=WINDOW).allowed)
-        self.assertFalse(evaluate_slot(occupied + timedelta(minutes=89, seconds=1), "facebook", rows,
-                                      now=NOW, window=WINDOW).allowed)
+        for seconds, allowed in ((-60, True), (-59, False), (0, False), (59, False), (60, True)):
+            with self.subTest(seconds=seconds):
+                self.assertEqual(evaluate_slot(occupied + timedelta(seconds=seconds), "facebook", rows,
+                                              now=NOW, window=WINDOW).allowed, allowed)
+        self.assertTrue(evaluate_slot(occupied, 'instagram', rows, now=NOW, window=WINDOW).allowed)
 
     def test_manual_conflict_keeps_requested_time_and_offers_three_distinct_options(self):
         target = NOW + timedelta(hours=4)
@@ -81,30 +82,25 @@ class PlanningTests(unittest.TestCase):
         result = evaluate_slot(target, "facebook", rows, now=NOW, window=WINDOW)
         self.assertEqual(target, NOW + timedelta(hours=4))
         self.assertEqual(len(result.suggestions), 3)
-        self.assertEqual(result.suggestions[0], target + timedelta(minutes=90))
+        self.assertEqual(result.suggestions[0], target + timedelta(minutes=1))
         for suggestion in result.suggestions:
             self.assertTrue(evaluate_slot(suggestion, "facebook", rows, now=NOW, window=WINDOW).allowed)
-        self.assertTrue(all(abs((a-b).total_seconds()) >= 5400
+        self.assertTrue(all(abs((a-b).total_seconds()) >= 60
                             for i, a in enumerate(result.suggestions) for b in result.suggestions[i+1:]))
 
     def test_unknown_channel_inside_the_gap_refuses_an_empty_slot(self):
-        """渠道未知的卡片不能当空档，也不能只挡住同一分钟。
-
-        格子时刻已独立核实时，它落在目标前后 90 分钟内就拒绝确认；
-        恰好 90 分钟与已核实渠道一样，不算冲突。相邻一分钟不是空档。
-        """
+        """独立时刻已核实的未知渠道卡片，在配置间隔内不能当作空档。"""
         target = NOW + timedelta(hours=4)
         rows = inventory((target, (), True))
         self.assertEqual(rows.occupied_for_channel("facebook"), ())
         self.assertEqual(rows.unverified_moments(), (target,))
         for channel in ("facebook", "instagram"):
-            for shift in (timedelta(0), timedelta(seconds=30), timedelta(minutes=1),
-                          timedelta(minutes=89, seconds=59)):
+            for shift in (timedelta(0), timedelta(seconds=30), timedelta(seconds=59)):
                 result = evaluate_slot(target + shift, channel, rows, now=NOW, window=WINDOW)
                 self.assertFalse(result.allowed)
                 self.assertEqual(result.reason, "channels_unavailable")
                 self.assertEqual(result.suggestions, ())
-            self.assertTrue(evaluate_slot(target + timedelta(minutes=90), channel, rows,
+            self.assertTrue(evaluate_slot(target + timedelta(minutes=1), channel, rows,
                                           now=NOW, window=WINDOW).allowed)
 
     def test_unverified_time_cannot_be_excluded_by_an_outer_clock(self):
@@ -142,7 +138,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(result.suggestions, ())
 
     def test_visible_month_must_cover_the_whole_conflict_window(self):
-        end = datetime(2026, 10, 1, 8, tzinfo=BERLIN)  # LA September 30 23:00
+        end = datetime(2026, 10, 1, 8, 59, tzinfo=BERLIN)  # LA September 30 23:59
         result = evaluate_slot(end, "facebook", inventory(), now=NOW, window=WINDOW)
         self.assertFalse(result.allowed)
         self.assertEqual(result.reason, "calendar_incomplete")
@@ -184,7 +180,7 @@ class PlanningTests(unittest.TestCase):
         with patch("publish.planning.cfg") as configuration:
             configuration.return_value.get.return_value = 45
             self.assertTrue(evaluate_slot(target, "facebook", rows, now=NOW, window=WINDOW).allowed)
-            configuration.return_value.get.assert_called_with("publish", "min_channel_gap_min", 90)
+            configuration.return_value.get.assert_called_with("publish", "min_channel_gap_min", 1)
         self.assertEqual(evaluate_slot(NOW + timedelta(minutes=5), "facebook", inventory(),
                                       now=NOW, window=WINDOW).reason, "outside_window")
         for invalid in (0, -1, float("nan"), True):
@@ -196,7 +192,9 @@ class PlanningTests(unittest.TestCase):
         later = datetime(2026, 10, 25, 2, 45, tzinfo=BERLIN, fold=1)
         now = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
         rows = inventory((early, ("facebook",)), start=date(2026, 10, 1), end=date(2026, 10, 31))
-        self.assertTrue(evaluate_slot(later, "facebook", rows, now=now, window=WINDOW).allowed)
+        # Keep a wider explicit interval here: 90 absolute minutes versus 30
+        # wall-clock minutes distinguishes the two folds, unlike a 1-minute gap.
+        self.assertTrue(evaluate_slot(later, "facebook", rows, now=now, window=WINDOW, gap_minutes=90).allowed)
 
 
 if __name__ == "__main__":

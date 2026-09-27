@@ -120,7 +120,7 @@ marks = ["CE", "FCC", "RoHS", "UL", "MSRP", "®", "™", "©"]
 
 [publish]
 ig_bio_url = ""  # 德国站聚合页，只读展示；不自动修改 bio。
-min_channel_gap_min = 90  # 同渠道排期间隔；冲突拒绝，不自动顺延。
+min_channel_gap_min = 1  # 同渠道排期间隔；相邻整分钟可排，冲突拒绝，不自动顺延。
 facebook_page_name = "Neakasa Deutschland"  # 主页显示名，用于 Business Suite 账号核验。
 facebook_page_slug = ""  # 主页 URL 账号名段；可留空，不用于账号核验。
 instagram_account = "neakasa.de"

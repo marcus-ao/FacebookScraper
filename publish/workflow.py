@@ -235,27 +235,16 @@ async def _execute_unlocked(
         submitted_shot = await _screenshot(
             page, base.attempt_id, "submitted", state_dir=c.state_dir,
             timeout=timeout)
-        if not result.confirmed:
-            ambiguous = journal.transition(
-                armed, journal.STATUS_SUBMIT_AMBIGUOUS,
-                recorded_at=datetime.now().astimezone().isoformat(),
-                step=step, screenshot=submitted_shot,
-                success_signal=result.success_signal,
-                remote_id=result.remote_id,
-                note=result.error or "提交结果不明确；禁止自动重试")
-            current = ambiguous
-            journal.append(c.state_dir, ambiguous)
-            return AttemptOutcome(
-                4, ambiguous,
-                "提交结果不明确；禁止自动重试，必须人工结转")
-
+        # A new success popup can evade the recorded signal. Read the actual
+        # schedule once either way; this never repeats the submission click.
         unverified = journal.transition(
-            armed, journal.STATUS_SUBMITTED_UNVERIFIED,
+            armed, journal.STATUS_SUBMITTED_UNVERIFIED if result.confirmed else journal.STATUS_SUBMIT_AMBIGUOUS,
             recorded_at=datetime.now().astimezone().isoformat(),
             step=step, screenshot=submitted_shot,
             success_signal=result.success_signal,
             remote_id=result.remote_id,
-            note="已看到提交成功信号，等待内容日历回读")
+            note=("已看到提交成功信号，等待内容日历回读" if result.confirmed else
+                  (result.error or "提交信号未确认") + "；只读核对已有排期，不重复提交"))
         current = unverified
         journal.append(c.state_dir, unverified)
 
@@ -273,7 +262,7 @@ async def _execute_unlocked(
             screenshot_path=readback_path, run=run)
         if not readback.found:
             unresolved = journal.transition(
-                unverified, journal.STATUS_SUBMITTED_UNVERIFIED,
+                unverified, unverified.status,
                 recorded_at=datetime.now().astimezone().isoformat(),
                 step=step, screenshot=readback.screenshot,
                 success_signal=unverified.success_signal,
@@ -286,8 +275,9 @@ async def _execute_unlocked(
                       + "；禁止自动重试，必须人工确认远端是否已经排期"))
             journal.append(c.state_dir, unresolved)
             return AttemptOutcome(
-                5, unresolved,
-                "提交信号已出现，但内容日历未回读成功；禁止自动重试")
+                5 if result.confirmed else 4, unresolved,
+                ("提交信号已出现，但内容日历未回读成功；禁止自动重试" if result.confirmed else
+                 "提交信号及排期回执尚未确认；禁止自动重试，请核对已有排期"))
 
         scheduled = journal.transition(
             unverified, journal.STATUS_SCHEDULED,
@@ -381,7 +371,7 @@ async def execute(post, when: datetime, *, ui_timezone: str, timeout: float,
             target_channels=target_channels, report=report, run=run,
             opening_inventory=opening_inventory, pre_submit_check=pre_submit_check)
         try:
-            records.project(outcome.attempt)
+            await records.project_async(outcome.attempt)
         except Exception:
             notify.notify('发布回执留档待补齐', '发布账本保留结果；请核对快照后恢复本地状态，勿重复提交。', popup=False)
         return outcome

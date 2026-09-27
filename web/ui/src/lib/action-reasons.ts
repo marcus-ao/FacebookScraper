@@ -51,14 +51,34 @@ const BLOCK_NOTICES: readonly (readonly [RegExp, string])[] = [
   [/owner|coauthors|归属/, '原帖作者信息不完整，暂不能发布，请联系维护人员核对。'],
 ]
 
+/** 英文标识、路径、命令参数、长编号或内部代号都算技术痕迹；平台名不算。 */
+function technical(text: string): boolean {
+  const words = text.replace(/Facebook|Instagram|Business Suite|Meta/g, '')
+  return /[A-Za-z_]{3,}|[\\/{}<>=]|--|\d{5,}|G\d/.test(words)
+}
+
+/** 后端原因不带技术痕迹时原样给业务看，否则换成同样指向下一步的通用说明。 */
+export function businessNotice(message: string | null | undefined, fallback: string): string {
+  const text = (message ?? '').trim()
+  return text && !technical(text) ? text : fallback
+}
+
 export function approvalBlockNotice(reason: string | null | undefined): string {
   const text = (reason ?? '').trim()
   if (!text) return ''
   const known = BLOCK_NOTICES.find(([pattern]) => pattern.test(text))
   if (known) return known[1]
   // 服务端已写成业务话术的原因（缺确认、需解除冻结、本月无可选时间）原样显示。
-  if (/^(请|本月|这份冻结|这篇)/.test(text) && !/[\\/]|python|--|G\d/i.test(text)) return text
-  return '发布条件暂未满足，请刷新核对；仍无法继续时请联系维护人员。'
+  const fallback = '发布条件暂未满足，请刷新核对；仍无法继续时请联系维护人员。'
+  return /^(请|本月|这份冻结|这篇)/.test(text) ? businessNotice(text, fallback) : fallback
+}
+
+/** 只读核对回执的结果；读取失败的原文可能带浏览器细节，只在干净时显示。 */
+export function receiptCheckNotice(receipt: { readonly status: string; readonly message?: string; readonly projection_error?: string }): string {
+  if (receipt.status !== 'scheduled') {
+    return businessNotice(receipt.message, '还没读到这次提交对应的后台排期，本地继续保留待核对状态；请稍后再核对，不要重新提交。')
+  }
+  return receipt.projection_error ? businessNotice(receipt.projection_error, '排期已确认，本地记录待补齐；可以再次核对，不要重新提交。') : ''
 }
 
 function contentJobCommon(gate: { readonly editing: boolean; readonly busy: boolean }): string {

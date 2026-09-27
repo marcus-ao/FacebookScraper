@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.async_api import expect
@@ -52,6 +53,36 @@ class PublishStepError(RuntimeError):
     def __init__(self, message, *, suggestions=()):
         super().__init__(message)
         self.suggestions = tuple(suggestions)
+
+
+class PlannerDialogCloseError(PublishStepError):
+    """A retained detail overlay blocks later cards; stop this inventory read."""
+
+
+class PlannerNavigationError(PublishStepError):
+    """Viewing a calendar object must not navigate into a new composer."""
+    retryable = False
+
+    def __init__(self, phase, surface, *, message=None):
+        self.diagnostic = {'phase': phase, 'surface': surface}
+        super().__init__(message or '查看排期条目时离开了月历；本次读取已停止，未修改或重新提交帖子。')
+
+
+def assert_planner_location(page, expected_url=None, *, phase):
+    """View/tracking parameters may change, but the Planner and its asset may not."""
+    actual_url = _safe_page_url(page)
+    actual = urlsplit(actual_url)
+    expected = urlsplit(expected_url if expected_url is not None else
+                        selectors.CONTENT_CALENDAR_URL if actual.hostname else actual_url)
+    if expected.hostname != 'business.facebook.com' or expected.path.rstrip('/') != '/latest/content_calendar':
+        return actual_url
+    query, current = parse_qs(expected.query), parse_qs(actual.query)
+    if (actual.hostname != expected.hostname or actual.path.rstrip('/') != expected.path.rstrip('/')
+            or any(query.get(key) and query[key] != current.get(key) for key in ('asset_id', 'business_id'))):
+        surface = ('composer' if actual.hostname == expected.hostname
+                   and actual.path.rstrip('/') == '/latest/composer' else 'other')
+        raise PlannerNavigationError(phase, surface)
+    return actual_url
 
 
 @dataclass(frozen=True)
@@ -1222,30 +1253,110 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
     return evidence.parse_entry_moment(rendered, spec.attributes)
 
 
+async def _settle_detail_open_location(page, entry, before, *, timeout, restore_calendar):
+    """Wait only for a transient composer route to return to the pinned calendar card."""
+    try:
+        assert_planner_location(page, before, phase='opening_detail')
+        return
+    except PlannerNavigationError as exc:
+        if restore_calendar is None or exc.diagnostic['surface'] != 'composer':
+            raise
+        first = exc
+    deadline = time.monotonic() + min(timeout, 5)
+    while time.monotonic() < deadline:
+        await asyncio.sleep(.1)
+        try:
+            assert_planner_location(page, before, phase='opening_detail')
+        except PlannerNavigationError as current:
+            if current.diagnostic['surface'] != 'composer':
+                raise
+            continue
+        if not await entry.evaluate('node => node.isConnected'):
+            raise PublishStepError('打开详情后原月历条目已被替换，本次核对作废')
+        return
+    raise first
+
+
+async def _click_isolated_day_card(entry, *, timeout):
+    # The week card and its outer day both have React onClick handlers. A normal
+    # card click opened Post details, then the day handler navigated to composer.
+    # Suppress only that outer handler for this one verified card click.
+    mode = await entry.evaluate('''node => {
+      const day = node.closest('[role="link"][draggable="false"]');
+      if (!day || node.getAttribute('role') !== 'link') return 'unsafe';
+      const keys = element => Object.keys(element).filter(key => key.startsWith('__reactProps$'));
+      const childKeys = keys(node), dayKeys = keys(day);
+      if (!childKeys.length && !dayKeys.length)
+        return day.onclick ? 'unsafe' : 'plain';
+      if (childKeys.length !== 1 || dayKeys.length !== 1 ||
+          typeof node[childKeys[0]].onClick !== 'function' ||
+          typeof day[dayKeys[0]].onClick !== 'function' ||
+          day.__receiptReadClick) return 'unsafe';
+      const props = day[dayKeys[0]], original = props.onClick;
+      const isolated = event => event.stopPropagation();
+      day.__receiptReadClick = {key: dayKeys[0], original, isolated};
+      props.onClick = isolated;
+      return 'isolated';
+    }''')
+    if mode == 'unsafe':
+        raise PublishStepError('周视图条目点击结构已变化，本次详情读取停止')
+    try:
+        await entry.click(timeout=_ms(timeout))
+    finally:
+        if mode == 'isolated':
+            await entry.evaluate('''node => {
+              const day = node.closest('[role="link"][draggable="false"]');
+              const saved = day && day.__receiptReadClick;
+              if (!saved) return;
+              if (day[saved.key] && day[saved.key].onClick === saved.isolated)
+                day[saved.key].onClick = saved.original;
+              delete day.__receiptReadClick;
+            }''')
+
+
 async def _open_channel_dialogs(
-        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None
+        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
+        restore_calendar=None, allow_preview_text_change=False, activation='pointer'
         ) -> dict[str, str]:
-    """只读详情的渠道与 remote ID；仅用 Escape 关闭，不操作 Publish now 或 Boost。"""
+    """只读详情身份；用详情自己的 Close 关闭并等它消失，再读下一条。"""
     attrs = spec.attributes
     try:
         pattern = re.compile(str(attrs.get("remote_id_regex") or ""))
     except re.error as exc:
         raise ProbeRequired("remote_id_regex 无效：%s" % exc) from exc
     found: dict[str, str] = {}
+    dialog = None
+    navigation_during_detail = False
+    before = _safe_page_url(page)
+    phase = 'opening_detail'
     try:
-        await entry.click(timeout=_ms(timeout))
+        if activation == 'keyboard':
+            await entry.press('Enter', timeout=_ms(timeout))
+        elif activation == 'isolated_pointer':
+            await _click_isolated_day_card(entry, timeout=timeout)
+        else:
+            await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
+        assert_planner_location(page, before, phase=phase)
         raise PublishStepError("点不开日历条目的详情弹窗：%s" % exc) from exc
     try:
+        await _settle_detail_open_location(page, entry, before, timeout=timeout,
+                                           restore_calendar=restore_calendar)
         dialogs = page.get_by_role(
             str(attrs.get("dialog_role") or "dialog"),
             name=str(attrs.get("dialog_name") or ""), exact=False)
         dialog = dialogs.first
         # 无详情弹窗时保留渠道未知，由调用方决定是否完整。
         await dialog.wait_for(state="visible", timeout=_ms(timeout))
+        assert_planner_location(page, before, phase=phase)
+        phase = 'reading_detail'
+        if prepare_detail is not None:
+            await prepare_detail(dialog)
+            assert_planner_location(page, before, phase=phase)
         deadline = time.monotonic() + timeout
         previous, stable_since = None, time.monotonic()
         while True:
+            assert_planner_location(page, before, phase=phase)
             rendered = await _node_text(dialog)
             remotes = {_regex_remote_id(match) for match in pattern.finditer(rendered)} - {''}
             remote = next(iter(remotes)) if len(remotes) == 1 else ''
@@ -1272,22 +1383,64 @@ async def _open_channel_dialogs(
                     if await dialogs.count() != 1:
                         raise PublishStepError('目标排期详情不唯一，不能读取图片')
                     await observe_detail(dialog, dict(found))
+                    assert_planner_location(page, before, phase=phase)
+                    after = await _node_text(dialog)
+                    after_ids = {_regex_remote_id(match) for match in pattern.finditer(after)} - {''}
+                    after_channels = {channel for channel in ('facebook', 'instagram')
+                                      if attrs.get('%s_marker' % channel)
+                                      and attrs['%s_marker' % channel] in after}
                     if (await dialogs.count() != 1 or not await dialog.is_visible()
-                            or await _node_text(dialog) != rendered):
+                            or after_ids != set(found.values()) or after_channels != set(found)
+                            or any(not evidence_token_present(after, str(attrs.get('%s_account_token' % channel) or ''))
+                                   for channel in found)
+                            or (not allow_preview_text_change and after != rendered)):
                         raise PublishStepError('取图期间排期详情身份或正文发生变化')
                 break
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
-    except Exception:                                 # noqa: BLE001
+    except Exception as exc:                          # noqa: BLE001
+        if isinstance(exc, PlannerNavigationError):
+            navigation_during_detail = True
+            raise
+        try:
+            assert_planner_location(page, before, phase=phase)
+        except PlannerNavigationError:
+            navigation_during_detail = True
+            raise
         if observe_detail is not None:
             raise
         pass
     finally:
-        try:
-            await page.keyboard.press("Escape")
-        except Exception:                             # noqa: BLE001
-            pass
+        # Service Post details has a Close button. Escape can be consumed by
+        # preview focus/menus; sending the key alone does not prove dismissal.
+        if not navigation_during_detail and dialog is not None and await dialog.is_visible():
+            try:
+                close = dialog.get_by_role('button', name='Close', exact=True)
+                if await close.count() == 1:
+                    await close.click(timeout=_ms(timeout))
+                else:
+                    await page.keyboard.press('Escape')
+                await dialog.wait_for(state='hidden', timeout=_ms(timeout))
+            except Exception as exc:
+                assert_planner_location(page, before, phase='closing_detail')
+                raise PlannerDialogCloseError(
+                    '上一条排期详情未能关闭，本次月历读取已停止；请重新核对已有排期。') from exc
+        # A detail read may fail before `found` is finalized. Closing its dialog
+        # can still change the route; restore the owned grid before propagating
+        # the original failure or moving to another card.
+        if not navigation_during_detail:
+            if restore_calendar is not None:
+                await restore_calendar('after_detail_close')
+            else:
+                assert_planner_location(page, before, phase='after_detail_close')
+    try:
+        assert_planner_location(page, before, phase='after_detail_close')
+    except PlannerNavigationError:
+        if restore_calendar is None:
+            raise
+        await restore_calendar('after_detail_close')
+        assert_planner_location(page, before, phase='after_detail_close')
     return found
 
 

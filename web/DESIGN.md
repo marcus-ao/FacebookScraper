@@ -36,7 +36,7 @@ SQLite 仅作查询索引，失配时回退来源或重建；写入始终核对�
 | `GET /api/tasks/{id}` | 人工优先内容、来源指纹、子资源版本、风险、模型任务与发布状态；按 ID 查询不受 90 天限制 |
 | `GET /api/tasks/{id}/image/{index}` | 原图或德语图，缺德语图须显式标识回退 |
 | `GET /api/tasks/{id}/approval-options` | `lockable` 表示内容可冻结，`available` 表示还能算出可选时间；`preview` 在已冻结时给出将提交的正文、图片和目标。历史录证缺失不能代替内容原因 |
-| `GET /api/calendar` | 月历缓存、业务/UI/受众时区、完整性与 stale；`local` 为本地图层，`local_error` 表示本地账本读不出来 |
+| `GET /api/calendar` | 月历缓存、业务/UI/受众时区、完整性与 stale；`local` 只保留尚未与远端精确关联的本地回执，`local_error` 表示本地账本读不出来。未知渠道条目仍在 `cards`，前端只显示其待核对数量 |
 | `GET /api/publish-operations/{id}` | 一次提交的当前步骤与终态；进程消失的记录读回来是 uncertain |
 | `GET /api/templates/{kind}` | text/image 模板，只读 |
 | `GET /api/settings` | version、editable、controlled、controlled_fields、editable_help |
@@ -116,7 +116,7 @@ FB 正文在光标处插入 `{{linkN}}`，后端换成确认过的 target_url，
 
 月历读取完整可见范围、所有日期/时刻项、手工任务和延迟加载；推荐时段不算帖子。缺覆盖、未知卡片或无明确空态显示 incomplete/unknown。公开状态附观测时间和来源，不按到点推定成功。
 
-同渠道间隔至少 90 分钟，冲突返回建议而不改用户时间；提交前在发布锁内重读占用。最终确认展示人工优先完整文案、标签/链接或 CTA、有序图片、来源版本、唯一目标渠道、业务时刻及许可。冻结 fingerprint 与回执一致，文件后续变化不影响该次提交；内容冻结与时刻绑定分两步，绑定过不同时刻的快照不得改绑。
+同渠道间隔至少 1 分钟，冲突返回建议而不改用户时间；提交前在发布锁内重读占用。最终确认展示人工优先完整文案、标签/链接或 CTA、有序图片、来源版本、唯一目标渠道、业务时刻及许可。冻结 fingerprint 与回执一致，文件后续变化不影响该次提交；内容冻结与时刻绑定分两步，绑定过不同时刻的快照不得改绑。
 
 成功验收要求全文相等、remote_images_verified=true、图片数量及有序 remote_media/source SHA 与冻结清单一致。仅编辑器图片或远端 ID 不足以通过；中断和不确定结果先核对，恢复只补有证据的记录。界面严格以 ok=true 且 status=scheduled 判定排期成功。
 
