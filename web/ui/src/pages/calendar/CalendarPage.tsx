@@ -6,7 +6,7 @@ import { PageTitle } from '@/app/PageTitle'
 import { calendarOptions, useCalendar } from '@/hooks/useCalendar'
 import { refreshCalendar } from '@/services/calendar'
 import { idPath, isApiError } from '@/services/http'
-import type { CalendarCard, CalendarPayload, Platform } from '@/types/domain'
+import type { CalendarCard, CalendarLocalEntry, CalendarPayload, Platform } from '@/types/domain'
 import { BusinessTime } from '@/components/Time'
 import { PlatformLabel } from '@/components/PlatformLabel'
 import { DisabledReason } from '@/components/DisabledReason'
@@ -17,11 +17,26 @@ import styles from './CalendarPage.module.css'
 const UNREAD_COPY = '该篇帖子的具体信息尚未成功获取，请前往Meta后台任务日历进行人工复核确认'
 const NO_TEXT_COPY = '该篇帖子不含文本部分,请跳转原帖进行复核确认'
 
-/** 卡片状态用短文案，颜色承载可信度。明细没读出来的说明放进详情，不占格子。 */
-function cardTags(card: CalendarCard) {
-  const delivery = ({ published: '已发布', scheduled: '定时', draft: '草稿', failed: '发布失败', processing: '处理中' } as Record<string, string>)[card.delivery] ?? '待核验'
-  const color = card.delivery === 'published' ? 'success' : card.delivery === 'scheduled' ? 'processing' : 'default'
-  return <Tag color={color}>{delivery}</Tag>
+/** 明细没读出来的说明放进详情，不占格子。 */
+function statusTag(status: string) {
+  const label = ({ published: '已发布', scheduled: '已排期', draft: '草稿', failed: '发布失败',
+    processing: '处理中', submitting: '待回读', content_locked: '待提交' } as Record<string, string>)[status] ?? '待核验'
+  const color = status === 'published' ? 'success' : status === 'scheduled' ? 'processing' : 'default'
+  return <Tag color={color}>{label}</Tag>
+}
+
+type DayEntry = { kind: 'remote'; at: string; sortAt: string; card: CalendarCard; key: string }
+  | { kind: 'local'; at: string; sortAt: string; item: CalendarLocalEntry; key: string }
+
+function dayEntries(data: CalendarPayload, visibleCards: readonly CalendarCard[], day: string): DayEntry[] {
+  return [
+    ...visibleCards.filter(card => card.at_business.slice(0, 10) === day)
+      .map((card, index) => ({ kind: 'remote' as const, at: card.at_business, sortAt: card.at,
+        card, key: `remote-${card.card_sha256}-${index}` })),
+    ...data.local.filter(item => item.at_business?.slice(0, 10) === day)
+      .map(item => ({ kind: 'local' as const, at: item.at_business!, sortAt: item.at ?? item.at_business!, item,
+        key: `local-${item.task_id}-${item.kind}` })),
+  ].sort((left, right) => Date.parse(left.sortAt) - Date.parse(right.sortAt))
 }
 
 function accountNames(card: CalendarCard): string {
@@ -91,14 +106,16 @@ export function CalendarPage() {
         {['周一','周二','周三','周四','周五','周六','周日'].map(day => <div key={day} className={styles.weekday}>{day}</div>)}
         {calendarDays(data.display_start, data.display_end_exclusive).map((day, index) => <div key={day ?? `pad-${index}`} className={cx(styles.day, day === today && styles.today, day != null && day.slice(0, 7) !== data.month_ui && styles.outside)} {...(day ? { 'data-day': day } : {})} {...(day === today ? { 'data-today': '' } : {})}>
           {day && <><div className={styles.date}>{day.slice(5).replace('-', '/')} {day === today && <span className={styles.todayMark}>今天</span>}</div>
-            {visibleCards.filter(card => card.at_business.slice(0, 10) === day).map((card, i) => <Popover key={`${card.card_sha256}-${i}`} trigger={['click']} content={<CardDetail card={card} />}>
-              <button type="button" className={styles.card}><strong>{card.at_business.slice(11, 16)}</strong>{card.channels.map(channel => <PlatformLabel key={channel} platform={channel} />)}{cardTags(card)}</button>
-            </Popover>)}
-            {/* 本地图层：系统自己知道的，还没从后台读回来 */}
-            {data.local.filter(item => item.at_business?.slice(0, 10) === day).map(item => <Link key={item.task_id} to={`/review/${idPath(item.task_id)}?platform=${item.platform}`} className={cx(styles.card, styles.localCard)}>
-              <strong>{item.at_business?.slice(11, 16)}</strong>
-              <span>{item.platform === 'facebook' ? 'Facebook' : 'Instagram'}</span>
-              <Tag>{({ scheduled: '本地', submitting: '待回读', content_locked: '待提交' } as const)[item.kind]}</Tag></Link>)}
+            {dayEntries(data, visibleCards, day).map(entry => entry.kind === 'remote'
+              ? <Popover key={entry.key} trigger={['click']} content={<CardDetail card={entry.card} />}>
+                <button type="button" className={styles.card}><strong>{entry.at.slice(11, 16)}</strong>{entry.card.channels.map(channel => <PlatformLabel key={channel} platform={channel} />)}{statusTag(entry.card.delivery)}</button>
+              </Popover>
+              : <Link key={entry.key} to={`/review/${idPath(entry.item.task_id)}?platform=${entry.item.platform}`}
+                  className={cx(styles.card, styles.localCard)}
+                  title={entry.item.kind === 'scheduled' ? '来自本地排期回执；未与当前月历卡精确关联' : '来自本地审校记录；未与当前月历卡精确关联'}>
+                <strong>{entry.at.slice(11, 16)}</strong>
+                <PlatformLabel platform={entry.item.platform} />
+                {statusTag(entry.item.kind)}</Link>)}
           </>}
         </div>)}
       </div> : !query.isPending && <Empty description={!data?.cached_at ? '还没有读取过发布日历' : '当前缓存没有覆盖本月；上次数据已保留'} />}

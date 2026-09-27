@@ -11,10 +11,11 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from playwright.async_api import TimeoutError as BrowserTimeout
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config  # noqa: E402
-from publish.business_suite import ProbeRequired, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
+from publish.business_suite import ProbeRequired, PublishStepError, RemotePlannerCard, RemoteSlotInventory  # noqa: E402
 from publish.compose import ComposeError, ScheduleWindow  # noqa: E402
 from publish.journal import PublishOperationLock  # noqa: E402
 from publish import planner_cache  # noqa: E402
@@ -377,6 +378,31 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(response.json()["cached_at"], NOW.isoformat())
         self.assertTrue(reread["error"])
         self.assertNotIn("private failure", response.text)
+
+    def test_failed_week_transition_reports_safe_operation_without_leaking_browser_log(self):
+        self.populate()
+        failure = BrowserTimeout('Locator.click: Timeout 30000ms exceeded.\n'
+            'waiting for get_by_role("button", name="Week", exact=True)\n'
+            'overlay intercepts pointer events; token=private-value')
+        with patch('web.api.calendar.read_live_inventory', AsyncMock(side_effect=failure)):
+            response = self.client.post('/api/calendar/refresh')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()['cached_at'], NOW.isoformat())
+        self.assertEqual(response.json()['refresh_diagnostic'], {
+            'code': 'week_button_timeout', 'operation': 'Locator.click',
+            'pointer_intercept': True})
+        self.assertNotIn('private-value', response.text)
+
+    def test_folded_day_mismatch_returns_a_bounded_failure_code(self):
+        self.populate()
+        failure = PublishStepError('周视图条目与月历可见项及折叠数量不一致，不能确认完整列表；token=private-value')
+        with patch('web.api.calendar.read_live_inventory', AsyncMock(side_effect=failure)):
+            response = self.client.post('/api/calendar/refresh')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()['refresh_diagnostic'], {
+            'code': 'week_overflow_mismatch', 'exception_type': 'PublishStepError'})
+        self.assertIn('折叠日的月视图与周视图条目不一致', response.json()['error'])
+        self.assertNotIn('private-value', response.text)
 
     def test_live_reader_requires_evidence_before_attaching_and_closes_own_page(self):
         with patch("publish.planner_cache.bs.require_readback_evidence", side_effect=ProbeRequired("missing")), \

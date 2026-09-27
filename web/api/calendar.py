@@ -35,6 +35,14 @@ _DETAIL_ERRORS = {
     'structure_unknown': '详情结构尚未识别', 'read_failed': '条目读取失败',
 }
 
+_REFRESH_ERRORS = {
+    'week_button_timeout': '切换周视图时控件超时。',
+    'week_overflow_mismatch': '折叠日的月视图与周视图条目不一致。',
+    'week_still_folded': '周视图仍有折叠条目。',
+    'week_changed_after_details': '详情读取期间周视图条目发生变化。',
+    'month_changed_after_details': '详情读取期间月视图条目发生变化。',
+}
+
 
 def _source_for(card: dict, scheduled_entries: list[dict]) -> dict | None:
     """排期与发布 ID 不同；逐渠道优先精确编号，再按时刻匹配，歧义不填。"""
@@ -182,12 +190,16 @@ def calendar_payload(*, snapshot: dict | None = None, now: datetime | None = Non
     unavailable = _readiness()
     diagnostic = snapshot.get('refresh_diagnostic')
     error = _ERRORS.get(snapshot.get('refresh_error'))
-    if error and diagnostic:
+    if error and diagnostic and all(key in diagnostic for key in ('date', 'time', 'stage')):
         stages = {'item_ready': '条目日期与正文', 'scheduled_detail': '排期详情',
                   'published_detail': '已发布详情'}
         error += ' 条目 %s %s，读取阶段：%s。' % (
             diagnostic['date'], diagnostic['time'], stages.get(diagnostic['stage'], '条目读取'))
         error += _DETAIL_ERRORS.get(diagnostic.get('code'), '条目读取失败') + '。'
+    elif error and diagnostic:
+        reason = _REFRESH_ERRORS.get(diagnostic.get('code'))
+        if reason:
+            error += ' ' + reason
     return {"status": snapshot["status"], "cached_at": snapshot.get("observed_at"),
             "stale": snapshot["status"] in {"stale", "clock_skew", "unavailable"} or
                      snapshot.get('refresh_status')=='failed' or

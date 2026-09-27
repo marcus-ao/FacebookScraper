@@ -9,13 +9,15 @@ import type { TaskId } from '@/types/brands'
 import { CardDetail } from './CalendarPage'
 import fixture from '@/types/__fixtures__/calendar.json'
 
-function render(data: CalendarPayload) {
+function renderMarkup(data: CalendarPayload) {
   const client = createQueryClient()
   client.setQueryData(['calendar'], data)
   return renderToStaticMarkup(<QueryClientProvider client={client}>
     <RouterProvider router={createMemoryRouter(routes, { initialEntries: ['/calendar'] })} />
-  </QueryClientProvider>).replace(/<[^>]+>/g, '')
+  </QueryClientProvider>)
 }
+
+function render(data: CalendarPayload) { return renderMarkup(data).replace(/<[^>]+>/g, '') }
 
 const detailMarkup = (card: CalendarCard) =>
   renderToStaticMarkup(<MemoryRouter><CardDetail card={card} /></MemoryRouter>)
@@ -88,6 +90,25 @@ describe('点击后的详情', () => {
 })
 
 describe('月历同步展示', () => {
+  it('同日远端 FB 与本地已排期 IG 按时刻交错显示，平台图标和状态文案一致', () => {
+    const base = fixture as unknown as CalendarPayload
+    const card = base.cards[0]!
+    const local = base.local[0]!
+    const markup = renderMarkup({ ...base, cards: [
+      { ...card, at: '2026-09-30T09:30:00+00:00', at_business: '2026-09-30T17:30:00+08:00',
+        channels: ['facebook'], delivery: 'scheduled', card_sha256: 'fb-1730' },
+      { ...card, at: '2026-09-30T15:00:00+00:00', at_business: '2026-09-30T23:00:00+08:00',
+        channels: ['facebook'], delivery: 'scheduled', card_sha256: 'fb-2300' },
+    ], local: [{ ...local, kind: 'scheduled', platform: 'instagram', channels: ['instagram'],
+      at: '2026-09-30T12:00:00+00:00', at_business: '2026-09-30T20:00:00+08:00',
+      remote_id: 'instagram=1099867215965804' }] })
+    expect(markup.indexOf('17:30')).toBeLessThan(markup.indexOf('20:00'))
+    expect(markup.indexOf('20:00')).toBeLessThan(markup.indexOf('23:00'))
+    expect(markup).toMatch(/20:00[\s\S]*?data-platform="instagram"/)
+    expect(markup).not.toContain('>本地<')
+    expect((markup.match(/已排期/g) ?? [])).toHaveLength(3)
+  })
+
   it('渠道已经确认、仅正文未读全的真实帖子继续显示', () => {
     const base = fixture as unknown as CalendarPayload
     const text = render({ ...base, cards: [{ ...base.cards[0]!,

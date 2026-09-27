@@ -6,6 +6,8 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from playwright.async_api import TimeoutError as BrowserTimeout
+
 from core import maintenance
 from core.chrome import attach, close_owned_page
 from core.config import cfg
@@ -71,6 +73,35 @@ def _empty() -> dict:
     return {"version": 1, "observed_at": None, "last_attempt_at": None,
             "refresh_status": "idle", "refresh_error": None, "refresh_diagnostic": None,
             "inventory": None}
+
+
+_PLANNER_FAILURE_CODES = {
+    '周视图条目与月历可见项及折叠数量不一致': 'week_overflow_mismatch',
+    '周视图仍存在折叠条目': 'week_still_folded',
+    '核对详情期间周视图条目已变化': 'week_changed_after_details',
+    '核对详情期间远端月历已更新': 'month_changed_after_details',
+}
+
+
+def _refresh_failure_diagnostic(exc: Exception) -> dict:
+    """Keep only bounded structural context from a failed browser refresh."""
+    if isinstance(exc, month_inventory.PlannerItemError):
+        return exc.diagnostic
+    if isinstance(exc, BrowserTimeout):
+        message = str(exc)
+        week = 'name="Week"' in message or "name='Week'" in message
+        return {'code': 'week_button_timeout' if week else 'browser_timeout',
+                'operation': 'Locator.click' if message.startswith('Locator.click:') else 'other',
+                'pointer_intercept': 'intercepts pointer events' in message}
+    diagnostic = getattr(exc, 'diagnostic', None)
+    if isinstance(diagnostic, dict):
+        return {key: diagnostic[key] for key in ('phase', 'surface', 'date', 'time', 'item_index', 'stage', 'code')
+                if key in diagnostic}
+    if isinstance(exc, bs.PublishStepError):
+        code = next((value for prefix, value in _PLANNER_FAILURE_CODES.items()
+                     if str(exc).startswith(prefix)), 'planner_read_failed')
+        return {'code': code, 'exception_type': type(exc).__name__}
+    return {'code': 'read_failed', 'exception_type': type(exc).__name__}
 
 
 def _serialize(inventory: RemoteSlotInventory) -> dict:
@@ -238,9 +269,9 @@ async def refresh_cache(path: Path, reader, *, state_dir: Path,
                           refresh_status="refreshed", refresh_error=None,
                           refresh_diagnostic=next(iter(inventory.diagnostics), None))
         except Exception as exc:
-            code = ("timeout" if isinstance(exc, TimeoutError) else
+            code = ("timeout" if isinstance(exc, (TimeoutError, BrowserTimeout)) else
                     "coverage_unavailable" if isinstance(exc, ProbeRequired) else "read_failed")
-            diagnostic = exc.diagnostic if isinstance(exc, month_inventory.PlannerItemError) else None
+            diagnostic = _refresh_failure_diagnostic(exc)
             record.update(refresh_status="failed", refresh_error=code, refresh_diagnostic=diagnostic)
             if corrupt:
                 # 失败读取不能用空壳抹去原文件；后续成功完整读取可以重建缓存。
