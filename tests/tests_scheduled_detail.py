@@ -39,9 +39,15 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
         cells = ''.join(f'<div role="link" draggable="false"><span>{day.day}</span>'
             + (item * copies if day == self.when.date() else '') + '</div>'
             for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9))
+        preview = (f'<span>{month.scheduled_details.INSTAGRAM_NOTICE}</span>'
+                   f'<div id="account">{html.escape(account)}</div>'
+                   f'<div><span>{html.escape(account)}</span><span></span>'
+                   f'<span id="caption">{html.escape(caption)}</span></div>' if marker == 'Instagram feed' else
+                   f'<article><h2 id="account">{html.escape(account)}</h2>'
+                   f'<span id="caption">{html.escape(caption)}</span></article>')
         await self.page.set_content('<h1>September</h1><h1>2026</h1>' + cells
             + f'<div role="dialog" aria-label="Post details" hidden>ID: {remote} '
-              f"{marker} <span id=account>{account}</span> <span id=caption>{html.escape(caption)}</span></div>"
+              f"{marker} {preview}</div>"
             + '<script>document.onkeydown=e=>{if(e.key==="Escape")document.querySelector("[role=dialog]").hidden=true}</script>')
 
     async def read(self, observer, card=None):

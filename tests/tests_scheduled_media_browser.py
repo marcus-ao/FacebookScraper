@@ -91,6 +91,29 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(capture.error, 'image_not_loaded')
         self.assertEqual(capture.structure['image_nodes'], 1)
 
+    async def test_detail_capture_waits_for_first_delayed_preview_image(self):
+        dialog = await self.content('<span>Post overview</span>')
+        await dialog.evaluate('''el => {
+          window.previewImageReadyAt=0;
+          setTimeout(()=>{
+            el.insertAdjacentHTML('beforeend',
+              '<img src="https://offline.fbcdn.net/photo.png">');
+            previewImageReadyAt=performance.now();
+          },1100);
+        }''')
+        with patch.object(APIRequestContext, 'get', AsyncMock(return_value=self.response())):
+            capture = await scheduled_media.collect(dialog, timeout=3)
+        self.assertGreater(await self.page.evaluate('previewImageReadyAt'), 0)
+        self.assertEqual(capture.structure['image_nodes'], 1)
+        self.assertEqual(len(capture.bodies), 1)
+
+    async def test_detail_capture_without_images_reports_missing_preview(self):
+        dialog = await self.content('<span>Post overview</span>')
+        capture = await scheduled_media.collect(dialog, timeout=.25)
+        self.assertEqual(capture.structure['image_nodes'], 0)
+        self.assertEqual(capture.error, 'image_not_present')
+        self.assertFalse(capture.bodies)
+
     async def test_candidate_limit_is_explicit_and_downloads_nothing(self):
         dialog = await self.content('<img src="https://offline.fbcdn.net/photo.png">' * 65)
         with patch.object(APIRequestContext, 'get', AsyncMock(side_effect=AssertionError('over limit'))):

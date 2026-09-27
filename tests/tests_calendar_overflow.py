@@ -112,8 +112,8 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
               e.stopPropagation(); const entry=entries[+n.dataset.item];opened.push(entry.id);
               document.getElementById('details').innerHTML='<div role="dialog" aria-label="Post details">ID: '+entry.id+
                 (entry.platform==='Instagram' ?
-                  '<p>This view of your post may not represent exactly how it appears on your Instagram feed.</p><div>neakasa.de</div><div><span>neakasa.de</span><span></span><span>Truncated ... <button>more</button></span></div>' :
-                  "<p>This view may not represent Facebook's Feed.</p><article><h2>Neakasa Deutschland</h2><div>Truncated ...</div></article>")+
+                  '<p>This view of your post may not represent exactly how it appears on your Instagram feed.</p><div>neakasa.de</div><div><span>neakasa.de</span><span></span><span>'+esc(entry.caption)+'</span></div>' :
+                  "<p>This view may not represent Facebook's Feed.</p><article><h2>Neakasa Deutschland</h2><div>"+esc(entry.caption)+"</div></article>")+
                 '<button id="close">Close</button><button>Boost</button><button>Publish now</button></div>';
               document.querySelectorAll('#details button:not(#close)').forEach(b=>b.onclick=()=>writes.push(b.innerText));
               document.getElementById('close').onclick=()=>{
@@ -160,6 +160,123 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await self.page.evaluate('opened'), [e['id'] for e in entries])
                 self.assertEqual(await self.page.evaluate('writes'), [])
                 self.assertEqual(await self.page.evaluate('mode'), 'month')
+
+    async def test_week_detail_waits_for_caption_after_id_and_owner_before_closing(self):
+        entries = await self.mount_week_view()
+        await self.page.evaluate('''() => {
+          const base=render;
+          render=()=>{base();
+            const entry=document.querySelector('[data-item="1"]');
+            if(!entry)return;
+            const open=entry.onclick;
+            entry.onclick=e=>{open(e);
+              const dialog=document.querySelector('#details [role="dialog"]');
+              const body=[...dialog.querySelectorAll('span')].find(n=>n.textContent.includes('Tag 1 auf'));
+              body.textContent='';
+              window.previewReadyAt=0;window.detailClosedAt=0;
+              const close=dialog.querySelector('#close'), oldClose=close.onclick;
+              close.onclick=()=>{detailClosedAt=performance.now();oldClose()};
+              setTimeout(()=>{body.textContent='Tag 1 auf der @ifa.berlin ✨'},250);
+              setTimeout(()=>{body.textContent='Tag 1 auf der @ifa.berlin ✨ Bis morgen! 👋 #Berlin';
+                previewReadyAt=performance.now()},2000);
+            };
+          };
+        }''')
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.get_by_role('button', name='Right').click()
+        row = {'date': date(2026, 9, 30), 'view': 'week', 'cell_index': 3}
+        item = {'href': '', 'labels': [entries[1]['caption']], 'icons': ['Instagram'], 'time': '8:00 PM'}
+        detail = await month.read_item_detail(self.page, row, item, self.page.locator('[data-item="1"]'), '',
+                                              timeout=3, card_spec=SPEC)
+        times = await self.page.evaluate('({ready:previewReadyAt, closed:detailClosedAt})')
+        self.assertEqual(detail['remote_ids'], {'instagram': entries[1]['id']})
+        self.assertGreater(times['ready'], 0)
+        self.assertGreaterEqual(times['closed'], times['ready'])
+
+    async def test_facebook_week_detail_waits_for_delayed_article_text(self):
+        entries = await self.mount_week_view()
+        await self.page.evaluate('''() => {
+          const base=render;
+          render=()=>{base();
+            const entry=document.querySelector('[data-item="0"]');
+            if(!entry)return;
+            const open=entry.onclick;
+            entry.onclick=e=>{open(e);
+              const dialog=document.querySelector('#details [role="dialog"]');
+              const body=dialog.querySelector('article > div');
+              body.textContent='';
+              window.previewReadyAt=0;window.detailClosedAt=0;
+              const close=dialog.querySelector('#close'), oldClose=close.onclick;
+              close.onclick=()=>{detailClosedAt=performance.now();oldClose()};
+              setTimeout(()=>{body.textContent='Riko full caption. #Riko';
+                previewReadyAt=performance.now()},1200);
+            };
+          };
+        }''')
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.get_by_role('button', name='Right').click()
+        row = {'date': date(2026, 9, 30), 'view': 'week', 'cell_index': 3}
+        item = {'href': '', 'labels': [entries[0]['caption']], 'icons': ['Facebook'], 'time': '5:30 PM'}
+        detail = await month.read_item_detail(self.page, row, item, self.page.locator('[data-item="0"]'), '',
+                                              timeout=3, card_spec=SPEC)
+        times = await self.page.evaluate('({ready:previewReadyAt, closed:detailClosedAt})')
+        self.assertEqual(detail['remote_ids'], {'facebook': entries[0]['id']})
+        self.assertGreater(times['ready'], 0)
+        self.assertGreaterEqual(times['closed'], times['ready'])
+
+    async def test_week_detail_accepts_stable_collapsed_preview_without_opening_more(self):
+        entries = await self.mount_week_view()
+        await self.page.evaluate('''() => {
+          const base=render;
+          render=()=>{base();
+            const entry=document.querySelector('[data-item="1"]');
+            if(!entry)return;
+            const open=entry.onclick;
+            entry.onclick=e=>{open(e);
+              const dialog=document.querySelector('#details [role="dialog"]');
+              const body=[...dialog.querySelectorAll('span')].find(n=>n.textContent.includes('Tag 1 auf'));
+              body.innerHTML='Tag 1 auf der @ifa.berlin ✨... <button>more</button>';
+              window.detailOpenedAt=performance.now();window.detailClosedAt=0;
+              const close=dialog.querySelector('#close'), oldClose=close.onclick;
+              close.onclick=()=>{detailClosedAt=performance.now();oldClose()};
+            };
+          };
+        }''')
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.get_by_role('button', name='Right').click()
+        row = {'date': date(2026, 9, 30), 'view': 'week', 'cell_index': 3}
+        item = {'href': '', 'labels': [entries[1]['caption']], 'icons': ['Instagram'], 'time': '8:00 PM'}
+        detail = await month.read_item_detail(self.page, row, item, self.page.locator('[data-item="1"]'), '',
+                                              timeout=4, card_spec=SPEC)
+        elapsed = await self.page.evaluate('detailClosedAt-detailOpenedAt')
+        self.assertEqual(detail['remote_ids'], {'instagram': entries[1]['id']})
+        self.assertGreaterEqual(elapsed, 1000)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_week_detail_without_preview_caption_stays_unverified(self):
+        entries = await self.mount_week_view()
+        await self.page.evaluate('''() => {
+          const base=render;
+          render=()=>{base();
+            const entry=document.querySelector('[data-item="1"]');
+            if(!entry)return;
+            const open=entry.onclick;
+            entry.onclick=e=>{open(e);
+              const dialog=document.querySelector('#details [role="dialog"]');
+              const body=[...dialog.querySelectorAll('span')].find(n=>n.textContent.includes('Tag 1 auf'));
+              body.textContent='';
+            };
+          };
+        }''')
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.get_by_role('button', name='Right').click()
+        row = {'date': date(2026, 9, 30), 'view': 'week', 'cell_index': 3}
+        item = {'href': '', 'labels': [entries[1]['caption']], 'icons': ['Instagram'], 'time': '8:00 PM'}
+        with self.assertRaises(month.content.DetailReadError) as failure:
+            await month.read_item_detail(self.page, row, item, self.page.locator('[data-item="1"]'), '',
+                                         timeout=1.2, card_spec=SPEC)
+        self.assertIn('preview_caption', failure.exception.missing_fields)
+        self.assertEqual(await self.page.get_by_role('dialog').count(), 0)
 
     async def test_week_recommendation_is_not_an_eighth_day_or_a_post(self):
         await self.mount_week_view()
@@ -383,7 +500,7 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
           render=()=>{base();const entry=document.querySelector('[data-item="1"]');if(!entry)return;
             const open=entry.onclick;entry.onclick=e=>{open(e);
               const d=document.getElementById('details');
-              d.innerHTML=d.innerHTML.replaceAll('neakasa.de', 'wrong.account').replace('Truncated ...', 'thanks to neakasa.de for the sample');
+              d.innerHTML=d.innerHTML.replaceAll('neakasa.de', 'wrong.account').replace('Tag 1 auf der @ifa.berlin ✨', 'thanks to neakasa.de for the sample');
               d.querySelector('#close').onclick=()=>d.innerHTML='';
             };
           };

@@ -4,6 +4,8 @@ import re
 import time
 from datetime import datetime
 
+from playwright.async_api import TimeoutError as BrowserTimeout
+
 from publish.planner_content import DetailReadError
 
 
@@ -95,9 +97,64 @@ async def verify_preview_owner(dialog, ids, expected_accounts, *, timeout):
         raise DetailReadError('identity_unverified', placement='feed', missing_fields=('preview_account',))
     deadline = time.monotonic() + timeout
     for node in nodes:
-        await node.wait_for(state='visible', timeout=max(1, (deadline - time.monotonic()) * 1000))
+        try:
+            await node.wait_for(state='visible', timeout=max(1, (deadline - time.monotonic()) * 1000))
+        except BrowserTimeout as exc:
+            raise DetailReadError('identity_unverified', placement='feed',
+                                  missing_fields=('preview_account',)) from exc
         if await node.count() != 1:
             raise DetailReadError('identity_unverified', placement='feed', missing_fields=('preview_account',))
+
+
+def _caption_words(value):
+    return re.findall(r'\w+', value.casefold().replace('\u200b', ''))
+
+
+async def wait_preview_caption(dialog, ids, expected_accounts, expected_caption, *, timeout):
+    """Wait for this card's preview body after its early ID/author shell appears."""
+    expected = _caption_words(expected_caption)
+    if not expected:
+        raise DetailReadError('missing_fields', placement='feed', missing_fields=('preview_caption',))
+    channel = next(iter(ids)) if len(ids) == 1 else ''
+    if channel == 'instagram':
+        author = instagram_caption_owner(dialog, expected_accounts['instagram'])
+        more = author.locator('xpath=..').get_by_role('button', name='more', exact=True)
+    elif channel == 'facebook':
+        article = dialog.get_by_role('article')
+        more = article.get_by_role('button', name='See more', exact=True)
+    else:
+        raise DetailReadError('identity_unverified', placement='feed', missing_fields=('preview_account',))
+    deadline = time.monotonic() + timeout
+    previous, stable_since = None, time.monotonic()
+    while time.monotonic() < deadline:
+        if not await dialog.is_visible():
+            raise DetailReadError('missing_fields', placement='feed', missing_fields=('preview_dialog',))
+        if channel == 'instagram':
+            if await author.count() != 1:
+                sample = ''
+            else:
+                sample = await author.evaluate('''el => {
+                  const siblings=[];
+                  for(let n=el.nextElementSibling;n;n=n.nextElementSibling)
+                    if(n.tagName==='SPAN') siblings.push(n.innerText);
+                  return siblings.join(' ');
+                }''')
+        else:
+            sample = await article.inner_text() if await article.count() == 1 else ''
+        actual = _caption_words(sample)
+        prefix = expected[:6]
+        matched = any(actual[i:i+len(prefix)] == prefix for i in range(len(actual)-len(prefix)+1))
+        full = any(actual[i:i+len(expected)] == expected for i in range(len(actual)-len(expected)+1))
+        truncated = await more.count() == 1 and await more.is_visible()
+        loading = dialog.get_by_role('heading', name='Loading preview', exact=True)
+        ready = matched and (full or truncated) and not (await loading.count() and await loading.is_visible())
+        observation = (sample, ready, truncated)
+        if observation != previous:
+            previous, stable_since = observation, time.monotonic()
+        if ready and time.monotonic() - stable_since >= (1.0 if truncated else .4):
+            return
+        await asyncio.sleep(min(.1, max(0, deadline - time.monotonic())))
+    raise DetailReadError('missing_fields', placement='feed', missing_fields=('preview_caption',))
 
 
 async def instagram_caption(dialog, owner):

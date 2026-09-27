@@ -66,6 +66,7 @@ async def collect(dialog, *, timeout=30):
     bodies, structure, screenshot = [], {}, b''
     error = 'layout_unverified'
     deadline = time.monotonic() + timeout
+    quiet_seconds = min(2.0, max(.4, timeout / 2))
     try:
         async with asyncio.timeout(timeout):
             previous, stable_since = None, time.monotonic()
@@ -77,14 +78,17 @@ async def collect(dialog, *, timeout=30):
                                                for item in raw['images']]}
                 if raw != previous:
                     previous, stable_since = raw, time.monotonic()
-                loaded = all(item['complete'] and item['natural_width'] > 0 and item['url']
+                # An empty image list makes all(...) true while the preview is
+                # still mounting. Keep observing until a real candidate appears.
+                loaded = bool(raw['images']) and all(item['complete'] and item['natural_width'] > 0 and item['url']
                              for item in raw['images'])
                 if raw['image_nodes'] > 64:
                     error = 'image_limit_exceeded'
                     break
-                if loaded and time.monotonic() - stable_since >= .4:
+                if loaded and time.monotonic() - stable_since >= quiet_seconds:
                     break
-                error = 'image_not_loaded' if not loaded else 'media_unstable'
+                error = ('image_not_present' if not raw['images'] else
+                         'image_not_loaded' if not loaded else 'media_unstable')
                 await asyncio.sleep(.05)
             if loaded and raw['image_nodes'] <= 64:
                 error = 'layout_unverified'
@@ -133,7 +137,7 @@ async def collect(dialog, *, timeout=30):
                 if await dialog.evaluate(_STRUCTURE) != raw:
                     error = 'media_list_changed'
     except TimeoutError:
-        if error not in {'image_not_loaded', 'media_unstable'}:
+        if error not in {'image_not_present', 'image_not_loaded', 'media_unstable'}:
             error = 'media_read_timeout'
     except Exception:
         error = 'media_read_failed'

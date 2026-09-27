@@ -647,10 +647,14 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
     caption = week_caption(row, item)
     if caption:
         async def observe_week_identity(dialog, ids):
+            deadline = time.monotonic() + timeout
             await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
+            await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption,
+                timeout=max(0, deadline - time.monotonic()))
             if observe_scheduled is not None:
                 await observe_scheduled(dialog, ids)
             await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
+            await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption, timeout=timeout)
 
         # The full caption is bound to this week card and checked by the final grid sweep.
         ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, observe_detail=observe_week_identity,
@@ -681,14 +685,25 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
     expected = datetime.combine(row['date'], datetime.strptime(item['time'], '%I:%M %p').time())
     if parsed is None or parsed != expected:
         raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
-    dialog_options = {'observe_detail': observe_scheduled} if observe_scheduled is not None else {}
+    match = re.search(spec.attributes['datetime_regex'], raw)
+    caption = raw[:match.start()].strip() if match else raw
+
+    async def observe_known_caption(dialog, ids):
+        deadline = time.monotonic() + timeout
+        await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
+        await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption,
+            timeout=max(0, deadline - time.monotonic()))
+        if observe_scheduled is not None:
+            await observe_scheduled(dialog, ids)
+            await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
+            await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption, timeout=timeout)
+
     remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
-                                              restore_calendar=restore_calendar, **dialog_options)
+        restore_calendar=restore_calendar, observe_detail=observe_known_caption,
+        allow_preview_text_change=True)
     if len(remote_ids) != 1:
         raise content.DetailReadError('identity_unverified', placement='feed',
                                       missing_fields=('channel_identity',))
-    match = re.search(spec.attributes['datetime_regex'], raw)
-    caption = raw[:match.start()].strip() if match else raw
     return {'channels': tuple(sorted(remote_ids)), 'remote_ids': remote_ids,
             'text': caption, 'delivery': 'scheduled', 'placement': 'feed',
             'caption_status': 'present', 'accounts': {key:accounts()[key] for key in remote_ids}}

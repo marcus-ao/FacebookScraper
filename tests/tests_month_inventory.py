@@ -269,7 +269,8 @@ class MonthTests(unittest.IsolatedAsyncioTestCase):
           slot.onclick=()=>{
             document.body.insertAdjacentHTML('beforeend', `<div role="dialog" aria-label="Post details">
               Post details ID: 2059528092104126 Facebook's Feed <span id="loading">Loading preview</span></div>`);
-            setTimeout(()=>{document.getElementById('loading').outerHTML='<article>Neakasa Deutschland September 30 at 5:30 PM Preview</article>'},350);
+            setTimeout(()=>{document.getElementById('loading').outerHTML=
+              `<article><h2>Neakasa Deutschland</h2><a>September 30 at 5:30 PM</a><div>${data.caption}</div></article>`},350);
           };
           document.onkeydown=e=>{if(e.key==='Escape')document.querySelector('[role=dialog]')?.remove()};
         }''', {'caption': CAPTION, 'entry': entry, 'delay': delay})
