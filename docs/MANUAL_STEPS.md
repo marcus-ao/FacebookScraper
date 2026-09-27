@@ -1429,9 +1429,11 @@ Get-WinEvent -FilterHashtable @{LogName='System'; Id=2004; StartTime=$publishEve
 **同日第三条 Instagram 已成功、月历出现 `+ 1 more`。** 2026-09-26 服务机已从周视图读到 09-30 的 FB 17:30、IG 20:00、FB 23:00，并打开 IG 详情 `1099867215965804`；不要再创建该 IG 排期。新版在原 attempt 的核对中自动读取完整周列表，核实全文、时刻、账号和编号，再恢复月视图复查。推荐卡不是帖子；月历折叠按钮也不是时间卡。部署步骤如下：
 
 1. 按 §13 拉取源码并从原 Web 启动脚本重启，保持 9223 的原发布会话。
-2. 用隔离数据运行 `scripts\run_python.bat -m tools.test_offline --only tests_calendar_overflow --only tests_scheduled_detail --only tests_month_readback --only tests_receipt_reconcile --only tests_final_form`；通过只证明本机读取器回归，不代表真实回执已恢复。
+2. 在启动 Web 的源码目录用 `git rev-parse HEAD` 核对交付版本；只拉取源码或刷新网页不能替换仍在运行的 Python 模块。开发机定向验证及证据见 [HANDOFF §1.34](HANDOFF.md#134-g8-远端图片与原排期补验2026-09-23)，离线通过不代表真实回执已恢复。
 3. 从 Instagram 的已处理/原审校页打开该帖，刷新后点一次“核对并补齐本地回执”。预期原提交 `2026-09-30 20:00 +08:00` 得到 `instagram=1099867215965804`，以实际完整回读为准；既有通知链沿原 attempt 幂等发送。
-4. 点一次“刷新月历”，确认同日三张真实排期各一条，原 Facebook 回执仍在。若读取失败，保留具体错误及原未决记录；不要解除冻结、手改账本或再次提交。
+4. 点一次“刷新月历”，确认同日三张真实排期各一条，原 Facebook 回执仍在。若读取失败，保留具体错误及 `state/planner_diagnostics/` 中本次诊断；不要解除冻结、手改账本或再次提交。
+
+**周标题报错与错页恢复。** 2026-09-27 的正式只读探针确认，原错误发生在 `/latest/composer/`，当时没有月历日期格；正常标签中的七个日期与换行没有异常。新版在详情打开/关闭和网格读取处核对页面，已读详情后意外跳转时自动重开原资产月历并比较整月及原周，成功才继续；不会操作新建编辑器或重提排期。诊断的 `phase` 标明发生阶段，`surface` 区分 calendar/composer/other，`recovered` 表示是否通过原列表比对。恢复后列表变化仍停止核验；将本次诊断与错误一并保留即可，不必另开正常月历反复抓标题。
 
 新移动应用推广弹窗不一定匹配旧成功标题，提交后仍会进行一次只读核对；仅弹窗文字或截图不足以写入 `scheduled`。这次流程不核验远端图片顺序，也不升级 G8。
 

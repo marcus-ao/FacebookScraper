@@ -12,6 +12,7 @@ import re
 import time
 from collections import Counter
 from datetime import date, datetime, timezone
+from functools import partial
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -28,6 +29,10 @@ from publish.channel_evidence import accounts, context_ids
 DAY_SELECTOR = '[role="link"][draggable="false"]'
 WEEK_DAY_SELECTOR = DAY_SELECTOR + ':not(' + DAY_SELECTOR + ' ' + DAY_SELECTOR + ')'
 WEEK_HEADER = re.compile(r'^\s*Sun\s*(\d{1,2})\s*Mon\s*(\d{1,2})\s*Tue\s*(\d{1,2})\s*Wed\s*(\d{1,2})\s*Thu\s*(\d{1,2})\s*Fri\s*(\d{1,2})\s*Sat\s*(\d{1,2})\s*$')
+WEEKDAYS = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat')
+WEEK_DAY_LABEL = re.compile(
+    r'^[\s\u200b-\u200f\ufeff]*(Sun|Mon|Tue|Wed|Thu|Fri|Sat)'
+    r'[\s\u200b-\u200f\ufeff]*(0?[1-9]|[12]\d|3[01])[\s\u200b-\u200f\ufeff]*$', re.I)
 WEEK_RECOMMENDATION = 'This week, your Instagram followers are most active at this time.'
 RECOMMENDATION = 'Recommendations are based on when your followers were most active on Instagram and Facebook respectively in the last 7 days.'
 TIME_PATTERN = re.compile(r'\b(\d{1,2}:\d{2}\s*[AP]M)\b')
@@ -50,6 +55,15 @@ class CalendarTitleUnavailable(bs.PublishStepError):
         self.diagnostic = {'phase': 'grid', 'month_candidates': len(months),
                            'year_candidates': len(years), 'headings': headings}
         super().__init__(f'月历的月份与年份尚未唯一识别（月份候选 {len(months)}，年份候选 {len(years)}）')
+
+
+class WeekHeaderUnavailable(bs.PublishStepError):
+    """Keep date-only failure evidence; a partial or duplicate week is not a calendar."""
+    retryable = False
+
+    def __init__(self, labels):
+        self.diagnostic = {'phase': 'week_header', 'date_label_count': len(labels), 'date_labels': labels[:21]}
+        super().__init__(f'周视图的七个日期标题尚未完整读取（可见日期标题 {len(labels)} 个，须按周日至周六唯一对应）')
 
 
 # Click 225 in the bound 2026-09-20 recording targets a time-only link; the
@@ -138,10 +152,12 @@ async def visible_month(page):
     return date(next(iter(years)), next(iter(months)), 1)
 
 
-async def ready_grid(page, *, timeout, phase='grid'):
+async def ready_grid(page, *, timeout, phase='grid', calendar_url=None):
     """Wait for a coherent title and complete cells, even when Meta shows no loader."""
     deadline = time.monotonic() + max(0, timeout)
+    calendar_url = bs.assert_planner_location(page, calendar_url, phase=phase)
     while True:
+        bs.assert_planner_location(page, calendar_url, phase=phase)
         await settled(page, deadline - time.monotonic())
         try:
             month = await visible_month(page)
@@ -152,6 +168,7 @@ async def ready_grid(page, *, timeout, phase='grid'):
             })''')
             return month, dates_for_cells(month, numbers)
         except bs.PublishStepError as exc:
+            bs.assert_planner_location(page, calendar_url, phase=phase)
             if time.monotonic() >= deadline:
                 if isinstance(exc, CalendarTitleUnavailable):
                     exc.diagnostic['phase'] = phase
@@ -167,14 +184,15 @@ async def settled(page, timeout):
         raise bs.PublishStepError('月历仍在加载，未确认空档') from exc
 
 
-async def read_grid(page, *, timeout=30, phase='grid'):
+async def read_grid(page, *, timeout=30, phase='grid', calendar_url=None):
     """Sweep every day twice, waiting for loaders and newly mounted cards; read labels from DOM copies."""
     deadline = time.monotonic() + timeout
+    calendar_url = bs.assert_planner_location(page, calendar_url, phase=phase)
     previous = None
     while True:
-        month, dates = await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase)
+        month, dates = await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase, calendar_url=calendar_url)
         result = await read_days(page, dates, timeout=deadline - time.monotonic())
-        if await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase) != (month, dates):
+        if await ready_grid(page, timeout=deadline - time.monotonic(), phase=phase, calendar_url=calendar_url) != (month, dates):
             raise bs.PublishStepError('读取过程中月份已变化，请重试')
         if result == previous:
             return result
@@ -240,16 +258,25 @@ async def read_days(page, dates, *, timeout, week=False):
     return result
 
 
-async def ready_week(page, month_rows, *, timeout, changed_from=None):
+async def ready_week(page, month_rows, *, timeout, changed_from=None, phase='week_header', calendar_url=None):
     deadline = time.monotonic() + max(0, timeout)
+    calendar_url = bs.assert_planner_location(page, calendar_url, phase=phase)
     while True:
+        bs.assert_planner_location(page, calendar_url, phase=phase)
         await settled(page, deadline - time.monotonic())
-        labels = await page.get_by_text(WEEK_HEADER).all_inner_texts()
-        candidates = [WEEK_HEADER.fullmatch(' '.join(label.split())) for label in labels]
+        # Service DOM has seven separate date DIVs. An ARIA text sequence is
+        # not one DOM element, and its rendered text need not match textContent.
+        labels = await page.get_by_text(WEEK_DAY_LABEL).evaluate_all('''nodes => nodes.filter(n =>
+          !n.closest('[aria-hidden="true"],[hidden],[inert],[role="link"],a,[role="dialog"],button,[role="button"],[role="tooltip"]') &&
+          n.getClientRects().length && getComputedStyle(n).visibility==='visible'
+        ).map(n=>n.innerText || '')''')
+        candidates = [WEEK_DAY_LABEL.fullmatch(label) for label in labels]
+        dates = [{'weekday': match[1].title(), 'day': int(match[2])} if match else None
+                 for match in candidates]
         try:
-            if len(candidates) != 1 or candidates[0] is None:
-                raise bs.PublishStepError('周视图的七个日期标题尚未完整读取')
-            days = week_dates(month_rows, [int(number) for number in candidates[0].groups()])
+            if tuple(value['weekday'] if value else None for value in dates) != WEEKDAYS:
+                raise WeekHeaderUnavailable(dates)
+            days = week_dates(month_rows, [value['day'] for value in dates])
             headings = [' '.join(label.lower().split()) for label in await page.get_by_role('heading').all_inner_texts()]
             month_labels = [re.split(r'\s*[-–]\s*', label) for label in headings]
             month_labels = [parts for parts in month_labels if all(part in bs._ENGLISH_MONTHS for part in parts)]
@@ -262,21 +289,27 @@ async def ready_week(page, month_rows, *, timeout, changed_from=None):
             if await page.locator(WEEK_DAY_SELECTOR).count() != 7 or days == changed_from:
                 raise bs.PublishStepError('周视图尚未完成切换')
             return days
-        except bs.PublishStepError:
+        except bs.PublishStepError as exc:
+            bs.assert_planner_location(page, calendar_url, phase=phase)
             if time.monotonic() >= deadline:
+                if isinstance(exc, WeekHeaderUnavailable):
+                    exc.diagnostic.update(phase=phase, timeout_seconds=max(0, timeout))
                 raise
         await asyncio.sleep(.1)
 
 
-async def read_week(page, month_rows, *, timeout):
+async def read_week(page, month_rows, *, timeout, phase='week_grid', calendar_url=None):
     deadline = time.monotonic() + timeout
+    calendar_url = bs.assert_planner_location(page, calendar_url, phase=phase)
     previous = None
     while True:
-        days = await ready_week(page, month_rows, timeout=deadline - time.monotonic())
+        days = await ready_week(page, month_rows, timeout=deadline - time.monotonic(),
+                                phase=phase + '_before_days', calendar_url=calendar_url)
         rows = await read_days(page, days, timeout=deadline - time.monotonic(), week=True)
         if any(row.get('hidden_count') for row in rows):
             raise bs.PublishStepError('周视图仍存在折叠条目，未读到完整列表')
-        if days != await ready_week(page, month_rows, timeout=deadline - time.monotonic()):
+        if days != await ready_week(page, month_rows, timeout=deadline - time.monotonic(),
+                                     phase=phase + '_after_days', calendar_url=calendar_url):
             raise bs.PublishStepError('读取条目期间周视图日期已变化')
         if rows == previous:
             return rows
@@ -286,8 +319,60 @@ async def read_week(page, month_rows, *, timeout):
         await asyncio.sleep(.4)
 
 
-async def detail_grids(page, month_rows, selected_rows, *, timeout):
+async def select_week(page, month_rows, target, *, timeout, calendar_url):
+    days = await ready_week(page, month_rows, timeout=timeout, phase='week_select', calendar_url=calendar_url)
+    for _ in range(len(month_rows) // 7):
+        if target in days:
+            return days
+        direction = 'Left' if target < days[0] else 'Right'
+        old = days
+        await page.get_by_role('button', name=direction, exact=True).click(timeout=timeout * 1000)
+        days = await ready_week(page, month_rows, timeout=timeout, changed_from=old,
+                                phase='week_navigate', calendar_url=calendar_url)
+        if (days[0] - old[0]).days != (-7 if direction == 'Left' else 7):
+            raise bs.PublishStepError('周视图没有按相邻七天切换，不能核对日期')
+    raise bs.PublishStepError('未能定位目标日期的完整周视图')
+
+
+async def restore_detail_grid(page, month_rows, view_rows, calendar_url, timeout, phase):
+    """Restore only our read tab, after a completed detail, against both original grids."""
+    try:
+        bs.assert_planner_location(page, calendar_url, phase=phase)
+        return
+    except bs.PlannerNavigationError as exc:
+        data = {'schema_version': 1, 'process_id': os.getpid(), 'recovered': False,
+                'failures': [await calendar_failure_snapshot(page, exc)]}
+        name = uuid4().hex + '.json'
+        try:
+            if exc.diagnostic['surface'] != 'composer':
+                raise
+            # No composer control is activated. Reopen the same owned tab/asset;
+            # do not replay detail observers or combine different grid versions.
+            data['recovery_stage'] = 'month_grid'
+            await open_calendar(page, context_ids(calendar_url), timeout=timeout)
+            if month_rows != await read_grid(page, timeout=timeout, phase='restore_month', calendar_url=calendar_url):
+                raise bs.PublishStepError('恢复月历后条目已变化，本次核对作废；请重新核对已有排期')
+            if view_rows[0].get('view') == 'week':
+                data['recovery_stage'] = 'week_grid'
+                await page.get_by_role('button', name='Week', exact=True).click(timeout=timeout * 1000)
+                await select_week(page, month_rows, view_rows[0]['date'], timeout=timeout, calendar_url=calendar_url)
+                if view_rows != await read_week(page, month_rows, timeout=timeout, phase='restore_week', calendar_url=calendar_url):
+                    raise bs.PublishStepError('恢复周视图后条目已变化，本次核对作废；请重新核对已有排期')
+            bs.assert_planner_location(page, calendar_url, phase='restored_detail_grid')
+            data['recovered'] = True
+        except Exception as failure:
+            if failure is exc:
+                raise
+            data['recovery_error'] = type(failure).__name__
+            raise bs.PlannerNavigationError('restore_detail_grid', 'other', message=
+                '月历跳转后未能恢复并核实原始完整列表，本次核对已作废；请重新核对已有排期。') from failure
+        finally:
+            save_calendar_diagnostic(name, data)
+
+
+async def detail_grids(page, month_rows, selected_rows, *, timeout, calendar_url):
     """Read folded days and Instagram captions in the recorded complete week view."""
+    bs.assert_planner_location(page, calendar_url, phase='before_details')
     expanded = []
     for row in selected_rows:
         if row.get('hidden_count'):
@@ -300,7 +385,9 @@ async def detail_grids(page, month_rows, selected_rows, *, timeout):
                 break
     ordinary = [row for row in selected_rows if row not in expanded]
     if ordinary:
-        yield ordinary
+        restore = partial(restore_detail_grid, page, month_rows, month_rows, calendar_url, timeout)
+        yield ordinary, restore
+        await restore('after_month_details')
     if not expanded:
         return
     await page.get_by_role('button', name='Week', exact=True).click(timeout=timeout * 1000)
@@ -309,26 +396,18 @@ async def detail_grids(page, month_rows, selected_rows, *, timeout):
     pending = {row['date']: row for row in expanded}
     while pending:
         target = min(pending)
-        days = await ready_week(page, month_rows, timeout=timeout)
-        for _ in range(len(month_rows) // 7):
-            if target in days:
-                break
-            direction = 'Left' if target < days[0] else 'Right'
-            old = days
-            await page.get_by_role('button', name=direction, exact=True).click(timeout=timeout * 1000)
-            days = await ready_week(page, month_rows, timeout=timeout, changed_from=old)
-            if (days[0] - old[0]).days != (-7 if direction == 'Left' else 7):
-                raise bs.PublishStepError('周视图没有按相邻七天切换，不能核对日期')
-        else:
-            raise bs.PublishStepError('未能定位目标日期的完整周视图')
-        rows = await read_week(page, month_rows, timeout=timeout)
+        await select_week(page, month_rows, target, timeout=timeout, calendar_url=calendar_url)
+        rows = await read_week(page, month_rows, timeout=timeout, calendar_url=calendar_url)
         selected = [row for row in rows if row['date'] in pending]
         for row in selected:
             require_expanded_day(pending.pop(row['date']), row)
-        yield selected
-        if rows != await read_week(page, month_rows, timeout=timeout):
+        restore = partial(restore_detail_grid, page, month_rows, rows, calendar_url, timeout)
+        yield selected, restore
+        await restore('after_week_details')
+        if rows != await read_week(page, month_rows, timeout=timeout, phase='after_details', calendar_url=calendar_url):
             raise bs.PublishStepError('核对详情期间周视图条目已变化，请重新读取')
     await page.get_by_role('button', name='Month', exact=True).click(timeout=timeout * 1000)
+    bs.assert_planner_location(page, calendar_url, phase='return_to_month')
 
 
 def week_caption(row, item):
@@ -386,7 +465,7 @@ async def recommendation_state(page, item, *, timeout=1.5):
     return 'shown'
 
 
-async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=None):
+async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=None, restore_calendar=None):
     stage = 'item_ready'
     try:
         ready = await ready_item(page, row, item, timeout=timeout, card_spec=card_spec)
@@ -395,7 +474,7 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=
         node, raw = ready
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
         return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone,
-                                      card_spec=card_spec)
+                                      card_spec=card_spec, restore_calendar=restore_calendar)
     except (BrowserReadInterrupted, bs.PlannerDialogCloseError, bs.PlannerNavigationError):
         raise
     except Exception as exc:
@@ -511,7 +590,7 @@ def require_same_item(item, fresh):
 
 
 async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None,
-                           card_spec=None, observe_scheduled=None):
+                           card_spec=None, observe_scheduled=None, restore_calendar=None):
     if item['href']:
         url = urljoin(page.url, item['href'])
         parsed = urlsplit(url)
@@ -572,7 +651,8 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             if observe_scheduled is not None:
                 await observe_scheduled(dialog, ids)
 
-        ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, observe_detail=observe_week_identity)
+        ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, observe_detail=observe_week_identity,
+                                            restore_calendar=restore_calendar)
         if len(ids) != 1 or {name.lower() for name in item.get('icons', [])} != set(ids):
             raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
         return {'channels': tuple(ids), 'remote_ids': ids, 'accounts': {key: accounts()[key] for key in ids},
@@ -591,7 +671,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
                 await observe_scheduled(dialog, ids)
 
         await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
-            prepare_detail=prepare_dialog, observe_detail=observe_dialog)
+            prepare_detail=prepare_dialog, observe_detail=observe_dialog, restore_calendar=restore_calendar)
         if material is None:
             raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
         return material
@@ -600,7 +680,8 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
     if parsed is None or parsed != expected:
         raise bs.PublishStepError('未知月历条目没有完整日期与正文证据；不能当作推荐时段跳过')
     dialog_options = {'observe_detail': observe_scheduled} if observe_scheduled is not None else {}
-    remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, **dialog_options)
+    remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
+                                              restore_calendar=restore_calendar, **dialog_options)
     if len(remote_ids) != 1:
         raise content.DetailReadError('identity_unverified', placement='feed',
                                       missing_fields=('channel_identity',))
@@ -622,24 +703,26 @@ async def read_scheduled_target(page, card, *, ui_timezone, observe_detail, time
             or spec.attributes.get(channel + '_account_token') != accounts()[channel]):
         raise bs.PublishStepError('取图目标账号与当前发布账号不一致')
     local = card.at.astimezone(bs.resolve_ui_timezone(ui_timezone)).replace(tzinfo=None)
-    rows = await read_grid(page, timeout=timeout)
+    calendar_url = bs.assert_planner_location(page, phase='media_target_grid')
+    rows = await read_grid(page, timeout=timeout, calendar_url=calendar_url)
     selected = [row for row in rows if row['date'] == local.date()]
     captured = None
-    async for batch in detail_grids(page, rows, selected, timeout=timeout):
+    async for batch, restore in detail_grids(page, rows, selected, timeout=timeout, calendar_url=calendar_url):
         captured = await read_scheduled_rows(page, card, batch, local=local, spec=spec,
-            ui_timezone=ui_timezone, observe_detail=observe_detail, timeout=timeout)
-    if captured is None or rows != await read_grid(page, timeout=timeout):
+            ui_timezone=ui_timezone, observe_detail=observe_detail, timeout=timeout, restore_calendar=restore)
+    if captured is None or rows != await read_grid(page, timeout=timeout, calendar_url=calendar_url):
         raise bs.PublishStepError('取图期间原排期对象或月历发生变化')
     return captured
 
 
-async def read_scheduled_rows(page, card, rows, *, local, spec, ui_timezone, observe_detail, timeout):
+async def read_scheduled_rows(page, card, rows, *, local, spec, ui_timezone, observe_detail, timeout, restore_calendar):
     channel = card.channels[0]
     matches = []
     for row in rows:
         if row['date'] != local.date():
             continue
         for item in row['items']:
+            await restore_calendar('before_detail')
             if item['href'] or datetime.strptime(item['time'], '%I:%M %p').time() != local.time():
                 continue
             ready = await ready_item(page, row, item, timeout=timeout, card_spec=spec)
@@ -649,7 +732,7 @@ async def read_scheduled_rows(page, card, rows, *, local, spec, ui_timezone, obs
             match = re.search(spec.attributes['datetime_regex'], raw)
             if not raw:
                 detail = await read_item_detail(page, row, item, node, raw, timeout=timeout,
-                                               card_spec=spec, ui_timezone=ui_timezone)
+                                               card_spec=spec, ui_timezone=ui_timezone, restore_calendar=restore_calendar)
                 if (detail['remote_ids'] == dict(card.remote_ids)
                         and bs._card_text(detail['text']) == bs._card_text(card.rendered)):
                     matches.append((row, item))
@@ -676,7 +759,7 @@ async def read_scheduled_rows(page, card, rows, *, local, spec, ui_timezone, obs
 
     try:
         detail = await read_item_detail(page, row, item, node, raw, timeout=timeout,
-            card_spec=spec, ui_timezone=ui_timezone, observe_scheduled=observe)
+            card_spec=spec, ui_timezone=ui_timezone, observe_scheduled=observe, restore_calendar=restore_calendar)
     except content.DetailReadError as exc:
         raise bs.PublishStepError('重新打开的排期详情身份未核实') from exc
     finally:
@@ -691,7 +774,7 @@ async def read_scheduled_rows(page, card, rows, *, local, spec, ui_timezone, obs
 async def open_calendar(page, asset_context, *, timeout=30):
     """打开指定业务资产的月历。调用方负责提供资产，这里不读录证文件。"""
     url = selectors.CONTENT_CALENDAR_URL + '?' + urlencode(asset_context)
-    # This is the caller-owned Planner tab, never the composer or a human tab.
+    # The caller owns this tab, including when recovering an unintended navigation.
     # Readiness must not depend on an inactive tab being rendered in the background.
     await page.bring_to_front()
     await page.goto(url, wait_until='domcontentloaded', timeout=timeout * 1000)
@@ -705,6 +788,7 @@ async def open_calendar(page, asset_context, *, timeout=30):
             await control.click()
             await page.get_by_role('menuitem', name='All', exact=True).click()
         await expect(control).to_have_text(prefix + ' all', timeout=timeout * 1000)
+    bs.assert_planner_location(page, url, phase='calendar_prepared')
 
 
 async def prepare(page, *, timeout=30):
@@ -727,7 +811,8 @@ async def calendar_failure_snapshot(page, error):
     async def collect():
         snapshot.update(await page.evaluate('''selector => ({
           document: {ready: document.readyState, visibility: document.visibilityState,
-                     lang: document.documentElement.lang},
+                     lang: document.documentElement.lang, scroll_x:scrollX, scroll_y:scrollY,
+                     viewport_width:innerWidth, viewport_height:innerHeight},
           day_cells: document.querySelectorAll(selector).length,
           raw_heading_nodes: [...document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]')]
             .slice(0,32).map(n=>({tag:n.tagName, role:n.getAttribute('role'),
@@ -737,9 +822,22 @@ async def calendar_failure_snapshot(page, error):
         })''', DAY_SELECTOR))
         snapshot['including_hidden'] = await page.get_by_role('heading', include_hidden=True).all_text_contents()
         snapshot['dialogs'] = await page.get_by_role('dialog').count()
+        if isinstance(error, WeekHeaderUnavailable):
+            matches = await page.get_by_text(WEEK_HEADER).evaluate_all('''nodes => nodes.map(n=>({
+              raw:n.textContent, shown:n.innerText, tag:n.tagName,
+              css_visible:!!(n.getClientRects().length && getComputedStyle(n).visibility==='visible')
+            }))''')
+            snapshot['whole_header_matches'] = len(matches)
+            snapshot['whole_header_nodes'] = [{
+                'tag': node['tag'], 'css_visible': node['css_visible'],
+                'raw_matches': bool(WEEK_HEADER.fullmatch(node['raw'] or '')),
+                'shown_matches': bool(WEEK_HEADER.fullmatch(' '.join(node['shown'].split()))),
+                'raw_length': len(node['raw'] or ''), 'shown_length': len(node['shown']),
+            } for node in matches[:8]]
         parsed = urlsplit(page.url)
         snapshot['surface'] = ('calendar' if parsed.hostname == 'business.facebook.com'
-            and parsed.path.rstrip('/') == urlsplit(selectors.CONTENT_CALENDAR_URL).path.rstrip('/') else 'other')
+            and parsed.path.rstrip('/') == urlsplit(selectors.CONTENT_CALENDAR_URL).path.rstrip('/') else
+            'composer' if parsed.hostname == 'business.facebook.com' and parsed.path.rstrip('/') == '/latest/composer' else 'other')
 
     try:
         await asyncio.wait_for(collect(), DIAGNOSTIC_TIMEOUT)
@@ -783,7 +881,7 @@ async def read(page, *, ui_timezone, business_timezone, timeout=30, run=None, de
                                          timeout=timeout, run=run, detail_range=detail_range)
                 data['recovered'] = bool(data['failures'])
                 return result
-            except CalendarTitleUnavailable as exc:
+            except (CalendarTitleUnavailable, WeekHeaderUnavailable, bs.PlannerNavigationError) as exc:
                 data['failures'].append(await calendar_failure_snapshot(page, exc))
                 saved = save_calendar_diagnostic(name, data)
                 if read_index or not exc.retryable:
@@ -817,16 +915,18 @@ async def _read_once(page, *, ui_timezone, business_timezone, timeout=30, run=No
     else:
         await open_calendar(page, run.asset_context, timeout=timeout)
         card_spec = run.planner_card
-    rows = await read_grid(page, timeout=timeout, phase='before_details')
+    calendar_url = bs.assert_planner_location(page, phase='before_details')
+    rows = await read_grid(page, timeout=timeout, phase='before_details', calendar_url=calendar_url)
     detail_rows = rows if selected_dates is None else [row for row in rows
         if selected_dates[0] <= row['date'] <= selected_dates[1]]
     cards, occupied, diagnostics = [], {}, []
-    async for batch in detail_grids(page, rows, detail_rows, timeout=timeout):
+    async for batch, restore in detail_grids(page, rows, detail_rows, timeout=timeout, calendar_url=calendar_url):
         for row in batch:
             for item in row['items']:
+                await restore('before_detail')
                 try:
                     material = await read_item(page, row, item, timeout=timeout, ui_timezone=ui_timezone,
-                                               card_spec=card_spec)
+                                               card_spec=card_spec, restore_calendar=restore)
                 except PlannerItemError as exc:
                     diagnostics.append(exc.diagnostic)
                     # A failed detail read proves neither a post nor a schedule.
@@ -864,7 +964,7 @@ async def _read_once(page, *, ui_timezone, business_timezone, timeout=30, run=No
                             source_content_id=variant.get('source_content_id',''),
                             permalinks=tuple(sorted((variant.get('permalinks') or {}).items()))))
     # Verify a final sweep so edits/late rendering during detail reads invalidate the inventory.
-    if rows != await read_grid(page, timeout=timeout, phase='after_details'):
+    if rows != await read_grid(page, timeout=timeout, phase='after_details', calendar_url=calendar_url):
         raise bs.PublishStepError('核对详情期间远端月历已更新，请重新读取')
     return bs.RemoteSlotInventory(tuple(occupied[key] for key in sorted(occupied)), ui_timezone,
         detail_rows[0]['date'] if detail_rows else None, detail_rows[-1]['date'] if detail_rows else None,

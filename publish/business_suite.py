@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from playwright.async_api import expect
@@ -61,6 +61,28 @@ class PlannerDialogCloseError(PublishStepError):
 
 class PlannerNavigationError(PublishStepError):
     """Viewing a calendar object must not navigate into a new composer."""
+    retryable = False
+
+    def __init__(self, phase, surface, *, message=None):
+        self.diagnostic = {'phase': phase, 'surface': surface}
+        super().__init__(message or '查看排期条目时离开了月历；本次读取已停止，未修改或重新提交帖子。')
+
+
+def assert_planner_location(page, expected_url=None, *, phase):
+    """View/tracking parameters may change, but the Planner and its asset may not."""
+    actual_url = _safe_page_url(page)
+    actual = urlsplit(actual_url)
+    expected = urlsplit(expected_url if expected_url is not None else
+                        selectors.CONTENT_CALENDAR_URL if actual.hostname else actual_url)
+    if expected.hostname != 'business.facebook.com' or expected.path.rstrip('/') != '/latest/content_calendar':
+        return actual_url
+    query, current = parse_qs(expected.query), parse_qs(actual.query)
+    if (actual.hostname != expected.hostname or actual.path.rstrip('/') != expected.path.rstrip('/')
+            or any(query.get(key) and query[key] != current.get(key) for key in ('asset_id', 'business_id'))):
+        surface = ('composer' if actual.hostname == expected.hostname
+                   and actual.path.rstrip('/') == '/latest/composer' else 'other')
+        raise PlannerNavigationError(phase, surface)
+    return actual_url
 
 
 @dataclass(frozen=True)
@@ -1232,7 +1254,8 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 
 
 async def _open_channel_dialogs(
-        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None
+        page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
+        restore_calendar=None
         ) -> dict[str, str]:
     """只读详情身份；用详情自己的 Close 关闭并等它消失，再读下一条。"""
     attrs = spec.attributes
@@ -1242,23 +1265,31 @@ async def _open_channel_dialogs(
         raise ProbeRequired("remote_id_regex 无效：%s" % exc) from exc
     found: dict[str, str] = {}
     dialog = None
-    before = urlsplit(_safe_page_url(page))
+    completed = False
+    before = _safe_page_url(page)
+    phase = 'opening_detail'
     try:
         await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
+        assert_planner_location(page, before, phase=phase)
         raise PublishStepError("点不开日历条目的详情弹窗：%s" % exc) from exc
     try:
+        assert_planner_location(page, before, phase=phase)
         dialogs = page.get_by_role(
             str(attrs.get("dialog_role") or "dialog"),
             name=str(attrs.get("dialog_name") or ""), exact=False)
         dialog = dialogs.first
         # 无详情弹窗时保留渠道未知，由调用方决定是否完整。
         await dialog.wait_for(state="visible", timeout=_ms(timeout))
+        assert_planner_location(page, before, phase=phase)
+        phase = 'reading_detail'
         if prepare_detail is not None:
             await prepare_detail(dialog)
+            assert_planner_location(page, before, phase=phase)
         deadline = time.monotonic() + timeout
         previous, stable_since = None, time.monotonic()
         while True:
+            assert_planner_location(page, before, phase=phase)
             rendered = await _node_text(dialog)
             remotes = {_regex_remote_id(match) for match in pattern.finditer(rendered)} - {''}
             remote = next(iter(remotes)) if len(remotes) == 1 else ''
@@ -1285,6 +1316,7 @@ async def _open_channel_dialogs(
                     if await dialogs.count() != 1:
                         raise PublishStepError('目标排期详情不唯一，不能读取图片')
                     await observe_detail(dialog, dict(found))
+                    assert_planner_location(page, before, phase=phase)
                     if (await dialogs.count() != 1 or not await dialog.is_visible()
                             or await _node_text(dialog) != rendered):
                         raise PublishStepError('取图期间排期详情身份或正文发生变化')
@@ -1292,12 +1324,10 @@ async def _open_channel_dialogs(
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
+        completed = True
     except Exception as exc:                          # noqa: BLE001
-        after = urlsplit(_safe_page_url(page))
-        if (before.hostname == 'business.facebook.com' and '/content_calendar' in before.path
-                and (after.hostname != before.hostname or after.path.rstrip('/') != before.path.rstrip('/'))):
-            raise PlannerNavigationError('查看排期条目时离开了月历；未修改或重新提交帖子，请核对已有排期。') from exc
-        if observe_detail is not None:
+        assert_planner_location(page, before, phase=phase)
+        if observe_detail is not None or isinstance(exc, PlannerNavigationError):
             raise
         pass
     finally:
@@ -1312,8 +1342,16 @@ async def _open_channel_dialogs(
                     await page.keyboard.press('Escape')
                 await dialog.wait_for(state='hidden', timeout=_ms(timeout))
             except Exception as exc:
+                assert_planner_location(page, before, phase='closing_detail')
                 raise PlannerDialogCloseError(
                     '上一条排期详情未能关闭，本次月历读取已停止；请重新核对已有排期。') from exc
+            if not (completed and found and restore_calendar is not None):
+                assert_planner_location(page, before, phase='after_detail_close')
+    # A hidden dialog can mean the entire Planner was replaced by composer.
+    # Only the inventory owner can restore and compare its original complete grid.
+    if found and restore_calendar is not None:
+        await restore_calendar('after_detail_close')
+    assert_planner_location(page, before, phase='after_detail_close')
     return found
 
 

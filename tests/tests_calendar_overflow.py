@@ -1,9 +1,13 @@
 """Recorded month overflow links are controls, never posts or invented times."""
 import calendar
+import asyncio
+import json
 import sys
+import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
@@ -70,7 +74,7 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             cells.append(f'<div role="link" draggable="false"><span>{day.day}</span>{cards}</div>')
         await self.page.set_content('<h1>Planner</h1><h1>September</h1><h1>2026</h1>' + ''.join(cells))
 
-    async def mount_week_view(self, *, missing=False, mutate=False, count=3):
+    async def mount_week_view(self, *, missing=False, mutate=False, count=3, navigate_on_close=False):
         entries = [
             {'time': '5:30 PM', 'platform': 'Facebook', 'id': '1884787296017457', 'caption': 'Riko full caption. #Riko'},
             {'time': '8:00 PM', 'platform': 'Instagram', 'id': '1099867215965804', 'caption': 'Tag 1 auf der @ifa.berlin ✨\nBis morgen! 👋 #Berlin'},
@@ -78,12 +82,12 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             {'time': '11:01 PM', 'platform': 'Instagram', 'id': '1000000000000004', 'caption': 'Fourth full caption at 5:30 PM.'},
         ][:count]
         days = [day.day for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
-        await self.page.set_content('''<h1>Planner</h1><h1 id="month">September</h1><h1>2026</h1>
+        markup = '''<h1>Planner</h1><h1 id="month">September</h1><h1>2026</h1>
           <button id="week">Week</button><button id="monthly">Month</button>
           <button id="left">Left</button><button id="right">Right</button>
           <button>Content type: all</button><button>Shared to: all</button>
-          <div id="headers"></div><div id="grid"></div><div id="details"></div>''')
-        await self.page.evaluate('''data=>{
+          <div id="headers"></div><div id="grid"></div><div id="details"></div>'''
+        script = '''data=>{
           window.opened=[];window.writes=[];window.mode='month';window.offset=0;
           window.entries=data.entries;
           const esc=s=>s.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
@@ -115,6 +119,10 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
               document.getElementById('close').onclick=()=>{
                 document.getElementById('details').innerHTML='';
                 if(data.mutate){entries[2].caption='Changed during detail';render();}
+                if(data.navigate_on_close){
+                  history.pushState({},'', '/latest/composer/?asset_id=111222333444');
+                  document.body.innerHTML='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"><button>Save</button><button>Schedule</button></div>';
+                }
               };
             });
             document.querySelectorAll('#grid button,#grid a').forEach(n=>n.onclick=e=>{e.preventDefault();writes.push(n.innerText)});
@@ -124,7 +132,11 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
           document.getElementById('right').onclick=()=>{offset++;render()};
           document.getElementById('left').onclick=()=>{offset--;render()};
           render();
-        }''', {'days': days, 'entries': entries, 'missing': missing, 'mutate': mutate})
+        }'''
+        data = {'days': days, 'entries': entries, 'missing': missing, 'mutate': mutate,
+                'navigate_on_close': navigate_on_close}
+        self.week_html = markup + '<script>(' + script + ')(' + json.dumps(data) + ')</script>'
+        await self.page.set_content(self.week_html)
         return entries
 
     async def inventory(self, *, whole_month=False):
@@ -155,6 +167,97 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inv.diagnostics, ())
         self.assertTrue(inv.decision_complete)
         self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_close_navigation_restores_and_rechecks_the_same_week_without_reopening_details(self):
+        visits, opened = [], []
+        async def serve(route):
+            visits.append(route.request.url)
+            await route.fulfill(content_type='text/html', body=self.week_html)
+        await self.page.route('https://business.facebook.com/**', serve)
+        await self.mount_week_view(navigate_on_close=True)
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        await self.page.expose_function('recordOpened', lambda value: opened.append(value))
+        await self.page.add_init_script("addEventListener('click',e=>{const n=e.target.closest('[data-item]');if(n)recordOpened(entries[+n.dataset.item].id)},true)")
+        await self.page.reload()
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
+            inv = await self.inventory()
+            self.assertFalse(inv.diagnostics)
+            self.assertEqual([dict(c.remote_ids)[c.channels[0]] for c in inv.cards],
+                             ['1884787296017457', '1099867215965804', '1084557747316275'])
+            self.assertEqual(opened, ['1884787296017457', '1099867215965804', '1084557747316275'])
+            self.assertEqual(len(visits), 5)  # initial load/reload, then one restoration per completed detail
+            self.assertTrue(all('/content_calendar?' in url for url in visits))
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
+            self.assertEqual(await self.page.evaluate('writes'), [])
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 3)
+            self.assertTrue(all(data['recovered'] for data in saved))
+            self.assertTrue(all(data['failures'][0]['phase'] == 'after_detail_close' for data in saved))
+            self.assertTrue(all(data['failures'][0]['surface'] == 'composer' for data in saved))
+            self.assertNotIn('111222333444', json.dumps(saved))
+
+    async def test_navigation_recovery_rejects_changed_visible_or_hidden_cards(self):
+        for change in ('visible_time', 'hidden_caption'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder, \
+                    patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
+                await self.mount_week_view(navigate_on_close=True)
+                original = self.week_html
+                changed = (original.replace('5:30 PM', '5:31 PM') if change == 'visible_time' else
+                           original.replace('Full caption.', 'Changed remote caption.'))
+                visits = []
+                async def serve(route):
+                    visits.append(route.request.url)
+                    await route.fulfill(content_type='text/html', body=original if len(visits)==1 else changed)
+                await self.page.route('https://business.facebook.com/**', serve)
+                await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+                with self.assertRaisesRegex(month.bs.PlannerNavigationError, '未能恢复并核实'):
+                    await self.inventory()
+                self.assertEqual(len(visits), 2)
+                self.assertEqual(await self.page.evaluate('opened'), [])
+                saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+                self.assertTrue(saved)
+                self.assertTrue(all(not data['recovered'] for data in saved))
+                await self.page.unroute('https://business.facebook.com/**', serve)
+
+    async def test_week_read_on_composer_reports_navigation_instead_of_missing_dates(self):
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"></div>'))
+        await self.page.goto('https://business.facebook.com/latest/composer/')
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        with self.assertRaises(month.bs.PlannerNavigationError) as failed:
+            await month.ready_week(self.page, rows, timeout=30, phase='after_details')
+        self.assertEqual(failed.exception.diagnostic, {'phase': 'after_details', 'surface': 'composer'})
+
+    async def test_view_switch_cannot_replace_the_original_asset_binding(self):
+        await self.mount_week_view(navigate_on_close=True)
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=self.week_html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        await self.page.evaluate('''()=>{
+          const button=document.getElementById('week'), original=button.onclick;
+          button.onclick=()=>{original();history.pushState({},'',
+            '/latest/content_calendar?asset_id=999999999999&business_id=555666777888')};
+        }''')
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
+            with self.assertRaises(month.bs.PlannerNavigationError) as failed:
+                await self.inventory()
+            self.assertEqual(failed.exception.diagnostic, {'phase': 'week_select', 'surface': 'other'})
+            self.assertEqual(await self.page.evaluate('opened'), [])
+            self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_navigation_during_grid_wait_is_not_relabelled_as_missing_dates(self):
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body='<h1>Planner</h1>'))
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        async def navigate(*args):
+            await self.page.evaluate("history.pushState({},'', '/latest/composer/');document.body.innerHTML='<h1>Create post</h1>'")
+        for reader, args in ((month.ready_grid, ()), (month.ready_week, (rows,))):
+            with self.subTest(reader=reader.__name__):
+                await self.page.goto('https://business.facebook.com/latest/content_calendar')
+                with patch.object(month, 'settled', side_effect=navigate), self.assertRaises(month.bs.PlannerNavigationError):
+                    await reader(self.page, *args, timeout=0)
 
     async def test_missing_hidden_post_cannot_be_treated_as_available(self):
         await self.mount_week_view(missing=True)
@@ -219,6 +322,82 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['index'] for item in day['items']], [0, 1])
         for item in day['items']:
             self.assertEqual(await month.item_locator(self.page, day, item).inner_text(), item['text'])
+
+    async def test_week_headers_do_not_need_one_element_containing_only_all_seven_dates(self):
+        days = tuple(calendar.Calendar(firstweekday=6).itermonthdates(2026, 9))[-7:]
+        headers = ''.join(f'<div>{label} {day.day}</div>'
+                          for label, day in zip(('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'), days))
+        cells = ''.join('<div role="link" draggable="false">8:00 PM</div>' for _ in days)
+        await self.page.set_content('<h1>Planner</h1><h1>Sep - Oct</h1><h1>2026</h1>'
+                                    '<section>' + headers + cells + '</section>')
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        self.assertEqual(await month.ready_week(self.page, rows, timeout=.3), days)
+
+    async def test_recorded_daily_divs_and_rendering_variants_read_the_same_week(self):
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        days = tuple(row['date'] for row in rows[-7:])
+        for variant in ('recorded', 'uppercase', 'direction_marks', 'hidden_copy', 'caption_dates'):
+            with self.subTest(variant=variant):
+                labels = [f'{label} {day.day}' for label, day in zip(month.WEEKDAYS, days)]
+                if variant == 'direction_marks':
+                    labels = [text.replace(' ', '\u200e\u00a0') for text in labels]
+                headers = '<div id="week-dates">' + ''.join(f'<div><div>{text}</div></div>' for text in labels) + '</div>'
+                extra = ''
+                if variant == 'uppercase':
+                    extra = '<style>#week-dates {text-transform:uppercase}</style>'
+                elif variant == 'hidden_copy':
+                    extra = f'<div hidden>{headers}</div><div aria-hidden="true">{headers}</div>'
+                cells = ''.join('<div role="link" draggable="false">' +
+                                (labels[i] if variant == 'caption_dates' else '8:00 PM') + '</div>' for i in range(7))
+                await self.page.set_content('<h1>Sep - Oct</h1><h1>2026</h1>' + headers + cells + extra)
+                self.assertEqual(await month.ready_week(self.page, rows, timeout=.3), days)
+
+    async def test_incomplete_duplicate_or_reordered_visible_week_stays_unresolved(self):
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        correct = ['Sun 27', 'Mon 28', 'Tue 29', 'Wed 30', 'Thu 1', 'Fri 2', 'Sat 3']
+        for labels in (correct[:-1], correct + ['Sun 20'], [correct[1], correct[0], *correct[2:]]):
+            with self.subTest(labels=labels):
+                headers = ''.join(f'<div>{text}</div>' for text in labels)
+                # Hidden content must not fill a missing visible weekday.
+                await self.page.set_content('<h1>Sep - Oct</h1><h1>2026</h1><div>' + headers +
+                    '</div><div hidden>Sat 3</div>' + '<div role="link" draggable="false"></div>' * 7)
+                with self.assertRaises(month.WeekHeaderUnavailable):
+                    await month.ready_week(self.page, rows, timeout=.2)
+
+    async def test_delayed_week_labels_are_waited_for_without_guessing_the_target_week(self):
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        await self.page.set_content('<h1>Sep - Oct</h1><h1>2026</h1><div id="dates"></div>' +
+                                    '<div role="link" draggable="false"></div>' * 7)
+        async def render():
+            await asyncio.sleep(.2)
+            await self.page.locator('#dates').evaluate('''n => n.innerHTML=
+              ['Sun 20','Mon 21','Tue 22','Wed 23','Thu 24','Fri 25','Sat 26'].map(s=>'<div>'+s+'</div>').join('')''')
+        render_task = asyncio.create_task(render())
+        try:
+            self.assertEqual(await month.ready_week(self.page, rows, timeout=2), tuple(row['date'] for row in rows[-14:-7]))
+        finally:
+            await render_task
+
+    async def test_week_header_failure_preserves_date_diagnostics_without_reloading_or_private_text(self):
+        rows = [{'date': day} for day in calendar.Calendar(firstweekday=6).itermonthdates(2026, 9)]
+        await self.page.set_content('<h1>Sep - Oct</h1><h1>2026</h1><div>Sun 27</div>'
+            '<div role="link" draggable="false">private caption with Sun 27</div>')
+        async def broken_read(*args, **kwargs):
+            return await month.ready_week(self.page, rows, timeout=.2)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month, '_read_once', AsyncMock(side_effect=broken_read)) as reader:
+            with self.assertRaisesRegex(month.WeekHeaderUnavailable, 'planner_diagnostics'):
+                await month.read(self.page, ui_timezone='Asia/Shanghai', business_timezone='Asia/Shanghai')
+            reader.assert_awaited_once()
+            evidence = list((Path(folder) / 'planner_diagnostics').glob('*.json'))
+            self.assertEqual(len(evidence), 1)
+            saved = json.loads(evidence[0].read_text('utf-8'))
+            failure = saved['failures'][0]
+            self.assertEqual(failure['phase'], 'week_header')
+            self.assertEqual(failure['date_labels'], [{'weekday': 'Sun', 'day': 27}])
+            self.assertFalse(saved['recovered'])
+            self.assertNotIn('private caption', json.dumps(saved))
 
     async def test_unrecorded_link_is_not_silently_skipped(self):
         await self.page.get_by_role('link', name='+ 1 more', exact=True).evaluate("el=>el.textContent='Other action'")

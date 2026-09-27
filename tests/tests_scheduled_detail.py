@@ -45,9 +45,11 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             + '<script>document.onkeydown=e=>{if(e.key==="Escape")document.querySelector("[role=dialog]").hidden=true}</script>')
 
     async def read(self, observer, card=None):
+        # Two real Chromium sweeps of 35 cells can exceed 1.5s on Windows;
+        # these cases verify identity and observation, not grid performance.
         with patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')):
             return await month.read_scheduled_target(self.page, card or self.card,
-                ui_timezone='Asia/Shanghai', card_spec=SPEC, timeout=1.5, observe_detail=observer)
+                ui_timezone='Asia/Shanghai', card_spec=SPEC, timeout=5, observe_detail=observer)
 
     async def mount_time_only(self, *, changed_clock=False, truncate=False):
         # Structure from the 2026-09-25 service Post details accessibility snapshot.
@@ -77,7 +79,7 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
                 patch.object(month.bs, 'require_readback_evidence', return_value=SPEC):
             return await month.read(self.page, ui_timezone='Asia/Shanghai',
-                business_timezone='Asia/Shanghai', timeout=1.5, detail_range=(self.when, self.when))
+                business_timezone='Asia/Shanghai', timeout=5, detail_range=(self.when, self.when))
 
     async def test_time_only_card_expands_its_own_preview_and_reads_full_caption(self):
         await self.mount_time_only()
@@ -143,6 +145,30 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
         await self.page.goto('https://business.facebook.com/latest/content_calendar')
         with self.assertRaisesRegex(bs.PlannerNavigationError, '离开了月历'):
             await bs._open_channel_dialogs(self.page, self.page.get_by_role('link'), SPEC, timeout=2)
+
+    async def test_successful_close_cannot_return_ids_from_a_composer_without_grid_restoration(self):
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body='''<button onclick="document.querySelector('[role=dialog]').hidden=false">Open</button>
+              <div role="dialog" aria-label="Post details" hidden>ID: 1099867215965804 Instagram feed neakasa.de
+              <button onclick="history.pushState({},'', '/latest/composer/');document.body.innerHTML='<h1>Create post</h1>'">Close</button></div>'''))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar')
+        with self.assertRaises(bs.PlannerNavigationError) as failed:
+            await bs._open_channel_dialogs(self.page, self.page.get_by_role('button', name='Open'), SPEC, timeout=1)
+        self.assertEqual(failed.exception.diagnostic, {'phase': 'after_detail_close', 'surface': 'composer'})
+
+    async def test_navigation_during_detail_observation_does_not_run_restore_or_confirm_ids(self):
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body='<html></html>'))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar')
+        await self.mount()
+        async def observe(dialog, ids):
+            await self.page.evaluate("history.pushState({},'', '/latest/composer/');document.body.innerHTML='<h1>Create post</h1>'")
+        restore = AsyncMock()
+        with self.assertRaises(bs.PlannerNavigationError) as failed:
+            await bs._open_channel_dialogs(self.page, self.page.locator('[draggable=false] a'), SPEC,
+                timeout=1, observe_detail=observe, restore_calendar=restore)
+        self.assertEqual(failed.exception.diagnostic['phase'], 'reading_detail')
+        restore.assert_not_awaited()
 
     async def test_two_time_only_posts_on_one_day_keep_separate_details_and_identity(self):
         await self.mount_time_only()
@@ -260,7 +286,7 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(month, 'read_item', service_failure), \
                 patch.object(bs, '_readback_screenshot', AsyncMock(return_value='')):
             result = await month_readback.verify(self.page, self.when, CAPTION,
-                ui_timezone='Asia/Shanghai', target_channels=('facebook',), timeout=1.5)
+                ui_timezone='Asia/Shanghai', target_channels=('facebook',), timeout=5)
         self.assertTrue(result.found, result.error)
         self.assertEqual(result.remote_id, 'facebook=123456789')
         diagnostic, = result.diagnostics['inventory_diagnostics']

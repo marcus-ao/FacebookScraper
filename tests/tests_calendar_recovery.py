@@ -108,6 +108,17 @@ class CalendarRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.visits), 1)
         self.assertFalse((self.state / 'planner_diagnostics').exists())
 
+    async def test_month_control_cannot_change_the_bound_asset_before_reading(self):
+        await self.serve(self.html + '''<script>
+          document.querySelector('button').onclick=()=>history.pushState({},'',
+            '/latest/content_calendar?asset_id=999999999999&business_id=555666777888');
+        </script>''')
+        with self.assertRaises(month.bs.PlannerNavigationError) as failed:
+            await self.read()
+        self.assertEqual(failed.exception.diagnostic, {'phase': 'calendar_prepared', 'surface': 'other'})
+        self.assertEqual(len(self.visits), 1)
+        self.assertFalse(self.diagnostic()['recovered'])
+
     async def test_final_sweep_failure_discards_the_first_read_including_its_cards(self):
         card = '<div role="link">5:30 PM</div>'
         html = ('>30' + card + '</div>').join(self.html.rsplit('>30</div>', 1))
