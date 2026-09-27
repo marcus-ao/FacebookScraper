@@ -44,7 +44,7 @@ class IndexDatabaseTests(unittest.TestCase):
             self.assertEqual(database.read_bytes(), before)
             self.assertEqual(index_db.query_posts(database), original)
 
-    def test_v2_schema_projects_structured_rows_ordered_tags_and_physical_media(self):
+    def test_v3_schema_projects_structured_rows_post_type_ordered_tags_and_physical_media(self):
         """Dropping a structured field or relation row must make the raw archive index incomplete."""
         from core import index_db
         with tempfile.TemporaryDirectory() as temporary:
@@ -85,15 +85,21 @@ class IndexDatabaseTests(unittest.TestCase):
 
             self.assertEqual(index_db.rebuild_index(root / "archive", database, include_frozen=True), 2)
             with closing(sqlite3.connect(database)) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
                 self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0].lower(), "delete")
                 post_columns = {row[1] for row in connection.execute("PRAGMA table_info(posts)")}
                 self.assertTrue({
                     "task_id", "account_dir", "platform", "post_id", "account", "owner",
                     "coauthors_json", "created_at", "archived_at", "permalink", "text",
                     "source_route", "month", "primary_tag", "archive_relpath", "folder_name",
-                    "media_complete", "status", "row_json",
+                    "media_complete", "status", "row_json", "display_month", "post_type",
                 }.issubset(post_columns))
+                # 来源媒体不完整的帖进“类型待核对”，无媒体的正文帖是纯文字（H50/H53）。
+                self.assertEqual(connection.execute(
+                    "SELECT task_id, post_type FROM posts ORDER BY task_id").fetchall(), [
+                    ("fa_neakasaofficial/same-id", "text_only"),
+                    ("in_neakasa.global/same-id", "pending"),
+                ])
                 posts = connection.execute(
                     "SELECT task_id, platform, post_id, owner, coauthors_json, archived_at, text, "
                     "source_route, month, primary_tag, archive_relpath, folder_name, media_complete "

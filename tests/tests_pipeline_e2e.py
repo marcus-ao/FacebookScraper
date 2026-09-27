@@ -131,6 +131,33 @@ class StageRunner:
         return 0
 
 
+def business_review(archive: Path, task_id: str) -> None:
+    """业务在详情页做的三件事：确认标签、正文和每张图。走与页面相同的写入路径。"""
+    from web.api import reader, writer
+    saved = config_module._cfg
+    config_module._cfg = ArchiveOverride(saved, archive)
+    try:
+        detail = reader.task_detail(task_id)
+        draft = detail["localization"]
+        digest = detail["text"]["source_text_sha256"]
+        fields = {key: draft[key] for key in ("body_de", "tags", "links", "ig_cta", "links_confirmed")}
+        writer.save_localization(task_id, dict(fields, hashtags_confirmed=True),
+            source_text_sha256=digest, human_revision=detail["text"]["human_revision"],
+            review_revision=detail["review"]["revision"], localization_revision=draft["revision"],
+            confirmation_only=True)
+        detail = reader.task_detail(task_id)
+        writer.confirm_content(task_id, "body", confirmed=True, source_text_sha256=digest,
+            review_revision=detail["review"]["revision"],
+            content_version=detail["content_review"]["body"]["version"])
+        for index in range(len(detail["content_review"]["images"])):
+            detail = reader.task_detail(task_id)
+            writer.confirm_content(task_id, "image", index=index, confirmed=True,
+                source_text_sha256=digest, review_revision=detail["review"]["revision"],
+                content_version=detail["content_review"]["images"][index]["version"])
+    finally:
+        config_module._cfg = saved
+
+
 print("[1] 造一份真实形态的临时归档，整条链在它上面跑")
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
@@ -176,6 +203,26 @@ with tempfile.TemporaryDirectory() as folder:
           "两篇都真的走了调图流程")
 
     items = A.latest_human_items(state)
+    waiting = [item for item in items.values() if item.get("status") == "open"]
+    check(len(waiting) == 2 and all(item.get("kind") == "offline_gate"
+                                    and "话题标签" in item.get("summary", "") for item in waiting),
+          "机器初稿和德语图齐了也不会自己变成可发布：标签由业务决定（D21），两篇都停在待人工")
+
+    print("\n[1b] 业务确认标签、正文和每张图后再跑，才进入 ready")
+    business_review(archive, "fa_neakasaofficial/e2e-fb")
+    business_review(archive, "in_neakasa.global/e2e-ig")
+    reviewed = StageRunner(archive)
+    try:
+        A.cfg = lambda: ArchiveOverride(original_cfg(), archive)
+        code_reviewed = A.run(account_dirs=[fb, ig], state_dir=state,
+                              settings=settings, now=now, runner=reviewed,
+                              report=lambda _message: None)
+    finally:
+        A.cfg = original_cfg
+    check(code_reviewed == 0 and not [call for call in reviewed.calls
+                                      if call[0] in {"translate", "image"}],
+          "确认后重跑不再付费：人工确认不会让译文或德语图显得过期")
+    items = A.latest_human_items(state)
     ready = [item for item in items.values()
              if item.get("kind") == "ready_to_publish"
              and item.get("status") == "open"]
@@ -183,7 +230,7 @@ with tempfile.TemporaryDirectory() as folder:
              if item.get("kind") not in {"ready_to_publish"}
              and item.get("status") == "open"]
     check(len(ready) == 2 and not gates,
-          "**翻译+调图 → 离线硬闸 → ready_to_publish 这一段真的通了**"
+          "**翻译+调图 → 业务确认 → 离线硬闸 → ready_to_publish 这一段真的通了**"
           "（此前从没有断言覆盖过；实得 ready=%d 其它=%s）"
           % (len(ready), [
               "%s: %s" % (item.get("kind"), item.get("summary"))
@@ -258,7 +305,8 @@ with tempfile.TemporaryDirectory() as folder:
           "批准前和远端占位后都通过真实时间闸，顺延槽位使用同一注入时钟")
 
     print("\n[3] 硬闸仍然拦得住：正文被改脏之后 ready 立刻消失")
-    dirty = ig / "translated.jsonl"
+    # 业务确认后生效的是人工译文；绕过保存入口直接改它，确认记录就对不上了。
+    dirty = ig / "translated_human.jsonl"
     rows = [json.loads(line) for line in
             dirty.read_text(encoding="utf-8").splitlines() if line.strip()]
     rows[-1]["text_de"] = "Deutscher Text ohne Hashtag."      # 抹掉 #Neabot

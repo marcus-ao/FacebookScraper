@@ -26,7 +26,8 @@ class RecheckTests(unittest.IsolatedAsyncioTestCase):
         snapshots.bind_schedule(self.f.frozen.snapshot_id, self.f.frozen.scheduled_at,
                                 target=manual_run.load('facebook').target())
         locked = review.transition(self.host.account, self.host.source, 'content_locked',
-            expected_revision=None, expected_source_sha256=self.host.params['source_text_sha256'],
+            expected_revision=self.host.params['review_revision'],
+            expected_source_sha256=self.host.params['source_text_sha256'],
             snapshot_id=self.f.frozen.snapshot_id)
         review.transition(self.host.account, self.host.source, 'approved',
             expected_revision=locked['revision'], expected_source_sha256=self.host.params['source_text_sha256'])

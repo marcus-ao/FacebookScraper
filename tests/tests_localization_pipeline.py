@@ -52,7 +52,8 @@ class LocalizationPipelineTests(unittest.TestCase):
         cfg()._d['publish']['link_map'] = {source_url: 'https://de.example/produkt'}
         with self.assertRaisesRegex(compose.ComposeError, '请确认本篇的链接'):
             build()
-        self.assertEqual(self.fixture.save_localization(links_confirmed=True).status_code, 200)
+        # 品牌标签也要人工确认（D21）；这条用例只看链接映射，标签按原样一并确认。
+        self.assertEqual(self.fixture.save_localization(links_confirmed=True, hashtags_confirmed=True).status_code, 200)
         post = build()
         self.assertIn('https://de.example/produkt', post.text_de)
         self.assertNotIn(source_url, post.text_de)

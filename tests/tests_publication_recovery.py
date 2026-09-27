@@ -22,7 +22,8 @@ class PublicationRecoveryTests(unittest.TestCase):
     def approved_state(self, snapshot_id):
         """排期前必须先「编辑确认无误」；这里把两步一起做到 approved。"""
         locked = review.transition(self.f.account, self.f.source, 'content_locked',
-            expected_revision=None, expected_source_sha256=self.f.params['source_text_sha256'],
+            expected_revision=self.f.params['review_revision'],
+            expected_source_sha256=self.f.params['source_text_sha256'],
             snapshot_id=snapshot_id)
         return review.transition(self.f.account, self.f.source, 'approved',
             expected_revision=locked['revision'],

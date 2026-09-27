@@ -75,18 +75,18 @@ class QueryIndexTests(unittest.TestCase):
         self.assertEqual(query_index.candidates(tag='__untagged__', now=self.now)['task_ids'], ['in_neakasa.global/2'])
 
     def test_history_month_follows_displayed_date_not_archive_folder(self):
-        """历史月份筛选与行内日期一致：归档目录按北京时刻换算，可能与原帖日期跨月。"""
+        """历史月份筛选与行内日期一致：两者都按业务时钟换算，月底 UTC 深夜的帖子算下个月。"""
         late = store.Post('late', 'instagram', 'neakasa.global', 'Late', '2026-08-31T22:30:00Z', tags=[])
         nodate = store.Post('nodate', 'instagram', 'neakasa.global', 'NoDate', '', tags=[])
         self.arc.append(late)
         self.arc.append(nodate)
-        # 北京时刻已是 9 月 1 日清晨，归档目录落进 2026-09；行内日期仍是 8 月 31 日。
+        # 业务时钟已是 9 月 1 日清晨：归档目录落进 2026-09，页面行内日期也显示 9/1。
         self.assertTrue(self.arc.post_dir(late).name.startswith('2026-09'))
         august = query_index.history_page(month='2026-08', now=self.now)
-        self.assertEqual([row['id'] for row in august['rows']],
-                         ['in_neakasa.global/late', 'in_neakasa.global/2'])
+        self.assertEqual([row['id'] for row in august['rows']], ['in_neakasa.global/2'])
         september = query_index.history_page(month='2026-09', now=self.now)
-        self.assertEqual([row['id'] for row in september['rows']], ['in_neakasa.global/1'])
+        self.assertEqual([row['id'] for row in september['rows']],
+                         ['in_neakasa.global/1', 'in_neakasa.global/late'])
         undated = query_index.history_page(month='undated', now=self.now)
         self.assertEqual([row['id'] for row in undated['rows']], ['in_neakasa.global/nodate'])
         self.assertEqual(query_index.history_page(now=self.now)['months'], ['2026-09', '2026-08', 'undated'])
@@ -301,7 +301,7 @@ class QueryIndexTests(unittest.TestCase):
         self.assertEqual(metadata.read_bytes(), metadata_before)
         self.assertEqual(list(database.parent.glob('*.candidate.sqlite')), [])
 
-    def test_old_schema_is_rebuilt_and_metadata_records_v2(self):
+    def test_old_schema_is_rebuilt_and_metadata_records_v3(self):
         query_index.candidates(now=self.now)
         database = self.root / 'state' / 'index.sqlite'
         with closing(sqlite3.connect(database)) as connection:
@@ -310,9 +310,9 @@ class QueryIndexTests(unittest.TestCase):
         result = query_index.candidates(now=self.now + timedelta(seconds=1))
         self.assertFalse(result['index']['stale'])
         with closing(sqlite3.connect(database)) as connection:
-            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 3)
         metadata = json.loads((self.root / 'state' / 'index.meta.json').read_text(encoding='utf-8'))
-        self.assertEqual(metadata['schema_version'], 2)
+        self.assertEqual(metadata['schema_version'], 3)
 
 
 if __name__ == '__main__':

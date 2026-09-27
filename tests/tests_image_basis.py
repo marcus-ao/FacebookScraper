@@ -27,6 +27,8 @@ class ImageBasisTests(unittest.TestCase):
         self.text = "Ein sauberes Zuhause. #Neakasa"
 
     def compose(self):
+        # 所有拟发布标签都由人决定（D21），只带品牌标签也要确认；这组用例只看图片。
+        self.fx.confirm_ready_localization()
         return compose.compose_post(
             self.fx.post_id, datetime.now(timezone.utc), archive_root=cfg().archive_dir,
             account=self.fx.account.name, warning_sink=None)
@@ -63,7 +65,8 @@ class ImageBasisTests(unittest.TestCase):
         forced, _, _ = images.build_jobs(
             images.Settings(), self.fx.account, [self.fx.source], force=True,
             allow_manual_refine=True)
-        self.assertEqual(forced[0].text_de, "Von Hand bewahrt. #Neakasa")
+        # 仍是人工文案而不是未采用的候选；确认标签后按服务端渲染，标签移到文末。
+        self.assertEqual(forced[0].text_de, "Von Hand bewahrt.\n\n#Neakasa")
 
     def test_reselected_image_and_history_remain_usable_after_text_candidate(self):
         expected = self.fx.write_generated_image(self.text)

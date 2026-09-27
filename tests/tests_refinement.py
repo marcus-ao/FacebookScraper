@@ -154,6 +154,8 @@ class RefinementTests(unittest.TestCase):
         pairs = images.review_image_pairs(self.account, self.source,
             translated.image_translation(self.source, machine, human))
         self.assertEqual(self.account / pairs[0].localized_rel, output)
+        # 所有拟发布标签都由人决定（D21），只带品牌标签也要先确认；这里只看组装选中的图片。
+        self.fixture.confirm_ready_localization()
         post = compose.compose_post(self.source['post_id'], datetime.now(timezone.utc),
                                     archive_root=cfg().archive_dir, account=self.account.name,
                                     warning_sink=None)

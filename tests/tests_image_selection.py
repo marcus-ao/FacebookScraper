@@ -36,6 +36,8 @@ class ImageSelectionTests(unittest.TestCase):
 
     def test_confirmed_original_is_previewed_composed_exported_and_never_generated(self):
         self.fx.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        # 所有拟发布标签都由人决定（D21），只带品牌标签也要先确认；这组用例只看图片。
+        self.fx.confirm_ready_localization()
         before = (self.fx.account / 'images_de.jsonl').read_bytes()
         response = self.select()
         self.assertEqual(response.status_code, 200, response.text)
@@ -67,6 +69,9 @@ class ImageSelectionTests(unittest.TestCase):
         self.assertEqual(event['status'], 'edited')
         self.assertEqual(event['action'], 'image_selected')
         self.assertIsNone(event['actor'])
+        # 冻结要求正文和每张图都有当前的人工确认；这里的选原图没有顺带确认。
+        self.fx.confirm_ready_content()
+        detail = self.fx.client.get(self.fx.url).json()
         locked = approval.lock(self.fx.account, self.fx.source,
             source_text_sha256=detail['text']['source_text_sha256'],
             review_revision=detail['review']['revision'],
@@ -116,6 +121,8 @@ class ImageSelectionTests(unittest.TestCase):
         localized = self.fx.post_dir / 'media_de'
         localized.mkdir()
         Image.new('RGB', (1080, 1080), 'green').save(localized / '02.png')
+        # 所有拟发布标签都由人决定（D21），只带品牌标签也要先确认；这组用例只看图片。
+        self.fx.confirm_ready_localization()
         post = compose.compose_post(self.fx.post_id, datetime.now(timezone.utc),
             archive_root=cfg().archive_dir, account=self.fx.account.name, warning_sink=None)
         self.assertEqual(post.image_sources, ('original_confirmed', 'media_de'))
@@ -172,6 +179,8 @@ class ImageSelectionTests(unittest.TestCase):
         self.assertFalse(detail['images'][0]['ready'])
         with self.assertRaisesRegex(ValueError, '多个.*人工'):
             images.build_jobs(images.Settings(), self.fx.account, [self.fx.source])
+        # 所有拟发布标签都由人决定（D21），只带品牌标签也要先确认；这组用例只看图片。
+        self.fx.confirm_ready_localization()
         with self.assertRaisesRegex(compose.ComposeError, '多个.*人工'):
             compose.compose_post(self.fx.post_id, datetime.now(timezone.utc),
                 archive_root=cfg().archive_dir, account=self.fx.account.name, warning_sink=None)
