@@ -278,6 +278,107 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('preview_caption', failure.exception.missing_fields)
         self.assertEqual(await self.page.get_by_role('dialog').count(), 0)
 
+    async def test_week_card_reordering_between_read_and_click_cannot_open_composer(self):
+        entries = await self.mount_week_view()
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.get_by_role('button', name='Right').click()
+        days = tuple(date(2026, 9, day) for day in (27, 28, 29, 30)) + tuple(
+            date(2026, 10, day) for day in (1, 2, 3))
+        row = (await month.read_days(self.page, days, timeout=5, week=True))[3]
+        item = row['items'][1]
+        original = month.bs._open_channel_dialogs
+
+        async def insert_before_click(page, node, spec, **kwargs):
+            await page.evaluate('''() => {
+              const target=document.querySelector('[data-item="1"]');
+              const decoy=document.createElement('div');
+              decoy.setAttribute('role','link');
+              decoy.innerHTML='8:00 PM<img alt="Instagram">';
+              decoy.onclick=()=>{
+                history.pushState({},'', '/latest/composer/');
+                document.body.innerHTML='<h1>Create post</h1>';
+              };
+              target.parentElement.insertBefore(decoy,target);
+            }''')
+            return await original(page, node, spec, **kwargs)
+
+        with patch.object(month.bs, '_open_channel_dialogs', insert_before_click):
+            result = await month.read_item(self.page, row, item, timeout=5, card_spec=SPEC)
+        self.assertEqual(result['remote_ids'], {'instagram': entries[1]['id']})
+        self.assertNotIn('/latest/composer/', self.page.url)
+        self.assertEqual(await self.page.evaluate('opened'), [entries[1]['id']])
+
+    async def test_opening_detail_composer_recovers_original_week_and_retries_once(self):
+        await self.mount_week_view()
+        html = self.week_html.replace(
+            "document.querySelectorAll('[data-item]').forEach(n=>n.onclick=e=>{",
+            """document.querySelectorAll('[data-item]').forEach(n=>n.onclick=e=>{
+              if(n.dataset.item==='1' && !sessionStorage.getItem('opened_ig_once')) {
+                e.stopPropagation();sessionStorage.setItem('opened_ig_once','1');
+                history.pushState({},'', '/latest/composer/?asset_id=111222333444');
+                document.body.innerHTML='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"><button>Save</button><button>Schedule</button></div>';
+                return;
+              }
+            """, 1) + '''<script>document.addEventListener('keydown',e=>{
+              const n=e.target.closest('[data-item]');
+              if(n && e.key==='Enter') {
+                e.preventDefault();
+                sessionStorage.setItem('keyboard_open', '1');
+                n.click();
+              }
+            });</script>'''
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
+            inv = await self.inventory()
+            self.assertEqual(inv.diagnostics, ())
+            self.assertEqual([dict(c.remote_ids)[c.channels[0]] for c in inv.cards],
+                             ['1884787296017457', '1099867215965804', '1084557747316275'])
+            self.assertEqual(await self.page.evaluate('opened'),
+                             ['1099867215965804', '1084557747316275'])
+            self.assertEqual(await self.page.evaluate("sessionStorage.getItem('opened_ig_once')"), '1')
+            self.assertEqual(await self.page.evaluate("sessionStorage.getItem('keyboard_open')"), '1')
+            self.assertEqual(await self.page.evaluate('writes'), [])
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 1)
+            self.assertTrue(saved[0]['recovered'])
+            self.assertEqual(saved[0]['failures'][0]['phase'], 'opening_detail')
+
+    async def test_opening_detail_stops_after_second_composer_navigation(self):
+        await self.mount_week_view()
+        html = self.week_html.replace(
+            "document.querySelectorAll('[data-item]').forEach(n=>n.onclick=e=>{",
+            """document.querySelectorAll('[data-item]').forEach(n=>n.onclick=e=>{
+              if(n.dataset.item==='1') {
+                e.stopPropagation();
+                sessionStorage.setItem('ig_open_count',
+                  String(Number(sessionStorage.getItem('ig_open_count')||0)+1));
+                history.pushState({},'', '/latest/composer/?asset_id=111222333444');
+                document.body.innerHTML='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"><button>Save</button><button>Schedule</button></div>';
+                return;
+              }
+            """, 1) + '''<script>document.addEventListener('keydown',e=>{
+              const n=e.target.closest('[data-item]');
+              if(n && e.key==='Enter') {e.preventDefault();n.click()}
+            });</script>'''
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
+            with self.assertRaises(month.bs.PlannerNavigationError):
+                await self.inventory()
+            self.assertEqual(await self.page.evaluate("sessionStorage.getItem('ig_open_count')"), '2')
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 2)
+            final = next(record for record in saved if not record['recovered'])
+            self.assertEqual(final['failures'][0]['phase'], 'opening_detail')
+            self.assertEqual(final['failures'][0]['activation'], 'keyboard_retry')
+            self.assertEqual(final['failures'][0]['time'], '8:00 PM')
+            self.assertEqual(final['failures'][0]['view'], 'week')
+
     async def test_week_recommendation_is_not_an_eighth_day_or_a_post(self):
         await self.mount_week_view()
         inv = await self.inventory(whole_month=True)

@@ -467,6 +467,7 @@ async def recommendation_state(page, item, *, timeout=1.5):
 
 async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=None, restore_calendar=None):
     stage = 'item_ready'
+    node = None
     try:
         ready = await ready_item(page, row, item, timeout=timeout, card_spec=card_spec)
         if ready is None:
@@ -475,7 +476,11 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=
         stage = 'published_detail' if item['href'] else 'scheduled_detail'
         return await read_item_detail(page, row, item, node, raw, timeout=timeout, ui_timezone=ui_timezone,
                                       card_spec=card_spec, restore_calendar=restore_calendar)
-    except (BrowserReadInterrupted, bs.PlannerDialogCloseError, bs.PlannerNavigationError):
+    except bs.PlannerNavigationError as exc:
+        exc.diagnostic.update(date=row['date'].isoformat(), time=item['time'],
+                              item_index=item['index'], view=row.get('view', 'month'))
+        raise
+    except (BrowserReadInterrupted, bs.PlannerDialogCloseError):
         raise
     except Exception as exc:
         raise_if_browser_lost(page, exc)
@@ -486,6 +491,11 @@ async def read_item(page, row, item, *, timeout=30, ui_timezone=None, card_spec=
             await page.mouse.move(0, 0)
         except BrowserError as exc:
             raise_if_browser_lost(page, exc)
+        if node is not None:
+            try:
+                await node.dispose()
+            except BrowserError:
+                pass
 
 
 def raise_if_browser_lost(page, cause):
@@ -567,10 +577,24 @@ async def ready_item(page, row, item, *, timeout, card_spec=None):
         if value != previous:
             previous, stable_since = value, time.monotonic()
         if time.monotonic() - stable_since >= .4:
-            # Hydration is accepted only after checking the original slot identity;
-            # read() compares this refreshed DOM snapshot with the final sweep.
-            item.update(fresh)
-            return node, raw
+            # A Locator with nth(index) resolves again at click time. React can
+            # insert a card between this check and that click, binding the same
+            # locator to a different link (including the day/composer control).
+            # Pin the verified element; a detached handle fails closed.
+            handle = await node.element_handle(timeout=max(1, (deadline - time.monotonic()) * 1000))
+            if handle is None:
+                raise unreadable_item(tooltip)
+            pinned = await handle.evaluate(ITEM_DATA_JS)
+            if not await handle.evaluate('n => n.isConnected'):
+                await handle.dispose()
+                raise bs.PublishStepError('月历条目在打开详情前已被替换，请重新读取')
+            require_same_item(item, pinned)
+            if pinned != fresh:
+                await handle.dispose()
+                previous = None
+                continue
+            item.update(pinned)
+            return handle, raw
         await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
 
 
@@ -587,6 +611,35 @@ def require_same_item(item, fresh):
     current = {' '.join(text.split()) for text in [fresh['text'], fresh['aria'], *fresh['labels']]}
     if not known.issubset(current):
         raise bs.PublishStepError('月历条目已读取的正文发生变化，请重新读取')
+
+
+async def open_scheduled_detail(page, row, item, node, raw, spec, *, timeout, restore_calendar, **kwargs):
+    """Retry one read-only open after restoring the unchanged calendar grid."""
+    try:
+        return await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
+                                              restore_calendar=restore_calendar, **kwargs)
+    except bs.PlannerNavigationError as exc:
+        if (restore_calendar is None or exc.diagnostic.get('phase') != 'opening_detail'
+                or exc.diagnostic.get('surface') != 'composer'):
+            raise
+        await restore_calendar('opening_detail')
+        retry = await ready_item(page, row, item, timeout=timeout, card_spec=spec)
+        if retry is None or retry[1] != raw:
+            raise bs.PublishStepError('恢复月历后原排期条目已变化，本次核对作废')
+        retry_node, _ = retry
+        # The detail ID, channel, account and caption must still pass the normal
+        # observer. A second unintended navigation ends this read.
+        try:
+            return await bs._open_channel_dialogs(page, retry_node, spec, timeout=timeout,
+                                                  restore_calendar=restore_calendar, activation='keyboard', **kwargs)
+        except bs.PlannerNavigationError as retry_error:
+            retry_error.diagnostic['activation'] = 'keyboard_retry'
+            raise
+        finally:
+            try:
+                await retry_node.dispose()
+            except BrowserError:
+                pass
 
 
 async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detail=None, ui_timezone=None,
@@ -657,8 +710,9 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption, timeout=timeout)
 
         # The full caption is bound to this week card and checked by the final grid sweep.
-        ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, observe_detail=observe_week_identity,
-                                            restore_calendar=restore_calendar, allow_preview_text_change=True)
+        ids = await open_scheduled_detail(page, row, item, node, raw, spec, timeout=timeout,
+                                          observe_detail=observe_week_identity, restore_calendar=restore_calendar,
+                                          allow_preview_text_change=True)
         if len(ids) != 1 or {name.lower() for name in item.get('icons', [])} != set(ids):
             raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
         return {'channels': tuple(ids), 'remote_ids': ids, 'accounts': {key: accounts()[key] for key in ids},
@@ -676,7 +730,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             if observe_scheduled is not None:
                 await observe_scheduled(dialog, ids)
 
-        await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
+        await open_scheduled_detail(page, row, item, node, raw, spec, timeout=timeout,
             prepare_detail=prepare_dialog, observe_detail=observe_dialog, restore_calendar=restore_calendar)
         if material is None:
             raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
@@ -698,7 +752,7 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
             await scheduled_details.wait_preview_caption(dialog, ids, accounts(), caption, timeout=timeout)
 
-    remote_ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
+    remote_ids = await open_scheduled_detail(page, row, item, node, raw, spec, timeout=timeout,
         restore_calendar=restore_calendar, observe_detail=observe_known_caption,
         allow_preview_text_change=True)
     if len(remote_ids) != 1:

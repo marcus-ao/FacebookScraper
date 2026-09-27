@@ -1255,7 +1255,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 
 async def _open_channel_dialogs(
         page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
-        restore_calendar=None, allow_preview_text_change=False
+        restore_calendar=None, allow_preview_text_change=False, activation='pointer'
         ) -> dict[str, str]:
     """只读详情身份；用详情自己的 Close 关闭并等它消失，再读下一条。"""
     attrs = spec.attributes
@@ -1269,7 +1269,10 @@ async def _open_channel_dialogs(
     before = _safe_page_url(page)
     phase = 'opening_detail'
     try:
-        await entry.click(timeout=_ms(timeout))
+        if activation == 'keyboard':
+            await entry.press('Enter', timeout=_ms(timeout))
+        else:
+            await entry.click(timeout=_ms(timeout))
     except Exception as exc:                          # noqa: BLE001
         assert_planner_location(page, before, phase=phase)
         raise PublishStepError("点不开日历条目的详情弹窗：%s" % exc) from exc
