@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core import config, review, translated  # noqa: E402
-from core.store import post_dirname  # noqa: E402
+from core.store import post_dirname, primary_tag_folder  # noqa: E402
 from web.api import app as api_app  # noqa: E402
 from localize import images as image_de  # noqa: E402
 
@@ -113,10 +113,10 @@ class WebReviewTests(unittest.TestCase):
         path = self.account / "translated_human.jsonl"
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
-    def write_generated_image(self, text_de):
+    def write_generated_image(self, text_de, color="green"):
         destination = self.post_dir / "media_de" / "01.jpg"
         destination.parent.mkdir(exist_ok=True)
-        Image.new("RGB", (1080, 1080), "green").save(destination)
+        Image.new("RGB", (1080, 1080), color).save(destination)
         generated = destination.read_bytes()
         row = {
             "post_id": self.post_id, "media_index": 0,
@@ -135,11 +135,69 @@ class WebReviewTests(unittest.TestCase):
 
     def confirm_content(self, section, *, confirmed=True, detail=None):
         detail = detail or self.client.get(self.url).json()
+        decisions = detail['content_review']
+        shown = (decisions['body'] if section == 'body'
+                 else decisions['images'][int(section.rsplit('/', 1)[1])])
         return self.client.put(self.url + '/review-confirmations/' + section, json={
             'confirmed': confirmed,
             'source_text_sha256': detail['text']['source_text_sha256'],
             'review_revision': detail['review']['revision'],
+            'content_version': shown['version'],
         })
+
+    def move_to_category_layout(self, tags):
+        """把平铺夹具搬成 posts/<月份>/<分类>/<帖子>，与服务机按月归档的布局一致。"""
+        name = self.post_dir.name
+        old = self.post_dir.relative_to(self.account).as_posix()
+        relative = 'posts/%s/%s/%s' % (name[:7], primary_tag_folder({'tags': tags}), name)
+        target = self.account / relative
+        target.parent.mkdir(parents=True)
+        self.post_dir.rename(target)
+        self.post_dir = target
+        self.source.update(folder_name=name, tags=tags, tags_origin='manual')
+        for item in self.source['media']:
+            item['local_path'] = item['local_path'].replace(old, relative)
+        self.write_source()
+        (self.account / 'manifest.jsonl').write_text(json.dumps(self.source) + '\n', encoding='utf-8')
+
+    def test_confirmation_is_refused_after_unseen_background_content_change(self):
+        self.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        seen = self.client.get(self.url).json()
+        # 后台出图、机器重译都不改审校版本；按页面旧版本确认必须被拒，不能确认一版没看过的内容。
+        self.write_generated_image('Ein sauberes Zuhause. #Neakasa', color='yellow')
+        stale_image = self.confirm_content('images/0', detail=seen)
+        self.assertEqual(stale_image.status_code, 409, stale_image.text)
+        self.write_machine('Ein sauberes Zuhause, neu. #Neakasa')
+        stale_body = self.confirm_content('body', detail=seen)
+        self.assertEqual(stale_body.status_code, 409, stale_body.text)
+        self.assertEqual(review.history(self.account), [])
+        current = self.client.get(self.url).json()
+        missing = self.client.put(self.url + '/review-confirmations/body', json={
+            'confirmed': True, 'source_text_sha256': current['text']['source_text_sha256'],
+            'review_revision': current['review']['revision']})
+        self.assertEqual(missing.status_code, 409, missing.text)
+        confirmed = self.confirm_content('body', detail=current)
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertTrue(confirmed.json()['content_review']['body']['confirmed'])
+
+    def test_category_move_keeps_decisions_and_frozen_post_schedulable(self):
+        self.move_to_category_layout(['M1'])
+        self.confirm_ready_localization()
+        self.write_generated_image('Ein sauberes Zuhause. #Neakasa')
+        self.confirm_ready_content()
+        self.assertEqual(self.lock().status_code, 200)
+        detail = self.client.get(self.url).json()
+        moved = self.client.put(self.url + '/tags', json={
+            'tags': ['P1'], 'tags_revision': detail['tags_revision'],
+            'source_text_sha256': detail['text']['source_text_sha256']})
+        self.assertEqual(moved.status_code, 200, moved.text)
+        self.assertTrue((self.account / 'posts' / self.post_dir.name[:7] / 'P1' / self.post_dir.name).is_dir())
+        after = self.client.get(self.url).json()
+        self.assertTrue(after['content_review']['body']['confirmed'])
+        self.assertEqual([item['confirmed'] for item in after['content_review']['images']], [True])
+        options = self.client.get(self.url + '/approval-options').json()
+        self.assertTrue(options['lockable'], options)
+        self.assertEqual(options['lock_reason'], '')
 
     def test_machine_body_can_be_confirmed_without_an_edit_and_body_change_invalidates_it(self):
         initial = self.client.get(self.url).json()

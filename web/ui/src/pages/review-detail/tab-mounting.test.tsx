@@ -67,7 +67,7 @@ describe('详情步骤按需挂载', () => {
     const machine = { ...detail, localization: { ...detail.localization, body_de: 'Maschinenentwurf' } }
     expect(renderDetail('text', undefined, machine)).toContain('确认当前德语正文')
     const confirmed = { ...machine, content_review: { ...machine.content_review,
-      body: { confirmed: true, confirmed_at: '2026-09-25T00:00:00Z' } } }
+      body: { confirmed: true, confirmed_at: '2026-09-25T00:00:00Z', version: 'b'.repeat(64) } } }
     expect(renderDetail('text', undefined, confirmed)).toContain('当前正文已确认')
   })
 

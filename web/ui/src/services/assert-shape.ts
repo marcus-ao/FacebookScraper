@@ -131,9 +131,10 @@ export const TASK_DETAIL_SHAPE: ShapeSpec = {
   review: shape.object,
   content_review: (value) => isObject(value) && isObject(value.body)
     && shape.boolean(value.body.confirmed) && shape.nullable(shape.string)(value.body.confirmed_at)
+    && shape.nullable(shape.string)(value.body.version)
     && Array.isArray(value.images) && value.images.every((item: unknown) => isObject(item)
       && shape.number(item.index) && shape.boolean(item.confirmed)
-      && shape.nullable(shape.string)(item.confirmed_at)),
+      && shape.nullable(shape.string)(item.confirmed_at) && shape.nullable(shape.string)(item.version)),
   tags: shape.array,
   tags_revision: shape.string,
   localization: shape.object,

@@ -9,7 +9,7 @@
  },
  "platform": "facebook",
  "status": "not_ready",
- "content_review": {"body": {"confirmed": false, "confirmed_at": null}, "images": [{"index": 0, "confirmed": false, "confirmed_at": null}]},
+ "content_review": {"body": {"confirmed": false, "confirmed_at": null, "version": "4f1e5bd9a1c46a3c8f0d0c1f5d8f7fb2a37d0a2c40a11f1f1d1ec9f3a6b8e2d1"}, "images": [{"index": 0, "confirmed": false, "confirmed_at": null, "version": null}]},
  "review": {
   "status": "not_ready",
   "revision": null,

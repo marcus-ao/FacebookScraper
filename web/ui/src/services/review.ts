@@ -38,11 +38,13 @@ export async function downloadPost(detail: TaskDetail): Promise<void> {
       review_revision: detail.review.revision ?? null }), 'post_de.zip'))
 }
 
+// 确认带回页面所见的内容版本：后台出图或重译不改审校版本，服务端据此拒绝确认没看过的一版。
 export async function confirmBody(detail: TaskDetail, confirmed: boolean): Promise<TaskDetail> {
   return request<TaskDetail>(`/api/tasks/${idPath(detail.id)}/review-confirmations/body`, putBody({
     confirmed,
     source_text_sha256: detail.text.source_text_sha256,
     review_revision: detail.review.revision ?? null,
+    content_version: detail.content_review.body.version,
   }))
 }
 
@@ -51,5 +53,6 @@ export async function confirmImage(detail: TaskDetail, index: number, confirmed:
     confirmed,
     source_text_sha256: detail.text.source_text_sha256,
     review_revision: detail.review.revision ?? null,
+    content_version: detail.content_review.images.find(item => item.index === index)?.version ?? null,
   }))
 }

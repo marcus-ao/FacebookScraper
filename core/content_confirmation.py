@@ -40,7 +40,9 @@ def project(events: Sequence[Mapping[str, object]], tokens: Mapping[str, object]
         confirmed = bool(isinstance(current, str) and isinstance(payload, Mapping)
                          and payload.get('confirmed') is True
                          and payload.get('content_token') == current)
-        return {'confirmed': confirmed, 'confirmed_at': saved.get('recorded_at') if confirmed else None}
+        # version 是页面所见内容的不透明版本；确认时原样带回，内容已变则拒绝。
+        return {'confirmed': confirmed, 'confirmed_at': saved.get('recorded_at') if confirmed else None,
+                'version': current if isinstance(current, str) else None}
 
     return {
         'body': decision(body_saved, tokens['body']),

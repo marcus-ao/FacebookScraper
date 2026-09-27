@@ -159,9 +159,13 @@ def select_image(task_id: str, index: int, *, choice: str, source_image_sha256: 
     return _detail(task_id)
 
 
+_UNCHECKED = object()
+
+
 def _record_content_confirmation(session: review.transaction, account_dir, truth: dict,
                                  section: str, index: int | None, confirmed: bool,
-                                 source_text_sha256: str, review_revision: str | None) -> dict:
+                                 source_text_sha256: str, review_revision: str | None,
+                                 expected_version: object = _UNCHECKED) -> dict:
     tokens = content_confirmation.current_tokens(account_dir, truth)
     if section == 'body':
         current = tokens['body']
@@ -179,6 +183,8 @@ def _record_content_confirmation(session: review.transaction, account_dir, truth
         raise review.ReviewValidationError('图片序号无效')
     if confirmed and current is None:
         raise review.ReviewConflict('当前内容尚不能读取，请核对后再确认')
+    if expected_version is not _UNCHECKED and expected_version != current:
+        raise review.ReviewConflict('内容已有更新，请核对最新内容后再确认')
     return session.change(truth, action, expected_revision=review_revision,
                           expected_source_sha256=source_text_sha256,
                           content_confirmation=payload)
@@ -186,7 +192,7 @@ def _record_content_confirmation(session: review.transaction, account_dir, truth
 
 def confirm_content(task_id: str, section: str, *, index: int | None = None,
                     confirmed: bool, source_text_sha256: str,
-                    review_revision: str | None) -> dict:
+                    review_revision: str | None, content_version: object = None) -> dict:
     if type(confirmed) is not bool:
         raise review.ReviewValidationError('请明确是否确认当前内容')
     source = _source(task_id)
@@ -197,8 +203,10 @@ def confirm_content(task_id: str, section: str, *, index: int | None = None,
             expected_source_sha256=source_text_sha256, scheduled=reader.has_schedule(source))
         if state['status'] in review.TERMINAL | review.LOCKED:
             raise review.ReviewConflict('这篇内容已冻结或结束审校，请先解除冻结')
+        # 后台出图或机器重译不改审校版本；确认须带回页面所见的内容版本，不能替业务确认没看过的一版。
         _record_content_confirmation(session, source.account_dir, truth, section, index,
-            confirmed, source_text_sha256, review_revision)
+            confirmed, source_text_sha256, review_revision,
+            expected_version=content_version if confirmed else _UNCHECKED)
     return _detail(task_id)
 
 

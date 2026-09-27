@@ -224,7 +224,7 @@ async def put_body_confirmation(task_id: str, request: Request) -> JSONResponse:
     body = await _json_body(request)
     return JSONResponse(await run_in_threadpool(writer.confirm_content, task_id, 'body',
         confirmed=body.get('confirmed'), source_text_sha256=_source_digest(body),
-        review_revision=_state_revision(body)))
+        review_revision=_state_revision(body), content_version=body.get('content_version')))
 
 
 @app.put('/api/tasks/{task_id:path}/review-confirmations/images/{index}')
@@ -232,7 +232,7 @@ async def put_image_confirmation(task_id: str, index: int, request: Request) -> 
     body = await _json_body(request)
     return JSONResponse(await run_in_threadpool(writer.confirm_content, task_id, 'image',
         index=index, confirmed=body.get('confirmed'), source_text_sha256=_source_digest(body),
-        review_revision=_state_revision(body)))
+        review_revision=_state_revision(body), content_version=body.get('content_version')))
 
 
 @app.put("/api/tasks/{task_id:path}/tags")

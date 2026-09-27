@@ -87,6 +87,7 @@ def current_tokens(account_dir: Path, source: dict, *, events: list[dict] | None
     except (OSError, ValueError, store.ArchivePathError):
         pairs = []
     by_index = {pair.media_index: pair for pair in pairs}
+    directory = store.post_directory(account_dir, source)
     image_tokens = []
     for media_index, item in enumerate(media):
         if not isinstance(item, dict) or item.get('kind') != 'image':
@@ -100,9 +101,12 @@ def current_tokens(account_dir: Path, source: dict, *, events: list[dict] | None
                 byte_digest = images.sha256_file(selected)
                 record = pair.record or {}
                 manual = images.manual_upload_record(selected) if pair.manual else None
+                # 只绑帖子目录内的位置：改商品分类会整体移动帖子目录，不能让图片确认失效。
+                location = (selected.relative_to(directory).as_posix()
+                            if directory in selected.parents else pair.selected_rel)
                 current = decisions.token(
-                    'image-v2', media_index, str(item.get('source_media_id') or ''),
-                    pair.source_sha256, pair.selection, pair.selected_rel, byte_digest,
+                    'image-v3', media_index, str(item.get('source_media_id') or ''),
+                    pair.source_sha256, pair.selection, location, byte_digest,
                     record.get('created_at'), record.get('selected_from'), record.get('refine_id'),
                     (manual or {}).get('replaced_at'), selected.stat().st_mtime_ns,
                     selections.get(media_index),

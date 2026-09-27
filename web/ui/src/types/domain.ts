@@ -380,6 +380,8 @@ export interface TaskDetailText {
 export interface ContentReviewDecision {
   readonly confirmed: boolean
   readonly confirmed_at: string | null
+  /** 当前内容的不透明版本；确认时原样带回，内容不可读时为 null。 */
+  readonly version: string | null
 }
 
 export interface ReviewContentState {

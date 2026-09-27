@@ -144,8 +144,9 @@ describe('GET /api/tasks/{id}（详情）', () => {
     expect(taskDetailActive.read_only).toBe(false)
   })
 
-  it('正文与逐图确认只暴露业务决策，不暴露内容指纹', () => {
+  it('正文与逐图确认只暴露业务决策和不透明版本，不暴露内容指纹组成', () => {
     expect(taskDetailActive.content_review.body.confirmed).toBe(false)
+    expect(taskDetailActive.content_review.body.version).toMatch(/^[0-9a-f]{64}$/)
     expect(taskDetailActive.content_review.images).toHaveLength(taskDetailActive.images.length)
     expect(JSON.stringify(taskDetailActive.content_review)).not.toContain('content_token')
   })

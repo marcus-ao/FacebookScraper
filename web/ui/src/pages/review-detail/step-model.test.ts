@@ -6,7 +6,7 @@ import { defaultStep, deriveSteps } from './step-model'
 const base = fixture as unknown as TaskDetail
 const readyBody = { ...base, localization: { ...base.localization, body_de: 'Geprüfter Text' },
   text: { ...base.text, stale: false },
-  content_review: { ...base.content_review, body: { confirmed: true, confirmed_at: '2026-09-24T00:00:00Z' } } }
+  content_review: { ...base.content_review, body: { confirmed: true, confirmed_at: '2026-09-24T00:00:00Z', version: 'b'.repeat(64) } } }
 
 describe('四步审核状态', () => {
   it('先打开首个未完成步骤，不能把看过图片当成已确认', () => {
@@ -23,7 +23,7 @@ describe('四步审核状态', () => {
 
   it('标签和缺失链接指向第三步，正文版本变化指回第一步', () => {
     const withImage = { ...readyBody, images: [{ ...base.images[0]!, ready: true }],
-      content_review: { ...readyBody.content_review, images: [{ index: 0, confirmed: true, confirmed_at: '2026-09-24T00:00:00Z' }] } }
+      content_review: { ...readyBody.content_review, images: [{ index: 0, confirmed: true, confirmed_at: '2026-09-24T00:00:00Z', version: 'c'.repeat(64) }] } }
     const steps = deriveSteps(withImage)
     expect(defaultStep(withImage)).toBe('localization')
     expect(steps[2]?.todos.some(item => item.text.includes('标签'))).toBe(true)
