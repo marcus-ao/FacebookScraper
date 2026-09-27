@@ -130,6 +130,8 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         <Tooltip title="上一篇"><Button aria-label="上一篇" icon={<LeftOutlined />} disabled={!listLoaded || index <= 0} onClick={() => adjacent(-1)} /></Tooltip>
         <Tooltip title="下一篇"><Button aria-label="下一篇" icon={<RightOutlined />} disabled={!listLoaded || index < 0 || index >= rows.length - 1} onClick={() => adjacent(1)} /></Tooltip></Space>
       <Space className={styles.center ?? ''} size="small"><PlatformLabel platform={detail.platform} /><span className={styles.account}>{detail.meta.account}</span><StatusTag status={detail.status} />
+        {/* 没有编辑入口时要说清原因，否则像是页面坏了。 */}
+        {detail.read_only && <Typography.Text type="secondary">冻结账号的历史归档 · 仅供查阅</Typography.Text>}
         {detail.text.stale && <Typography.Text type="danger">原文已变更，请复核</Typography.Text>}
         {!['skipped', 'handed_off', 'snoozed'].includes(detail.status) && <span className={styles.position}>步骤 {steps.filter(step => step.status === 'complete' || step.status === 'not_required').length} / 4</span>}
       </Space>

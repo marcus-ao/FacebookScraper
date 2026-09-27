@@ -112,6 +112,13 @@ describe('详情步骤按需挂载', () => {
       .not.toContain('暂时不能冻结内容')
   })
 
+  it('冻结账号的历史帖说明只供查阅，而不是只少了编辑按钮', () => {
+    const markup = renderDetail('text', undefined, { ...detail, read_only: true })
+    expect(markup).toContain('冻结账号的历史归档 · 仅供查阅')
+    expect(markup).not.toContain('>编辑德语<')
+    expect(renderDetail('text')).not.toContain('仅供查阅')
+  })
+
   it('归档、索引和云盘事实不进入业务审核画布', () => {
     const markup = renderDetail('text', {
       classified_by: 'manual', account_dir: 'fa_neakasaofficial', folder: 'posts/2026-09/S10/post',
