@@ -383,13 +383,60 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         html += '''<script>
           const priorRender=render;
           render=()=>{priorRender();
-            const card=document.querySelector('[data-item="1"]');if(!card)return;
-            const day=card.closest('[role="link"][draggable="false"]');
+            const cards=[...document.querySelectorAll('[data-item]')];if(!cards.length)return;
+            const day=cards[1].closest('[role="link"][draggable="false"]');
             const key='__reactProps$fixture';
-            card[key]={onClick:card.onclick};
+            cards.forEach(card=>card[key]={onClick:card.onclick});
             day[key]={onClick:e=>{
               history.pushState({},'', '/latest/composer/?asset_id=111222333444');
               document.body.innerHTML='<h1>Create post</h1>';
+            }};
+            day.onclick=e=>day[key].onClick(e);
+          };
+          render();
+        </script>'''
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        when = datetime(2026, 9, 30, 20, tzinfo=ZoneInfo('Asia/Shanghai'))
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC), \
+                patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
+                patch.object(month.bs, '_readback_screenshot', AsyncMock(return_value='')):
+            result = await month_readback.verify(self.page, when, entries[1]['caption'],
+                ui_timezone='Asia/Shanghai', target_channels=('instagram',), timeout=5)
+            self.assertTrue(result.found, result.error)
+            self.assertEqual(result.remote_id, 'instagram=1099867215965804')
+            self.assertEqual(await self.page.evaluate('opened'), [e['id'] for e in entries])
+            self.assertEqual(await self.page.evaluate('writes'), [])
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
+
+    async def test_existing_ig_receipt_reads_the_other_facebook_card_without_day_navigation(self):
+        entries = await self.mount_week_view()
+        html = self.week_html.replace(
+            'e.stopPropagation(); const entry=entries[+n.dataset.item];',
+            "if(n.dataset.item!=='2') e.stopPropagation(); const entry=entries[+n.dataset.item];", 1)
+        html += '''<script>
+          const priorRender=render;
+          render=()=>{priorRender();
+            const cards=[...document.querySelectorAll('[data-item]')];
+            const day=cards[2].closest('[role="link"][draggable="false"]');
+            const key='__reactProps$fixture';
+            const open=cards[2].onclick;
+            cards[2].onclick=e=>{
+              open(e);
+              const caption=document.querySelector('#details article > div');
+              caption.textContent='';
+              setTimeout(()=>caption.textContent=window.entries[2].caption,1100);
+            };
+            cards.forEach(card=>card[key]={onClick:card.onclick});
+            day[key]={onClick:e=>{
+              setTimeout(()=>{
+                history.pushState({},'', '/latest/composer/?asset_id=111222333444');
+                document.body.innerHTML='<h1>Create post</h1>';
+              },600);
             }};
             day.onclick=e=>day[key].onClick(e);
           };

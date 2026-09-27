@@ -631,8 +631,7 @@ def require_same_item(item, fresh):
 
 async def open_scheduled_detail(page, row, item, node, raw, spec, *, timeout, restore_calendar, **kwargs):
     """Retry one read-only open after restoring the unchanged calendar grid."""
-    activation = ('isolated_pointer' if row.get('view') == 'week'
-                  and item.get('icons') == ['Instagram'] else 'pointer')
+    activation = 'isolated_pointer' if row.get('view') == 'week' else 'pointer'
     try:
         return await bs._open_channel_dialogs(page, node, spec, timeout=timeout,
                                               restore_calendar=restore_calendar,
