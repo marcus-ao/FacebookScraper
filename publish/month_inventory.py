@@ -202,6 +202,23 @@ async def read_grid(page, *, timeout=30, phase='grid', calendar_url=None):
         await asyncio.sleep(min(.4, max(0, deadline - time.monotonic())))
 
 
+async def select_month_view(page, *, timeout, calendar_url, phase, verify_grid=True):
+    """Activate the Month button; verify the grid here when no title retry follows."""
+    bs.assert_planner_location(page, calendar_url, phase=phase)
+    if await page.get_by_role('dialog').count():
+        raise bs.PlannerDialogCloseError('排期详情弹窗尚未关闭，不能切换月历视图；请重新核对已有排期。')
+    button = page.get_by_role('button', name='Month', exact=True)
+    await expect(button).to_have_count(1, timeout=timeout * 1000)
+    await expect(button).to_be_visible(timeout=timeout * 1000)
+    await expect(button).to_be_enabled(timeout=timeout * 1000)
+    # Meta can leave a non-dialog overlay over the toolbar after detail close.
+    # Enter activates the button without clicking through the overlay; do not use force=True.
+    await button.press('Enter', timeout=timeout * 1000)
+    bs.assert_planner_location(page, calendar_url, phase=phase)
+    if verify_grid:
+        await ready_grid(page, timeout=timeout, phase=phase, calendar_url=calendar_url)
+
+
 async def read_days(page, dates, *, timeout, week=False):
     deadline = time.monotonic() + max(0, timeout)
     selector = WEEK_DAY_SELECTOR if week else DAY_SELECTOR
@@ -406,8 +423,7 @@ async def detail_grids(page, month_rows, selected_rows, *, timeout, calendar_url
         await restore('after_week_details')
         if rows != await read_week(page, month_rows, timeout=timeout, phase='after_details', calendar_url=calendar_url):
             raise bs.PublishStepError('核对详情期间周视图条目已变化，请重新读取')
-    await page.get_by_role('button', name='Month', exact=True).click(timeout=timeout * 1000)
-    bs.assert_planner_location(page, calendar_url, phase='return_to_month')
+    await select_month_view(page, timeout=timeout, calendar_url=calendar_url, phase='return_to_month')
 
 
 def week_caption(row, item):
@@ -852,7 +868,9 @@ async def open_calendar(page, asset_context, *, timeout=30):
     await bs.assert_page_usable(page)
     if context_ids(page.url) != asset_context:
         raise bs.PublishStepError('月历当前资产与本次发布目标不一致，请核对发布账号')
-    await page.get_by_role('button', name='Month', exact=True).click(timeout=timeout * 1000)
+    # The caller's first read_grid owns the bounded missing-title retry.
+    await select_month_view(page, timeout=timeout, calendar_url=url,
+                            phase='calendar_prepared', verify_grid=False)
     for prefix in ('Content type:', 'Shared to:'):
         control = page.get_by_role('button', name=re.compile('^' + re.escape(prefix)))
         if ' '.join((await control.inner_text()).split()) != prefix + ' all':

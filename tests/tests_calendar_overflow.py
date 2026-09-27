@@ -379,6 +379,60 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(final['failures'][0]['time'], '8:00 PM')
             self.assertEqual(final['failures'][0]['view'], 'week')
 
+    async def test_month_view_returns_after_a_non_dialog_overlay_blocks_pointer(self):
+        await self.mount_week_view()
+        await self.page.evaluate('''() => {
+          const oldRender=render;
+          render=()=>{oldRender();
+            const last=document.querySelector('[data-item="2"]');
+            if(!last)return;
+            const oldOpen=last.onclick;
+            last.onclick=e=>{oldOpen(e);
+              const close=document.querySelector('#close'),oldClose=close.onclick;
+              close.onclick=()=>{oldClose();
+                const button=document.getElementById('monthly');
+                const r=button.getBoundingClientRect();
+                const blocker=document.createElement('div');
+                blocker.id='month-pointer-blocker';
+                blocker.style=`position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;z-index:9999`;
+                document.body.append(blocker);
+              };
+            };
+          };
+        }''')
+        inv = await self.inventory()
+        self.assertEqual(inv.diagnostics, ())
+        self.assertEqual(await self.page.evaluate('mode'), 'month')
+        self.assertEqual(await self.page.locator('#month-pointer-blocker').count(), 1)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_calendar_open_uses_the_month_button_with_a_pointer_overlay(self):
+        await self.mount_week_view()
+        html = self.week_html + '''<script>
+          const blocker=document.createElement('div');blocker.id='month-pointer-blocker';
+          blocker.style='position:fixed;inset:0;z-index:9999';
+          document.body.append(blocker);
+        </script>'''
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=html))
+        await month.open_calendar(self.page, {'asset_id': '111222333444', 'business_id': '555666777888'}, timeout=3)
+        self.assertEqual(await self.page.evaluate('mode'), 'month')
+        self.assertEqual(await self.page.locator('#month-pointer-blocker').count(), 1)
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_month_view_does_not_activate_behind_an_open_detail_dialog(self):
+        await self.mount_week_view()
+        await self.page.get_by_role('button', name='Week').click()
+        await self.page.evaluate('''() => {
+          document.getElementById('details').innerHTML =
+            '<div role="dialog" aria-label="Post details"><button>Publish now</button></div>';
+        }''')
+        with self.assertRaises(month.bs.PlannerDialogCloseError):
+            await month.select_month_view(self.page, timeout=2,
+                calendar_url=self.page.url, phase='return_to_month')
+        self.assertEqual(await self.page.evaluate('mode'), 'week')
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
     async def test_week_recommendation_is_not_an_eighth_day_or_a_post(self):
         await self.mount_week_view()
         inv = await self.inventory(whole_month=True)
