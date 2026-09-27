@@ -118,6 +118,30 @@ class ApprovalTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual(review.latest(self.account)[self.source['post_id']]['status'], 'content_locked')
 
+    def legacy_lock_without_tag_decision(self):
+        """main 时代冻结的帖：只带品牌标签，从没存过标签决定。"""
+        _, _, snapshot = snapshots.freeze(self.post, self.source, scheduled_at=None,
+                                           expected_fingerprint=self.params['content_fingerprint'])
+        review.transition(self.account, self.source, 'content_locked',
+            expected_revision=self.params['review_revision'], expected_source_sha256=self.params['source_text_sha256'],
+            snapshot_id=snapshot.name, now=NOW)
+        (self.account / 'localization.jsonl').unlink()
+
+    def test_legacy_frozen_brand_tags_name_every_missing_decision(self):
+        self.legacy_lock_without_tag_decision()
+        options = approval.options(self.account, self.source, now=NOW)
+        self.assertFalse(options['available'])
+        self.assertEqual(options['lock_reason'],
+                         '请解除冻结，重新核对并确认当前正文、每张图片及标签与链接，然后再次冻结')
+        self.assertEqual(options['reason'], options['lock_reason'])
+
+    def test_legacy_frozen_with_content_confirmed_asks_only_for_tags(self):
+        self.params['review_revision'] = self.confirm_fixture()
+        self.legacy_lock_without_tag_decision()
+        options = approval.options(self.account, self.source, now=NOW)
+        self.assertFalse(options['available'])
+        self.assertEqual(options['lock_reason'], '请解除冻结，确认标签与链接后再次冻结')
+
     def test_missing_asset_record_means_zero_remote_reads(self):
         (config.cfg().state_dir / channel_evidence.FILENAME).unlink()
         reader, execute = AsyncMock(), AsyncMock()

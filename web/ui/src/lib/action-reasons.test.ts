@@ -30,6 +30,8 @@ describe('冻结与选时的阻断原因只给业务下一步', () => {
   it('服务端已是业务话术时原样显示；技术原因换成通用说明', () => {
     expect(approvalBlockNotice('请先核对并确认第 2 张图片')).toBe('请先核对并确认第 2 张图片')
     expect(approvalBlockNotice('本月已经没有可选择的发布时间')).toBe('本月已经没有可选择的发布时间')
+    // 旧冻结帖缺什么说什么；只缺标签时不能被归成“正文和图片”。
+    expect(approvalBlockNotice('请解除冻结，确认标签与链接后再次冻结')).toBe('请解除冻结，确认标签与链接后再次冻结')
     expect(approvalBlockNotice('排期早于 G1 实测 UI 下限（state/probe.json）')).not.toContain('probe')
     expect(approvalBlockNotice('')).toBe('')
   })

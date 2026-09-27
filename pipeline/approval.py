@@ -74,7 +74,7 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
     state = review.latest(account_dir).get(source['post_id'])
     if state and state.get('status') == 'content_locked':
         if not result['lockable']:
-            result['lock_reason'] = '请解除冻结、重新核对并确认当前正文和每张图片，然后再次冻结'
+            result['lock_reason'] = _relock_reason(account_dir, source, result['lock_reason'])
             result['reason'] = result['lock_reason']
         try:
             result['preview'] = _preview(account_dir, source, state)
@@ -83,6 +83,21 @@ def options(account_dir: Path, indexed: dict, *, now=None) -> dict:
             result['available'] = False
             result['reason'] = str(exc)
     return result
+
+
+def _relock_reason(account_dir: Path, source: dict, blocked: str) -> str:
+    """旧冻结缺什么说什么：只提正文和图片，业务照做完再冻结才发现标签也要确认。"""
+    tags = compose.platform_text_unready(blocked)
+    try:
+        content_confirmation.require_current(account_dir, source)
+        content = False
+    except review.ReviewConflict:
+        content = True
+    if tags and not content:
+        return '请解除冻结，确认标签与链接后再次冻结'
+    if tags:
+        return '请解除冻结，重新核对并确认当前正文、每张图片及标签与链接，然后再次冻结'
+    return '请解除冻结、重新核对并确认当前正文和每张图片，然后再次冻结'
 
 
 def lock(account_dir: Path, indexed: dict, *, source_text_sha256: str,
