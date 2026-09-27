@@ -13,6 +13,7 @@ import { PostTable } from '@/features/post-list/PostTable'
 import type { HistoryListItem } from '@/types/domain'
 import { idPath } from '@/services/http'
 import { formatDate } from '@/lib/format'
+import { businessNotice } from '@/lib/action-reasons'
 import styles from '@/features/post-list/PostTable.module.css'
 
 export function HistoryPage() {
@@ -66,7 +67,8 @@ export function HistoryPage() {
       <div className={styles.toolbar}><ListFilters filters={filters} months={query.data?.summary.months ?? []}
         tags={query.data?.summary.tags ?? []} onChange={change} postTypeFilter /></div>
     </div>
-    {query.error && <Alert type="error" showIcon title="暂时无法读取历史归档" description={query.error.message}
+    {query.error && <Alert type="error" showIcon title="暂时无法读取历史归档"
+      description={businessNotice(query.error.message, '请点重试；仍无法读取请联系维护人员。')}
       action={<Button onClick={()=>void query.refetch()}>重试</Button>} />}
     {query.data?.index.stale && <Alert type="warning" banner title="列表更新暂有延迟，当前已从归档重新读取。" />}
     <PostTable rows={[...(query.data?.tasks ?? [])]} columns={columns} loading={query.isFetching} href={href}

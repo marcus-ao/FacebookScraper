@@ -9,6 +9,7 @@ import { filterReviewRows, queueCounts } from '@/features/post-list/model'
 import { ListFilters } from '@/features/post-list/ListFilters'
 import { PostTable } from '@/features/post-list/PostTable'
 import { ReviewActions } from '@/features/review-actions/ReviewActions'
+import { businessNotice } from '@/lib/action-reasons'
 import type { Platform, ReviewListItem } from '@/types/domain'
 import { idPath } from '@/services/http'
 import styles from '@/features/post-list/PostTable.module.css'
@@ -74,7 +75,7 @@ export function ReviewPage({ platform }: { platform: Platform }) {
       </div>
     </div>
     {query.error && <div className={styles.error}><Alert type="error" showIcon title="暂时无法读取审校队列"
-      description={query.error.message} action={<Button onClick={() => void query.refetch()}>重试</Button>} /></div>}
+      description={businessNotice(query.error.message, '请点重试；仍无法读取请联系维护人员。')} action={<Button onClick={() => void query.refetch()}>重试</Button>} /></div>}
     {query.data?.index.stale && <Alert type="warning" banner title="列表更新暂有延迟，当前已从归档重新读取。" />}
     <PostTable rows={rows} columns={columns} loading={query.isFetching} href={href}
       empty={<Empty description={`${platformLabel} 当前筛选下没有帖子。`}><Button onClick={() => setSearch({ queue: 'review' })}>清除筛选</Button></Empty>} />
