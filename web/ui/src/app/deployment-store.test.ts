@@ -85,6 +85,21 @@ describe('deployment session coordination', () => {
     expect(f.reports.at(-1)?.dirty).toBe(false)
   })
 
+  it('waits for the editor to report clean before leaving, and gives up if another input stays dirty', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await expect(f.store.whenClean()).resolves.toBe(true)
+    f.store.setDirty('editor', true)
+    const saved = f.store.whenClean(1000)
+    vi.advanceTimersByTime(400)
+    f.store.setDirty('editor', false)
+    await expect(saved).resolves.toBe(true)
+    f.store.setDirty('category', true)
+    const blocked = f.store.whenClean(1000)
+    vi.advanceTimersByTime(1000)
+    await expect(blocked).resolves.toBe(false)
+  })
+
   it('serializes an in-flight clean report before the newest dirty snapshot', async () => {
     const f = fixture(); await f.store.refresh()
     const delayed = deferred<Response>()

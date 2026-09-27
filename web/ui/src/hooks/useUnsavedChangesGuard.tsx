@@ -28,11 +28,9 @@ export function useUnsavedChangesGuard() {
     setSaving(true); setSaveError(false)
     try {
       const result = await actions.save()
-      if (result === 'saved') {
-        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
-        if (!deploymentStore.getSnapshot().dirty) blocker.proceed?.()
-        else setSaveError(true)
-      } else setSaveError(true)
+      // 只等一帧会偶尔早于编辑区报告干净：已保存却提示“尚未保存”，还留在原页。
+      if (result === 'saved' && await deploymentStore.whenClean()) blocker.proceed?.()
+      else setSaveError(true)
     } catch { setSaveError(true) }
     finally { setSaving(false) }
   }

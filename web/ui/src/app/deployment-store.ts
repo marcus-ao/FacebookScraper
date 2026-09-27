@@ -87,6 +87,16 @@ export class DeploymentStore {
     this.listeners.forEach(listener => listener())
   }
 
+  /** 编辑区清掉草稿后要等重新渲染才报告干净；离开前等它追上。限时后仍有改动，说明别处还有没保存的输入。 */
+  whenClean(timeoutMs = 1000): Promise<boolean> {
+    if (!this.state.dirty) return Promise.resolve(true)
+    return new Promise(resolve => {
+      const finish = (clean: boolean) => { globalThis.clearTimeout(timer); unsubscribe(); resolve(clean) }
+      const unsubscribe = this.subscribe(() => { if (!this.state.dirty) finish(true) })
+      const timer = globalThis.setTimeout(() => finish(!this.state.dirty), timeoutMs)
+    })
+  }
+
   setDirty(source: string, dirty: boolean) {
     if (this.sources.has(source) === dirty) return
     if (dirty) this.sources.add(source)
