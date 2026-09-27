@@ -555,6 +555,27 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(inv.decision_complete)
         self.assertEqual(await self.page.evaluate('writes'), [])
 
+    async def test_folded_day_switches_to_complete_week_through_toolbar_overlay(self):
+        await self.mount_week_view()
+        covered = await self.page.evaluate('''() => {
+          const button = document.getElementById('week');
+          const box = button.getBoundingClientRect();
+          const overlay = document.createElement('div');
+          overlay.setAttribute('aria-hidden', 'true');
+          Object.assign(overlay.style, {position: 'absolute', zIndex: '1000',
+            left: box.left + window.scrollX + 'px', top: box.top + window.scrollY + 'px', width: box.width + 'px',
+            height: box.height + 'px', pointerEvents: 'auto'});
+          document.body.appendChild(overlay);
+          return document.elementFromPoint(box.left + box.width/2, box.top + box.height/2) === overlay;
+        }''')
+        self.assertTrue(covered)
+        inv = await self.inventory(whole_month=True)
+        self.assertEqual([card.at.hour for card in inv.cards], [17, 20, 23])
+        self.assertEqual(inv.diagnostics, ())
+        self.assertTrue(inv.decision_complete)
+        self.assertEqual(await self.page.evaluate('mode'), 'month')
+        self.assertEqual(await self.page.evaluate('writes'), [])
+
     async def test_close_navigation_restores_and_rechecks_the_same_week_without_reopening_details(self):
         visits, opened = [], []
         async def serve(route):

@@ -219,6 +219,19 @@ async def select_month_view(page, *, timeout, calendar_url, phase, verify_grid=T
         await ready_grid(page, timeout=timeout, phase=phase, calendar_url=calendar_url)
 
 
+async def select_week_view(page, *, timeout, calendar_url, phase):
+    """Activate the week view without clicking through a toolbar overlay."""
+    bs.assert_planner_location(page, calendar_url, phase=phase)
+    if await page.get_by_role('dialog').count():
+        raise bs.PlannerDialogCloseError('排期详情弹窗尚未关闭，不能切换周视图；请重新核对已有排期。')
+    button = page.get_by_role('button', name='Week', exact=True)
+    await expect(button).to_have_count(1, timeout=timeout * 1000)
+    await expect(button).to_be_visible(timeout=timeout * 1000)
+    await expect(button).to_be_enabled(timeout=timeout * 1000)
+    await button.press('Enter', timeout=timeout * 1000)
+    bs.assert_planner_location(page, calendar_url, phase=phase)
+
+
 async def read_days(page, dates, *, timeout, week=False):
     deadline = time.monotonic() + max(0, timeout)
     selector = WEEK_DAY_SELECTOR if week else DAY_SELECTOR
@@ -371,7 +384,7 @@ async def restore_detail_grid(page, month_rows, view_rows, calendar_url, timeout
                 raise bs.PublishStepError('恢复月历后条目已变化，本次核对作废；请重新核对已有排期')
             if view_rows[0].get('view') == 'week':
                 data['recovery_stage'] = 'week_grid'
-                await page.get_by_role('button', name='Week', exact=True).click(timeout=timeout * 1000)
+                await select_week_view(page, timeout=timeout, calendar_url=calendar_url, phase='restore_week')
                 await select_week(page, month_rows, view_rows[0]['date'], timeout=timeout, calendar_url=calendar_url)
                 if view_rows != await read_week(page, month_rows, timeout=timeout, phase='restore_week', calendar_url=calendar_url):
                     raise bs.PublishStepError('恢复周视图后条目已变化，本次核对作废；请重新核对已有排期')
@@ -407,7 +420,7 @@ async def detail_grids(page, month_rows, selected_rows, *, timeout, calendar_url
         await restore('after_month_details')
     if not expanded:
         return
-    await page.get_by_role('button', name='Week', exact=True).click(timeout=timeout * 1000)
+    await select_week_view(page, timeout=timeout, calendar_url=calendar_url, phase='open_week_details')
     for name in ('Content type: all', 'Shared to: all'):
         await expect(page.get_by_role('button', name=name, exact=True)).to_have_count(1, timeout=timeout * 1000)
     pending = {row['date']: row for row in expanded}
