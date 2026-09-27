@@ -81,7 +81,7 @@ def stage_schedule_preview(page, ui):
         expect(dialog.get_by_role('button', name='确认并创建排期', exact=True)).to_be_in_viewport(ratio=1)
 
     expect(dialog.get_by_text('Neakasa Deutschland', exact=True)).to_be_visible()
-    expect(dialog.get_by_text('2026-09-30 17:30', exact=True)).to_be_visible()
+    expect(dialog.get_by_text('9/30 周三 17:30', exact=True)).to_be_visible()
     expect(dialog.get_by_text('确认后将使用', exact=False)).to_have_count(0)
     page.set_viewport_size({'width': 1366, 'height': 768})
     expect(dialog.get_by_label('发布文案')).to_have_text(caption)

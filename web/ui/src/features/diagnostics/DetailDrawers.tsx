@@ -17,7 +17,9 @@ export function DetailDrawers({ detail, open, onClose, onAfterClose }: {
   detail: TaskDetail; open: boolean; onClose: () => void; onAfterClose?: () => void;
 }) {
   const records = businessTrail(detail.trail)
-  return <Drawer title="处理记录" open={open} onClose={onClose} afterOpenChange={visible => { if (!visible) onAfterClose?.() }} width={480}>
+  // 抽屉关完先回调这里，随后又把焦点还给打开那一刻的元素（常是已收起的菜单项）；晚一帧才不会被它抢走。
+  return <Drawer title="处理记录" open={open} onClose={onClose} width={480}
+    afterOpenChange={visible => { if (!visible) requestAnimationFrame(() => onAfterClose?.()) }}>
     {records.length ? <Timeline items={records.map(record => ({ content: <>
       <strong>{TRAIL_ACTION_LABEL[record.action]}</strong> · <ShanghaiTime at={record.at} />
       {record.note && <p>理由：{record.note}</p>}

@@ -42,7 +42,7 @@ def stage_receipt_reconcile(page, ui):
         return 200, {'status': 'scheduled', 'message': '已有排期已确认'}
     ui.overrides[('POST', endpoint + '/publication/reconcile')] = recovered
     button.click()
-    expect(panel.get_by_text('排期已确认', exact=True)).to_be_visible()
+    expect(panel.get_by_role('status').filter(has_text='定时排期已确认')).to_be_visible()
     expect(panel.locator('time')).to_have_attribute('datetime', at)
     expect(panel.get_by_text('已收到排期成功信号，待补齐回执', exact=True)).to_have_count(0)
     expect(button).to_be_enabled()

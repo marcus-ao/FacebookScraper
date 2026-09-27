@@ -549,7 +549,7 @@ def stage_f(page, ui):
     ui.overrides[('GET','/api/calendar')]=(200,data)
     ui.overrides[('POST','/api/calendar/refresh')]=(503,{**data,'stale':True,'error':'fixture failure','cards':[data['cards'][0]]})
     page.goto(ui.fx.base_url+'/calendar',wait_until='networkidle')
-    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('定时',exact=True)).to_be_visible()
+    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('已排期',exact=True)).to_be_visible()
     assert '公开发布正文' not in page.locator('main').inner_text()
     page.get_by_role('button',name=re.compile('已发布')).click();expect(page.get_by_text('公开发布正文',exact=True)).to_be_visible()
     expect(page.get_by_role('link',name='查看原帖 ↗',exact=True)).to_have_attribute(
@@ -567,7 +567,7 @@ def stage_f(page, ui):
     page.get_by_role('button',name='刷新月历',exact=True).click()
     expect(page.get_by_text('本次月历未完整更新',exact=True)).to_be_visible()
     expect(page.get_by_text('fixture failure',exact=True)).to_be_visible()
-    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('定时',exact=True)).to_have_count(0)
+    expect(page.get_by_text('已发布',exact=True)).to_be_visible();expect(page.get_by_text('已排期',exact=True)).to_have_count(0)
     call=[r for r in ui.requests if r['method']=='POST'][-1];assert call['path']=='/api/calendar/refresh' and call['body']=={}
     heights=page.locator('[data-day]').evaluate_all('(els)=>els.filter(el=>!el.querySelector("button")).map(el=>el.getBoundingClientRect().height)')
     assert heights and min(heights)>=64
@@ -580,7 +580,7 @@ def stage_f(page, ui):
                   'card_sha256':'unread','channels':[],'read_status':'incomplete','delivery':'scheduled'}]}
     ui.overrides[('POST','/api/calendar/refresh')]=(200,unread)
     page.get_by_role('button',name='刷新月历',exact=True).click()
-    expect(page.get_by_text('定时',exact=True)).to_have_count(0)
+    expect(page.get_by_text('已排期',exact=True)).to_have_count(0)
     expect(page.get_by_text('1 个后台条目尚未识别为实际帖子',exact=True)).to_be_visible()
     expect(page.get_by_text('未读全',exact=True)).to_have_count(0)
     expect(page.get_by_text('数据可能已过期',exact=True)).to_have_count(0)
