@@ -421,7 +421,10 @@ def stage_d5(page, ui):
         page.get_by_role('button', name='刷新处理状态', exact=True).last.click()
         expect(page.get_by_role('button', name='采用到正文编辑区', exact=True)).to_be_disabled()
     page.get_by_role('button',name='更多处理动作',exact=True).click()
-    page.get_by_role('menuitem',name='处理记录').click();expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape')
+    page.get_by_role('menuitem',name='处理记录').click();expect(page.get_by_role('dialog')).to_be_visible()
+    # 下拉菜单收起动画结束前按 Esc 会被当成菜单的，抽屉不关；人不会这么快，先等菜单真正收起。
+    expect(page.locator('.ant-dropdown:not(.ant-dropdown-hidden)')).to_have_count(0)
+    page.keyboard.press('Escape');expect(page.get_by_role('dialog')).to_be_hidden()
     expect(page.get_by_role('button',name='更多处理动作',exact=True)).to_be_focused()
     interrupted={**initial_job,'status':'interrupted'};cap['job']=interrupted
     ui.overrides[('GET','/api/initial-translation/jobs/fixture-initial')]=(200,interrupted)
