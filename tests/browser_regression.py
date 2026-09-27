@@ -367,7 +367,10 @@ def stage_d4(page, ui):
     scheduled=copy.deepcopy(detail);scheduled['status']='scheduled';scheduled['schedule']={'at':'2026-09-15T11:30:00+08:00','channel':detail['platform']}
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,scheduled)
     page.get_by_role('button',name='确认发布时间并排期',exact=True).click();page.get_by_role('button',name='确认并创建排期',exact=True).click()
-    expect(page.get_by_text('定时排期已确认；公开发布仍待观测',exact=True)).to_be_visible(timeout=15000)
+    # 合并 main 后成功提示与排期状态合成一句，带上已确认的业务时刻。
+    status=page.get_by_role('status').filter(has_text='定时排期已确认')
+    expect(status).to_contain_text('9/15 周二 11:30',timeout=15000)
+    expect(status).to_contain_text('公开发布仍待观测')
     assert ui.count_list_gets()==1
     return {'D4':'PASS','strict_receipt':True,'exact_five_body_fields':True,'no_offset_submission':True,'clickable_409_suggestion':True,'polled_operation':True,'list_GET_count':1}
 
