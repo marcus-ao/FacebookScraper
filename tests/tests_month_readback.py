@@ -74,6 +74,33 @@ class ReadbackTests(unittest.IsolatedAsyncioTestCase):
             blocked = self.inventory(cards)
             self.assertFalse((await self.readback(blocked)).found)
 
+    async def test_failed_existing_receipt_identifies_each_inventory_guard_without_caption(self):
+        card = self.card()
+        diagnostic = {'date': WHEN.date().isoformat(), 'time': '6:00 PM', 'stage': 'detail'}
+        cases = (
+            (replace(self.inventory([card]), occupied=()), 'occupancy_complete'),
+            (replace(self.inventory([card]), visible_end=WHEN.date().replace(day=14)), 'covers_target'),
+            (replace(self.inventory([card]), diagnostics=(diagnostic,)), 'diagnostics_mapped'),
+            (self.inventory([replace(card, channels=(), time_verified=False)]), 'target_cards_verified'),
+        )
+        for inventory, failed_guard in cases:
+            with self.subTest(failed_guard=failed_guard):
+                result = await self.readback(inventory)
+                self.assertFalse(result.found)
+                evidence = result.diagnostics['inventory_evidence']
+                self.assertEqual(evidence['target_at'], WHEN.isoformat())
+                self.assertEqual(evidence['target_ui_at'], WHEN.isoformat())
+                self.assertEqual(evidence['ui_timezone'], 'UTC')
+                self.assertEqual(evidence['visible_start'], WHEN.date().isoformat())
+                self.assertTrue(evidence['cards_loaded'])
+                self.assertFalse(evidence[failed_guard])
+                self.assertEqual(evidence['card_times']['count'], 1)
+                self.assertEqual(evidence['target_card_count'], 1)
+                self.assertEqual(evidence['target_cards'][0]['remote_ids'], {'facebook': '123456789'})
+                self.assertNotIn(TEXT, str(evidence))
+                if failed_guard == 'diagnostics_mapped':
+                    self.assertEqual(evidence['missing_diagnostic_indices'], [0])
+
     async def test_preexisting_remote_id_or_duplicate_cards_cannot_prove_new_submission(self):
         baseline = bs.ScheduledBaseline('observed', 0, ('facebook=123456789',))
         self.assertFalse((await self.readback(self.inventory([self.card()]), pre_submit_baseline=baseline)).found)

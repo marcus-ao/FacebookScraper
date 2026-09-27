@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.config import Config
-from publish import month_inventory as month
+from publish import month_inventory as month, month_readback
 from tests_month_inventory import SPEC
 
 
@@ -345,6 +345,35 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(saved), 1)
             self.assertTrue(saved[0]['recovered'])
             self.assertEqual(saved[0]['failures'][0]['phase'], 'opening_detail')
+
+    async def test_ig_detail_waits_for_transient_composer_route_to_return_to_original_grid(self):
+        entries = await self.mount_week_view()
+        html = self.week_html.replace(
+            "document.querySelectorAll('#details button:not(#close)').forEach",
+            """if(entry.id==='1099867215965804') {
+                const original=location.pathname+location.search;
+                history.pushState({},'', '/latest/composer/?asset_id=111222333444');
+                setTimeout(()=>history.replaceState({},'',original),300);
+              }
+              document.querySelectorAll('#details button:not(#close)').forEach""", 1)
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        when = datetime(2026, 9, 30, 20, tzinfo=ZoneInfo('Asia/Shanghai'))
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month, 'prepare', AsyncMock()), \
+                patch.object(month.bs, 'require_readback_evidence', return_value=SPEC), \
+                patch.object(month, 'recommendation_state', AsyncMock(return_value='absent')), \
+                patch.object(month.bs, '_readback_screenshot', AsyncMock(return_value='')):
+            result = await month_readback.verify(self.page, when, entries[1]['caption'],
+                ui_timezone='Asia/Shanghai', target_channels=('instagram',), timeout=5)
+            self.assertTrue(result.found, result.error)
+            self.assertEqual(result.remote_id, 'instagram=1099867215965804')
+            self.assertEqual(result.diagnostics['inventory_evidence']['target_cards'][0]['channels'], ['instagram'])
+            self.assertEqual(await self.page.evaluate('opened'), [e['id'] for e in entries])
+            self.assertEqual(await self.page.evaluate('writes'), [])
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
 
     async def test_opening_detail_stops_after_second_composer_navigation(self):
         await self.mount_week_view()

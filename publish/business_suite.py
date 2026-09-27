@@ -1253,6 +1253,30 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
     return evidence.parse_entry_moment(rendered, spec.attributes)
 
 
+async def _settle_detail_open_location(page, entry, before, *, timeout, restore_calendar):
+    """Wait only for a transient composer route to return to the pinned calendar card."""
+    try:
+        assert_planner_location(page, before, phase='opening_detail')
+        return
+    except PlannerNavigationError as exc:
+        if restore_calendar is None or exc.diagnostic['surface'] != 'composer':
+            raise
+        first = exc
+    deadline = time.monotonic() + min(timeout, 5)
+    while time.monotonic() < deadline:
+        await asyncio.sleep(.1)
+        try:
+            assert_planner_location(page, before, phase='opening_detail')
+        except PlannerNavigationError as current:
+            if current.diagnostic['surface'] != 'composer':
+                raise
+            continue
+        if not await entry.evaluate('node => node.isConnected'):
+            raise PublishStepError('打开详情后原月历条目已被替换，本次核对作废')
+        return
+    raise first
+
+
 async def _open_channel_dialogs(
         page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
         restore_calendar=None, allow_preview_text_change=False, activation='pointer'
@@ -1277,7 +1301,8 @@ async def _open_channel_dialogs(
         assert_planner_location(page, before, phase=phase)
         raise PublishStepError("点不开日历条目的详情弹窗：%s" % exc) from exc
     try:
-        assert_planner_location(page, before, phase=phase)
+        await _settle_detail_open_location(page, entry, before, timeout=timeout,
+                                           restore_calendar=restore_calendar)
         dialogs = page.get_by_role(
             str(attrs.get("dialog_role") or "dialog"),
             name=str(attrs.get("dialog_name") or ""), exact=False)

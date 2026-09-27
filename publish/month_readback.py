@@ -60,6 +60,48 @@ def baseline_from_inventory(inventory, when, final_text, target_channels):
                                 tuple(card.card_sha256 for card in cards))
 
 
+def _inventory_evidence(inventory, when, requested_ui_timezone):
+    """Bounded, caption-free evidence for the four existing receipt guards."""
+    target_stamp = when.timestamp()
+    occupied = {at.timestamp(): at.isoformat() for at in inventory.occupied}
+    card_times = {card.at.timestamp(): card.at.isoformat() for card in inventory.cards}
+    index_counts = {index: sum(card.diagnostic_index == index for card in inventory.cards)
+                    for index in range(len(inventory.diagnostics))}
+    missing = [index for index, count in index_counts.items() if not count]
+    target_cards = [card for card in inventory.cards if card.at.timestamp() == target_stamp]
+
+    def times(values):
+        ordered = [value for _, value in sorted(values.items())]
+        return {'count': len(ordered), 'values': ordered[:60], 'truncated': len(ordered) > 60}
+
+    def ids(card):
+        return {channel: value if value.isdecimal() and 6 <= len(value) <= 30 else 'invalid'
+                for channel, value in card.remote_ids}
+
+    return {'target_at': when.isoformat(), 'target_ui_at': when.astimezone(
+                bs.resolve_ui_timezone(inventory.ui_timezone)).isoformat(),
+            'ui_timezone': inventory.ui_timezone, 'requested_ui_timezone': requested_ui_timezone,
+            'visible_start': inventory.visible_start.isoformat() if inventory.visible_start else None,
+            'visible_end': inventory.visible_end.isoformat() if inventory.visible_end else None,
+            'cards_loaded': inventory.cards_loaded, 'details_scoped': inventory.details_scoped,
+            'occupancy_complete': inventory.occupancy_complete,
+            'covers_target': inventory.covers((when,)),
+            'diagnostics_mapped': not missing,
+            'diagnostic_count': len(inventory.diagnostics),
+            'diagnostic_card_counts': [{'index': index, 'cards': count}
+                                       for index, count in list(index_counts.items())[:20]],
+            'missing_diagnostic_count': len(missing), 'missing_diagnostic_indices': missing[:20],
+            'occupied_times': times(occupied), 'card_times': times(card_times),
+            'target_cards_verified': all(card.time_verified and card.channels for card in target_cards),
+            'target_card_count': len(target_cards),
+            'target_cards': [{'at': card.at.isoformat(), 'channels': list(card.channels),
+                              'time_verified': card.time_verified, 'read_status': card.read_status,
+                              'caption_status': card.caption_status, 'delivery': card.delivery,
+                              'placement': card.placement, 'diagnostic_index': card.diagnostic_index,
+                              'remote_ids': ids(card)} for card in target_cards[:12]],
+            'target_cards_truncated': len(target_cards) > 12}
+
+
 async def baseline(page, when, final_text, *, ui_timezone, target_channels, timeout=30, run=None):
     inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
                                           business_timezone=bs.business_timezone(), timeout=timeout, run=run,
@@ -85,6 +127,7 @@ async def verify(page, when, final_text, *, ui_timezone, target_channels,
         inventory = await month_inventory.read(page, ui_timezone=ui_timezone,
                                               business_timezone=bs.business_timezone(), timeout=timeout, run=run,
                                               detail_range=(when, when))
+        diagnostics['inventory_evidence'] = _inventory_evidence(inventory, when, ui_timezone)
         diagnostics.update(inventory_cards=len(inventory.cards),
                            inventory_diagnostics=list(inventory.diagnostics),
                            complete_month=inventory.decision_complete and inventory.covers((when,)),
