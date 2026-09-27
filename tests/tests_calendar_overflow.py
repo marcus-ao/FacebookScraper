@@ -121,7 +121,8 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
                 if(data.mutate){entries[2].caption='Changed during detail';render();}
                 if(data.navigate_on_close){
                   history.pushState({},'', '/latest/composer/?asset_id=111222333444');
-                  document.body.innerHTML='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"><button>Save</button><button>Schedule</button></div>';
+                  if(data.navigate_on_close==='replace_body')
+                    document.body.innerHTML='<h1>Create post</h1><div role="dialog" aria-label="Schedule post"><button>Save</button><button>Schedule</button></div>';
                 }
               };
             });
@@ -174,7 +175,7 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             visits.append(route.request.url)
             await route.fulfill(content_type='text/html', body=self.week_html)
         await self.page.route('https://business.facebook.com/**', serve)
-        await self.mount_week_view(navigate_on_close=True)
+        await self.mount_week_view(navigate_on_close='replace_body')
         await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
         await self.page.expose_function('recordOpened', lambda value: opened.append(value))
         await self.page.add_init_script("addEventListener('click',e=>{const n=e.target.closest('[data-item]');if(n)recordOpened(entries[+n.dataset.item].id)},true)")
@@ -197,11 +198,90 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(data['failures'][0]['surface'] == 'composer' for data in saved))
             self.assertNotIn('111222333444', json.dumps(saved))
 
+    async def test_composer_address_with_week_grid_recovers_after_preview_text_changes(self):
+        await self.mount_week_view(navigate_on_close='url_only')
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=self.week_html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        original = month.scheduled_details.verify_preview_owner
+
+        async def preview_changes(dialog, ids, expected_accounts, *, timeout):
+            await original(dialog, ids, expected_accounts, timeout=timeout)
+            if 'instagram' in ids:
+                await dialog.evaluate("el => { const n=document.createElement('span'); n.textContent='preview settled'; el.append(n) }")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month.scheduled_details, 'verify_preview_owner', preview_changes):
+            inv = await self.inventory()
+            self.assertEqual(inv.diagnostics, ())
+            self.assertEqual([dict(c.remote_ids)[c.channels[0]] for c in inv.cards],
+                             ['1884787296017457', '1099867215965804', '1084557747316275'])
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 3)
+            self.assertTrue(all(d['recovered'] and d['failures'][0]['surface'] == 'composer' for d in saved))
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
+            self.assertEqual(await self.page.evaluate('writes'), [])
+
+    async def test_detail_observer_failure_survives_composer_address_and_keeps_other_cards_readable(self):
+        await self.mount_week_view(navigate_on_close='url_only')
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=self.week_html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        original = month.scheduled_details.verify_preview_owner
+
+        async def preview_fails(dialog, ids, expected_accounts, *, timeout):
+            await original(dialog, ids, expected_accounts, timeout=timeout)
+            if 'instagram' in ids:
+                raise month.bs.PublishStepError('synthetic preview uncertainty')
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month.scheduled_details, 'verify_preview_owner', preview_fails):
+            inv = await self.inventory()
+            self.assertEqual([dict(c.remote_ids).get('facebook') for c in inv.cards if c.read_status == 'complete'],
+                             ['1884787296017457', '1084557747316275'])
+            self.assertEqual([d['code'] for d in inv.diagnostics], ['read_failed'])
+            self.assertFalse(inv.decision_complete)
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
+            self.assertEqual(await self.page.evaluate('writes'), [])
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 3)
+            self.assertTrue(all(d['recovered'] for d in saved))
+
+    async def test_late_route_change_after_close_is_restored_before_accepting_the_card(self):
+        await self.mount_week_view()
+        await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
+            content_type='text/html', body=self.week_html))
+        await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')
+        original = month.restore_detail_grid
+        hopped = False
+
+        async def late_route(page, month_rows, view_rows, calendar_url, timeout, phase):
+            nonlocal hopped
+            await original(page, month_rows, view_rows, calendar_url, timeout, phase)
+            if phase == 'after_detail_close' and not hopped:
+                hopped = True
+                await page.evaluate("history.pushState({},'', '/latest/composer/?asset_id=111222333444')")
+
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))), \
+                patch.object(month, 'restore_detail_grid', late_route):
+            inv = await self.inventory()
+            self.assertTrue(hopped)
+            self.assertEqual(inv.diagnostics, ())
+            self.assertEqual([dict(c.remote_ids)[c.channels[0]] for c in inv.cards],
+                             ['1884787296017457', '1099867215965804', '1084557747316275'])
+            self.assertEqual(await self.page.evaluate('mode'), 'month')
+            saved = [json.loads(p.read_text('utf-8')) for p in (Path(folder) / 'planner_diagnostics').glob('*.json')]
+            self.assertEqual(len(saved), 1)
+            self.assertTrue(saved[0]['recovered'])
+
     async def test_navigation_recovery_rejects_changed_visible_or_hidden_cards(self):
         for change in ('visible_time', 'hidden_caption'):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as folder, \
                     patch.object(month, 'cfg', return_value=SimpleNamespace(state_dir=Path(folder))):
-                await self.mount_week_view(navigate_on_close=True)
+                await self.mount_week_view(navigate_on_close='replace_body')
                 original = self.week_html
                 changed = (original.replace('5:30 PM', '5:31 PM') if change == 'visible_time' else
                            original.replace('Full caption.', 'Changed remote caption.'))
@@ -230,7 +310,7 @@ class OverflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed.exception.diagnostic, {'phase': 'after_details', 'surface': 'composer'})
 
     async def test_view_switch_cannot_replace_the_original_asset_binding(self):
-        await self.mount_week_view(navigate_on_close=True)
+        await self.mount_week_view(navigate_on_close='replace_body')
         await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
             content_type='text/html', body=self.week_html))
         await self.page.goto('https://business.facebook.com/latest/content_calendar?asset_id=111222333444&business_id=555666777888')

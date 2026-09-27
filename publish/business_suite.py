@@ -1255,7 +1255,7 @@ def _entry_naive(rendered: str, spec: EvidenceSignal) -> datetime | None:
 
 async def _open_channel_dialogs(
         page, entry, spec: EvidenceSignal, *, timeout: float, observe_detail=None, prepare_detail=None,
-        restore_calendar=None
+        restore_calendar=None, allow_preview_text_change=False
         ) -> dict[str, str]:
     """只读详情身份；用详情自己的 Close 关闭并等它消失，再读下一条。"""
     attrs = spec.attributes
@@ -1265,7 +1265,7 @@ async def _open_channel_dialogs(
         raise ProbeRequired("remote_id_regex 无效：%s" % exc) from exc
     found: dict[str, str] = {}
     dialog = None
-    completed = False
+    navigation_during_detail = False
     before = _safe_page_url(page)
     phase = 'opening_detail'
     try:
@@ -1317,23 +1317,37 @@ async def _open_channel_dialogs(
                         raise PublishStepError('目标排期详情不唯一，不能读取图片')
                     await observe_detail(dialog, dict(found))
                     assert_planner_location(page, before, phase=phase)
+                    after = await _node_text(dialog)
+                    after_ids = {_regex_remote_id(match) for match in pattern.finditer(after)} - {''}
+                    after_channels = {channel for channel in ('facebook', 'instagram')
+                                      if attrs.get('%s_marker' % channel)
+                                      and attrs['%s_marker' % channel] in after}
                     if (await dialogs.count() != 1 or not await dialog.is_visible()
-                            or await _node_text(dialog) != rendered):
+                            or after_ids != set(found.values()) or after_channels != set(found)
+                            or any(not evidence_token_present(after, str(attrs.get('%s_account_token' % channel) or ''))
+                                   for channel in found)
+                            or (not allow_preview_text_change and after != rendered)):
                         raise PublishStepError('取图期间排期详情身份或正文发生变化')
                 break
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(min(.2, max(0, deadline - time.monotonic())))
-        completed = True
     except Exception as exc:                          # noqa: BLE001
-        assert_planner_location(page, before, phase=phase)
-        if observe_detail is not None or isinstance(exc, PlannerNavigationError):
+        if isinstance(exc, PlannerNavigationError):
+            navigation_during_detail = True
+            raise
+        try:
+            assert_planner_location(page, before, phase=phase)
+        except PlannerNavigationError:
+            navigation_during_detail = True
+            raise
+        if observe_detail is not None:
             raise
         pass
     finally:
         # Service Post details has a Close button. Escape can be consumed by
         # preview focus/menus; sending the key alone does not prove dismissal.
-        if dialog is not None and await dialog.is_visible():
+        if not navigation_during_detail and dialog is not None and await dialog.is_visible():
             try:
                 close = dialog.get_by_role('button', name='Close', exact=True)
                 if await close.count() == 1:
@@ -1345,13 +1359,21 @@ async def _open_channel_dialogs(
                 assert_planner_location(page, before, phase='closing_detail')
                 raise PlannerDialogCloseError(
                     '上一条排期详情未能关闭，本次月历读取已停止；请重新核对已有排期。') from exc
-            if not (completed and found and restore_calendar is not None):
+        # A detail read may fail before `found` is finalized. Closing its dialog
+        # can still change the route; restore the owned grid before propagating
+        # the original failure or moving to another card.
+        if not navigation_during_detail:
+            if restore_calendar is not None:
+                await restore_calendar('after_detail_close')
+            else:
                 assert_planner_location(page, before, phase='after_detail_close')
-    # A hidden dialog can mean the entire Planner was replaced by composer.
-    # Only the inventory owner can restore and compare its original complete grid.
-    if found and restore_calendar is not None:
+    try:
+        assert_planner_location(page, before, phase='after_detail_close')
+    except PlannerNavigationError:
+        if restore_calendar is None:
+            raise
         await restore_calendar('after_detail_close')
-    assert_planner_location(page, before, phase='after_detail_close')
+        assert_planner_location(page, before, phase='after_detail_close')
     return found
 
 

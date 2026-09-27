@@ -650,9 +650,11 @@ async def read_item_detail(page, row, item, node, raw, *, timeout, observe_detai
             await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
             if observe_scheduled is not None:
                 await observe_scheduled(dialog, ids)
+            await scheduled_details.verify_preview_owner(dialog, ids, accounts(), timeout=timeout)
 
+        # The full caption is bound to this week card and checked by the final grid sweep.
         ids = await bs._open_channel_dialogs(page, node, spec, timeout=timeout, observe_detail=observe_week_identity,
-                                            restore_calendar=restore_calendar)
+                                            restore_calendar=restore_calendar, allow_preview_text_change=True)
         if len(ids) != 1 or {name.lower() for name in item.get('icons', [])} != set(ids):
             raise content.DetailReadError('identity_unverified', placement='feed', missing_fields=('channel_identity',))
         return {'channels': tuple(ids), 'remote_ids': ids, 'accounts': {key: accounts()[key] for key in ids},

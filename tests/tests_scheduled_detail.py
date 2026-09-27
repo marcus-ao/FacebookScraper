@@ -156,6 +156,15 @@ class ScheduledDetailTests(unittest.IsolatedAsyncioTestCase):
             await bs._open_channel_dialogs(self.page, self.page.get_by_role('button', name='Open'), SPEC, timeout=1)
         self.assertEqual(failed.exception.diagnostic, {'phase': 'after_detail_close', 'surface': 'composer'})
 
+    async def test_dialog_caption_remains_stable_when_no_independent_week_caption_exists(self):
+        async def alter_caption(dialog, ids):
+            await dialog.locator('#caption').evaluate("node => node.textContent='Changed caption'")
+
+        with self.assertRaisesRegex(bs.PublishStepError, '身份或正文发生变化'):
+            await bs._open_channel_dialogs(self.page, self.page.locator('[draggable=false] a'), SPEC,
+                timeout=2, observe_detail=alter_caption)
+        self.assertFalse(await self.page.get_by_role('dialog').is_visible())
+
     async def test_navigation_during_detail_observation_does_not_run_restore_or_confirm_ids(self):
         await self.page.route('https://business.facebook.com/**', lambda route: route.fulfill(
             content_type='text/html', body='<html></html>'))
