@@ -92,7 +92,13 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         deadline = time.monotonic() + 5
         while len(self.held_checks) < count and time.monotonic() < deadline:
             self.page.wait_for_timeout(20)
-        self.assertEqual(len(self.held_checks), count, "The debounced real /check request did not arrive")
+        self.assertEqual(len(self.held_checks), count, "The real /check request did not arrive")
+
+    def wait_saves(self, count):
+        deadline = time.monotonic() + 5
+        while len(self.held_saves) < count and time.monotonic() < deadline:
+            self.page.wait_for_timeout(20)
+        self.assertEqual(len(self.held_saves), count, "The real localization save did not arrive")
 
     def setup_model(self, *, complete=True):
         path = f"/api/refinements/task/{self.task_id}"
@@ -138,24 +144,43 @@ class Stage2ReviewTests(BrowserWorkflowTests):
 
     def enter_edit(self):
         self.open_task(self.task_id)
+        self.step("德语正文")
         self.page.get_by_role("button", name="编辑德语", exact=True).click()
         return self.page.get_by_role("textbox", name="德语正文")
 
-    def ask_for_suggestions(self):
-        # 两个动作使用不同标题，但始终属于这个具名区域。
+    def suggestion_panel(self):
+        # 建议区默认折叠；只有带着上一轮建议进来时才自动展开。
         panel = self.page.get_by_role("region", name="德语文案优化建议")
         button = panel.locator("button[data-paid-action]")
+        if not button.is_visible():
+            panel.get_by_text("文案优化建议（可选）", exact=True).click()
+        return panel, button
+
+    def ask_for_suggestions(self):
+        panel, button = self.suggestion_panel()
         expect(button).to_be_enabled()
         button.click()
         return panel
 
-    def localized_link(self, *, target="https://de.example.invalid/stage2"):
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
-        self.page.get_by_role("textbox", name="本篇语义标签").fill("#Katzenliebe")
-        self.page.get_by_label("我已确认本篇使用的话题标签").check()
+    def localized_link(self, *, target="https://de.example.invalid/stage2", tags="#Neakasa #Katzenliebe"):
+        # 所有拟发布标签都由人填写（D21），品牌标签也要写进来才会保留。
+        self.step("标签与链接")
+        self.page.get_by_role("textbox", name="本篇拟发布标签").fill(tags)
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill(target)
-        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.step("德语正文")
+
+    def open_caption(self):
+        """第四步按需向服务端取回完整文案；只有它回来的成品才能复制。"""
+        self.step("最终确认与排期")
+        self.page.get_by_role("button", name="查看完整发布文案", exact=True).click()
+        return self.page.get_by_role("button", name=re.compile("复制发布文案$"))
+
+    def complete_button(self):
+        # 保存中按钮名前会多出加载图标的名称。
+        return self.page.get_by_role("button", name=re.compile("完成标签与链接审核$"))
+
+    def reviewed_status(self):
+        return self.page.get_by_role("status").filter(has_text="标签与链接已审核")
 
     def clipboard(self):
         self.page.add_init_script("""
@@ -207,6 +232,7 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         adopt.click()
         adopted = "Kostenloser Versand heute. Deine Katze freut sich."
         expect(body).to_have_value(adopted)
+        # 采用只改编辑区，保存之前两份译文账本一个字节都不变。
         self.assertEqual([self.bytes_or_none(path) for path in paths], original)
         self.assertEqual([request for request in self.writes if request[0] == "PUT"], [])
 
@@ -220,12 +246,14 @@ class Stage2ReviewTests(BrowserWorkflowTests):
     def test_stage2_02_refresh_recovers_pending_job_without_resubmitting(self):
         model = self.setup_model(complete=False)
         self.enter_edit()
-        panel = self.ask_for_suggestions()
-        button = panel.locator("button[data-paid-action]")
+        self.ask_for_suggestions()
+        _, button = self.suggestion_panel()
         expect(button).to_be_disabled()
         reads = model["capability_reads"]
         self.page.reload()
+        self.step("德语正文")
         self.page.get_by_role("button", name="编辑德语", exact=True).click()
+        panel, button = self.suggestion_panel()
         expect(button).to_be_disabled()
         self.assertGreater(model["capability_reads"], reads)
         model["complete"] = True
@@ -237,7 +265,13 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         body = self.enter_edit()
         self.localized_link()
         body.fill("Jetzt entdecken: 〔链接 1〕. 🐈")
-        copy = self.page.get_by_role("button", name=re.compile("复制发布文案$"))
+        # 编辑中不给看完整文案：复制出去的必须是服务端按已保存内容渲染的成品。
+        self.step("最终确认与排期")
+        expect(self.page.get_by_role("button", name="查看完整发布文案", exact=True)).to_be_disabled()
+        self.step("德语正文")
+        self.expected_puts = 1
+        self.save_draft()
+        copy = self.open_caption()
         expect(copy).to_be_enabled()
         copy.click()
         self.page.wait_for_function("window.stage2Copies.length === 1")
@@ -246,35 +280,43 @@ class Stage2ReviewTests(BrowserWorkflowTests):
 
     def test_stage2_04_stale_check_response_cannot_enable_copy(self):
         self.clipboard()
-        body = self.enter_edit()
-        copy = self.page.get_by_role("button", name=re.compile("复制发布文案$"))
-        expect(copy).to_be_enabled()
+        self.open_task(self.task_id)
+        self.step("最终确认与排期")
         self.hold_checks = True
-        body.fill("Alte ungespeicherte Fassung.")
+        self.page.get_by_role("button", name="查看完整发布文案", exact=True).click()
         self.wait_checks(1)
-        body.fill("Aktuelle ungespeicherte Fassung. 🐈")
-        self.wait_checks(2)
-        expect(copy).to_be_disabled()
+        self.hold_checks = False
+        # 旧请求还没回来时正文被改并保存，页面的内容版本已经变了。
+        self.step("德语正文")
+        self.page.get_by_role("button", name="编辑德语", exact=True).click()
+        self.page.get_by_role("textbox", name="德语正文").fill("Aktuelle gespeicherte Fassung. 🐈")
+        self.expected_puts = 1
+        self.save_draft()
         route, response = self.held_checks.pop(0)
         route.fulfill(status=200, json=response.json())
+        self.step("最终确认与排期")
+        view = self.page.get_by_role("button", name="查看完整发布文案", exact=True)
+        expect(view).to_be_enabled()
         self.page.evaluate("async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) }")
-        expect(copy).to_be_disabled()
+        copy = self.page.get_by_role("button", name=re.compile("复制发布文案$"))
+        expect(copy).to_have_count(0)
         self.assertEqual(self.page.evaluate("window.stage2Copies"), [])
-        route, response = self.held_checks.pop(0)
-        route.fulfill(status=200, json=response.json())
+        view.click()
         expect(copy).to_be_enabled()
         copy.click()
         self.page.wait_for_function("window.stage2Copies.length === 1")
         self.assertEqual(self.page.evaluate("window.stage2Copies[0]"),
-                         "Aktuelle ungespeicherte Fassung. 🐈\n\n#Neakasa #CatLover")
+                         "Aktuelle gespeicherte Fassung. 🐈\n\n#Neakasa #CatLover")
 
     def test_stage2_05_clipboard_fallback_and_manual_dialog_keep_exact_caption(self):
         self.clipboard()
         body = self.enter_edit()
         self.localized_link()
         body.fill("Weitere Infos: 〔链接 1〕. 🐈")
+        self.expected_puts = 1
+        self.save_draft()
         expected = "Weitere Infos: https://de.example.invalid/stage2. 🐈\n\n#Neakasa #Katzenliebe"
-        copy = self.page.get_by_role("button", name=re.compile("复制发布文案$"))
+        copy = self.open_caption()
         expect(copy).to_be_enabled()
         self.page.evaluate("window.stage2CopyMode = 'missing'")
         copy.click()
@@ -299,29 +341,25 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         body.fill('Erste Bearbeitung.')
         self.expected_puts = 2
         self.hold_saves = True
-        self.page.get_by_role('button', name='保存', exact=True).click()
-        deadline = time.monotonic() + 5
-        while not self.held_saves and time.monotonic() < deadline:
-            self.page.wait_for_timeout(20)
-        self.assertEqual(len(self.held_saves), 1)
+        self.page.get_by_role('button', name='保存修改', exact=True).click()
+        self.wait_saves(1)
         body.fill('Neue Bearbeitung waehrend Speichern.')
-        self.localized_link(target='https://de.example.invalid/new-edit')
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
-        self.page.get_by_role('textbox', name='本篇语义标签').fill('#Katzenzuhause')
+        self.localized_link(target='https://de.example.invalid/new-edit', tags='#Neakasa #Katzenzuhause')
         self.release_saves()
         self.hold_saves = False
-        expect(self.page.get_by_role('button', name='保存', exact=True)).to_be_enabled()
+        # 保存只认点击时那一版；等待期间的新输入留在编辑区，不能被回写覆盖。
+        expect(self.page.get_by_role('button', name='保存修改', exact=True)).to_be_enabled()
         self.assertEqual(self.fixtures.detail(self.task_id)['localization']['body_de'], 'Erste Bearbeitung.')
-        expect(self.page.get_by_role('textbox', name='本篇语义标签')).to_have_value('#Katzenzuhause')
-        expect(self.page.get_by_role('textbox', name='链接 1 德语落地页')).to_have_value('https://de.example.invalid/new-edit')
-        self.page.get_by_role('tab', name='正文对照', exact=True).click()
         expect(body).to_have_value('Neue Bearbeitung waehrend Speichern.')
+        self.step('标签与链接')
+        expect(self.page.get_by_role('textbox', name='本篇拟发布标签')).to_have_value('#Neakasa #Katzenzuhause')
+        expect(self.page.get_by_role('textbox', name='链接 1 德语落地页')).to_have_value('https://de.example.invalid/new-edit')
+        self.step('德语正文')
         self.save_draft()
         saved = self.fixtures.detail(self.task_id)['localization']
         self.assertEqual(saved['body_de'], 'Neue Bearbeitung waehrend Speichern.')
         self.assertEqual(saved['tags'], ['#Neakasa', '#Katzenzuhause'])
         self.assertEqual(saved['links'][0]['target_url'], 'https://de.example.invalid/new-edit')
-
 
     def test_stage2_07_confirm_sections_without_entering_editor(self):
         self.task_id = self.fixtures.add_post('in_neakasa.global', '3234567907', 'instagram')
@@ -331,66 +369,66 @@ class Stage2ReviewTests(BrowserWorkflowTests):
         self.fixtures.write_machine(self.task_id, 'Ein sauberes Zuhause. #Neakasa #CatLover')
         before = self.fixtures.detail(self.task_id)['localization_validation']['caption']
         self.open_task(self.task_id)
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
-        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
-        links = self.page.get_by_label('我已确认本篇的链接与主页引导')
-        expect(tags).to_be_visible()
-        expect(links).to_be_visible()
+        self.step('标签与链接')
         expect(self.page.get_by_text('原帖没有链接。', exact=True)).to_be_visible()
-        for checkbox in (tags, links):
-            self.expected_puts += 1
-            with self.page.expect_response(lambda r: r.request.method == 'PUT' and r.url.endswith('/localization')):
-                checkbox.click()
-            expect(checkbox).to_be_checked()
-            expect(checkbox).to_be_enabled()
-            expect(self.page.get_by_role('button', name='编辑德语', exact=True)).to_be_visible()
-            expect(self.page.get_by_role('textbox', name='本篇语义标签')).to_have_count(0)
+        # 不进编辑区也能一次完成审核；它只记下决定，不改文案。
+        self.expected_puts += 1
+        with self.page.expect_response(lambda r: r.request.method == 'PUT' and r.url.endswith('/localization')):
+            self.complete_button().click()
+        expect(self.reviewed_status()).to_be_visible()
+        expect(self.complete_button()).to_have_count(0)
+        expect(self.page.get_by_role('button', name='编辑标签与链接', exact=True)).to_be_enabled()
+        expect(self.page.get_by_role('textbox', name='本篇拟发布标签')).to_have_count(0)
         self.page.reload()
-        expect(tags).to_be_checked()
-        expect(links).to_be_checked()
+        expect(self.reviewed_status()).to_be_visible()
         saved = self.fixtures.detail(self.task_id)
+        self.assertTrue(saved['localization']['hashtags_confirmed'])
         self.assertTrue(saved['localization_validation']['ready'])
         self.assertEqual(saved['localization_validation']['caption'], before)
         self.assertEqual(saved['localization']['ig_cta'], '')
-        self.page.get_by_role('button', name='编辑德语', exact=True).click()
+        self.page.get_by_role('button', name='编辑标签与链接', exact=True).click()
         self.page.get_by_label('自定义 bio 引导').fill('Mehr dazu im Profil')
-        expect(links).not_to_be_checked()
-        expect(tags).to_be_checked()
+        expect(self.complete_button()).to_be_visible()
+        expect(self.reviewed_status()).to_have_count(0)
         self.page.get_by_role('button', name='放弃修改', exact=True).click()
-        expect(links).to_be_checked()
+        expect(self.reviewed_status()).to_be_visible()
+        expect(self.complete_button()).to_have_count(0)
 
     def test_stage2_08_confirmation_failure_and_conflict_do_not_claim_saved(self):
         self.open_task(self.task_id)
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
-        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
+        self.step('标签与链接')
         endpoint = ('PUT', f'/api/tasks/{self.task_id}/localization')
         self.responses[endpoint] = {'status_code': 503, 'body': {'detail': 'temporary failure'}}
-        tags.click()
-        expect(self.page.get_by_role('alert').filter(has_text='确认未保存')).to_be_visible()
-        expect(tags).not_to_be_checked()
+        self.complete_button().click()
+        failure = self.page.get_by_role('alert').filter(has_text='确认未保存')
+        expect(failure).to_be_visible()
+        expect(failure).not_to_contain_text('temporary')
+        expect(self.reviewed_status()).to_have_count(0)
         self.assertFalse(self.fixtures.detail(self.task_id)['localization']['hashtags_confirmed'])
         del self.responses[endpoint]
         self.fixtures.sources[self.task_id][0]['text'] += ' Changed'
         self.fixtures.write_source(self.task_id)
         self.expected_puts += 1
-        tags.click()
+        self.complete_button().click()
         expect(self.page.get_by_role('button', name='载入最新内容并保留我的修改')).to_be_visible()
-        expect(tags).not_to_be_checked()
+        expect(self.reviewed_status()).to_have_count(0)
         self.page.get_by_role('button', name='载入最新内容并保留我的修改').click()
-        expect(tags).to_be_enabled()
+        expect(self.complete_button()).to_be_enabled()
+        # 原文变了，旧德语稿不能直接确认；页面要说清下一步，而不是只让人重试。
         self.expected_puts += 1
-        tags.click()
+        self.complete_button().click()
         expect(self.page.get_by_role('alert').filter(has_text='请先编辑德语')).to_be_visible()
-        expect(tags).not_to_be_checked()
+        expect(self.reviewed_status()).to_have_count(0)
+        self.step('德语正文')
         self.page.get_by_role('button', name='编辑德语', exact=True).click()
-        self.page.get_by_role('tab', name='正文对照', exact=True).click()
         self.page.get_by_role('textbox', name='德语正文').fill('Erneut gepruefter Text.')
         self.expected_puts += 1
         self.save_draft()
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        self.step('标签与链接')
         self.expected_puts += 1
-        tags.click()
-        expect(tags).to_be_checked()
+        self.complete_button().click()
+        # 这篇的原文链接没有映射，确认只记下决定，同时提醒补全落地页。
+        expect(self.page.get_by_role('status').filter(has_text='审核选择已保存，请补全德语落地页')).to_be_visible()
 
     def test_stage2_09_facebook_confirmation_pending_and_locked_states(self):
         mapping = self.fixtures.config._d['publish'].get('link_map', {})
@@ -399,41 +437,32 @@ class Stage2ReviewTests(BrowserWorkflowTests):
             'https://us.example.invalid/product': 'https://de.example.invalid/product'}
         self.responses[('GET', f'/api/tasks/{self.task_id}/approval-options')] = {'body': approval_options()}
         self.open_task(self.task_id)
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
-        links = self.page.get_by_label('我已确认本篇的链接与主页引导')
-        tags = self.page.get_by_label('我已确认本篇使用的话题标签')
+        self.step('标签与链接')
+        edit = self.page.get_by_role('button', name='编辑标签与链接', exact=True)
         before = self.fixtures.detail(self.task_id)['localization_validation']['caption']
-        expect(self.page.get_by_role('button', name='编辑确认无误', exact=True)).to_be_enabled()
         self.expected_puts = 1
         self.hold_saves = True
-        links.click()
-        expect(links).to_be_disabled()
-        expect(tags).to_be_disabled()
-        expect(self.page.get_by_role('button', name='编辑德语', exact=True)).to_be_disabled()
-        expect(self.page.get_by_role('button', name='编辑确认无误', exact=True)).to_have_count(0)
-        deadline = time.monotonic() + 5
-        while not self.held_saves and time.monotonic() < deadline:
-            self.page.wait_for_timeout(20)
-        self.assertEqual(len(self.held_saves), 1)
+        self.complete_button().click()
+        # 保存途中两个入口都不可点，不能开出第二份编辑或重复确认。
+        expect(self.complete_button()).to_be_disabled()
+        expect(edit).to_be_disabled()
+        self.wait_saves(1)
         self.release_saves()
         self.hold_saves = False
-        expect(links).to_be_checked()
-        expect(links).to_be_enabled()
+        expect(self.reviewed_status()).to_be_visible()
+        expect(edit).to_be_enabled()
         saved = self.fixtures.detail(self.task_id)
         self.assertTrue(saved['localization']['links'][0]['confirmed'])
+        self.assertTrue(saved['localization']['links_confirmed'])
         self.assertEqual(saved['localization_validation']['caption'], before)
-        self.expected_puts += 1
-        links.click()
-        expect(links).not_to_be_checked()
-        expect(links).to_be_enabled()
-        self.assertFalse(self.fixtures.detail(self.task_id)['localization']['links_confirmed'])
         for status, read_only in [('content_locked', False), ('pending_review', True), ('scheduled', False)]:
             locked = self.fixtures.detail(self.task_id)
             locked.update(status=status, read_only=read_only)
             self.responses[('GET', f'/api/tasks/{self.task_id}')] = {'body': locked}
             self.page.reload()
-            expect(links).to_be_disabled()
-            expect(tags).to_be_disabled()
+            expect(self.reviewed_status()).to_be_visible()
+            expect(self.complete_button()).to_have_count(0)
+            expect(edit).to_have_count(0)
 
 
 def load_tests(_loader, _tests, _pattern):

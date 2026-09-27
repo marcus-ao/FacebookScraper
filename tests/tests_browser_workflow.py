@@ -90,6 +90,8 @@ class BrowserWorkflowTests(unittest.TestCase):
             if self.fixtures.local_image_writes and request.method == "POST":
                 allowed |= parsed.path.endswith(("/image/0/upload", "/image/0/selection", "/export"))
                 allowed |= parsed.path.startswith("/api/image-versions/task/")
+            if self.fixtures.local_image_writes and request.method == "PUT":
+                allowed |= "/review-confirmations/images/" in parsed.path
             if not allowed:
                 self.denied.append(request.method + " " + parsed.path)
                 route.abort()
@@ -121,11 +123,16 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_role("link", name="返回列表", exact=True)).to_be_visible()
         self.assertEqual(urlsplit(self.page.url).path, expected)
 
-    def save_draft(self):
+    def step(self, label):
+        """四步导航切换只改本篇的步骤参数，不触发离开提示。"""
+        self.page.get_by_role("navigation", name="审核步骤").get_by_role(
+            "button", name=re.compile(label)).click()
+
+    def save_draft(self, action="保存修改"):
         with self.page.expect_response(lambda response: response.request.method == "PUT" and response.url.endswith("/localization")) as result:
-            self.page.get_by_role("button", name="保存", exact=True).click()
+            self.page.get_by_role("button", name=action, exact=True).click()
         self.assertEqual(result.value.status, 200, result.value.text())
-        expect(self.page.get_by_role("button", name="编辑德语", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("textbox", name="德语正文")).to_have_count(0)
 
     def test_12_review_lists_show_newest_sources_before_older_posts(self):
         """Real API + React: all platform queues, paging and adjacent navigation."""
@@ -200,107 +207,107 @@ class BrowserWorkflowTests(unittest.TestCase):
     def test_11_refinement_rejection_explains_cause_and_refresh_clears_only_after_success(self):
         endpoint = '/api/refinements/task/' + self.fixtures.ig_id
         reason = 'instagram:3984612646028833441 的正文/图片/轮播完整性硬闸未通过，未调用付费服务。'
+        notice = '本次处理未完成或状态暂不可读，请刷新状态后再决定是否重试'
         submissions = []
         def reject(request):
             submissions.append(request.post_data_json)
             return {'status_code': 409, 'body': {'detail': reason}}
         self.responses[('POST', endpoint)] = reject
         self.open_task(self.fixtures.ig_id)
-        self.page.get_by_text('单篇优化（可选）', exact=True).click()
-        instruction = self.page.get_by_role('textbox', name='这一次希望怎样调整')
+        self.page.get_by_text('调整德语文案（可选）', exact=True).click()
+        instruction = self.page.get_by_role('textbox', name='希望怎样调整文案')
         instruction.fill('保留型号，用更自然的德语。')
+        # 图片步骤和初稿区也有同名按钮，但它们挂在别处；文案调整在内容处理区里。
+        panel = self.page.locator('[data-content-jobs]')
         self.page.get_by_role('button', name=re.compile('生成文案候选')).click()
-        expect(self.page.get_by_text(reason, exact=True)).to_be_visible()
+        expect(self.page.get_by_text(notice, exact=True)).to_be_visible()
+        # 业务页不透出后端原因原文（D12）；输入保留，便于核对后决定是否重试。
+        expect(self.page.get_by_text(reason)).to_have_count(0)
         expect(instruction).to_have_value('保留型号，用更自然的德语。')
         self.responses[('GET', endpoint)] = {'status_code': 503, 'body': {'detail': '任务状态暂时不可读'}}
-        self.page.get_by_role('button', name='刷新任务状态', exact=True).click()
-        expect(self.page.get_by_text('任务状态暂时不可读', exact=True)).to_be_visible(timeout=15000)
+        panel.get_by_role('button', name='刷新处理状态', exact=True).click()
+        expect(self.page.get_by_text(notice, exact=True)).to_be_visible(timeout=15000)
         del self.responses[('GET', endpoint)]
-        self.page.get_by_role('button', name='刷新任务状态', exact=True).click()
-        expect(self.page.get_by_text(reason, exact=True)).to_have_count(0)
-        expect(self.page.get_by_text('任务状态暂时不可读', exact=True)).to_have_count(0)
-        expect(self.page.get_by_text('本次处理未完成或状态暂不可读，已保留输入，请刷新状态核对', exact=True)).to_have_count(0)
+        panel.get_by_role('button', name='刷新处理状态', exact=True).click()
+        expect(self.page.get_by_text(notice, exact=True)).to_have_count(0)
         expect(instruction).to_have_value('保留型号，用更自然的德语。')
         self.assertEqual(len(submissions), 1, '刷新状态不得重新提交付费请求')
 
     def test_01_facebook_save_refresh_and_source_conflict_keep_the_draft(self):
-        """Real local backend: three sections save atomically; new source gives 409."""
+        """Real local backend: body, tags and links save together; a new source gives 409."""
         self.open_task(self.fixtures.fb_id)
         self.page.get_by_role("button", name="编辑德语").click()
         body = self.page.get_by_role("textbox", name="德语正文")
         expect(body).not_to_have_value(re.compile("https?://"))
         body.fill("Offline-Test: von Hand überarbeitet. 🐈")
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
-        self.page.get_by_role("textbox", name="本篇语义标签").fill("#Katzenliebe")
-        self.page.get_by_label("我已确认本篇使用的话题标签").check()
+        self.step("标签与链接")
+        # 所有拟发布标签都由人决定，品牌标签不会被自动补回（D21）。
+        self.page.get_by_role("textbox", name="本篇拟发布标签").fill("#Katzenliebe")
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill("https://de.example.invalid/produkt")
-        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
-        self.save_draft()
+        self.save_draft("完成标签与链接审核")
         saved = self.fixtures.detail(self.fixtures.fb_id)
-        self.assertEqual(saved["localization"]["tags"], ["#Neakasa", "#Katzenliebe"])
+        self.assertEqual(saved["localization"]["tags"], ["#Katzenliebe"])
+        self.assertTrue(saved["localization"]["hashtags_confirmed"])
+        self.assertTrue(saved["localization"]["links_confirmed"])
         self.assertEqual(saved["localization"]["body_de"], "Offline-Test: von Hand überarbeitet. 🐈")
         self.assertIn("https://de.example.invalid/produkt", saved["text"]["de_human"])
         self.fixtures.write_machine(self.fixtures.fb_id, "Offline-Neuübersetzung. #Neakasa #CatLover")
         self.page.reload()
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.step("德语正文")
         expect(self.page.get_by_text("Offline-Test: von Hand überarbeitet. 🐈", exact=True)).to_be_visible()
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
+        self.step("标签与链接")
         expect(self.page.get_by_text("本篇链接已确认", exact=True)).to_be_visible()
 
-        self.page.get_by_role("button", name="编辑德语").click()
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.page.get_by_role("button", name="编辑标签与链接", exact=True).click()
+        self.step("德语正文")
         body.fill("Offline-Konflikt: diesen Entwurf behalten.")
         self.fixtures.sources[self.fixtures.fb_id][0]["text"] = "Updated offline source. https://us.example.invalid/new #Neakasa #CatLover"
         self.fixtures.write_source(self.fixtures.fb_id)
         with self.page.expect_response(lambda r: r.request.method == "PUT" and r.url.endswith("/localization")) as conflict:
-            self.page.get_by_role("button", name="保存", exact=True).click()
+            self.page.get_by_role("button", name="保存修改", exact=True).click()
         self.assertEqual(conflict.value.status, 409)
-        expect(self.page.get_by_role("alert").filter(has_text="源帖已更新")).to_be_visible()
+        expect(self.page.get_by_role("alert").filter(has_text="这一篇在别处被改过了")).to_be_visible()
         expect(body).to_have_value("Offline-Konflikt: diesen Entwurf behalten.")
         self.page.get_by_role("button", name="载入最新内容并保留我的修改").click()
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
+        self.step("标签与链接")
         expect(self.page.get_by_role("link", name="https://us.example.invalid/new", exact=True)).to_be_visible()
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.step("德语正文")
         expect(body).to_have_value("Offline-Konflikt: diesen Entwurf behalten.")
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
-        self.page.get_by_label("我已确认本篇使用的话题标签").check()
+        self.step("标签与链接")
         self.page.get_by_role("textbox", name="链接 1 德语落地页").fill("https://de.example.invalid/neu")
-        self.page.get_by_label("我已确认本篇的链接与主页引导").check()
-        self.save_draft()
+        self.save_draft("完成标签与链接审核")
         self.assertFalse(self.fixtures.detail(self.fixtures.fb_id)["text"]["stale"])
 
     def test_02_instagram_bio_counter_and_unsaved_navigation(self):
-        """Real save: URL excluded, CTA retained, emoji count and >30 tags stay intact."""
+        """Real save: URL excluded, CTA retained, emoji body and >30 tags stay intact."""
         self.open_task(self.fixtures.ig_id)
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
+        self.step("标签与链接")
         expect(self.page.get_by_text("当前 bio（只读）：未配置", exact=True)).to_be_visible()
-        self.page.get_by_role("button", name="编辑德语").click()
+        self.page.get_by_role("button", name="编辑标签与链接", exact=True).click()
         body = "Offline-Test 🐈 für Instagram."
         cta = "Weitere Infos im Link in unserer Bio."
         tags = ["#Neakasa"] + ["#Offline" + str(index) for index in range(30)]
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.step("德语正文")
         self.page.get_by_role("textbox", name="德语正文").fill(body)
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
-        self.page.get_by_role("textbox", name="本篇语义标签").fill(" ".join(tags[1:]))
-        self.page.get_by_label("我已确认本篇使用的话题标签").check()
+        self.step("标签与链接")
+        self.page.get_by_role("textbox", name="本篇拟发布标签").fill(" ".join(tags))
         self.page.get_by_role("combobox", name="常用引导话术").click()
         self.page.locator(".ant-select-dropdown:visible .ant-select-item-option-content").filter(
             has_text="自定义（下方输入）").click()
         self.page.get_by_label("自定义 bio 引导").fill(cta)
         caption = "\n\n".join([body, cta, " ".join(tags)])
-        expect(self.page.get_by_text(re.compile(rf"^发布文案 {len(caption)} / 2,200 字符"))).to_be_visible()
         expect(self.page.get_by_role("region", name="话题标签选择")).to_contain_text("31 / 30 个")
         self.page.get_by_role("link", name="发布月历", exact=True).click()
         expect(self.page.get_by_role("dialog")).to_be_visible()
-        self.page.get_by_role("button", name="留在本页", exact=True).click()
-        self.page.get_by_role("tab", name="正文对照", exact=True).click()
+        self.page.get_by_role("button", name="继续编辑", exact=True).click()
+        self.step("德语正文")
         expect(self.page.get_by_role("textbox", name="德语正文")).to_have_value(body)
         self.save_draft()
         human = self.fixtures.detail(self.fixtures.ig_id)["text"]["de_human"]
         self.assertEqual(human, caption)
         self.assertNotIn("https://", human)
         self.page.reload()
-        self.page.get_by_role("tab", name="话题标签与链接", exact=True).click()
+        self.step("标签与链接")
         expect(self.page.get_by_text(cta, exact=True)).to_be_visible()
 
     def test_03_history_pages_and_frozen_account_are_read_only(self):
@@ -320,7 +327,8 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.page.locator("tr[data-task-id] a").first.click()
         expect(self.page.get_by_text("冻结账号的历史归档 · 仅供查阅", exact=True)).to_be_visible()
         expect(self.page.get_by_role("button", name="编辑德语")).to_have_count(0)
-        expect(self.page.get_by_role("button", name="通过并创建排期")).to_have_count(0)
+        expect(self.page.get_by_role("button", name="编辑确认无误")).to_have_count(0)
+        expect(self.page.get_by_role("button", name="确认发布时间并排期")).to_have_count(0)
         expect(self.page.get_by_role("button", name="翻译这篇", exact=True)).to_have_count(0)
         self.assertIn("/history/", self.page.url)
         self.assertFalse((self.fixtures.root / "archive/in_neakasa.tech/translated_human.jsonl").exists())
@@ -383,10 +391,8 @@ class BrowserWorkflowTests(unittest.TestCase):
             default_times=["16:00"])}
 
         def approve(request):
+            # 提交只登记一次后台操作；回读确认之前账本不会写成已排期。
             posted.append(request.post_data_json)
-            detail["status"] = "scheduled"
-            detail["publication"] = {"attempt_id": "offline-attempt", "status": "scheduled"}
-            detail["delivery"] = {"status": "not_observed", "message": "尚无远端公开发布观测"}
             detail["publish_operation"] = publish_operation(status="running", step_index=1, step="打开编辑器")
             return {"body": detail["publish_operation"]}
 
@@ -396,24 +402,30 @@ class BrowserWorkflowTests(unittest.TestCase):
             "body": detail["publish_operation"]}
         self.responses[("GET", "/api/calendar")] = {"body": calendar_payload()}
         self.open_task(self.fixtures.fb_id)
-        self.page.get_by_label("发布时间").fill("2026-09-13T16:00")
+        self.page.get_by_role("textbox", name="发布时间", exact=True).fill("2026-09-13T16:00")
         self.page.get_by_role("button", name="确认发布时间并排期", exact=True).click()
         self.page.get_by_role("button", name="确认并创建排期", exact=True).click()
-        expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
+        progress = self.page.get_by_role("alert").filter(has_text="正在创建排期")
+        expect(progress).to_be_visible()
+        # 进度只给业务状态，不透出浏览器步骤（D40）。
+        expect(progress).not_to_contain_text("打开编辑器")
         self.page.reload()
-        expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_contain_text("打开编辑器")
+        expect(self.page.get_by_role("alert").filter(has_text="正在创建排期")).to_be_visible()
+        detail.update(status="scheduled",
+            publication={"attempt_id": "offline-attempt", "status": "scheduled"},
+            delivery={"status": "not_observed", "message": "尚无远端公开发布观测"})
         detail["publish_operation"] = publish_operation(status="succeeded", step_index=7,
             step="提交并回读月历", message="自动提交并回读为 scheduled")
-        expect(self.page.get_by_text("排期已确认；排期详情图片未核验", exact=True)).to_be_visible(timeout=15000)
-        expect(self.page.get_by_role("status")).to_contain_text("排期已确认。")
+        expect(self.page.get_by_role("status").filter(has_text="定时排期已确认")).to_contain_text(
+            "公开发布仍待观测", timeout=15000)
         expect(self.page.get_by_text("已排期", exact=True)).to_be_visible()
         self.assertEqual(len(posted), 1)
         self.assertEqual(posted[0]["scheduled_at"], "2026-09-13T16:00")
         self.assertEqual(posted[0]["content_fingerprint"], "offline-fingerprint")
         self.page.get_by_role("link", name="发布月历", exact=True).click()
-        scheduled = self.page.get_by_role("button").filter(has_text="定时")
+        scheduled = self.page.get_by_role("button").filter(has_text="已排期")
         published = self.page.get_by_role("button").filter(has_text="已发布")
-        expect(scheduled).to_contain_text("定时")
+        expect(scheduled).to_contain_text("已排期")
         expect(scheduled).not_to_contain_text("已发布")
         expect(published).to_contain_text("已发布")
         scheduled.click()
@@ -422,30 +434,28 @@ class BrowserWorkflowTests(unittest.TestCase):
         expect(self.page.get_by_text("Offline published observation fixture", exact=True)).to_be_visible()
         self.assertEqual(self.writes, [])
 
-
     def test_07_facebook_inline_link_insertion_uses_backend_counter_and_survives_reload(self):
         self.open_task(self.fixtures.fb_id)
         self.page.get_by_role('button', name='编辑德语').click()
         body = self.page.get_by_role('textbox', name='德语正文')
         body.fill('Details:  bitte lesen.')
         body.evaluate('el => el.setSelectionRange(9, 9)')
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
-        self.page.get_by_role('button', name='将链接 1 插入正文光标处', exact=True).click()
+        self.step('标签与链接')
+        # 插入后回到正文步骤，占位符落在原光标处。
+        self.page.get_by_role('button', name='插入链接 1', exact=True).click()
         expect(body).to_have_value('Details: 〔链接 1〕 bitte lesen.')
         link = 'https://de.example.invalid/inline'
-        self.page.get_by_role('tab', name='话题标签与链接', exact=True).click()
+        self.step('标签与链接')
         self.page.get_by_role('textbox', name='链接 1 德语落地页').fill(link)
-        self.page.get_by_label('我已确认本篇的链接与主页引导').check()
         draft = self.fixtures.detail(self.fixtures.fb_id)['localization']
         expected = 'Details: ' + link + ' bitte lesen.\n\n' + ' '.join(draft['tags'])
-        expect(self.page.get_by_text(re.compile(r'^发布文案 ' + str(len(expected)) + r' 字符'))).to_be_visible()
-        self.save_draft()
+        self.save_draft('完成标签与链接审核')
         detail = self.fixtures.detail(self.fixtures.fb_id)
         self.assertEqual(detail['text']['de_human'], expected)
         self.assertEqual(detail['text']['de_human'].count(link), 1)
         self.page.reload()
+        self.step('德语正文')
         self.page.get_by_role('button', name='编辑德语').click()
-        self.page.get_by_role('tab', name='正文对照', exact=True).click()
         expect(self.page.get_by_role('textbox', name='德语正文')).to_have_value('Details: 〔链接 1〕 bitte lesen.')
         self.page.get_by_role('button', name='放弃修改').click()
 
@@ -479,7 +489,10 @@ class BrowserWorkflowTests(unittest.TestCase):
         field.fill("2026-09-15T09:00")
         approve.click()
         dialog = self.page.get_by_role("dialog")
-        expect(dialog).to_contain_text("Facebook · Neakasa Deutschland · 2026-09-15 09:00")
+        # 弹窗分开写目标账号、唯一渠道和业务时刻；时刻与页面同一格式，不带地名。
+        expect(dialog).to_contain_text("Neakasa Deutschland")
+        expect(dialog).to_contain_text("Facebook")
+        expect(dialog).to_contain_text("9/15 周二 09:00")
         expect(dialog).not_to_contain_text("柏林")
         dialog.get_by_role("button", name="继续核对", exact=True).click()
         expect(dialog).to_have_count(0)
@@ -505,14 +518,18 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.responses[("POST", endpoint + "/content-lock")] = lock
         self.responses[("DELETE", endpoint + "/content-lock")] = unlock
         self.open_task(self.fixtures.fb_id)
+        self.step("最终确认与排期")
         # 录证缺失让排期不可用，但不该挡住人确认文案和图片。
         field = self.page.get_by_role("textbox", name="发布时间", exact=True)
         expect(field).to_have_count(0)
         self.page.get_by_role("button", name="编辑确认无误", exact=True).click()
-        expect(self.page.get_by_text("正文与图片已按当前版本锁定")).to_be_visible()
+        expect(self.page.get_by_text("如需修改正文或图片，请先解除冻结")).to_be_visible()
         expect(field).to_have_count(1)
+        # 排期条件的技术原因不上业务页面，只给下一步。
+        expect(self.page.get_by_text("发布条件暂未满足，请刷新核对")).to_be_visible()
+        expect(self.page.get_by_text("ui_constraints_verified")).to_have_count(0)
         self.page.get_by_role("button", name="解除冻结", exact=True).click()
-        expect(self.page.get_by_text("正文与图片已按当前版本锁定")).to_have_count(0)
+        expect(self.page.get_by_text("如需修改正文或图片，请先解除冻结")).to_have_count(0)
         expect(field).to_have_count(0)
 
     def test_09_capture_link_unknown_total_and_explicit_one_attempt_recovery(self):
@@ -597,20 +614,26 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.fixtures.local_image_writes = True
         self.addCleanup(setattr, self.fixtures, "local_image_writes", False)
         self.open_task(task_id)
-        self.page.get_by_role("tab", name="图片 1", exact=True).click()
-        self.page.get_by_role("button", name="预览第 1 版", exact=True).click()
-        dialog = self.page.get_by_role("dialog", name="历史版本预览（尚未采用）")
-        preview = dialog.get_by_role("img", name="待比较的历史版本")
+        self.step("逐张图片")
+        self.page.get_by_role("button", name="比较其他版本", exact=True).click()
+        versions = self.page.get_by_role("dialog", name="第 1 张 · 选择图片版本")
+        candidate = versions.locator("li").filter(has=self.page.get_by_role("button", name="采用这一版"))
+        candidate.get_by_role("button", name="对比画面", exact=True).click()
+        preview = self.page.get_by_role("dialog", name="版本画面对比").get_by_role("img", name="待比较的图片")
         expect(preview).to_be_visible()
-        self.page.wait_for_function("() => [...document.images].filter(i => i.alt === '待比较的历史版本').every(i => i.complete && i.naturalWidth > 0)")
+        self.page.wait_for_function("() => [...document.images].filter(i => i.alt === '待比较的图片').every(i => i.complete && i.naturalWidth > 0)")
         self.assertIsNone(self.fixtures.detail(task_id)["review"]["revision"])
         self.page.keyboard.press("Escape")
-        self.page.get_by_role("button", name="采用这一版", exact=True).click()
+        expect(self.page.get_by_role("dialog", name="版本画面对比")).to_have_count(0)
+        candidate.get_by_role("button", name="采用这一版", exact=True).click()
+        expect(versions).to_have_count(0)
         self.page.wait_for_function("() => !document.querySelector('.ant-btn-loading')")
         before = self.fixtures.detail(task_id)
         self.assertEqual(before["status"], "edited")
+        # 纯下载在页头「更多」里，不改审核状态（D32）。
+        self.page.get_by_role("button", name="更多处理动作", exact=True).click()
         with self.page.expect_download():
-            self.page.get_by_role("button", name="下载本篇素材", exact=True).click()
+            self.page.get_by_role("menuitem", name="下载本篇素材", exact=True).click()
         self.assertEqual(self.fixtures.detail(task_id)["review"], before["review"])
         for colour in ("orange", "red"):
             data = io.BytesIO()
@@ -624,14 +647,14 @@ class BrowserWorkflowTests(unittest.TestCase):
                     "name": "manual.png", "mimeType": "image/png", "buffer": data.getvalue()})
             self.assertEqual(response.value.status, 200, response.value.text())
             current = self.fixtures.detail(task_id)
-            expect(self.page.get_by_role("img", name="最终图片 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
-            expect(self.page.get_by_text("人工图片", exact=True)).to_be_visible()
-            expect(self.page.get_by_role("alert").filter(has_text="宽高比")).to_be_visible()
+            expect(self.page.get_by_role("img", name="拟发布图片 1", exact=True)).to_have_attribute("src", current["images"][0]["de_url"])
+            expect(self.page.locator("figcaption").filter(has_text="人工图片")).to_be_visible()
+            # 画幅只给复核提示，不显示宽高比数值（D20）。
+            expect(self.page.get_by_text("请核对第 1 张图片的画幅是否适合发布。", exact=True)).to_be_visible()
+            expect(self.page.get_by_text("宽高比")).to_have_count(0)
             self.assertEqual(current["status"], "edited")
-        self.page.get_by_text("单篇优化（可选）", exact=True).click()
-        self.page.get_by_role("combobox", name="优化内容").click()
-        self.page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter(has_text=re.compile("^图片$")).click()
-        self.page.get_by_role("textbox", name="这一次希望怎样调整").fill("请把 CTA 改短")
+        self.page.get_by_text("生成或调整第 1 张图片（可选）", exact=True).click()
+        self.page.get_by_role("textbox", name="希望怎样调整这张图片").fill("请把 CTA 改短")
         expect(self.page.get_by_role("button", name=re.compile("生成图片"))).to_be_disabled()
         self.page.get_by_role("note", name=re.compile("生成图片.*人工图片")).hover()
         expect(self.page.get_by_text("这一张已换成人工图片，模型优化不会被采用", exact=True)).to_be_visible()
@@ -642,19 +665,26 @@ class BrowserWorkflowTests(unittest.TestCase):
         self.fixtures.local_image_writes = True
         self.addCleanup(setattr, self.fixtures, 'local_image_writes', False)
         self.open_task(task_id)
-        self.page.get_by_role('tab', name=re.compile('图片')).click()
-        for action, selection in (('确认使用原图', 'original_confirmed'), ('撤销原图确认', 'original')):
-            with self.page.expect_response(lambda response: response.request.method == 'POST'
-                    and response.url.endswith('/image/0/selection')) as response:
-                self.page.get_by_role('button', name=action, exact=True).click()
-            self.assertEqual(response.value.status, 200, response.value.text())
-            self.assertEqual(self.fixtures.detail(task_id)['images'][0]['selection'], selection)
-            if selection == 'original_confirmed':
-                expect(self.page.get_by_text('已确认使用原图', exact=True)).to_be_visible()
-                expect(self.page.get_by_text('缺德语图，显示的是原图', exact=True)).to_have_count(0)
-            else:
-                expect(self.page.get_by_text('缺德语图，显示的是原图', exact=True)).to_be_visible()
-        self.assertEqual(self.fixtures.detail(task_id)['review']['status'], 'edited')
+        self.step('逐张图片')
+        expect(self.page.get_by_text('暂无可用的拟发布图片', exact=True)).to_be_visible()
+        # 选原图与确认是同一次服务端动作（D10）。
+        with self.page.expect_response(lambda response: response.request.method == 'POST'
+                and response.url.endswith('/image/0/selection')) as response:
+            self.page.get_by_role('button', name='使用原图并确认', exact=True).click()
+        self.assertEqual(response.value.status, 200, response.value.text())
+        detail = self.fixtures.detail(task_id)
+        self.assertEqual(detail['images'][0]['selection'], 'original_confirmed')
+        self.assertTrue(detail['content_review']['images'][0]['confirmed'])
+        expect(self.page.get_by_text('第 1 张已确认', exact=True)).to_be_visible()
+        expect(self.page.locator('figcaption').filter(has_text='当前选用原图')).to_be_visible()
+        with self.page.expect_response(lambda response: response.request.method == 'PUT'
+                and response.url.endswith('/review-confirmations/images/0')) as response:
+            self.page.get_by_role('button', name='撤销第 1 张确认', exact=True).click()
+        self.assertEqual(response.value.status, 200, response.value.text())
+        detail = self.fixtures.detail(task_id)
+        self.assertFalse(detail['content_review']['images'][0]['confirmed'])
+        self.assertEqual(detail['images'][0]['selection'], 'original_confirmed')
+        expect(self.page.get_by_role('button', name='确认第 1 张图片用于发布', exact=True)).to_be_visible()
         self.assertFalse((self.fixtures.root / 'state/paid_requests.jsonl').exists())
 
     def test_13_capture_table_page_size_follows_the_size_changer(self):

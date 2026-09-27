@@ -92,6 +92,9 @@ class BrowserFixture:
                     if self.local_image_writes and method == "POST":
                         safe_write |= path.endswith(("/image/0/upload", "/image/0/selection", "/export"))
                         safe_write |= path.startswith("/api/image-versions/task/")
+                    if self.local_image_writes and method == "PUT":
+                        # 逐张确认只写临时归档的审校账本。
+                        safe_write |= "/review-confirmations/images/" in path
                     if method not in {"GET", "HEAD"} and not safe_write:
                         self.denied_backend_requests.append(method + " " + path)
                         from starlette.responses import JSONResponse
