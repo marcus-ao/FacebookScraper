@@ -118,8 +118,12 @@ async def prepare(post, when: datetime, *, ui_timezone: str,
 
 
 def _current_source(post, archive_root: Path) -> tuple[Path, dict]:
-    account_dir = post.post_dir.parent.parent
-    if account_dir.parent != archive_root:
+    # 帖子目录可在 posts/、posts/<月份>/ 或 posts/<月份>/<分类>/ 下；
+    # 不要退回 post_dir.parent.parent，那只对旧平铺目录成立，按月归档的帖子会全部被拒。
+    archive_root = Path(archive_root)
+    post_dir = Path(post.post_dir)
+    account_dir = next((parent for parent in post_dir.parents if parent.parent == archive_root), None)
+    if account_dir is None or account_dir / 'posts' not in post_dir.parents:
         raise review.ReviewConflict('帖子归档账号已变化，请重新组装内容')
     rows = [row for row in Archive(archive_root, account_dir.name).rows()
             if row.get('post_id') == post.post_id and row.get('platform') == post.platform]

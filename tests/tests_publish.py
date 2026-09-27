@@ -1964,6 +1964,59 @@ with tempfile.TemporaryDirectory() as folder:
           'CLI 真实提交缺正文/逐图确认时在浏览器前拒绝')
     check(prepare_without_review == 0 and prepared_calls == [False],
           'CLI 只准备草稿仍可运行，不把人工确认误设为准备门槛')
+
+    # 服务机归档是 posts/<月份>/<分类>/<帖子>；确认齐全的帖子必须能走到真实提交（批量批准也走这里）。
+    from core import review as review_ledger  # noqa: E402
+    from core.store import primary_tag_folder  # noqa: E402
+    from localize import images as image_ledger  # noqa: E402
+    from pipeline import content_confirmation  # noqa: E402
+    account_dir, source = fixture['account_dir'], fixture['source']
+    flat = fixture['post_dir'].relative_to(account_dir).as_posix()
+    nested = 'posts/%s/%s/%s' % (fixture['post_dir'].name[:7], primary_tag_folder({'tags': ['P1']}),
+                                 fixture['post_dir'].name)
+    (account_dir / nested).parent.mkdir(parents=True)
+    fixture['post_dir'].rename(account_dir / nested)
+    source.update(folder_name=fixture['post_dir'].name, tags=['P1'], tags_origin='manual',
+                  media=[dict(item, local_path=item['local_path'].replace(flat, nested))
+                         for item in source['media']])
+    (account_dir / nested / 'post.json').write_text(json.dumps(source, ensure_ascii=False), encoding='utf-8')
+    (account_dir / 'manifest.jsonl').write_text(json.dumps(source, ensure_ascii=False) + '\n', encoding='utf-8')
+    digest = source_text_sha256(source['text'])
+    revision = review_ledger.transition(
+        account_dir, source, 'image_selected', expected_revision=None, expected_source_sha256=digest,
+        image_selection=image_ledger.image_selection_record(account_dir, source, 0, 'original'))['revision']
+    tokens = content_confirmation.current_tokens(account_dir, source)
+    for action, payload in (('body_reviewed', {'confirmed': True, 'content_token': tokens['body']}),
+                            ('image_reviewed', {'confirmed': True, 'media_index': 0,
+                                                'content_token': tokens['images'][0]['token']})):
+        revision = review_ledger.transition(account_dir, source, action, expected_revision=revision,
+                                            expected_source_sha256=digest,
+                                            content_confirmation=payload)['revision']
+    post.post_dir = account_dir / nested
+    post.image_paths = (account_dir / nested / '01.jpg',)
+    prepared_calls.clear()
+    pre_submit_results = []
+
+    async def fake_submit(*args, **kwargs):
+        prepared_calls.append(kwargs['submit_enabled'])
+        kwargs['pre_submit_check'](post)
+        pre_submit_results.append('checked')
+        return 0, {'status': journal.STATUS_SCHEDULED, 'attempt_id': 'fixture'}
+
+    with patch.object(publish_entry, 'cfg', return_value=ConfirmationCfg()), \
+            patch.object(publish_entry, '_resolve_ui_timezone', return_value='Asia/Shanghai'), \
+            patch.object(publish_entry, 'compose_post', return_value=post), \
+            patch.object(publish_entry, 'print_checklist'), \
+            patch.object(publish_entry, 'prepare', side_effect=fake_submit), \
+            patch.object(publish_entry.bs, 'assert_ui_time_unambiguous'), \
+            patch.object(publish_entry.bs, 'require_submission_evidence'), \
+            patch.object(publish_entry.bs, 'require_readback_evidence'), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        submit_after_review = publish_entry.main([
+            '--post-id', post.post_id, '--at', '2026-09-28T10:00:00+08:00',
+            '--account', fixture['account'], '--submit', '--assume-yes'])
+    check(submit_after_review == 0 and prepared_calls == [True] and pre_submit_results == ['checked'],
+          'CLI 真实提交能定位按月/分类归档的帖子，确认齐全时通过提交前复核：' + output.getvalue()[-300:])
 check("publish_debug_port" in workflow_entry and "publish_profile_dir" in workflow_entry
       and "assert_publish_chrome_isolated" in workflow_entry,
       "入口只附着发布专用 profile/端口，且启动前核对与抓取小号隔离")
