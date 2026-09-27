@@ -1,6 +1,6 @@
 # 项目交接
 
-**代码与证据同步至 2026-09-25；服务机事实以各条观测日期为准。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
+**代码与证据同步至 2026-09-27；服务机事实以各条观测日期为准。** 业务功能以 [FUNCTIONALITY.md](FUNCTIONALITY.md) 为准，每个验收单元的状态以 [REQUIREMENTS §10](REQUIREMENTS.md#10-五阶段验收状态) 为准；**本文件管的是边界与证据**——哪些是红线、真实 UI 长什么样、踩过什么坑、哪份证据能证明到哪一步。按主题组织，不记实施过程。
 
 ## 1. 当前工作区事实
 
@@ -67,6 +67,23 @@
 **历史来源类型与缩略图（离线通过）。** 归档的 `post_type` 是完整来源媒体与正文的派生分类；`preview_kind` 仍只说明当前可展示的预览。展示索引升为 v3 并可从原始文件重建，文件回退与索引均在分页前应用平台、显示月份、分类及来源类型筛选；非法类型按全部处理，月底跨月帖子显示与筛选月份一致。历史页四个筛选会随 URL、分页、详情返回及相邻帖子保留。历史无图行改用 40px 视频、文字、混合、图片或待核对插画；混合帖有图仍显示原图并叠加播放提示，HTTP 404 仅回退画面。待审列表继续使用原有简明图标，非静态图文不进入待审候选，不抓视频封面。`tests_history` 在临时归档覆盖六类、字节缺失、组合筛选、跨月和索引/文件一致；前端类型、URL、日期和缩略图定向测试、构建及隔离浏览器 stage E 通过。stage E 的 1366/827px 行高均为 48px，七行插画夹具只有一行真实图片请求，404 后不重试；[浏览器结果](../state/ui-regression/browser-stage-e.json)与 [缩略图截图](../state/ui-regression/history-media-placeholders.png)仅证明合成数据。既有 1,067 篇归档的请求成本见 §7；本轮未访问真实账号或服务机归档，真实规模和视觉仍待联调。
 
 **详情与历史页组合验证（离线通过）。** `codex/review-detail-redesign` 合并工作树的最终 Python 定向组合包含 `tests_approval`、`tests_web_review`、`tests_publish`、`tests_pipeline_human`、`tests_pipeline_service`、`tests_review` 和 `tests_hygiene`，7/7 通过，结果在 `state/offline-validation-20260926T064240Z/results.json`；此前 `tests_history` 通过。前端 `npm test` 为 40 文件、628 项通过，生产构建通过。隔离浏览器 E、D、D1、D3、D4、`SCHEDULE_PREVIEW` 覆盖历史四筛选与详情往返、九种审核状态及 12 个步骤／宽度组合、邻篇缓存切换、草稿离开与冲突恢复、图片 404 后原地址重试、排期建议／轮询和提交前冻结预览。E 曾检出切换每页条数后立即选平台会丢失筛选；历史页现按最新 URL 规范化分页，修复后 E 通过。浏览器结果及截图在本工作树 `state/ui-regression/`；这些均使用临时归档与合成内容，不证明服务机真实素材、模型费用或真实排期。
+
+**详情审核独立复核（2026-09-27，离线通过）。** 复核按业务同事的实际顺序走了一遍：打开待审帖、确认正文和每张图、改商品分类、冻结、选时排期，另走 CLI `--submit`。修了四处会挡住或误放行审核的问题：
+
+- CLI 点击前的来源复核只认 `<账号>/posts/<帖子>` 的平铺目录，按月或按月加分类归档的帖子在编辑器填完后被拒，还误报成“尚未完成审校确认”。现从帖子目录向上找归档根下的账号目录。
+- 改商品分类会把整个帖子目录搬走，而图片确认绑的是归档内相对路径，于是全部图片确认静默失效，已冻结的帖子也排不了期。现只绑帖子目录内的位置（令牌前缀 `image-v3`）。代价是开发数据里已有的图片确认要重新点一次；这组功能尚未进 main，服务机没有受影响的记录。
+- 后台出图完成、机器重译都不改审校版本，停在旧页面的人仍能确认自己没看到的内容。现在确认要带回页面所见的 `content_version`，对不上或没带就返回 409，账本不写。“使用原图并确认”仍按原图字节核对，没有改。
+- 前三步都完成、服务端却不许冻结时，第四步既没按钮也没原因；旧冻结帖则指向一个不存在的“下方提示”。现在都给出业务原因和下一步，命令、字段名等内部说法不上页面，认不出的原因用通用说明。顺带去掉了优化按钮加载提示里的“费用”二字。
+
+验证在功能工作树 `.worktrees/review-detail-redesign` 进行：`tools.test_offline` 定向跑 `tests_web_review`、`tests_review`、`tests_image_workflow_review`、`tests_publish`、`tests_approval`、`tests_pipeline_human`、`tests_pipeline_service`、`tests_hygiene`，8/8 通过，结果在 `state/offline-validation-20260927T145024Z/`。前端 40 个文件、636 项通过，生产构建通过；隔离浏览器 D、D3、D4、`SCHEDULE_PREVIEW` 通过。前端与浏览器日志在 `state/audit-20260927/`，被这次浏览器运行覆盖前的 `state/ui-regression/` 备份在同目录 `ui-regression-before-audit/`。前三项各有回归用例，改动前先复现为红。浏览器 D 仍把 `lockable` 强制为 true，“暂时不能冻结内容”只由详情 SSR 用例覆盖。以上全是临时归档、合成图片和模拟回执，不能据此升级服务机真实素材、Business Suite 排期、远端图片或 G8 的结论。
+
+**与 main 的集成差异（2026-09-27 核对）。** main 已到 `9dffa5f`，比共同基点 `de8894f` 多 18 个提交，最近两个是月历回执对齐与刷新诊断。后端自动合并无冲突，`pipeline/approval.py`、`publish/workflow.py` 两边改动相容。前端有四个文件冲突，都卡在同一个取舍上：main 往页面加了恢复和诊断信息，功能分支按“只给业务状态”把这类信息撤掉了。
+
+- `hooks/useApproval.ts`：main 加了 `pendingReceipt`、`recover`/`recoveryNotice` 和回执提醒；功能分支简化了恢复。合并时保留 main 的回执补齐能力，文案沿用功能分支。
+- `features/approval/DecisionPanel.tsx` 及其测试（测试是两边都新建的同名文件）：main 显示 `op.step`、`operation.message` 和“查看核验信息”；功能分支按产品原则隐藏这些内容。合并时只保留业务状态。
+- `pages/calendar/CalendarPage.tsx`：main 用 `dayEntries` 合并远端卡与本地回执，时刻直接截 `entry.at.slice(11, 16)`；功能分支用 `formatBusinessHour` 按业务日期分组。`web/api/calendar.py` 给的 `at_business` 已换算到业务时区，两种写法显示结果相同，冲突只是文本上的。合并时沿用 `dayEntries`，时刻显示改用共用格式器，和其他页面保持同一套口径。
+
+本轮没有合并。建议单独做一次集成提交，完成后跑前端全量单测、构建，以及浏览器 D4、F、`SCHEDULE_PREVIEW`。
 
 ### 1.1 服务机现状与上线前的未完项
 
