@@ -253,7 +253,7 @@ def stage_d2(page, ui):
     assert body['localization']['tags']==['#Katzen','#Haustiere','#Tierpflege']
     page.get_by_role('button',name='放弃修改',exact=True).click()
     page.get_by_role('button',name='编辑分类').click()
-    page.get_by_role('textbox',name='产品分类',exact=True).fill('Riko，促销')
+    page.get_by_role('textbox',name='商品分类',exact=True).fill('Riko，促销')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(200,{**detail,'tags':['Riko','促销']})
     page.get_by_role('button',name='保存分类',exact=True).click()
     expect(page.get_by_role('dialog')).to_have_count(0)
@@ -462,6 +462,41 @@ def stage_d(page, ui):
         else:
             expect(schedule).to_have_count(0);expect(freeze).to_have_count(0)
         states[status]='PASS'
+    # 上面一律可冻结。前三步都做完、服务端仍拒绝冻结时（如金额对不上），真实后端给的是
+    # 带帖子编号和硬闸字样的原文；页面要说清原因和去哪改，并能重新核对。
+    options_path=f'/api/tasks/{task_id}/approval-options'
+    raw=f'帖子 {task_id.split("/")[-1]}：金额硬闸未通过：€19,99 未出现在德语稿'
+    ui.overrides[('GET',options_path)]=(200,dict(options,available=False,lockable=False,fingerprint=None,reason=raw,lock_reason=raw))
+    detail=copy.deepcopy(original);detail['status']='pending_review';detail['review']['status']='pending_review'
+    draft=detail['localization'];detail['text']['stale']=False;detail['localization_validation']['issues']=[]
+    draft.update(body_de=draft['body_de'] or 'Geprüfter Text',source_stale=False,hashtags_confirmed=True,links_confirmed=True)
+    for link in draft['links']: link.update(target_url=link['target_url'] or 'https://de.example/p',confirmed=True)
+    for image in detail['images']: image.update(ready=True,source_image_sha256=image.get('source_image_sha256') or 'a'*64)
+    stamp={'confirmed':True,'confirmed_at':'2026-09-25T00:00:00Z'}
+    detail['content_review']['body'].update(stamp,version='b'*64)
+    detail['content_review']['images']=[dict(stamp,index=image['index'],version='c'*64) for image in detail['images']]
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
+    page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=final',wait_until='networkidle')
+    blocked=page.get_by_role('alert').filter(has_text='暂时不能冻结内容')
+    expect(blocked).to_contain_text('德语正文里的金额与原帖不一致，请回到德语正文核对金额写法。')
+    expect(blocked).not_to_contain_text('硬闸')
+    expect(page.get_by_role('button',name='编辑确认无误',exact=True)).to_have_count(0)
+    reads=lambda:len([r for r in ui.requests if r['method']=='GET' and r['path']==options_path])
+    before=reads();blocked.get_by_role('button',name='重新核对').click()
+    for _ in range(30):
+        if reads()>before: break
+        page.wait_for_timeout(100)
+    assert reads()>before,'「重新核对」没有重读冻结条件'
+    # main 时代冻结的旧帖缺标签决定：先说解除冻结，排期按钮不可点。
+    relock='请解除冻结，确认标签与链接后再次冻结'
+    ui.overrides[('GET',options_path)]=(200,dict(options,available=False,lockable=False,reason=relock,lock_reason=relock))
+    detail=copy.deepcopy(original);detail['status']='content_locked';detail['review']['status']='content_locked'
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
+    page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=final',wait_until='networkidle')
+    expect(page.get_by_text(relock,exact=True)).to_be_visible()
+    expect(page.get_by_role('button',name='确认发布时间并排期',exact=True)).to_be_disabled()
+    expect(page.get_by_role('button',name='解除冻结',exact=True)).to_be_enabled()
+    ui.overrides[('GET',options_path)]=(200,options)
     detail=copy.deepcopy(original);detail['read_only']=True
     ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
     page.goto(ui.fx.base_url+'/history/'+task_id,wait_until='networkidle')
@@ -534,7 +569,7 @@ def stage_d(page, ui):
         visible=page.locator('main').inner_text()
         assert not any(term in visible for term in ('费用估计','技术诊断','归档位置','飞书云盘','上海时间','柏林'))
         page.screenshot(path=str(EVIDENCE/f'review-detail-{width}.png'))
-    return {'B5':states,'B9':'PASS','B10':'PASS','B11':'PASS','B12_DST':'PASS','B15':'PASS','B17':'PASS','B23_refresh_neighbors':'PASS','B4_browser_back':'PASS','mark_geometry':geometry,'layouts':layouts}
+    return {'B5':states,'freeze_blocked_notice':'PASS','legacy_relock_notice':'PASS','B9':'PASS','B10':'PASS','B11':'PASS','B12_DST':'PASS','B15':'PASS','B17':'PASS','B23_refresh_neighbors':'PASS','B4_browser_back':'PASS','mark_geometry':geometry,'layouts':layouts}
 
 
 def stage_f(page, ui):
@@ -682,11 +717,11 @@ def stage_i(page, ui):
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
     task_id=row['id']; detail=ui.fx.detail(task_id)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('button',name='编辑分类',exact=True).click();page.get_by_role('textbox',name='产品分类',exact=True).fill('Riko，保留选择')
+    page.get_by_role('button',name='编辑分类',exact=True).click();page.get_by_role('textbox',name='商品分类',exact=True).fill('Riko，保留选择')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(409,{'detail':'stale tags'})
     page.get_by_role('button',name='保存分类',exact=True).click()
     latest={**detail,'tags_revision':'new-tags-version'};ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,latest)
-    page.get_by_role('button',name='载入最新分类',exact=True).click();expect(page.get_by_role('textbox',name='产品分类',exact=True)).to_have_value('Riko，保留选择')
+    page.get_by_role('button',name='载入最新分类',exact=True).click();expect(page.get_by_role('textbox',name='商品分类',exact=True)).to_have_value('Riko，保留选择')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(200,latest)
     page.get_by_role('button',name='保存分类',exact=True).click();expect(page.get_by_role('dialog')).to_have_count(0)
     assert [r['body'] for r in ui.requests if r['method']=='PUT' and r['path'].endswith('/tags')][-1]['tags_revision']=='new-tags-version'
