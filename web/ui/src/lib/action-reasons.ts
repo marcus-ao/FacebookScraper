@@ -99,6 +99,8 @@ export interface InitialTranslationGate {
   readonly interrupted: boolean
   readonly available: boolean
   readonly consented: boolean
+  /** 服务端给的不可用原因。 */
+  readonly reason?: string
 }
 
 export function initialTranslationDisabledReason(gate: InitialTranslationGate): string {
@@ -106,7 +108,7 @@ export function initialTranslationDisabledReason(gate: InitialTranslationGate): 
   if (common) return common
   if (gate.running) return '当前初翻仍在处理'
   if (gate.interrupted) return '请先核对中断的处理'
-  if (!gate.available) return '当前无法开始初翻，请刷新处理状态'
+  if (!gate.available) return businessNotice(gate.reason, '当前无法开始初翻，请刷新处理状态')
   if (!gate.consented) return '请先确认可以处理这篇第三方内容'
   return ''
 }
@@ -124,6 +126,8 @@ export interface RefinementGate {
   /** 选中的这一张当前是人工图。 */
   readonly manualImage?: boolean
   readonly originalConfirmed?: boolean
+  /** 本篇已有德语正文；服务端出图要以译文为准，没有正文时一定拒绝。 */
+  readonly hasGerman?: boolean
 }
 
 export function refinementDisabledReason(gate: RefinementGate): string {
@@ -132,6 +136,7 @@ export function refinementDisabledReason(gate: RefinementGate): string {
   if (!gate.eligible) return '请先恢复审校并复核原文变化'
   if (gate.running) return '当前优化仍在生成'
   if (gate.interrupted) return '请先核对中断的处理'
+  if (gate.kind === 'image' && gate.hasGerman === false) return '请先在“德语正文”步骤生成或填写德语正文，再生成图片'
   if (!gate.instruction.trim()) return '请填写本次希望怎样调整'
   if (!gate.capabilitiesLoaded) return '正在读取可用次数'
   // 人工图优先于程序产出，所以模型再生成一版也不会被采用——那笔钱是白花的。

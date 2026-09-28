@@ -1,5 +1,7 @@
 .wrap { margin-top: var(--rc-space-3); }
 .initial { margin-top: var(--rc-space-2); }
+/* 放进正文空状态时与“手写德语正文”并排，顶边要对齐。 */
+:global([data-draft-slot]) > .initial { margin-top: 0; }
 .imageTools { margin-top: var(--rc-space-3); }
 .initial p { font-size: var(--rc-font-secondary); }
 .field { display: grid; gap: var(--rc-space-2); margin: var(--rc-space-3) 0; }

@@ -166,6 +166,13 @@ describe('初翻：授权那一条排在最后，前面还有别的事要先做'
     expect(initialTranslationDisabledReason({ ...initialOk, ...patch })).toBe(expected)
   })
 
+  it('服务端说了为什么不能初翻，就照它说；带技术痕迹的原因才换成通用说明', () => {
+    expect(initialTranslationDisabledReason({ ...initialOk, available: false, reason: '本篇已经完成生成，请直接审校或使用单篇优化' }))
+      .toBe('本篇已经完成生成，请直接审校或使用单篇优化')
+    expect(initialTranslationDisabledReason({ ...initialOk, available: false, reason: 'KeyError: created_at' }))
+      .toBe('当前无法开始初翻，请刷新处理状态')
+  })
+
   it('还在跑的时候不提授权 —— 那是下一轮才需要的', () => {
     expect(initialTranslationDisabledReason({ ...initialOk, running: true, consented: false }))
       .toBe('当前初翻仍在处理')
@@ -193,6 +200,14 @@ describe('单篇优化：七条原因，次数用完排在最后', () => {
     [{ kind: 'image' as const, remaining: 0 }, '这张图片的优化次数已用完'],
   ])('%o → %s', (patch, expected) => {
     expect(refinementDisabledReason({ ...refineOk, ...patch })).toBe(expected)
+  })
+
+  it('还没有德语正文时，图片生成先指回正文步骤，而不是让人填完要求再被服务端拒绝', () => {
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', hasGerman: false }))
+      .toBe('请先在“德语正文”步骤生成或填写德语正文，再生成图片')
+    expect(refinementDisabledReason({ ...refineOk, kind: 'image', hasGerman: false, instruction: '' }))
+      .toBe('请先在“德语正文”步骤生成或填写德语正文，再生成图片')
+    expect(refinementDisabledReason({ ...refineOk, kind: 'text', hasGerman: false })).toBe('')
   })
 
   it('次数用完只管图片：文案优化不按张算', () => {

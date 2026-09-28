@@ -437,6 +437,45 @@ def stage_d5(page, ui):
     return {'D5':'PASS','consent_and_versions':True,'polls_stop_at_terminal':True,'candidate_dirty_confirmation':True,'expired_or_unversioned_candidate_disabled':True,'recovery_only_no_model_repeat':True,'drawer_escape_focus':True,'poll_counts':polls}
 
 
+
+def stage_draft_entry(page, ui):
+    """品牌帖还没有德语时，空状态里的“生成德语初稿”必须真的发起处理；不能用时要当场说明原因。"""
+    row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
+    task_id=row['id'];detail=copy.deepcopy(ui.fx.detail(task_id))
+    detail['status']='not_ready';detail['localization']['body_de']=''
+    detail['text'].update(de_machine=None,de_human=None,machine_current=False)
+    for image in detail['images']:
+        image.update(ready=False,de_present=False)
+    ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,detail)
+    initial_path=f'/api/initial-translation/task/{task_id}'
+    blocked={'available':False,'reason':'本篇已经完成生成，请直接审校或使用单篇优化','source_fingerprint':'b'*64,'needs_consent':False,'third_party':False,'job':None}
+    ui.overrides[('GET',initial_path)]=(200,blocked)
+    page.goto(ui.fx.base_url+'/review/'+task_id+'?tab=text',wait_until='networkidle')
+    slot=page.locator('[data-draft-slot]')
+    button=slot.locator('[data-paid-action="生成德语初稿"]')
+    expect(button).to_be_disabled()
+    expect(slot.get_by_role('status')).to_have_text(blocked['reason'])
+    # 页面上只能有一颗“生成德语初稿”，不再是一颗灰按钮加一颗只会滚动的链接。
+    expect(page.get_by_text('生成德语初稿',exact=True)).to_have_count(1)
+    ui.overrides[('GET',initial_path)]=(200,dict(blocked,available=True,reason=''))
+    job={'job_id':'fixture-brand-initial','kind':'initial','status':'pending','recorded_at':'2026-09-28T00:00:00Z'}
+    ui.overrides[('POST',initial_path)]=(202,job)
+    ui.overrides[('GET','/api/initial-translation/jobs/fixture-brand-initial')]=(200,dict(job,status='running'))
+    page.reload(wait_until='networkidle')
+    expect(button).to_be_enabled()
+    button.click()
+    expect(slot.get_by_text('正在生成',exact=True)).to_be_visible()
+    expect(page.get_by_role('dialog')).to_have_count(0)
+    posts=[r['body'] for r in ui.requests if r['method']=='POST' and r['path']==initial_path]
+    assert posts==[{'consent':False,'source_fingerprint':'b'*64,'source_text_sha256':detail['text']['source_text_sha256'],'human_revision':detail['text']['human_revision'],'review_revision':detail['review']['revision']}],posts
+    page.get_by_role('button',name=re.compile('逐张图片')).click()
+    page.get_by_role('button',name='生成德语图',exact=True).click()
+    image_button=page.locator('[data-paid-action="生成图片"]')
+    expect(image_button).to_be_visible()
+    expect(image_button).to_be_disabled()
+    expect(image_button.locator('xpath=ancestor::*[@role="note"][1]')).to_have_attribute('title','请先在“德语正文”步骤生成或填写德语正文，再生成图片')
+    return {'DRAFT_ENTRY':'PASS','blocked_reason_visible':True,'single_entry':True,'brand_posts_without_consent':True,'image_waits_for_german':True}
+
 def stage_d(page, ui):
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and row['image_count']>=3)
     task_id=row['id']; original=ui.fx.detail(task_id)
@@ -802,7 +841,7 @@ def stage_review_menu(page, ui):
     return {'review_menu': 'PASS', 'measurements': measurements, 'cancel_without_mutation': True}
 
 
-STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i,'REVIEW_MENU':stage_review_menu,'SCHEDULE_PREVIEW':stage_schedule_preview,'RECEIPT_RECONCILE':stage_receipt_reconcile}
+STAGES={'C':stage_c,'E':stage_e,'D1':stage_d1,'D2':stage_d2,'D3':stage_d3,'D4':stage_d4,'D5':stage_d5,'DRAFT_ENTRY':stage_draft_entry,'D':stage_d,'F':stage_f,'G':stage_g,'H':stage_h,'I':stage_i,'REVIEW_MENU':stage_review_menu,'SCHEDULE_PREVIEW':stage_schedule_preview,'RECEIPT_RECONCILE':stage_receipt_reconcile}
 
 def main():
     parser=argparse.ArgumentParser()

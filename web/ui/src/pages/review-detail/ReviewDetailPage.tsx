@@ -64,6 +64,7 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
   const approval = useApproval(detail, loc.editing || loc.saving, refresh)
   const textRef = useRef<TextWorkspaceHandle>(null)
   const [initialContainer, setInitialContainer] = useState<HTMLDivElement | null>(null)
+  const [draftSlot, setDraftSlot] = useState<HTMLDivElement | null>(null)
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [imageContainer, setImageContainer] = useState<HTMLDivElement | null>(null)
   const [imageIndex, setImageIndex] = useState(0)
@@ -151,11 +152,11 @@ function DetailWorkspace({ detail, apply, refresh, source }: { detail: TaskDetai
         <TextWorkspace ref={textRef} en={detail.localization.source_body} de={loc.shown.body_de} marks={loc.marks} liveMarks={loc.shownMarks}
           active={loc.active} editing={loc.editing} checking={loc.checking} human={!!detail.text.de_human} scan={detail.risk_scan}
           onChange={body_de => loc.setDraft({ ...loc.shown, body_de })} onSelect={loc.setActive} onJump={loc.jump}
-          {...(canEditTask(detail) ? { onStartEdit: loc.start, onGenerateDraft: () => initialContainer?.scrollIntoView({ block: 'center' }) } : {})} />
+          {...(canEditTask(detail) ? { onStartEdit: loc.start, draftSlot: setDraftSlot } : {})} />
         <SuggestionPanel key={detail.id} detail={detail} body={loc.shown.body_de} editing={loc.editing}
           onAdopt={body_de => loc.setDraft({ ...loc.shown, body_de })} onRefreshed={() => void refresh()} />
         {!detail.read_only && <ContentJobs key={detail.id} detail={detail} editing={loc.editing || loc.saving} refresh={refresh} onCandidate={adoptCandidate}
-          initialContainer={initialContainer} imageContainer={imageContainer} imageIndex={imageIndex} imageGenerationRequest={imageGenerationRequest} />}
+          initialContainer={draftSlot ?? initialContainer} imageContainer={imageContainer} imageIndex={imageIndex} imageGenerationRequest={imageGenerationRequest} />}
         <BodyReviewActions canEdit={canEditTask(detail)} hasBody={!!detail.localization.body_de.trim()}
           editing={loc.editing} saving={loc.saving || loc.recovering} confirming={loc.bodyConfirming}
           confirmed={detail.content_review.body.confirmed} onEdit={loc.start} onSave={() => void loc.save()}

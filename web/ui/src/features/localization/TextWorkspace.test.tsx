@@ -12,16 +12,23 @@ function bodyMarkup(de: string, state: RiskScan = scan, marks: readonly Mark[] =
   return renderToStaticMarkup(<TextWorkspace en="Only four words" de={de} marks={marks} liveMarks={marks}
     active={-1} editing={false} checking={false} human={false} scan={state}
     onChange={() => {}} onSelect={() => {}} onJump={() => {}}
-    onStartEdit={() => {}} onGenerateDraft={() => {}} />)
+    onStartEdit={() => {}} draftSlot={() => {}} />)
 }
 
 describe('正文审核工作区', () => {
-  it('无德语稿时显示空状态和手写、生成入口，不称为机器初译', () => {
+  it('无德语稿时显示空状态和手写入口，生成入口的位置留给真正的付费按钮，不称为机器初译', () => {
     const markup = bodyMarkup('')
     expect(markup).toContain('尚无德语文案')
     expect(markup).toContain('手写德语正文')
-    expect(markup).toContain('生成德语初稿')
+    expect(markup).toContain('data-draft-slot')
     expect(markup).not.toContain('机器初译')
+  })
+
+  it('空状态里不再放只会滚动页面的“生成德语初稿”假按钮', () => {
+    // 旧实现只 scrollIntoView 到顶部那颗按钮；那颗按钮已在视野里又被禁用时，点了毫无反应。
+    const source = readFileSync(new URL('./TextWorkspace.tsx', import.meta.url), 'utf8')
+    expect(source).not.toContain('onGenerateDraft')
+    expect(bodyMarkup('')).not.toContain('生成德语初稿')
   })
 
   it('未扫描、失败、过期与完成零结果分别表述，均不宣称安全', () => {

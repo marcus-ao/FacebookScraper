@@ -28,15 +28,59 @@ class InitialTranslationTests(ConsentFixture):
     def submit(self, **changes):
         params = dict(source_fingerprint=paid_consent.fingerprint(self.source, self.account),
             source_text_sha256=translated.source_text_sha256(self.source['text']),
-            human_revision=None, review_revision=None, executor=self.executor)
+            human_revision=None, review_revision=None, consent=True, executor=self.executor)
         params.update(changes)
         return initial_translation.submit(self.account, self.source, **params)
+
+    def make_brand_source(self):
+        self.source.update(owner='neakasaofficial', coauthors=[])
+        self.write_source()
 
     def test_capability_is_read_only_and_does_not_grant_permission(self):
         capability = initial_translation.capabilities(self.account, self.source)
         self.assertTrue(capability['available'])
         self.assertTrue(capability['needs_consent'])
         self.assertFalse(paid_consent.history(self.account))
+
+    def test_third_party_submit_without_consent_is_rejected_before_any_write(self):
+        with self.assertRaises(review.ReviewValidationError):
+            self.submit(consent=False)
+        self.assertFalse(paid_consent.history(self.account))
+        self.executor.submit.assert_not_called()
+
+    def test_brand_source_without_german_can_start_initial_draft(self):
+        # 激活边界前的品牌帖不会被自动流水线处理；这里再挡住，页面上的“生成德语初稿”就永远点不动。
+        self.make_brand_source()
+        capability = initial_translation.capabilities(self.account, self.source)
+        self.assertTrue(capability['available'], capability)
+        self.assertFalse(capability['third_party'])
+        self.assertFalse(capability['needs_consent'])
+        job = self.submit(consent=False)
+        self.executor.submit.assert_called_once()
+        self.assertEqual(initial_translation.job_result(job['job_id'])['status'], 'pending')
+        self.assertFalse(paid_consent.history(self.account), '品牌来源不需要逐帖第三方许可')
+        self.assertFalse(initial_translation.capabilities(self.account, self.source)['available'])
+
+    def test_brand_source_still_checks_page_versions_before_queueing(self):
+        self.make_brand_source()
+        with self.assertRaises(review.ReviewConflict):
+            self.submit(consent=False, review_revision='stale-page')
+        with self.assertRaises(review.ReviewConflict):
+            self.submit(consent=False, source_fingerprint='0' * 64)
+        self.executor.submit.assert_not_called()
+
+    def test_brand_draft_runs_through_the_same_processing(self):
+        self.make_brand_source()
+        selection = image_de.image_selection_record(self.account, self.source, 0, 'original')
+        event = review.transition(self.account, self.source, 'image_selected',
+            expected_revision=None, expected_source_sha256=translated.source_text_sha256(self.source['text']),
+            image_selection=selection)
+        job = self.submit(consent=False, review_revision=event['revision'])
+        translator = SimpleNamespace(translate=Mock(return_value='Ein sauberes Zuhause. #Neakasa'))
+        result = initial_translation.execute(job, self.source, translator=translator, editor=Mock(),
+            risk_scanner=lambda **kwargs: {'status': 'completed', 'risks': []})
+        self.assertEqual(result['status'], 'succeeded', result)
+        self.assertTrue(translated.load_translated(self.account / 'translated.jsonl'))
 
     def test_double_click_queues_once_and_preserves_author_whitelist(self):
         first = self.submit()
@@ -144,6 +188,18 @@ class InitialTranslationTests(ConsentFixture):
             self.assertEqual(accepted.status_code, 202, accepted.text)
             job = client.get('/api/initial-translation/jobs/' + accepted.json()['job_id'])
             self.assertEqual(job.json()['status'], 'pending')
+
+    def test_http_brand_source_queues_without_third_party_consent(self):
+        self.make_brand_source()
+        url = '/api/initial-translation/task/' + self.account.name + '/' + self.source['post_id']
+        with TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41000)) as client, patch.object(refinement, '_executor', self.executor):
+            capability = client.get(url).json()
+            self.assertTrue(capability['available'], capability)
+            accepted = client.post(url, json=dict(consent=False, source_fingerprint=capability['source_fingerprint'],
+                source_text_sha256=translated.source_text_sha256(self.source['text']),
+                human_revision=None, review_revision=None))
+            self.assertEqual(accepted.status_code, 202, accepted.text)
+        self.assertFalse(paid_consent.history(self.account))
 
 
 if __name__ == '__main__':
