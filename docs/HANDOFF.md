@@ -40,7 +40,7 @@
 
 **单篇排期确认预览（离线通过）。** `SchedulePreviewDialog` 在当前审核页内展示账号、唯一渠道、所选业务时刻与冻结图文；桌面等高分栏，窄屏上下排列，图片完整等比适配，多图按顺序切换，标题与操作栏固定在视口内。已移除冻结/远端图片回读的技术说明；图片加载失败仍明示。`useApproval` 在打开时共同复制预览与提交参数，网络恢复刷新查询不替换确认内容；取消保留时刻，再次打开采用最新查询结果。弹层打开期间保留原触发按钮节点，已验证查询刷新完成后关闭的焦点恢复。
 
-证据位于 `.worktrees/schedule-confirmation-preview/state/`：`schedule-preview/` 保存原缺陷复现、前端 138 项定向测试、生产构建及浏览器日志；`ui-regression/browser-stage-schedule_preview.json`、`browser-stage-d4.json` 与 `schedule-preview-*.png` 记录四种窗口尺寸、单图/多图/长文案/缺图、键盘返回、查询刷新与重复点击提交行为。全部使用临时归档、合成图片和模拟排期回执，无真实账号访问或发布。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 构建并重启后核对真实素材的视觉效果；此单元不升级 G8、模型或真实排期状态。
+证据位于 `state/branch-cleanup-20260927/schedule-confirmation-preview/state/`：`schedule-preview/` 保存原缺陷复现、前端 138 项定向测试、生产构建及浏览器日志；`ui-regression/browser-stage-schedule_preview.json`、`browser-stage-d4.json` 与 `schedule-preview-*.png` 记录四种窗口尺寸、单图/多图/长文案/缺图、键盘返回、查询刷新与重复点击提交行为。全部使用临时归档、合成图片和模拟排期回执，无真实账号访问或发布。服务机按 [MANUAL_STEPS §13](MANUAL_STEPS.md#13-更新并启动审校台) 构建并重启后核对真实素材的视觉效果；此单元不升级 G8、模型或真实排期状态。
 
 确认弹层的非阻塞键盘待办：若在重连刷新仍未完成时关闭，`DisabledReason` 恢复禁用包装可能重新挂载按钮，使组件库保存的原焦点节点失效；当前用例覆盖刷新完成后取消，未覆盖这一延迟响应边界。不影响内容冻结、所选时刻或提交校验。
 
@@ -52,13 +52,13 @@
 
 **月历来源关联（离线通过）。** 账本保留的是排期时的详情 ID，发布后卡片可能变成 IG 媒体 ID、聚合 entity ID 或缺少编号，旧的远端编号等值连接因此漏链。现按 `local_schedule.entries()` 的已排期记录，以目标渠道及排期时刻 ±5 分钟唯一关联，精确远端编号优先；全渠道须指向同一审校任务。原帖地址来自 `reader.source_post()` 的 `post.json`，不依赖 SQLite、不覆盖已发布地址；账本读取失败仍显示 `local_error`。该关联只负责导航，不充当发布验收证据。服务机真实月历待联调。
 
-隔离验证：`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 594 项和构建通过；浏览器 stage F 验证三类地址和进入审校详情，使用临时归档与模拟月历，没有真实账号调用。证据保存在 `.worktrees/calendar-source-link/state/` 的 `offline-validation-20260924T034358Z/`（月历与 hygiene）、`offline-validation-20260924T033652Z/`（发布操作）、`frontend-tests.log`、`frontend-build.log`、`ui-regression/browser-stage-f.json` 与 `ui-regression/calendar-source-links.png`。服务机部署后须只读核对本系统已发布卡的原帖链接与审校详情一致，并检查未匹配本地排期的人工帖没有来源入口。
+隔离验证：`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 594 项和构建通过；浏览器 stage F 验证三类地址和进入审校详情，使用临时归档与模拟月历，没有真实账号调用。证据保存在 `state/branch-cleanup-20260927/calendar-source-link/state/` 的 `offline-validation-20260924T034358Z/`（月历与 hygiene）、`offline-validation-20260924T033652Z/`（发布操作）、`frontend-tests.log`、`frontend-build.log`、`ui-regression/browser-stage-f.json` 与 `ui-regression/calendar-source-links.png`。服务机部署后须只读核对本系统已发布卡的原帖链接与审校详情一致，并检查未匹配本地排期的人工帖没有来源入口。
 
 **月历待办。** `publish/observations.status()` 仍假设账本排期 ID 与已发布卡 ID 相同；本轮不改公开观测判据，不能拿来源链接出现替它宣称已公开。
 
 **来源关联的歧义边界。** 同一任务/渠道附近有多张远端卡时，精确编号优先，其余时间近似匹配关闭；无精确编号时全部不挂链接。仅一张人工帖恰好落进本系统排期窗口、又没有其它远端证据时，时刻加渠道仍无法证明两者内容相同；这是该展示规则的限制，服务机需人工核对，不能升级成身份或公开状态证据。
 
-**列表与月历修复组合验证（离线通过）。** 合并提交 `dce0323` 同时包含类型占位与月历来源关联，合并无冲突。`tests_history` 7 项、`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 596 项及生产构建通过；隔离浏览器 stage E/F 验证 48px 行高、三类占位、图片 404 回退、三类月历链接与审校跳转。证据位于 `.worktrees/review-preview-integration/state/`：`offline-validation-20260924T040016Z/`、`integration-frontend.log`、`integration-build.log`、`ui-regression/browser-stage-e.json` 与 `ui-regression/browser-stage-f.json`。未使用真实账号或业务数据；服务机部署与联调仍待执行。
+**列表与月历修复组合验证（离线通过）。** 合并提交 `dce0323` 同时包含类型占位与月历来源关联，合并无冲突。`tests_history` 7 项、`tests_calendar_api` 21 项、`tests_publish_operations` 25 项、hygiene、前端 596 项及生产构建通过；隔离浏览器 stage E/F 验证 48px 行高、三类占位、图片 404 回退、三类月历链接与审校跳转。证据位于 `state/branch-cleanup-20260927/review-preview-integration/state/`：`offline-validation-20260924T040016Z/`、`integration-frontend.log`、`integration-build.log`、`ui-regression/browser-stage-e.json` 与 `ui-regression/browser-stage-f.json`。未使用真实账号或业务数据；服务机部署与联调仍待执行。
 
 **源码服务机改址。** 仓库网络入口以 `ops/service-machine.network.json` 为准，非受管飞书入口同步至 `[feishu].base_url`。`scripts/update_service_address.bat` 支持 IP/前缀或明确 CIDR，保留未指定端口；只输入 IP 时不猜新子网。局域网入口 `scripts/run_web_lan.bat` 从同一 JSON 读取监听和端口，再调用原前端构建流程。防火墙及客户端操作见 [MANUAL_STEPS §13.1](MANUAL_STEPS.md#131-源码服务机一键改址)。受管 `control/host.json` 优先且不由此工具修改，历史文档中的地址不是新的现场确认。
 
@@ -179,7 +179,9 @@
 
 同日按用户确认清理 `social-media-image-verification-fix-938aa1`、`story-insights-ci-timeout`、`feishu-card-redesign` 三个工作树及本地、远端同名分支。三个分支头 `cf1ed29`、`bd8b475`、`56b80d8` 均已包含在本地与远端 `main` 的 `28066f8` 中。其全部 2,722 份 `state/` 文件已按 SHA-256 核对：1,846 份补到主检出同名路径，853 份已有相同副本，23 份同名异字节文件保存在 `state/branch-cleanup-20260922/collisions/`，没有覆盖原文件。[保全清单](../state/branch-cleanup-20260922/preservation.json)记录每份来源、去向与摘要；三树未发现业务账本、原图或凭据。
 
-`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 现已能从主检出解析。`state/calendar-data-sync-fix/` 的独有证据仍由保留的 `.claude/worktrees/calendar-data-sync-fix-646a9e` 保管，清理前须保全。2026-09-23 复查时日历树 `a22ba9b` 与品牌树 `7a436f2` 均干净，功能已进入 main；本次未清理这些工作树。其余分支的验证仍以对应代码与工作树为准，不能把旧同名结果当作新版本的验证。
+`state/ci-evidence-35693145553/`、`state/offline-validation-20260922T071604Z/` 和 `state/story-insights-ci-timeout/step14-*.log` 现已能从主检出解析。`state/calendar-data-sync-fix/` 当时仍由 `.claude/worktrees/calendar-data-sync-fix-646a9e` 保管。2026-09-23 复查时日历树 `a22ba9b` 与品牌树 `7a436f2` 均干净，功能已进入 main；两树在 2026-09-27 的清理中退役，证据去向见下一段。其余分支的验证仍以对应代码与工作树为准，不能把旧同名结果当作新版本的验证。
+
+2026-09-27 按用户确认清理 17 个工作树及其本地分支，另删 7 个已并入 main 的远端分支和已无工作树的分支 `claude/facebook-review-detail-audit-e24f44`。其中 15 个分支头已包含在 main `7253f2a`；`codex/history-media-filter-thumbnails` 的四个提交由 `codex/review-detail-redesign` 重做后随 `936028c` 进入 main，`codex/manual-schedule-readiness` 唯一的独有提交改的是 main 在 `f507671` 已删除的断言。这两个分支的原提交另存为 `state/branch-cleanup-20260927/bundles/` 下的 git bundle。各树的 `state/`（历史筛选树另含 `.superpowers/`）整目录复制到 `state/branch-cleanup-20260927/<工作树名>/`，没有平铺到主检出同名路径：五棵树各有一份 `ui-regression/`，来自不同代码版本，平铺会互相覆盖。2,257 份文件按 SHA-256 核对，[保全清单](../state/branch-cleanup-20260927/preservation.json)逐份记录来源、去向与摘要；`business-ui-simplification` 的 6 份隔离实例索引（`.sqlite`/`.lock`）可重建，只记摘要未复制。本文原写作 `.worktrees/<名>/state/<路径>` 或「该工作树 `state/<路径>`」的证据，现位于 `state/branch-cleanup-20260927/<名>/state/<路径>`，只在已清理树中存在的引用已按此改写。主检出同名路径下已有的副本与归档逐字节一致；唯独 `ui-regression/` 每次运行都会覆盖，主检出那份不能代替各树的归档副本。
 
 ### 1.19 待审核列表按原帖时间降序（2026-09-19）
 
@@ -367,7 +369,7 @@ FB 的身份补充和正文未知规则见下方单条生产验证；不会借�
 ⛔ **跨发的 Story 预览里嵌着被分享的原卡片，它自带账号行，所以 owner 永远不是该区域里唯一的账号名**——
 "唯一作者"这个判据在真实页面上不可能成立。2026-09-20 服务机 `--verify-reader` 卡在
 `facebook_story_preview_owner`，根因就是这条：读取器认的是 `IMG` 作直接子节点、账号在相邻且无嵌套的 `DIV`，
-而三张截图里的预览是「头像 + 账号行」外面再套一层被分享卡片。[隔离复现](../state/calendar-data-sync-fix/preview-owner-repro.json)
+而三张截图里的预览是「头像 + 账号行」外面再套一层被分享卡片。[隔离复现](../state/branch-cleanup-20260927/calendar-data-sync-fix-646a9e/state/calendar-data-sync-fix/preview-owner-repro.json)
 用五种与截图一致的结构验证：旧判据只在单元夹具那一种形状下通过，其余四种全假。
 夹具当初是照着判据写的，所以测试一直绿——**不要再把它改回一行作者**。
 现在的判据是：可见的 `#instagram_story_preview_frame` 不存在（IG 视图保留自己的框，这是两个渠道的结构分界），
@@ -454,8 +456,8 @@ Total performance 与 Instagram 标题均为 `This content has no text`；Facebo
 
 **当前边界：9 月 4 日跨发 Story、IG Feed/Reel、FB 单渠道 Story 真实通过；聚合 Post 逐渠道适配器离线通过、服务机待复验；
 09-30 17:30 那条真实 IG 排期项的正文证据仍为代码未完成。**
-预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`，基点 `c0e734c`；
-**离线通过**，逐脚本结果与限制见该工作树 [state/calendar-data-sync-fix/validation.json](../state/calendar-data-sync-fix/validation.json)，清理前须保全。
+预览判据的修复在分支 `claude/calendar-data-sync-fix-646a9e`、工作树 `.claude/worktrees/calendar-data-sync-fix-646a9e`（2026-09-27 已清理），基点 `c0e734c`；
+**离线通过**，逐脚本结果与限制见归档的 [validation.json](../state/branch-cleanup-20260927/calendar-data-sync-fix-646a9e/state/calendar-data-sync-fix/validation.json)。
 [定向验证汇总](../state/planner-content-compatibility/validation.json)记录 11 个 Python 子系统脚本、
 4 个前端测试文件（124 条）、生产构建和月历浏览器场景；月份浏览器回归 23 条，独立复审另跑 8 条针对性场景。
 首轮两处测试夹具/断言不一致已修正并复跑，原日志保留。所有写入使用隔离临时数据；没有接入真实账号或调用模型。
@@ -802,7 +804,7 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 ### 1.31 实现精简与核验优化（2026-09-22）
 
-工作树 `.worktrees/publishing-simplification`，分支 `codex/publishing-simplification`。基于 `56b80d8`，接入已提交的单篇排期实现 `ef85dab`，复用审批内容单次组装与 `baseline_from_inventory()`；整合结果已通过 `3c15895` 进入 main，原排期工作树保留。
+工作树 `.worktrees/publishing-simplification`，分支 `codex/publishing-simplification`。基于 `56b80d8`，接入已提交的单篇排期实现 `ef85dab`，复用审批内容单次组装与 `baseline_from_inventory()`；整合结果已通过 `3c15895` 进入 main，原排期工作树 2026-09-27 已清理。
 
 **旧 Planner 清理、单渠道静态检查与操作提示：离线通过。** 生产读取只保留 `month_inventory` / `month_readback`；迁移的测试覆盖完整长文、重复卡、旧 ID、缺 ID、覆盖不足、DST 两次占用与不存在时刻。预检和激活仍核验双渠道，锁内防重、提交意图先落盘与未决禁止重提保留。同步证据复用会检查文件版本及截图存在性，配置每次重查，不增加持久缓存文件。
 
@@ -812,33 +814,33 @@ media 对象带 `coauthor_producers`，永远只有一个 pk；这里是三条�
 
 **图片选择与原图确认：离线通过。** 独立工作树 `.worktrees/image-selection`，分支 `codex/image-selection`。所有消费者共用有效图片选择；确认原图写现有审校账本，绑定实际 SHA、序号和媒体身份，冻结与生成锁、CAS 均保留。旧生成记录即使缺完整来源字段仍保留程序所有权，不能被误当成人工图；只有完整有效依据才能作为当前生成图。
 
-该工作树 `state/offline-validation-20260922T123055Z/` 中图片选择、图片工作流、localize、发布及 hygiene 通过；`state/offline-validation-20260922T123340Z/` 中批准、首次加工、优化、通知及图片选择通过；`state/offline-validation-20260922T123519Z/` 中请求前复核、首次加工、加工预算预览及 localize 通过。定向前端 122 项和生产构建通过。隔离浏览器 `state/offline-browser-20260922T123252Z-22332/report.json` 覆盖真实本地 API 的确认/撤销与上传，两个场景通过，没有付费或发布账本写入。夹具期间发现的过时测试假设与加工预览旧函数引用均已修正。
+归档 `state/branch-cleanup-20260927/image-selection/state/offline-validation-20260922T123055Z/` 中图片选择、图片工作流、localize、发布及 hygiene 通过；`state/branch-cleanup-20260927/image-selection/state/offline-validation-20260922T123340Z/` 中批准、首次加工、优化、通知及图片选择通过；`state/branch-cleanup-20260927/image-selection/state/offline-validation-20260922T123519Z/` 中请求前复核、首次加工、加工预算预览及 localize 通过。定向前端 122 项和生产构建通过。隔离浏览器 `state/branch-cleanup-20260927/image-selection/state/offline-browser-20260922T123252Z-22332/report.json` 覆盖真实本地 API 的确认/撤销与上传，两个场景通过，没有付费或发布账本写入。夹具期间发现的过时测试假设与加工预览旧函数引用均已修正。
 
-补充冻结验证 `state/offline-validation-20260922T124044Z/`：图片选择与 hygiene 通过，实际冻结/加载后图片字节与确认的原图一致，冻结后撤销被拒绝。
+补充冻结验证 `state/branch-cleanup-20260927/image-selection/state/offline-validation-20260922T124044Z/`：图片选择与 hygiene 通过，实际冻结/加载后图片字节与确认的原图一致，冻结后撤销被拒绝。
 
 **月历范围与最终表单复核：离线通过。** 工作树 `.worktrees/calendar-occupancy`，分支 `codex/calendar-occupancy`。完整月份枚举与最终复扫保留；逐卡保存独立时刻证据与诊断关联，范围外已知时间的异常可排除，相关未知/聚合卡未读到的时间/缺新字段的旧缓存继续阻断。候选建议使用相同范围规则。提交基线仍复用初次库存；目标卡全文、账号、单渠道、ID 和前后因果核验保留，远端删除仍要求整月完整。
 
-该工作树 `state/offline-validation-20260922T124715Z/` 八个规划、批准、缓存与回读脚本通过；`state/offline-validation-20260922T124912Z/` 的月历、聚合卡、发布恢复/防重及提交状态机通过。`state/offline-validation-20260922T125111Z/` 中最终表单、回读及日历 API 通过：隔离 Chromium 对正文、图片调序/删除、日期、时间、开关注入等待期变化，均在提交意图前拒绝，未变化时只点击一次。
+归档 `state/branch-cleanup-20260927/calendar-occupancy/state/offline-validation-20260922T124715Z/` 八个规划、批准、缓存与回读脚本通过；`state/branch-cleanup-20260927/calendar-occupancy/state/offline-validation-20260922T124912Z/` 的月历、聚合卡、发布恢复/防重及提交状态机通过。`state/branch-cleanup-20260927/calendar-occupancy/state/offline-validation-20260922T125111Z/` 中最终表单、回读及日历 API 通过：隔离 Chromium 对正文、图片调序/删除、日期、时间、开关注入等待期变化，均在提交意图前拒绝，未变化时只点击一次。
 
-最终定向结果 `state/offline-validation-20260922T125354Z/` 的聚合卡、hygiene、范围占用、规划与发布通过；新增月份浏览器用例的括号错误已修复，单独复跑 `state/partial-caption-browser.log` 通过，证明实际读取器保留缺正文但时间/渠道已核实的占用。较早发布测试运行中编辑源码曾扰动其 `inspect.getsource` 行号，最终串行发布回归通过；不作为产品故障结论。
+最终定向结果 `state/branch-cleanup-20260927/calendar-occupancy/state/offline-validation-20260922T125354Z/` 的聚合卡、hygiene、范围占用、规划与发布通过；新增月份浏览器用例的括号错误已修复，单独复跑 `state/branch-cleanup-20260927/calendar-occupancy/state/partial-caption-browser.log` 通过，证明实际读取器保留缺正文但时间/渠道已核实的占用。较早发布测试运行中编辑源码曾扰动其 `inspect.getsource` 行号，最终串行发布回归通过；不作为产品故障结论。
 
 **来源指纹与历史兼容：离线通过。** 工作树 `.worktrees/source-fingerprint`，分支 `codex/source-fingerprint`。只忽略图片已知签名参数，新许可、加工任务、冻结快照与发布记录携带 v2。旧授权先验证原始摘要再规范化比较；旧快照和任务继续按 v1 核验。旧快照遇到签名变化仍会失配，需要正常重新确认，不批量迁移。已排期来源变化通知也读取对应版本。现有 `truth_contract` 提升为 2，阻止不兼容的受管版本切换；没有恢复自动部署或工作流。
 
-该工作树 `state/offline-validation-20260922T130237Z/` 15/15 定向脚本通过，覆盖许可、实际归档持久化签名刷新、字节/顺序/正文/作者/派生参数变化、旧未决费用、旧任务、快照/回执恢复、采集恢复、初始加工/优化及 hygiene；`state/offline-validation-20260922T130457Z/` 发布兼容声明与 hygiene 2/2 通过。所有写入均使用临时归档与状态目录、空凭据和注入的外部依赖。
+归档 `state/branch-cleanup-20260927/source-fingerprint/state/offline-validation-20260922T130237Z/` 15/15 定向脚本通过，覆盖许可、实际归档持久化签名刷新、字节/顺序/正文/作者/派生参数变化、旧未决费用、旧任务、快照/回执恢复、采集恢复、初始加工/优化及 hygiene；`state/branch-cleanup-20260927/source-fingerprint/state/offline-validation-20260922T130457Z/` 发布兼容声明与 hygiene 2/2 通过。所有写入均使用临时归档与状态目录、空凭据和注入的外部依赖。
 
-独立只读复审确认并修复一项 P2：已排期来源通知遗漏指纹版本，导致签名 URL 未变的旧记录也会误报。`state/offline-validation-20260922T130718Z/` 复现，修复后的 `state/offline-validation-20260922T130731Z/` 通知与服务 2/2 通过，发布账本字节不变。复审回读后未发现剩余 P0/P1/P2；未执行真实服务验证。后续小待办：`RemoteSlotInventory.occupied_for_channel()` 已仅剩测试引用，下次对应详情测试迁移时可一并删除，不扩大本次主线回归。
+独立只读复审确认并修复一项 P2：已排期来源通知遗漏指纹版本，导致签名 URL 未变的旧记录也会误报。`state/branch-cleanup-20260927/source-fingerprint/state/offline-validation-20260922T130718Z/` 复现，修复后的 `state/branch-cleanup-20260927/source-fingerprint/state/offline-validation-20260922T130731Z/` 通知与服务 2/2 通过，发布账本字节不变。复审回读后未发现剩余 P0/P1/P2；未执行真实服务验证。后续小待办：`RemoteSlotInventory.occupied_for_channel()` 已仅剩测试引用，下次对应详情测试迁移时可一并删除，不扩大本次主线回归。
 
 G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变。没有连接真实业务账号、模型或服务机。
 
 四批结果已汇入 `codex/publishing-simplification`：`f507671`（Planner/静态检查/提示）、`eefdf72`（图片选择）、`69eb781`（范围占用/最终表单）、`bf486b8`（指纹兼容）。相对接入前序排期后的基线，生产代码与配置增加 537 行、删除 800 行，净减少 263 行；不包含测试和文档，不据此推导运行性能。该次快照中主检出干净，未推送或部署。
 
-该次集成工作树的 [组合验证](../state/offline-validation-20260922T131016Z/results.json) 5/5 通过：原图选择与冻结、范围占用、最终表单、指纹兼容、发布恢复。[前端构建](../state/final-ui-build.log)通过，保留既有大 chunk 提示。本节四个发布子工作树目前仍保留，独有证据仍由各树保管；§1.3 中另外三棵已退役工作树已经清理，证据按清单保全。没有运行全量或追修无关 Actions。
+该次集成工作树的 [组合验证](../state/offline-validation-20260922T131016Z/results.json) 5/5 通过：原图选择与冻结、范围占用、最终表单、指纹兼容、发布恢复。[前端构建](../state/final-ui-build.log)通过，保留既有大 chunk 提示。本节四个发布子工作树与 §1.3 中另外三棵已退役工作树均已清理，证据按清单保全，去向见 §1.3。没有运行全量或追修无关 Actions。
 
 2026-09-23 已合入本地 `main` 的 `af80b0c`，其证据清理事实保留在 §1.3。`tests_scheduler` 现按 publish 角色与发件箱里 `ready/sent` 的持久记录核对“内容就绪后投递、投递后关闭”，不再依赖飞书卡片标题；[修前复现](../state/offline-validation-20260923T033236Z/results.json)与[修后验证](../state/offline-validation-20260923T034105Z/results.json)保留。[最新定向复验](../state/offline-validation-20260923T041115Z/results.json) 的 scheduler、品牌、初翻和旧许可 4/4 通过。品牌与日历整合见 §1.32–§1.33。
 
 **主干整合快照 `3c15895`：离线通过。** 发布精简线吸收 main `7a436f2`，完整保留 `2377290` 的 Facebook 已接受合作者归属修复及原有监测目标。十个冲突文件按 §1.32–§1.33 的共同规则整合；该次结果的 459 个受版本管理文件与[审计快照](../state/merge-audit-20260923T060659Z/candidate-manifest.json)逐字节一致，见[比对记录](../state/publishing-integration-20260923/resolved-tree-check.json)。快照的 [31 个定向脚本](../state/merge-audit-20260923T060659Z/validation-summary.json)、[两项抓取到许可交互](../state/merge-audit-20260923T060659Z/capture-consent-bridge.log)、[59 项前端检查](../state/merge-audit-20260923T060659Z/ui-calendar-shape.log)及[构建](../state/merge-audit-20260923T060659Z/ui-build-result.json)通过；该次工作树复验及最终比对见[交付验证](../state/publishing-integration-20260923/validation.json)。资产配置修正及新验证见下段。
 
-本节集成日志、审计快照和 §1.32–§1.33 已收集的证据，按[SHA-256 保全清单](../state/publishing-integration-20260923/preservation.json)复制到主检出，原件保留。同名异字节的月历浏览器报告与截图保存在本次专用目录，主检出已有文件保留。四个发布子工作树仍保留各自独有证据，未清理。全部验证使用隔离归档、状态与浏览器夹具，没有新增真实服务结论。单篇提交与人工撤销核验复用已有渠道资产绑定；普通日历刷新仍走原录证入口。前后端按 §13 同步更新，旧受管版本不得混用 `truth_contract=2` 的记录，具体操作见 [MANUAL_STEPS §16.1](MANUAL_STEPS.md#161-检查现有发布能力)。G8 远端图片适配仍为 **代码未完成**。
+本节集成日志、审计快照和 §1.32–§1.33 已收集的证据，按[SHA-256 保全清单](../state/publishing-integration-20260923/preservation.json)复制到主检出，原件保留。同名异字节的月历浏览器报告与截图保存在本次专用目录，主检出已有文件保留。四个发布子工作树的独有证据随 2026-09-27 清理归档，去向见 §1.3。全部验证使用隔离归档、状态与浏览器夹具，没有新增真实服务结论。单篇提交与人工撤销核验复用已有渠道资产绑定；普通日历刷新仍走原录证入口。前后端按 §13 同步更新，旧受管版本不得混用 `truth_contract=2` 的记录，具体操作见 [MANUAL_STEPS §16.1](MANUAL_STEPS.md#161-检查现有发布能力)。G8 远端图片适配仍为 **代码未完成**。
 
 **资产信息复用修正：离线通过。** 先前把内部资产标识改为 `[publish].asset_id` / `business_id` 必填配置，造成已有渠道记录仍无法提交；测试夹具同时补上新键，遗漏了旧配置兼容场景。[修前复现](../state/offline-validation-20260923T065638Z/results.json)确认问题。[修后定向验证](../state/offline-validation-20260923T070307Z/results.json)的批准、单篇排期和发布操作三个脚本通过。现删除两个配置键，预览、提交和撤销共用原渠道记录中的绑定，不迁移或新增状态文件。缺绑定可冻结和选时刻；绑定变化、账号不符在远端读取前拒绝。严格预检仍校验控件和截图，单篇路径只复用资产信息并核对当次页面。
 
@@ -884,13 +886,13 @@ G8 远端图片适配仍按 §4 单列阻塞，自动加工双渠道前置不变
 
 **Month 按钮被浮层遮挡（2026-09-27）：离线通过，原 IG 回执待真实联调。** 用户的新 Playwright 调用日志明确显示 Month 按钮可见、可用且位置稳定，但另一个 DIV 持续拦截指针事件，旧鼠标 `click` 因此 30 秒超时；截图只显示审校台错误，尚不能确定 Meta 浮层的具体来源。月历初次打开及周视图读完返回月视图的两处切换现改为对唯一可见且可用的 Month 按钮发送 Enter；初次打开由既有首次读取保留缺标题重读，返回月视图立即核对完整日期格，末次仍比较原整月列表。仍有可访问详情弹窗时直接停止，不在弹窗背后切换，也不用强制鼠标点击。隔离 Chromium 用遮挡层先复现两处原超时，再验证切换及零次写入，并覆盖详情弹窗未关时拒绝。初版改动后 `tests_calendar_overflow` 35 项通过；为保留缺标题重读而调整初次打开的核验阶段后，三个遮挡场景、`tests_calendar_recovery` 10 项、两项月份就绪测试、`tests_receipt_reconcile` 7 项及 hygiene 通过。服务机未重跑，不能据此确认原 IG attempt 已取得回执。
 
-**原 IG 回执范围拒绝（2026-09-27）：待真实联调。** 服务机源码干净且 HEAD 为 `d75afd6`；8765 的 Web 进程 16:59:35 启动，晚于 `month_inventory.py` 的 16:58:48 文件时间，17:00 的回读由这一进程处理。原 attempt `5024d9f4-38fe-4b49-9adb-788d2e7054b2` 仍为 `submit_ambiguous`：本次读出 09-30 的三张卡，但 17:30、20:00、23:00 均在 `scheduled_detail` 得到 `load_timeout`；目标 20:00 卡样本是 `channels=[]`、`delivery=unknown`、正文长度 0。因此目标卡的渠道/独立时刻未核实，不能写 scheduled；旧记录没有直接给出覆盖范围和诊断索引布尔值，不能仅从 `complete_month=false` 推断另一分支。服务机对同一 IG 卡的独立只读探针进一步记录：指针打开详情时地址变成 `/latest/composer/`，同时可见一个 `Post details` 弹窗；正式恢复原月/周网格后，键盘 Enter 重试等待 `Post details` 可见超时，最终页面仍是月历且没有弹窗。随后同卡只读点击在弹窗可见时读到日历地址、7 个原周日期格、详情 ID `1099867215965804` 和 Instagram feed 标识；账号当时尚未在弹窗文本出现，不能据此确认身份。悬停后的格外链接不稳定，不能用于绑定原卡。由此可复现的故障是：打开详情时短暂的 composer 地址被立即当作最终跳转，已有弹窗被丢弃，备用 Enter 又未打开详情；Meta 的内部事件机制尚未证实。读取器现在只在原卡点击之后，有限等待地址回到原资产月历且固定的原卡仍在，随后仍须等原详情并核验完整账号、渠道、正文、时刻和 ID；地址不返回或原卡变化仍拒绝。一次月历读取返回后、进入 matching 前的 `inventory_evidence` 记录四项判据，以及目标/UI 时区、覆盖日期、占用/卡片绝对时刻、诊断索引对应数、目标卡渠道、时刻核实、读取状态、交付状态与数字远端 ID；列表有上限，不含正文或签名图片 URL。`details_scoped=true` 使 `decision_complete=false`，本身不拒绝已有对象的正向回执。四种隔离库存的拒绝诊断已用 `tests_month_readback` 逐项复现；隔离 Chromium 的短暂路由场景已先复现旧拒绝、再验证同一次点击可读详情且不写入。服务机仍须部署后只对原 attempt 真正复验，不能因此重提。本次隔离验证：`tests_month_readback` 11 项、`tests_calendar_recovery` 10 项、`tests_receipt_reconcile` 7 项、`tests_scheduled_detail` 20 项和 hygiene 通过，日志在本功能工作树 `state/offline-validation-20260927T094528Z/`；`tests_calendar_overflow` 被该工具的单脚本 300 秒限制截断后，以同一隔离夹具直接运行 36 项全部通过（312 秒），其中包括旧拒绝到新读取的回归。未连接服务机业务数据。
+**原 IG 回执范围拒绝（2026-09-27）：待真实联调。** 服务机源码干净且 HEAD 为 `d75afd6`；8765 的 Web 进程 16:59:35 启动，晚于 `month_inventory.py` 的 16:58:48 文件时间，17:00 的回读由这一进程处理。原 attempt `5024d9f4-38fe-4b49-9adb-788d2e7054b2` 仍为 `submit_ambiguous`：本次读出 09-30 的三张卡，但 17:30、20:00、23:00 均在 `scheduled_detail` 得到 `load_timeout`；目标 20:00 卡样本是 `channels=[]`、`delivery=unknown`、正文长度 0。因此目标卡的渠道/独立时刻未核实，不能写 scheduled；旧记录没有直接给出覆盖范围和诊断索引布尔值，不能仅从 `complete_month=false` 推断另一分支。服务机对同一 IG 卡的独立只读探针进一步记录：指针打开详情时地址变成 `/latest/composer/`，同时可见一个 `Post details` 弹窗；正式恢复原月/周网格后，键盘 Enter 重试等待 `Post details` 可见超时，最终页面仍是月历且没有弹窗。随后同卡只读点击在弹窗可见时读到日历地址、7 个原周日期格、详情 ID `1099867215965804` 和 Instagram feed 标识；账号当时尚未在弹窗文本出现，不能据此确认身份。悬停后的格外链接不稳定，不能用于绑定原卡。由此可复现的故障是：打开详情时短暂的 composer 地址被立即当作最终跳转，已有弹窗被丢弃，备用 Enter 又未打开详情；Meta 的内部事件机制尚未证实。读取器现在只在原卡点击之后，有限等待地址回到原资产月历且固定的原卡仍在，随后仍须等原详情并核验完整账号、渠道、正文、时刻和 ID；地址不返回或原卡变化仍拒绝。一次月历读取返回后、进入 matching 前的 `inventory_evidence` 记录四项判据，以及目标/UI 时区、覆盖日期、占用/卡片绝对时刻、诊断索引对应数、目标卡渠道、时刻核实、读取状态、交付状态与数字远端 ID；列表有上限，不含正文或签名图片 URL。`details_scoped=true` 使 `decision_complete=false`，本身不拒绝已有对象的正向回执。四种隔离库存的拒绝诊断已用 `tests_month_readback` 逐项复现；隔离 Chromium 的短暂路由场景已先复现旧拒绝、再验证同一次点击可读详情且不写入。服务机仍须部署后只对原 attempt 真正复验，不能因此重提。本次隔离验证：`tests_month_readback` 11 项、`tests_calendar_recovery` 10 项、`tests_receipt_reconcile` 7 项、`tests_scheduled_detail` 20 项和 hygiene 通过，日志在 `state/branch-cleanup-20260927/g8-remote-images/state/offline-validation-20260927T094528Z/`；`tests_calendar_overflow` 被该工具的单脚本 300 秒限制截断后，以同一隔离夹具直接运行 36 项全部通过（312 秒），其中包括旧拒绝到新读取的回归。未连接服务机业务数据。
 
 **首次部署实测（2026-09-27 18:11 +08:00）：未通过。** 服务机已拉取 `e596e57`，8765 新 Web PID 27380 的启动时间 18:07:27 晚于修复文件落盘时间，父进程链指向服务机源码，健康检查无错误。只对原 Instagram attempt 点过一次“核对并补齐本地回执”；原账本由 12 增至 13 条，仍为 `submit_ambiguous`，没有 remote ID 或原通知事件。新失败发生在 `reading_detail`，地址为 composer，失败快照仍有 8 个日期格与一个弹窗；月历读取未返回，所以本轮没有新 `inventory_evidence`，不能判定本轮四个 matching 守卫。随后独立只读轨迹显示原卡点击约 0.8 秒后详情 ID 可见、约 1 秒后地址变 composer 且原卡与周格暂留，约 2 秒后原卡、周格和弹窗均消失；全文尚未出现。先前“等待打开时的短暂地址变化”只越过旧失败点，不能完成这条真实详情。悬停的格外链接不稳定且本次未出现。不得对原 attempt 再次点击核对或另建排期，先验证安全的详情入口。
 
 **外层日期格点击已定位（2026-09-27，真实只读探针）：修复待部署。** 原 IG 20:00 时间卡与外层日期格各有一个 React `onClick`。仅在一次临时月历标签中让外层日期格点击处理器停止冒泡，并在点击原卡后恢复，详情在原月历地址持续 6 秒；周格持续为 7 个，详情依次出现 `1099867215965804`、Instagram feed 和 `neakasa.de`。这证实外层日期格的点击处理器引起先前的 composer 跳转；仍未读出或核对完整冻结正文，因此不能据此补本地回执。修复只在已核对的周视图 IG 卡点击期间隔离该外层处理器；处理器结构部分变化或发现未知外层点击时拒绝详情，正常读取仍受原导航与身份守卫约束。隔离浏览器夹具先复现旧版跳 composer 并拒绝，再验证同卡详情与完整回读，不写业务数据。原 attempt 已执行过一次真实核对且仍未决，再次执行须另行确认。
 
-本次外层点击修复的离线验证：`tests_calendar_overflow` 37 项通过，新增夹具先在旧版稳定拒绝、修后确认同卡完整正文与远端 ID，零写入；`tests_month_readback`、`tests_calendar_recovery`、`tests_receipt_reconcile` 三组通过，记录在本功能工作树 `state/offline-validation-20260927T103103Z/`；`tests_month_inventory` 与 `tests_scheduled_detail` 两组通过，记录在 `state/offline-validation-20260927T103235Z/`。另经 hygiene 和 `git diff --check`。均未附着真实服务机发布会话，不能升级为原 attempt 真实通过。
+本次外层点击修复的离线验证：`tests_calendar_overflow` 37 项通过，新增夹具先在旧版稳定拒绝、修后确认同卡完整正文与远端 ID，零写入；`tests_month_readback`、`tests_calendar_recovery`、`tests_receipt_reconcile` 三组通过，记录在 `state/branch-cleanup-20260927/g8-remote-images/state/offline-validation-20260927T103103Z/`；`tests_month_inventory` 与 `tests_scheduled_detail` 两组通过，记录在 `state/branch-cleanup-20260927/g8-remote-images/state/offline-validation-20260927T103235Z/`。另经 hygiene 和 `git diff --check`。均未附着真实服务机发布会话，不能升级为原 attempt 真实通过。
 
 **同次读取的 FB 23:00 仍会误跳（2026-09-27 19:23 +08:00）：原 IG 回执未决。** 用户在部署 `65679df` 后提供的新诊断由 Web PID 5828 保存：`reading_detail`、`surface=composer`、09-30 11:00 PM、`item_index=2`、周视图，仍有 8 个日期格与 1 个弹窗。前一修复仅隔离 IG 20:00 的点击，却仍须读取同日 FB 23:00，整次库存因后者的导航中断；不能把失败继续归给 IG 详情，也不能跳过这张未知渠道/时刻的卡当作空档。首次 FB 单卡探针的临时包装误用了 `setdefault`，没有覆盖正式调用显式传入的普通点击，因此得到的 `load_timeout` 不能判定隔离点击是否有效。更正后的直接隔离点击使原 FB 卡详情在月历与 7 个周格上保持 5 秒；随后以显式 `isolated_pointer` 单独执行正式只读详情读取，取得 Facebook 单渠道、目标账号核实、259 字正文与原周卡一致、远端 ID `1084557747316275`，关闭后仍为原月历且无详情弹窗。隔离 Chromium 已以“FB 详情先出现、正文延迟、外层日期格稍后跳 composer”复现当前错误；把隔离点击用于同一周视图的全部已核对排期卡后，同一夹具三张卡完整读取并核实原 IG 唯一对象，零业务写入。原 IG attempt 的全链路真实回读仍未完成，继续保留未决与防重。
 
