@@ -153,6 +153,19 @@ class CatalogTests(unittest.TestCase):
         self.list_reply["data"] = [{"id": "gpt-image-2-free", "object": "model"}]
         self.assert_preflight_stops(L.ModelUnavailableError, ["/v1/models"])
 
+    def test_missing_model_error_names_what_the_key_can_see(self):
+        # 服务机只看到“返回 4 个型号”，分不清是型号改名还是 Key 没开权限，只能再跑一轮猜。
+        self.list_reply["data"] = [
+            {"id": "deepseek-flash"}, {"id": "gpt-image-2-free"},
+            {"id": "gpt-image-1"}, {"id": "sk-looks like a secret?"}]
+        with self.assertRaises(L.ModelUnavailableError) as caught:
+            self.editor.verify_model_available()
+        message = str(caught.exception)
+        for model_id in ("deepseek-flash", "gpt-image-1", "gpt-image-2-free"):
+            self.assertIn(model_id, message)
+        self.assertNotIn("secret", message)
+        self.assertIn("另有 1 个无法安全显示", message)
+
     def test_malformed_or_error_list_is_not_an_empty_catalog(self):
         for reply in ({"object": "list"}, {"data": None}, {"data": {}},
                       {"data": [{"model_id": "gpt-image-2"}]},
