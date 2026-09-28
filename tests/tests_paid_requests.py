@@ -179,8 +179,8 @@ for kind, failure, supplied_client in (
 
         def respond(request):
             if request.method == "GET":
-                return httpx.Response(200, request=request, json={
-                    "object": "list", "data": [{"id": settings.model, "object": "model"}]})
+                assert request.url.path.endswith("/models/" + settings.model), request.url.path
+                return httpx.Response(200, request=request, json={"id": settings.model, "object": "model"})
             attempts.append(request.url.path)
             if len(attempts) == 1:
                 if failure == "timeout":

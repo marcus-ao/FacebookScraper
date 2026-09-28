@@ -109,9 +109,10 @@ class FakeModels:
         self.ids = ids
         self.calls = 0
 
-    def list(self):
+    def retrieve(self, model):
+        # 同一 Key 的精确详情：看得到就回同名 id，否则网关回的是别的型号。
         self.calls += 1
-        return SimpleNamespace(data=[SimpleNamespace(id=value) for value in self.ids])
+        return SimpleNamespace(id=model if model in self.ids else self.ids[0])
 
 
 def minimal_usage():
@@ -159,7 +160,7 @@ check(result.model == "gpt-image-2" and not L.usage_contract_errors(result.usage
       "响应实际模型与最低 usage 契约可验证")
 check(result.model_verification == "response", "响应含 model 时记录 response 验证")
 check(fake_models.calls == 1 and fake_images.calls == 2,
-      "同一客户端多次 edits 只执行一次 /models 精确预检")
+      "同一客户端多次 edits 只执行一次 /models/{model} 精确预检")
 check(bool(L.decode_image_payload(result.b64_json)), "响应裸 base64 可解码为合法图片")
 
 blocked_images = FakeImages()
@@ -174,13 +175,13 @@ with tempfile.TemporaryDirectory() as tmp:
     except L.ModelUnavailableError:
         catalog_failed = True
 check(catalog_failed and blocked_images.calls == 0,
-      "目录无精确 gpt-image-2 时在付费 edits 前停止")
+      "详情未确认精确 gpt-image-2 时在付费 edits 前停止")
 
 class FailingModels:
     def __init__(self):
         self.calls = 0
 
-    def list(self):
+    def retrieve(self, model):
         self.calls += 1
         raise RuntimeError("catalog unavailable")
 
