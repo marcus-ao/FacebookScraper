@@ -88,26 +88,27 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(P.load_events(self.state), [])
         self.assertEqual(self.preflights, 0)
 
-    def test_empty_list_uses_exact_detail_before_one_paid_edit(self):
+    def test_exact_detail_before_one_paid_edit(self):
         result = self.edit()
         self.assertEqual((result.model, result.model_verification), ("gpt-image-2", "catalog"))
         self.assertEqual(L.decode_image_payload(result.b64_json), self.source.read_bytes())
         self.editor.finalize_paid(True)
         self.editor.verify_model_available()
         self.assertEqual(self.requests, [
-            ("GET", "/v1/models"), ("GET", "/v1/models/gpt-image-2"),
-            ("POST", "/v1/images/edits"),
+            ("GET", "/v1/models/gpt-image-2"), ("POST", "/v1/images/edits"),
         ])
         events = P.load_events(self.state)
         self.assertEqual(sum(row["event"] == P.EVENT_STARTED for row in events), 1)
         self.assertEqual(events[-1]["event"], "accepted")
 
-    def test_exact_list_never_needs_detail(self):
-        self.list_reply["data"] = [self.detail_reply]
-        self.detail_reply = 503
+    def test_chat_only_list_does_not_block_image_models(self):
+        # 2026-09-28 实测：网关 /v1/models 列表（无 Key 416 个）只收 chat 模型，一个 gpt-image-* 都没有；
+        # 服务机那把 Key 的列表是 4 个型号，同样没有 gpt-image-2。详情 /v1/models/gpt-image-2 返回精确 id。
+        self.list_reply["data"] = [{"id": name, "object": "model"} for name in
+                                   ("deepseek-flash", "gpt-6-luna", "gemini-3.1-flash-image", "claude-opus-5-5")]
         result = self.edit()
         self.assertEqual(result.model, "gpt-image-2")
-        self.assertEqual(self.requests, [("GET", "/v1/models"), ("POST", "/v1/images/edits")])
+        self.assertEqual(self.requests, [("GET", "/v1/models/gpt-image-2"), ("POST", "/v1/images/edits")])
 
     def test_flare_and_sunburst_keep_exact_names_through_detail_edit_and_ledger(self):
         for model in ("gpt-image-2.5-flare", "gpt-image-2.5-sunburst"):
@@ -125,8 +126,7 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual((result.model, result.model_verification), (model, "response"))
                 self.editor.finalize_paid(True)
                 self.assertEqual(self.requests, [
-                    ("GET", "/v1/models"), ("GET", "/v1/models/" + model),
-                    ("POST", "/v1/images/edits"),
+                    ("GET", "/v1/models/" + model), ("POST", "/v1/images/edits"),
                 ])
                 started = [row for row in P.load_events(self.state) if row["event"] == P.EVENT_STARTED]
                 self.assertEqual(len(started), 1)
@@ -149,45 +149,7 @@ class CatalogTests(unittest.TestCase):
             L.Settings(dict(L.cfg()["image"], model="gpt-image-2.5"))
         self.assertEqual(self.requests, [])
 
-    def test_nonempty_list_missing_model_still_stops(self):
-        self.list_reply["data"] = [{"id": "gpt-image-2-free", "object": "model"}]
-        self.assert_preflight_stops(L.ModelUnavailableError, ["/v1/models"])
-
-    def test_missing_model_error_names_what_the_key_can_see(self):
-        # 服务机只看到“返回 4 个型号”，分不清是型号改名还是 Key 没开权限，只能再跑一轮猜。
-        self.list_reply["data"] = [
-            {"id": "deepseek-flash"}, {"id": "gpt-image-2-free"},
-            {"id": "gpt-image-1"}, {"id": "sk-looks like a secret?"}]
-        with self.assertRaises(L.ModelUnavailableError) as caught:
-            self.editor.verify_model_available()
-        message = str(caught.exception)
-        for model_id in ("deepseek-flash", "gpt-image-1", "gpt-image-2-free"):
-            self.assertIn(model_id, message)
-        self.assertNotIn("secret", message)
-        self.assertIn("另有 1 个无法安全显示", message)
-
-    def test_malformed_or_error_list_is_not_an_empty_catalog(self):
-        for reply in ({"object": "list"}, {"data": None}, {"data": {}},
-                      {"data": [{"model_id": "gpt-image-2"}]},
-                      {"data": [], "error": {"message": "secret-sentinel"}},
-                      {"data": [], "success": False}):
-            with self.subTest(reply=reply):
-                self.list_reply = reply
-                self.requests.clear()
-                self.editor = L.ImageEditor(self.settings, client=self.client,
-                    paid_controller=P.RequestController(self.state, preflight=self.preflight))
-                self.assert_preflight_stops(L.ModelCatalogPreflightError, ["/v1/models"])
-
-    def test_list_http_failure_never_uses_detail_or_retries(self):
-        for reply in (401, 403, 503, "timeout"):
-            with self.subTest(reply=reply):
-                self.list_reply = reply
-                self.requests.clear()
-                self.editor = L.ImageEditor(self.settings, client=self.client,
-                    paid_controller=P.RequestController(self.state, preflight=self.preflight))
-                self.assert_preflight_stops(L.ModelCatalogPreflightError, ["/v1/models"])
-
-    def test_empty_list_detail_failure_stops_before_paid_ledger(self):
+    def test_detail_failure_stops_before_paid_ledger(self):
         for reply in (401, 403, 404, 503, "timeout",
                       {"error": {"message": "secret-sentinel"}},
                       {"id": "gpt-image-2", "success": False}):
@@ -197,7 +159,7 @@ class CatalogTests(unittest.TestCase):
                 self.editor = L.ImageEditor(self.settings, client=self.client,
                     paid_controller=P.RequestController(self.state, preflight=self.preflight))
                 self.assert_preflight_stops(L.ModelCatalogPreflightError,
-                    ["/v1/models", "/v1/models/gpt-image-2"])
+                    ["/v1/models/gpt-image-2"])
 
     def test_detail_requires_exact_id_not_free_alias_or_nested_payload(self):
         for reply in ({"id": "gpt-image-2-free"}, {"id": "GPT-IMAGE-2"},
@@ -209,13 +171,13 @@ class CatalogTests(unittest.TestCase):
                 self.editor = L.ImageEditor(self.settings, client=self.client,
                     paid_controller=P.RequestController(self.state, preflight=self.preflight))
                 self.assert_preflight_stops(L.ModelUnavailableError,
-                    ["/v1/models", "/v1/models/gpt-image-2"])
+                    ["/v1/models/gpt-image-2"])
 
     def test_detail_success_does_not_bypass_budget(self):
         self.budget_blocked = True
         with self.assertRaises(P.PaidRequestBlocked):
             self.edit()
-        self.assertEqual(self.requests, [("GET", "/v1/models"), ("GET", "/v1/models/gpt-image-2")])
+        self.assertEqual(self.requests, [("GET", "/v1/models/gpt-image-2")])
         self.assertEqual(P.load_events(self.state), [])
         self.assertEqual(self.preflights, 1)
 
