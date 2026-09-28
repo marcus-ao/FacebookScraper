@@ -253,7 +253,7 @@ def stage_d2(page, ui):
     assert body['localization']['tags']==['#Katzen','#Haustiere','#Tierpflege']
     page.get_by_role('button',name='放弃修改',exact=True).click()
     page.get_by_role('button',name='编辑分类').click()
-    page.get_by_role('textbox',name='商品分类',exact=True).fill('Riko，促销')
+    page.get_by_role('textbox',name='产品分类',exact=True).fill('Riko，促销')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(200,{**detail,'tags':['Riko','促销']})
     page.get_by_role('button',name='保存分类',exact=True).click()
     expect(page.get_by_role('dialog')).to_have_count(0)
@@ -720,11 +720,11 @@ def stage_i(page, ui):
     row=next(row for row in ui.list_data['tasks'] if row['status']=='pending_review' and not row['hard_alerts'])
     task_id=row['id']; detail=ui.fx.detail(task_id)
     page.goto(ui.fx.base_url+'/review/'+task_id,wait_until='networkidle')
-    page.get_by_role('button',name='编辑分类',exact=True).click();page.get_by_role('textbox',name='商品分类',exact=True).fill('Riko，保留选择')
+    page.get_by_role('button',name='编辑分类',exact=True).click();page.get_by_role('textbox',name='产品分类',exact=True).fill('Riko，保留选择')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(409,{'detail':'stale tags'})
     page.get_by_role('button',name='保存分类',exact=True).click()
     latest={**detail,'tags_revision':'new-tags-version'};ui.overrides[('GET',f'/api/tasks/{task_id}')]=(200,latest)
-    page.get_by_role('button',name='载入最新分类',exact=True).click();expect(page.get_by_role('textbox',name='商品分类',exact=True)).to_have_value('Riko，保留选择')
+    page.get_by_role('button',name='载入最新分类',exact=True).click();expect(page.get_by_role('textbox',name='产品分类',exact=True)).to_have_value('Riko，保留选择')
     ui.overrides[('PUT',f'/api/tasks/{task_id}/tags')]=(200,latest)
     page.get_by_role('button',name='保存分类',exact=True).click();expect(page.get_by_role('dialog')).to_have_count(0)
     assert [r['body'] for r in ui.requests if r['method']=='PUT' and r['path'].endswith('/tags')][-1]['tags_revision']=='new-tags-version'

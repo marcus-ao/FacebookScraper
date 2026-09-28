@@ -101,7 +101,7 @@ def current_tokens(account_dir: Path, source: dict, *, events: list[dict] | None
                 byte_digest = images.sha256_file(selected)
                 record = pair.record or {}
                 manual = images.manual_upload_record(selected) if pair.manual else None
-                # 只绑帖子目录内的位置：改商品分类会整体移动帖子目录，不能让图片确认失效。
+                # 只绑帖子目录内的位置：改产品分类会整体移动帖子目录，不能让图片确认失效。
                 location = (selected.relative_to(directory).as_posix()
                             if directory in selected.parents else pair.selected_rel)
                 current = decisions.token(
