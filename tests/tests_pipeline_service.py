@@ -240,10 +240,14 @@ class ServiceTests(unittest.TestCase):
     def test_overnight_skipped_ready_is_cancelled_before_delivery(self):
         runtime = self.enabled_runtime()
         source = self.fixture.source
+        # 必须是前一晚：借用真实时钟时，碰上业务时间 8 点那一小时会先排一张当天晨报，被下面投递出去。
+        night = datetime(2026, 9, 12, 15, 0, tzinfo=timezone.utc)
         engine.append_human_item(self.state, engine.HumanItem(
             'ready-night', 'ready_to_publish', ('facebook:' + source['post_id'],), 'ready',
-            {'source_text_sha256': journal.text_sha256(source['text'])}), self.now)
-        runtime.collect([self.fixture.account], self.now)
+            {'source_text_sha256': journal.text_sha256(source['text'])}), night)
+        runtime.collect([self.fixture.account], night)
+        events = json.loads(runtime.outbox.path.read_text(encoding='utf-8'))['events']
+        self.assertEqual([item['kind'] for item in events.values()], ['ready'])
         review.transition(self.fixture.account, source, 'skipped', reason='活动已结束',
                           expected_revision=None, expected_source_sha256=journal.text_sha256(source['text']))
         morning = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
