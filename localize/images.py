@@ -365,6 +365,15 @@ def usage_contract_errors(usage: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _catalog_listing(model_ids: set[str], limit: int = 20) -> str:
+    """列出 Key 可见的型号，才分得清是改名还是没开权限；只回显像型号名的字符串。"""
+    safe = sorted(value for value in model_ids
+                  if re.fullmatch(r"[A-Za-z0-9._:/-]{1,80}", value))
+    shown = "、".join(safe[:limit]) or "无"
+    hidden = len(model_ids) - min(len(safe), limit)
+    return shown + (f"；另有 {hidden} 个无法安全显示或超出列举上限" if hidden else "")
+
+
 def safe_error_summary(exc: Exception) -> str:
     """API 异常只暴露类型、HTTP 状态和安全 request ID。"""
     error_type = type(exc).__name__
@@ -454,8 +463,9 @@ class ImageEditor(paid_model.PaidCaller):
                         "已在图片 edits 付费请求前停止")
                 if self.s.model not in model_ids:
                     raise ModelUnavailableError(
-                        f"模型目录返回 {len(model_ids)} 个型号，但未返回精确模型 {self.s.model!r}；"
-                        "请核对图片 Key 的模型权限；已在图片 edits 付费请求前停止")
+                        f"模型目录返回 {len(model_ids)} 个型号（{_catalog_listing(model_ids)}），"
+                        f"但未返回精确模型 {self.s.model!r}；请核对图片 Key 的模型权限；"
+                        "已在图片 edits 付费请求前停止")
         except (ModelUnavailableError, ModelCatalogPreflightError) as exc:
             self._catalog_error = exc
             raise
