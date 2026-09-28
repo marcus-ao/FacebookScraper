@@ -1,7 +1,10 @@
 """Read effective review material for Feishu, sharing the editor's selection rules."""
 from __future__ import annotations
 
+import re
+
 from pipeline.risk_scan import result_for
+from publish import compose
 from core import localization, translated
 from core.integrity import parse_ts
 from core.store import assert_physical_direct_path
@@ -10,6 +13,41 @@ from localize import images as image_de
 IMAGE_NOTES = {'de': '德语首图', 'original_confirmed': '首图已确认使用原图',
                'original': '尚无有效德语首图，预览使用原图',
                'unreadable': '首图读不出，请进入审校台核对'}
+
+# 待人工记录的原文带帖子编号、配置键、命令和“硬闸”术语，是留给维护人员查账的；
+# 待审卡只说业务能做的下一步。原文仍在待人工记录与运行页里。
+_KIND_NOTES = {
+    'human_translation_stale': '原帖已更新，人工德语稿需要重新复核并保存。',
+    'unknown_owner': '原帖作者信息不完整，暂不能发布，请联系维护人员核对。',
+    'unknown_collaborator': '这篇是合作帖，合作方尚未确认，请在审校台确认来源与处理许可。',
+    'unmapped_price': '原帖里的金额还没有德国站价格对照，请联系维护人员补充。',
+}
+# 按顺序取第一条命中：价格对照先于金额，德语图先于泛指的图片问题。
+_GATE_NOTES = (
+    (r'未映射金额|price_map|价格映射', _KIND_NOTES['unmapped_price']),
+    (r'金额', '德语正文里的金额与原帖不一致，请回到德语正文核对金额写法。'),
+    (r'IG 正文长度', '德语文案超过 Instagram 长度上限，请精简正文。'),
+    (r'IG 标签数', '话题标签超过 Instagram 上限，请删减标签。'),
+    (r'IG 图片数', '图片数量超过 Instagram 单帖上限，请联系维护人员处理。'),
+    (r'画幅比', '有图片的画幅超出 Instagram 允许范围，请换图或联系维护人员。'),
+    (r'缺少德语图|多个人工图片候选', '仍有图片没有可发布的版本，请回到逐张图片处理。'),
+    (r'没有译文|德语译文缺失', '尚无德语正文，请先在德语正文步骤补充。'),
+    (r'源帖已变更|指纹已过期|提示词版本已过期', '原帖或德语初稿已更新，请回到德语正文重新复核并保存。'),
+    (r'owner|coauthors|归属', _KIND_NOTES['unknown_owner']),
+    (r'G1|probe|排期', '发布环境尚未完成校准，请联系维护人员处理。'),
+    (r'图片|媒体|media|原文缺失', '原帖素材不完整或读不出，请联系维护人员核对归档。'),
+)
+GATE_FALLBACK = '发布前自动检查未通过，请联系维护人员核对。'
+
+
+def review_note(kind: str, summary: str) -> str | None:
+    """待审卡上的处理说明；返回 None 表示由当前稿校验逐项给出，不再重复。"""
+    if kind in _KIND_NOTES:
+        return _KIND_NOTES[kind]
+    if compose.platform_text_unready(summary):
+        return None
+    return next((note for pattern, note in _GATE_NOTES if re.search(pattern, summary)), GATE_FALLBACK)
+
 
 def _origin(row) -> str:
     """合作帖由一方发布、双方主页同时显示；不写清楚会被当成本账号原创。"""

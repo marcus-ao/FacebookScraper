@@ -20,7 +20,7 @@ from core import notify, review, paid_consent, paid_requests
 from core.store import Archive, account_dirs, read_post_truth
 from core.translated import source_text_sha256
 from pipeline import engine, notifications
-from publish import compose, journal, observations, planner_cache, records
+from publish import journal, observations, planner_cache, records
 
 
 class Runtime:
@@ -493,11 +493,11 @@ class Runtime:
             entry['recorded_at'] = min(entry['recorded_at'], event['recorded_at'])
             if event['kind'] == 'ready_to_publish':
                 entry['ready_at'] = max(entry.get('ready_at') or event['recorded_at'], event['recorded_at'])
-            # 标签全由人定后几乎每篇都停在“平台文案尚未确认”；下面按当前稿逐项列出，
-            # 再贴一句带帖子编号的硬闸原文只是重复，确认之后还会残留到下次重跑。
-            if (event['kind'] != 'ready_to_publish' and event.get('summary')
-                    and not compose.platform_text_unready(event['summary'])):
-                entry['notes'].append(event['summary'])
+            # 原文带帖子编号和硬闸术语，卡片换成业务说法；“平台文案尚未确认”由当前稿逐项列出。
+            if event['kind'] != 'ready_to_publish' and event.get('summary'):
+                note = notifications.review_note(event['kind'], str(event['summary']))
+                if note and note not in entry['notes']:
+                    entry['notes'].append(note)
 
         for ref, item in pending.items():
             source, directory, state = item['source'], item['directory'], item['state']

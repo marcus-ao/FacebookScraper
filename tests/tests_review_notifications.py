@@ -180,13 +180,45 @@ class NotificationTests(unittest.TestCase):
         self.assertNotIn(self.f.post_id + '：', rendered)
         self.assertIn('待审核素材需处理', rendered)
 
-    def test_other_gate_reasons_still_reach_the_card(self):
+    def test_other_gate_reasons_reach_the_card_in_business_words(self):
         self.gate('tags', '平台文案尚未确认：请确认本篇使用的话题标签')
         self.gate('money', '金额硬闸未通过：€19,99 未出现在德语稿')
+        engine.append_human_item(cfg().state_dir, engine.HumanItem('partner', 'unknown_collaborator',
+            ('facebook:' + self.f.post_id,), 'facebook:%s 含未列入 trusted_owners 或 brand_accounts 的合作方：'
+            'someone；未调用付费服务。' % self.f.post_id), self.now)
         self.runtime.collect([self.f.account], self.now)
         payload = next(e['payload'] for e in self.events().values() if e['kind'] == 'ready')
-        self.assertEqual(len(payload['processing_notes']), 1)
-        self.assertIn('€19,99', payload['risk'])
+        self.assertEqual(payload['processing_notes'], [
+            '德语正文里的金额与原帖不一致，请回到德语正文核对金额写法。',
+            '这篇是合作帖，合作方尚未确认，请在审校台确认来源与处理许可。'])
+        self.runtime.prepare_preview(payload)
+        rendered = json.dumps(notification_card('ready', [payload], self.runtime.settings), ensure_ascii=False)
+        for hidden in ('硬闸', 'trusted_owners', 'brand_accounts', 'facebook:' + self.f.post_id, '未调用付费服务'):
+            self.assertNotIn(hidden, rendered)
+        self.assertIn('金额与原帖不一致', rendered)
+
+    def test_every_gate_reason_gets_a_business_sentence(self):
+        cases = {
+            '帖子 1：第 2 张缺少德语图；已在浏览器操作前停止。补图后再提交：\n'
+            'python -m localize.images --account "fb_x" --post-id "1" --media-index 1': '逐张图片',
+            '帖子 1：金额硬闸未通过：$10': '金额与原帖不一致',
+            '最终发布文案存在未映射金额：$10': '德国站价格对照',
+            '帖子 1：IG 正文长度 2300 超过 G1 实测上限 2200（state/publish_probe_1.json）': '长度上限',
+            '帖子 1：IG 标签数 31 超过 G1 实测上限 30（state/publish_probe_1.json）': '删减标签',
+            '帖子 1：译文绑定的英文正文指纹已过期；必须先重译': '重新复核并保存',
+            '帖子 1：owner 缺失；无法确认是在发布原创帖还是合作帖': '作者信息不完整',
+            '[publish].ui_probe_dump 为空；严格发布不能伪造 G1 来源': '发布环境尚未完成校准',
+            '帖子 1：图片无法由 Pillow 完整打开：posts/1/01.jpg（OSError）': '核对归档',
+            'KeyError: unexpected': notifications.GATE_FALLBACK,
+        }
+        for summary, expected in cases.items():
+            note = notifications.review_note('offline_gate', '付费阶段后离线硬闸失败：' + summary)
+            self.assertIn(expected, note, summary)
+            for hidden in ('硬闸', 'python', 'probe', 'G1', 'Pillow', 'owner', 'state/'):
+                self.assertNotIn(hidden, note, summary)
+        self.assertIsNone(notifications.review_note('offline_gate', '帖子 1：平台文案尚未确认：请确认本篇的链接与主页引导'))
+        self.assertEqual(notifications.review_note('human_translation_stale', 'facebook:1 的人工译文依据已变更'),
+                         '原帖已更新，人工德语稿需要重新复核并保存。')
 
     def test_unreadable_lead_image_degrades_its_card_instead_of_the_round(self):
         # 首图读不出只降级这一张图；德语正文已经完成，丢掉整张卡等于白等一轮审校。
