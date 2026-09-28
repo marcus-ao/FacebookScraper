@@ -218,7 +218,7 @@ class NotificationTests(unittest.TestCase):
                 self.assertNotIn(hidden, note, summary)
         self.assertIsNone(notifications.review_note('offline_gate', '帖子 1：平台文案尚未确认：请确认本篇的链接与主页引导'))
         self.assertEqual(notifications.review_note('human_translation_stale', 'facebook:1 的人工译文依据已变更'),
-                         '原帖已更新，人工德语稿需要重新复核并保存。')
+                         '原帖已更新，之前保存的人工稿需要重新复核并保存。')
 
     def test_unreadable_lead_image_degrades_its_card_instead_of_the_round(self):
         # 首图读不出只降级这一张图；德语正文已经完成，丢掉整张卡等于白等一轮审校。

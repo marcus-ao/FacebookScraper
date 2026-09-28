@@ -17,7 +17,7 @@ IMAGE_NOTES = {'de': '德语首图', 'original_confirmed': '首图已确认使�
 # 待人工记录的原文带帖子编号、配置键、命令和“硬闸”术语，是留给维护人员查账的；
 # 待审卡只说业务能做的下一步。原文仍在待人工记录与运行页里。
 _KIND_NOTES = {
-    'human_translation_stale': '原帖已更新，人工德语稿需要重新复核并保存。',
+    'human_translation_stale': '原帖已更新，之前保存的人工稿需要重新复核并保存。',
     'unknown_owner': '原帖作者信息不完整，暂不能发布，请联系维护人员核对。',
     'unknown_collaborator': '这篇是合作帖，合作方尚未确认，请在审校台确认来源与处理许可。',
     'unmapped_price': '原帖里的金额还没有德国站价格对照，请联系维护人员补充。',
