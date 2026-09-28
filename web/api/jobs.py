@@ -61,15 +61,14 @@ def initial_capabilities(task_id: str):
 @router.post('/api/initial-translation/task/{task_id:path}')
 async def translate_one(task_id: str, request: Request):
     body = await _body(request)
-    if body.get('consent') is not True:
-        raise review.ReviewValidationError('请确认允许处理这一篇第三方内容')
     fingerprint = body.get('source_fingerprint')
     if not isinstance(fingerprint, str) or not re.fullmatch(r'[0-9a-f]{64}', fingerprint):
         raise review.ReviewValidationError('原帖依据不完整，请刷新后重新确认')
     source = _source(task_id)
     job = initial_translation.submit(source.account_dir, dict(source.row),
         source_fingerprint=fingerprint, source_text_sha256=body['source_text_sha256'],
-        human_revision=body.get('human_revision'), review_revision=body.get('review_revision'))
+        human_revision=body.get('human_revision'), review_revision=body.get('review_revision'),
+        consent=body.get('consent') is True)
     return JSONResponse(job, status_code=202)
 
 

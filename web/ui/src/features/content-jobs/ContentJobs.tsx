@@ -59,12 +59,14 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
   const eligible = ['pending_review', 'edited', 'not_ready'].includes(detail.status) && !detail.text.stale
   const remaining = Math.max(0, (capabilities.data?.max_refine_per_media ?? 0) - (capabilities.data?.image_attempts[String(imageIndex)] ?? 0))
   const firstReason = initialTranslationDisabledReason({ editing, busy, running: jobRunning(first.job),
-    interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: true })
+    interrupted: first.job?.status === 'interrupted', available: !!initial.data?.available, consented: true,
+    reason: initial.data?.reason ?? '' })
   const nextReason = (kind: 'text' | 'image') => refinementDisabledReason({ editing, busy, eligible,
     running: jobRunning(next.job), interrupted: next.job?.status === 'interrupted',
     instruction: kind === 'text' ? textInstruction : imageInstruction, capabilitiesLoaded: !!capabilities.data,
     kind, remaining, manualImage: !!detail.images[imageIndex]?.manual,
-    originalConfirmed: detail.images[imageIndex]?.selection === 'original_confirmed' })
+    originalConfirmed: detail.images[imageIndex]?.selection === 'original_confirmed',
+    hasGerman: !!detail.localization.body_de.trim() })
   const act = async (action: Action, consent = false) => {
     setBusy(true); setError(null)
     try {
@@ -123,6 +125,8 @@ export function ContentJobs({ detail, editing, refresh, onCandidate, initialCont
         {!jobRunning(first.job) && <PaidActionButton label="生成德语初稿"
           {...(firstReason ? { disabledReason: firstReason } : {})} loading={busy} onClick={() => start('initial')} />}
         {!initial.data && <p className={styles.help}>正在核对初稿生成条件…</p>}
+        {/* 禁用原因只放在悬停提示里，点按钮的人看到的就是“没反应”。 */}
+        {initial.data && !jobRunning(first.job) && firstReason && <p className={styles.help} role="status">{firstReason}</p>}
         {status(first, 'initial')}
         {first.job && <Button size="small" type="link" disabled={busy} onClick={() => void refreshStatus('initial')}>刷新处理状态</Button>}
       </section>, initialContainer)}

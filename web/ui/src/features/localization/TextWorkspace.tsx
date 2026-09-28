@@ -11,11 +11,13 @@ interface Props {
   en: string; de: string; marks: readonly Mark[]; liveMarks: readonly Mark[]; active: number;
   editing: boolean; checking: boolean; human: boolean; scan: RiskScan;
   onChange: (text: string) => void; onSelect: (index: number) => void; onJump: (delta: number) => void;
-  onStartEdit?: () => void; onGenerateDraft?: () => void;
+  onStartEdit?: () => void;
+  /** 付费的“生成德语初稿”由 ContentJobs 渲染到这里，禁用原因和处理状态都跟着按钮走。 */
+  draftSlot?: (element: HTMLDivElement | null) => void;
   ref?: Ref<TextWorkspaceHandle>;
 }
 
-export function TextWorkspace({ en, de, marks, liveMarks, active, editing, checking, human, scan, onChange, onSelect, onJump, onStartEdit, onGenerateDraft, ref }: Props) {
+export function TextWorkspace({ en, de, marks, liveMarks, active, editing, checking, human, scan, onChange, onSelect, onJump, onStartEdit, draftSlot, ref }: Props) {
   const english = useRef<HTMLDivElement>(null)
   const german = useRef<HTMLDivElement>(null)
   const mirror = useRef<HTMLDivElement>(null)
@@ -60,9 +62,9 @@ export function TextWorkspace({ en, de, marks, liveMarks, active, editing, check
           <textarea ref={textarea} className={styles.textarea} aria-label="德语正文" spellCheck={false} value={displayLinks(de)}
             onChange={event => onChange(storeLinks(event.target.value))}
             onScroll={event => { if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop }} />
-        </div> : <div className={styles.prose} ref={german} data-testid="german-prose">{de.trim() ? render(de, liveMarks, 'de') : <div className={styles.empty}><p>尚无德语文案</p><Space wrap>
+        </div> : <div className={styles.prose} ref={german} data-testid="german-prose">{de.trim() ? render(de, liveMarks, 'de') : <div className={styles.empty}><p>尚无德语文案</p><Space wrap align="start">
           {onStartEdit && <Button onClick={onStartEdit}>手写德语正文</Button>}
-          {onGenerateDraft && <Button type="link" onClick={onGenerateDraft}>生成德语初稿</Button>}
+          {draftSlot && <div ref={draftSlot} data-draft-slot />}
         </Space></div>}</div>}
       </section>
     </div>

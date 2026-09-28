@@ -40,26 +40,29 @@ def _check(account_dir, indexed, *, allow_consent=False):
     return source, candidate
 
 
+def _third_party(source: dict) -> bool:
+    rules = engine.publish_rules()
+    owners = {str(value).strip().lower()
+              for value in [source.get('owner'), *(source.get('coauthors') or [])]
+              if value and str(value).strip()}
+    return bool(owners - account_roles.collaborator_trust(
+        rules.trusted_owners, rules.brand_accounts, source['platform']))
+
+
 def capabilities(account_dir: Path, indexed: dict) -> dict:
     result = {'available': False, 'reason': '', 'source_fingerprint': None, 'needs_consent': False,
               'third_party': False, 'job': None}
     try:
         source, _ = read_post_truth(account_dir, indexed)
-        rules = engine.publish_rules()
-        owners = {str(value).strip().lower()
-                  for value in [source.get('owner'), *(source.get('coauthors') or [])]
-                  if value and str(value).strip()}
-        result['third_party'] = bool(owners - account_roles.collaborator_trust(
-            rules.trusted_owners, rules.brand_accounts, source['platform']))
+        result['third_party'] = _third_party(source)
         jobs = [row for row in refinement.latest().values() if row['kind'] == 'initial'
                 and row['account'] == account_dir.name and row['post_id'] == source['post_id']]
         result['job'] = refinement.public_job(jobs[-1]) if jobs else None
         result['needs_consent'] = result['third_party'] and not paid_consent.is_current(account_dir, source)
         source, candidate = _check(account_dir, source, allow_consent=True)
         result['source_fingerprint'] = paid_consent.fingerprint(source, account_dir)
-        if not result['third_party']:
-            result['reason'] = '品牌账号来源沿用自动处理流程'
-        elif any(row['status'] in {'pending', 'running'} for row in jobs):
+        # 品牌来源也要能手动发起：激活边界之前的帖子自动流水线不会处理，挡掉就只能手写。
+        if any(row['status'] in {'pending', 'running'} for row in jobs):
             result['reason'] = '本篇已在处理，重启遗留任务需先核对付费账本'
         elif not engine.translation_needed(candidate.canonical) and not engine.pending_image_indices(candidate.canonical):
             result['reason'] = '本篇已经完成生成，请直接审校或使用单篇优化'
@@ -72,21 +75,34 @@ def capabilities(account_dir: Path, indexed: dict) -> dict:
 
 @maintenance.guarded('initial_translation')
 def submit(account_dir: Path, indexed: dict, *, source_fingerprint: str, source_text_sha256: str,
-           review_revision: str | None, human_revision: str | None, executor=None) -> dict:
+           review_revision: str | None, human_revision: str | None, consent: bool,
+           executor=None) -> dict:
     account_dir = Path(account_dir)
     with paid_model.FileLock(cfg().state_dir / 'refinement.lock', busy_message='有内容请求正在受理，请稍后重试'):
         source, _ = _check(account_dir, indexed, allow_consent=True)
         if any(row['account'] == account_dir.name and row['post_id'] == source['post_id']
                and row['status'] in {'pending', 'running'} for row in refinement.latest().values()):
             raise review.ReviewConflict('这篇已有内容任务在处理，请等待结果')
+        third_party = _third_party(source)
+        if third_party and not consent:
+            raise review.ReviewValidationError('请确认允许处理这一篇第三方内容')
         engine.budget_preflight()
-        consent = paid_consent.grant(account_dir, source, source_fingerprint=source_fingerprint,
-            source_text_sha256=source_text_sha256, review_revision=review_revision, human_revision=human_revision)
+        if third_party:
+            granted = paid_consent.grant(account_dir, source, source_fingerprint=source_fingerprint,
+                source_text_sha256=source_text_sha256, review_revision=review_revision, human_revision=human_revision)
+        else:
+            # 品牌来源不写第三方许可账本，但页面版本与来源指纹照样核对，旧页面不能触发付费。
+            granted = {'revision': None}
+            with review.transaction(account_dir):
+                refinement._eligible(account_dir, source, source_hash=source_text_sha256,
+                    review_revision=review_revision, human_revision=human_revision, initial=True)
+            if paid_consent.fingerprint(source, account_dir) != source_fingerprint:
+                raise review.ReviewConflict('原文、作者或原图已经改变，请刷新后重新发起')
         _check(account_dir, source)
         row = {'job_id': uuid4().hex, 'kind': 'initial', 'account': account_dir.name, 'post_id': source['post_id'],
                'source_fingerprint': source_fingerprint, 'source_text_sha256': source_text_sha256,
                'source_fingerprint_version': paid_consent.FINGERPRINT_VERSION,
-               'consent_revision': consent['revision'], 'status': 'pending', 'actor': None,
+               'consent_revision': granted['revision'], 'status': 'pending', 'actor': None,
                'recorded_at': datetime.now(timezone.utc).isoformat()}
         row.update(worker=refinement.current_worker(), operation_tracked=True)
         refinement._append(row)
